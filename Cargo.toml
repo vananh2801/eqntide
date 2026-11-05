@@ -1,0 +1,36 @@
+[package]
+name = "omml-converter"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Convert OMML equations in .docx files to MathType OLE objects with rendered previews"
+readme = "README.md"
+license = "MIT"
+authors = ["Anh <phanvananh01218465035@gmail.com>"]
+keywords = ["omml", "mathtype", "docx", "mathml", "equation"]
+categories = ["command-line-utilities", "text-processing"]
+repository = "https://github.com/vananh2801/omml-converter-rust"
+
+[lib]
+name = "omml_converter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "omml-converter"
+path = "src/main.rs"
+
+[dependencies]
+quick-xml = "0.31"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+clap = { version = "4", features = ["derive"] }
+log = "0.4"
+uuid = { version = "1", features = ["v4"] }
+ab_glyph = "0.2"
+ab_glyph_rasterizer = "0.1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+crc32fast = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
