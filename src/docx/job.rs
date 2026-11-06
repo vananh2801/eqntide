@@ -123,7 +123,6 @@ impl Job {
         // 1. OMML → MathML
         let mathml = omml_to_mathml(&omath)?;
         // Print MathML on terminal for debug review
-        println!("{:#?}", mathml);
 
         // 2. MathML → MTEF binary
         let eq_bytes = mathml_to_mtef_bytes(&mathml)?;

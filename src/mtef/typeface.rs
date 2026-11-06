@@ -1,7 +1,10 @@
 //! MTEF typeface constants and character classification.
 
+use super::charmap::map_char_with_variant;
 use super::records::*;
 
+/// Regular text (Times New Roman / Arial in the preamble).
+pub const TF_TEXT: u8 = 1;
 /// `sin`, `cos`, `log` …
 pub const TF_FUNCTION: u8 = 2;
 /// Italic math variables.
@@ -16,8 +19,14 @@ pub const TF_SYMBOL: u8 = 6;
 pub const TF_VECTOR: u8 = 7;
 /// `0–9`.
 pub const TF_NUMBER: u8 = 8;
-/// Regular text (Arial in the preamble).
-pub const TF_TEXT: u8 = 1;
+/// User 1 font.
+pub const TF_USER1: u8 = 9;
+/// User 2 font.
+pub const TF_USER2: u8 = 10;
+/// MT Extra font (`fnMTEXTRA`).
+pub const TF_MTEXTRA: u8 = 11;
+/// Expandable characters / fences / arrows (`fnEXPAND`).
+pub const TF_EXPAND: u8 = 22;
 
 /// Approximation of Python's `str.isdigit()` for the characters that matter in
 /// math: ASCII digits, super/subscript digits and full-width digits.
@@ -34,16 +43,7 @@ pub fn classify_char(text: &str) -> (u8, u32) {
     let Some(ch) = text.chars().next() else {
         return (TF_VARIABLE, 0x20);
     };
-    if py_isdigit(ch) {
-        return (TF_NUMBER, ch as u32);
-    }
-    if crate::symbols::operators::MTEF_SYMBOL_OPERATORS.contains(ch) || (ch as u32) > 0x2000 {
-        return (TF_SYMBOL, ch as u32);
-    }
-    if ch.is_ascii_alphabetic() {
-        return (TF_VARIABLE, ch as u32);
-    }
-    (TF_SYMBOL, ch as u32)
+    map_char_with_variant(ch, None, TF_VARIABLE)
 }
 
 /// Encode a string as a sequence of CHAR records (spaces are skipped).
@@ -53,8 +53,7 @@ pub fn chars_from_text(text: &str) -> Vec<u8> {
         if ch == ' ' {
             continue;
         }
-        let mut buf = [0u8; 4];
-        let (tf, val) = classify_char(ch.encode_utf8(&mut buf));
+        let (tf, val) = map_char_with_variant(ch, None, TF_VARIABLE);
         out.extend(char_record(tf, val));
     }
     out

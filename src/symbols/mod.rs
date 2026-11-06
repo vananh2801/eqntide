@@ -79,8 +79,17 @@ pub fn is_latin_letter(c: char) -> bool {
     c.is_ascii_alphabetic()
 }
 
-/// `true` for a run holding letters outside ASCII and Greek (e.g. Vietnamese
-/// words), which should be drawn as upright text, not as math variables.
+/// `true` for a run holding non-ASCII natural-language letters (e.g. Vietnamese
+/// words with diacritics), which should be drawn as upright text, not as math
+/// variables. Excludes Greek letters, Letterlike Symbols (`U+2100..=U+214F`),
+/// and Mathematical Alphanumeric Symbols (`U+1D400..=U+1D7FF`).
 pub fn has_foreign_letters(s: &str) -> bool {
-    s.chars().any(|c| c.is_alphabetic() && !c.is_ascii() && !greek::in_greek_block(c))
+    s.chars().any(|c| {
+        let cp = c as u32;
+        c.is_alphabetic()
+            && !c.is_ascii()
+            && !greek::in_greek_block(c)
+            && !(0x2100..=0x214F).contains(&cp)
+            && !(0x1D400..=0x1D7FF).contains(&cp)
+    })
 }

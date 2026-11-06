@@ -124,6 +124,7 @@ impl Layout {
                 Ok(self.radical(&c, d.as_ref(), em))
             }
             "msub" | "msup" | "msubsup" => self.scripts(n, em, script),
+            "mmultiscripts" => self.prescripts(n, em, script),
             "munder" | "mover" | "munderover" => self.under_over(n, em, script),
             "mtable" => self.table(n, em, script),
             "mphantom" => {

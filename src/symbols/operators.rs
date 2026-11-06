@@ -8,8 +8,8 @@ pub const BINARY: &str = "+−-±∓×÷·⋅∗*∘∔\u{2295}\u{2297}\u{2299}"
 /// Large operators that take limits (summation, product, big set operators).
 pub const BIG_OPERATORS: &str = "\u{2211}\u{2210}\u{220F}\u{22C3}\u{22C2}\u{22C1}\u{22C0}\u{2A02}\u{2A01}\u{2A00}";
 
-/// Integral signs.
-pub const INTEGRALS: &str = "\u{222B}\u{222C}\u{222D}\u{222E}\u{222F}\u{2230}";
+/// Integral signs (including loop, double, triple, cw and ccw loop integrals).
+pub const INTEGRALS: &str = "\u{222B}\u{222C}\u{222D}\u{222E}\u{222F}\u{2230}\u{2232}\u{2233}";
 
 /// `true` for a binary operator of this palette.
 pub fn is_binary(c: char) -> bool {

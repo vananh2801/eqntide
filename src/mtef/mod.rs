@@ -28,16 +28,19 @@
 //! |--------------|---------------------------------------------------|
 //! | `records`    | END/LINE/CHAR/SIZE/TMPL primitives               |
 //! | `typeface`   | typeface constants, [`classify_char`]            |
+//! | `charmap`    | Unicode ↔ MTCode mapping and typeface rules      |
 //! | `templates`  | fraction, radicals, sub/superscripts             |
 //! | `encode`     | MathML → MTEF encoder                            |
 //! | `decode`     | MTEF → MathML decoder (planned)                  |
 
+pub mod charmap;
 mod records;
 mod templates;
 mod typeface;
 
 pub mod encode;
 
+pub use charmap::*;
 pub use records::*;
 pub use templates::*;
 pub use typeface::*;
@@ -57,10 +60,9 @@ pub fn build_mtef(equation_bytes: &[u8]) -> Vec<u8> {
     ];
     let mut out = Vec::with_capacity(header.len() + equation_bytes.len() + 12);
     out.extend_from_slice(&header);
-    // main line: FULL + LINE + SIZE + content + END
+    // main line: FULL + LINE + content + END
     out.extend_from_slice(FULL);
     out.extend(line(false));
-    out.extend(size_display());
     out.extend_from_slice(equation_bytes);
     out.extend_from_slice(END);
     out

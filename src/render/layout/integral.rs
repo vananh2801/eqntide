@@ -18,7 +18,7 @@ impl Layout {
 
         let face = Face::Symbol;
         let recipe = match c {
-            '\u{222B}' | '\u{222C}' | '\u{222D}' | '\u{222E}' | '\u{222F}' | '\u{2230}' => AssemblyRecipe {
+            '\u{222B}' | '\u{222C}' | '\u{222D}' | '\u{222E}' | '\u{222F}' | '\u{2230}' | '\u{2232}' | '\u{2233}' => AssemblyRecipe {
                 top: '\u{2320}',
                 ext: '\u{23AE}',
                 mid: None,
@@ -32,7 +32,7 @@ impl Layout {
             _ => 1,
         };
         let ellipse_w = match c {
-            '\u{222E}' => 1.0,
+            '\u{222E}' | '\u{2232}' | '\u{2233}' => 1.0,
             '\u{222F}' => 2.0,
             '\u{2230}' => 3.0,
             _ => 0.0,
@@ -143,7 +143,7 @@ impl Layout {
     ) -> Result<LBox> {
         let sem = em * SCRIPT;
         // Use the hand-built glyph assembly
-        let base = self.integral_without_limits(c, 1.45 * em, em).unwrap();
+        let base = self.integral_without_limits(c, 1.45 * em, em).unwrap_or_else(|| self.glyph(display_char(c), Face::Symbol, em));
         let sub = match under_n { Some(u) => Some(self.node(u, sem, true)?), None => None };
         let sup = match over_n { Some(o) => Some(self.node(o, sem, true)?), None => None };
 

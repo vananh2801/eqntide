@@ -4,6 +4,55 @@
 
 use super::*;
 
+/// Map an ASCII character with `mathvariant` (`double-struck`, `fraktur`,
+/// `script`, …) to its Unicode Mathematical Alphanumeric / Letterlike glyph
+/// present in `STIXTwoMath-Regular.ttf`.
+fn styled_math_glyph(ch: char, variant: Option<&str>) -> Option<char> {
+    let v = variant?;
+    let cp = match v {
+        "double-struck" => match ch {
+            'C' => 0x2102,
+            'H' => 0x210D,
+            'N' => 0x2115,
+            'P' => 0x2119,
+            'Q' => 0x211A,
+            'R' => 0x211D,
+            'Z' => 0x2124,
+            'A'..='Z' => 0x1D538 + (ch as u32 - 'A' as u32),
+            'a'..='z' => 0x1D552 + (ch as u32 - 'a' as u32),
+            '0'..='9' => 0x1D7D8 + (ch as u32 - '0' as u32),
+            _ => return None,
+        },
+        "fraktur" | "bold-fraktur" => match ch {
+            'C' => 0x212D,
+            'H' => 0x210C,
+            'I' => 0x2111,
+            'R' => 0x211C,
+            'Z' => 0x2128,
+            'A'..='Z' => 0x1D504 + (ch as u32 - 'A' as u32),
+            'a'..='z' => 0x1D51E + (ch as u32 - 'a' as u32),
+            _ => return None,
+        },
+        "script" | "bold-script" => match ch {
+            'B' => 0x212C,
+            'E' => 0x2130,
+            'F' => 0x2131,
+            'H' => 0x210B,
+            'I' => 0x2110,
+            'L' => 0x2112,
+            'M' => 0x2133,
+            'R' => 0x211B,
+            'A'..='Z' => 0x1D49C + (ch as u32 - 'A' as u32),
+            'e' => 0x212F,
+            'g' => 0x210A,
+            'o' => 0x2134,
+            'a'..='z' => 0x1D4B6 + (ch as u32 - 'a' as u32),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    char::from_u32(cp)
+}
 
 impl Layout {
     /// Lay out a run of siblings on one baseline with TeX-style spacing.
@@ -51,11 +100,11 @@ impl Layout {
                             // Single character symbol, operator, relation, or punctuation (e.g. '=', '≈', ',')
                             self.atoms_mo(t, em, &mut atoms);
                         } else {
-                            // Normal text words (Vietnamese words, text labels)
+                            // Normal text words (Vietnamese words, text labels); preserve boundary spaces
                             let face = if bold { Face::VectorMatrix } else { Face::Text };
                             atoms.push(Atom {
                                 class: Class::Ord,
-                                b: self.text(t, face, em),
+                                b: self.text(&kid.text, face, em),
                                 delim: None,
                                 is_table: false,
                             });
@@ -168,7 +217,7 @@ impl Layout {
             let class = class_of(ch);
             let delim = if is_open(ch) || is_close(ch) || is_bar(ch) { Some(ch) } else { None };
             let b = if is_integral(ch) {
-                self.integral_without_limits(ch, 1.45 * em, em).unwrap()
+                self.integral_without_limits(ch, 1.45 * em, em).unwrap_or_else(|| self.glyph(display_char(ch), Face::Symbol, em))
             } else if is_big_op(ch) {
                 self.big_glyph(ch, Face::ExtraMath, em, 1.45)
             } else {
@@ -183,7 +232,8 @@ impl Layout {
         if t.is_empty() {
             return;
         }
-        let bold = kid.attr("mathvariant") == Some("bold");
+        let variant = kid.attr("mathvariant");
+        let bold = matches!(variant, Some("bold") | Some("bold-italic"));
         if t.chars().count() > 1 && is_function(t) {
             let face = if bold { Face::VectorMatrix } else { Face::Function };
             out.push(Atom { class: Class::Op, b: self.text(t, face, em), delim: None, is_table: false });
@@ -200,13 +250,25 @@ impl Layout {
             if ch.is_whitespace() || ch == '\u{00A0}' || ch == '\u{200B}' {
                 continue;
             }
-            if bold {
+            if let Some(styled_ch) = styled_math_glyph(ch, variant) {
+                out.push(Atom {
+                    class: Class::Ord,
+                    b: self.glyph(styled_ch, Face::Symbol, em),
+                    delim: None,
+                    is_table: false,
+                });
+            } else if bold {
                 out.push(Atom { class: Class::Ord, b: self.glyph(ch, Face::VectorMatrix, em), delim: None, is_table: false });
             } else if ch.is_ascii_digit() {
                 // Digits inside <mi> runs must be upright numbers, not math operators.
                 out.push(Atom { class: Class::Ord, b: self.glyph(ch, Face::Number, em), delim: None, is_table: false });
             } else if is_latin_letter(ch) {
-                out.push(Atom { class: Class::Ord, b: self.glyph(ch, Face::Variable, em), delim: None, is_table: false });
+                let face = if variant == Some("normal") {
+                    Face::Function
+                } else {
+                    Face::Variable
+                };
+                out.push(Atom { class: Class::Ord, b: self.glyph(ch, face, em), delim: None, is_table: false });
             } else if is_greek_lower(ch) {
                 out.push(Atom { class: Class::Ord, b: self.glyph(ch, Face::LcGreek, em), delim: None, is_table: false });
             } else if is_greek_upper(ch) {

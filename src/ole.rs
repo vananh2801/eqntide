@@ -217,10 +217,11 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
         MATHTYPE_CLSID,
     );
     let entry = |idx: usize, left: u32, right: u32| {
+        let color = if idx == 0 { 0 } else { 1 };
         dir_entry(
             streams[idx].0,
             2,
-            1,
+            color,
             FREESECT,
             left,
             right,

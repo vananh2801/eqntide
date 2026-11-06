@@ -26,6 +26,56 @@ impl Layout {
         Ok(self.attach_scripts(base, sub, sup, em))
     }
 
+    pub(super) fn prescripts(&mut self, n: &MathNode, em: f32, script: bool) -> Result<LBox> {
+        let base = match n.children.first() {
+            Some(c) => self.node(c, em, script)?,
+            None => LBox::default(),
+        };
+        let sem = em * SCRIPT;
+        let mut pre_sub: Option<LBox> = None;
+        let mut pre_sup: Option<LBox> = None;
+        if let Some(mp_idx) = n.children.iter().position(|c| c.tag == "mprescripts") {
+            if let Some(sub_n) = n.children.get(mp_idx + 1) {
+                if sub_n.tag != "none" && (!sub_n.children.is_empty() || !sub_n.text.trim().is_empty()) {
+                    pre_sub = Some(self.node(sub_n, sem, true)?);
+                }
+            }
+            if let Some(sup_n) = n.children.get(mp_idx + 2) {
+                if sup_n.tag != "none" && (!sup_n.children.is_empty() || !sup_n.text.trim().is_empty()) {
+                    pre_sup = Some(self.node(sup_n, sem, true)?);
+                }
+            }
+        }
+        let sub_w = pre_sub.as_ref().map_or(0.0, |s| s.w);
+        let sup_w = pre_sup.as_ref().map_or(0.0, |s| s.w);
+        let pre_w = sub_w.max(sup_w);
+        if pre_w == 0.0 {
+            return Ok(base);
+        }
+
+        let mut sub_y = pre_sub.as_ref().map(|s| (0.22 * em).max(base.desc + 0.05 * em).max(s.asc - 0.32 * em));
+        let sup_y = pre_sup.as_ref().map(|s| -(0.40 * em).max(base.asc - 0.39 * sem).max(s.desc + 0.25 * 0.45 * em));
+        if let (Some(s1), Some(s2), Some(sy), Some(py)) = (&pre_sub, &pre_sup, sub_y, sup_y) {
+            let gap = (sy - s1.asc) - (py + s2.desc);
+            let need = 0.18 * em;
+            if gap < need {
+                sub_y = Some(sy + (need - gap));
+            }
+        }
+
+        let mut b = LBox::default();
+        if let (Some(s), Some(y)) = (&pre_sub, sub_y) {
+            b.place(s, pre_w - s.w, y);
+        }
+        if let (Some(s), Some(y)) = (&pre_sup, sup_y) {
+            b.place(s, pre_w - s.w, y);
+        }
+        let base_x = pre_w + 0.03 * em;
+        b.place(&base, base_x, 0.0);
+        b.w = base_x + base.w;
+        Ok(b)
+    }
+
     pub(super) fn attach_scripts(&self, base: LBox, sub: Option<LBox>, sup: Option<LBox>, em: f32) -> LBox {
         let sem = em * SCRIPT;
         let mut sub_y = sub.as_ref().map(|s| (0.22 * em).max(base.desc + 0.05 * em).max(s.asc - 0.32 * em));
