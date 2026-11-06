@@ -4,7 +4,7 @@
 use super::*;
 
 
-/// Glyph pieces that make up a tall delimiter.
+/// Glyph pieces that make up a tall integral sign.
 struct AssemblyRecipe {
     top: char,
     ext: char,
@@ -13,7 +13,7 @@ struct AssemblyRecipe {
 }
 
 impl Layout {
-    /// Generalized Glyph Assembly: Delimiters hug content tightly, Integrals remain untouched.
+    /// Glyph assembly of the integral signs (delimiters live in delimiter.rs).
     pub(super) fn integral_without_limits(&self, c: char, target_h: f32, em: f32) -> Option<LBox> {
 
         let face = Face::Symbol;

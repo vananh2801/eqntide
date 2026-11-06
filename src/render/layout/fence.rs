@@ -63,36 +63,17 @@ impl Layout {
     }
 
     pub(super) fn delim_box(&self, c: char, asc: f32, desc: f32, em: f32) -> LBox {
+        // Parentheses, brackets, braces, floors and ceilings are assembled from
+        // font glyph pieces so they follow the height of their content.
+        if let Some(b) = self.stretchy_delimiter(c, asc, desc, em) {
+            return b;
+        }
         let h = asc + desc;
         let t = (0.05 * em).max(1.0);
         let pad = 0.04 * em;
         let mut b = LBox { asc, desc, ..Default::default() };
         let top = -asc;
         match c {
-            '(' | ')' => {
-                if let Some(b) = self.integral_without_limits(c, h, em) {
-                    return b;
-                }
-            }
-            '[' | ']' | '⌊' | '⌋' | '⌈' | '⌉' => {
-                let w = 0.30 * em;
-                let (x0, dir) = if matches!(c, '[' | '⌊' | '⌈') { (pad, 1.0) } else { (pad + w - t, -1.0) };
-                b.items.push(Item::Poly(rect(x0, top, t, h)));
-                let serif = 0.22 * em;
-                let sx = if dir > 0.0 { x0 } else { x0 + t - serif };
-                if !matches!(c, '⌊' | '⌋') {
-                    b.items.push(Item::Poly(rect(sx, top, serif, t)));
-                }
-                if !matches!(c, '⌈' | '⌉') {
-                    b.items.push(Item::Poly(rect(sx, top + h - t, serif, t)));
-                }
-                b.w = w + 2.0 * pad;
-            }
-            '{' | '}' => {
-                if let Some(b) = self.integral_without_limits(c, h, em) {
-                    return b;
-                }
-            }
             '|' => {
                 b.items.push(Item::Poly(rect(pad + 0.03 * em, top, t, h)));
                 b.w = 0.12 * em + 2.0 * pad;

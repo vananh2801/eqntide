@@ -25,6 +25,7 @@ mod arrow;
 mod bar;
 mod bigop;
 mod boxes;
+mod delimiter;
 mod embellish;
 mod fence;
 mod fraction;
