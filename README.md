@@ -1,142 +1,167 @@
 # omml-converter (Rust)
 
-Convert the math equations in a Microsoft Word `.docx` from **OMML** (Office Math
-Markup Language, Word's native equation format) into embedded **MathType** OLE
-objects (`Equation.DSMT4`) — without Word, MathType, or any Microsoft software
-installed. A single static binary; no Python, no runtime.
+Convert math equations in Microsoft Word `.docx` documents from **OMML** (Office Math Markup Language, Word's native equation format) into embedded **MathType** OLE objects (`Equation.DSMT4`) with high-fidelity vector previews — without requiring Microsoft Word, MathType, or Windows. A single self-contained binary written in pure Rust.
 
-This is a Rust fork of the Python
-[`omml-converter`](https://github.com/bohdanbodnarenko/omml-converter). For the
-same input it produces **byte-identical** `.bin` OLE objects and an equivalent
-`document.xml`.
+Double-clicking any converted equation in Microsoft Word or WPS Office opens it directly in **MathType** for full visual editing.
 
-The original OMML is preserved as a fallback, so every equation stays visible in
-ordinary Word while MathType-aware tooling can pick up the embedded objects.
+---
+
+## Key Features
+
+- **End-to-End Conversion Pipeline**: Translates `.docx` equations via `OMML → MathML → MTEF 5.0 → Compound File Binary (OLE 2.0) → .docx`.
+- **Comprehensive MathType 5 Template & Symbol Support**:
+  - **Fences & Intervals**: Parentheses, brackets, braces, open brackets, absolute values, double bars, floor/ceiling, Dirac notation (`⟨ψ|`, `|ψ⟩`, `⟨ϕ|ψ⟩`), and intervals (`(a, b]`, `[a, b)`).
+  - **Radicals & Fractions**: Square roots, nth roots, regular fractions, skewed / slash fractions (`a/b`).
+  - **Scripts & Limits**: Subscripts, superscripts, sub-superscripts, pre-subscripts/pre-superscripts (`m:sPre`), and limit operators (`\lim`, `\max`, `\min`, `\sup`, `\inf`) with proper size restoration (`FULL` size restoration).
+  - **Large Operators & Integrals**:
+    - Summations (`∑`), products (`∏`), coproducts (`∐`), unions (`⋃`), intersections (`⋂`).
+    - Single, double, and triple integrals ($\int$, $\iint$, $\iiint$).
+    - Contour and loop integrals ($\oint$, $\oiint$, $\oiiint$, $\ointclockwise$, $\varointctrclockwise$) mapped to MathType's native composite glyph structures (loop circles in `MT Extra` paired with symbol stems).
+  - **Embellishments & Over/Under Bars**: Vectors (`\vec{v}` with expandable right/left arrows), hats (`\hat{x}`), tildes (`\tilde{x}`), arcs (`\overarc{AB}`), single/double overbars (`\overline{AB}`), single/double underbars (`\underline{AB}`), joint status, horizontal/slanted strike-throughs, primes (`′`, `″`, `‴`), and dot accents (`\dot`, `\ddot`, `\dddot`, `\ddddot`).
+  - **Extensible Arrows**: Left, right, and bidirectional arrows with labels above and below (`A \xrightarrow{yields} B`, `A \xleftrightarrow[y]{x} B`).
+  - **Matrices & Tables**: Multiline equation arrays (`eqArr`), matrices with customizable horizontal/vertical alignment and row/column partition lines.
+  - **Long Division**: Elementary long division template with dividend and divisor slots.
+  - **Full MathType Typeface & Character Classification**: Accurate classification across `TF_TEXT`, `TF_FUNCTION`, `TF_VARIABLE`, `TF_LCGREEK`, `TF_UCGREEK`, `TF_SYMBOL`, `TF_VECTOR`, `TF_MTEXTRA`, and `TF_EXPAND`.
+- **Crisp Vector Previews**: Built-in EMF vector (and optional PNG raster) preview renderer powered by STIX Two Math fonts, ensuring equations render crisply at any zoom level before MathType is even opened.
+- **OLE Compatibility**: Generates standard OLE Storage streams (`\x01CompObj`, `\x01Ole`, `\x03ObjInfo`, and `Equation Native` with `EQNOLEFILEHDR`), verified against genuine MathType 5/6 documents.
+
+---
 
 ## Installation
 
+### Prerequisites
+Rust **1.75+** (MSRV).
+
 ```bash
-cargo install --path .          # from a checkout
-# or build a release binary:
-cargo build --release           # → target/release/omml-converter
+# Clone the repository
+git clone https://github.com/vananh2801/omml-converter-rust.git
+cd omml-converter-rust
+
+# Build release binary:
+cargo build --release
+
+# The compiled binary will be located at:
+# target/release/omml-converter
 ```
 
-Requires Rust **1.75+**. A `Cargo.lock` is committed and pins dependency
-versions that build on 1.75.
+---
 
 ## Usage
 
 ```bash
-omml-converter input.docx                     # writes input_mathtype.docx
-omml-converter input.docx -o converted.docx
-omml-converter input.docx --font-size 13      # size the equation pictures are drawn at
-omml-converter input.docx --omml-fallback     # keep the OMML visible (see below)
-omml-converter input.docx --verbose           # show each equation as it converts
-omml-converter input.docx --quiet             # only print errors
-omml-converter --version
+# Basic conversion (writes <input>_mathtype.docx)
+omml-converter input.docx
+
+# Specify custom output file
+omml-converter input.docx -o output.docx
+
+# Set preview font size (default: 12 pt, matching MathType default)
+omml-converter input.docx --font-size 13
+
+# Use PNG raster preview instead of EMF vector
+omml-converter input.docx --preview png
+
+# Keep original OMML visible (MathType OLE objects stored in background as fallback)
+omml-converter input.docx --omml-fallback
+
+# Verbose progress logging
+omml-converter input.docx --verbose
+
+# Quiet mode (suppress progress, print errors only)
+omml-converter input.docx --quiet
 ```
 
-| Option | Description |
+### CLI Options
+
+| Flag / Option | Description |
 | --- | --- |
-| `input` | Input `.docx` file (required). |
-| `-o`, `--output` | Output path (default: `<input>_mathtype.docx`). |
-| `--font-size PT` | Size the preview pictures are drawn at, 4–72 (default `12`, MathType's default). |
-| `--omml-fallback` | Keep the original OMML visible; MathType objects are stored but not shown. |
-| `-v`, `--verbose` | Log every equation as it is converted. |
-| `-q`, `--quiet` | Suppress progress; print errors only. |
-| `--preview png` | Use .png as OLE preview. |
+| `<INPUT>` | Path to the source `.docx` file (required). |
+| `-o, --output <FILE>` | Destination path (default: `<input>_mathtype.docx`). |
+| `--preview <FORMAT>` | Picture format for OLE previews: `emf` (vector, default) or `png` (raster). |
+| `--font-size <PT>` | Font size (in points) used to render previews (default: `12`). |
+| `--omml-fallback` | Retains OMML visible in Word using `mc:AlternateContent`, storing MathType objects in the background. |
+| `-v, --verbose` | Logs per-equation conversion progress and details. |
+| `-q, --quiet` | Suppresses info messages; only prints errors. |
+| `-h, --help` | Prints help information. |
+| `-V, --version` | Prints version. |
 
-| Exit code | Meaning |
-| --- | --- |
-| `0` | Success — all equations converted (or none present). |
-| `1` | Bad input (missing / non-`.docx` / unreadable) or one or more equations failed. |
-| `2` | Invalid command-line arguments. |
+---
 
-The output `.docx` is always written when the input is readable; equations that
-fail to convert are left as their original OMML.
+## Library Usage
 
-### What you get
-
-**Default mode.** Every equation becomes what Word itself writes for a MathType
-equation: an inline `w:object` holding an `Equation.DSMT4` OLE object **and a
-preview picture** (`v:imagedata`). Word, WPS and LibreOffice display the picture;
-MathType (on Windows/macOS) opens the object for editing. The original OMML is
-replaced. Pictures are drawn by the built-in renderer (STIX Two fonts layout) 
-at 288 dpi, so a 4 000-equation document grows by roughly 10 MB.
-
-A bare OLE object with *no* picture shows as an empty frame in every viewer —
-which is why earlier versions of this tool (and the Python original) appeared to
-"lose" the equations.
-
-**`--omml-fallback`.** The OLE object is wrapped in `mc:AlternateContent` whose
-`Requires` names a namespace no application knows, so viewers always pick the
-OMML branch. Equations stay visible as normal Word equations; the MathType
-objects are only stored for tools that read the XML directly.
-
-## Use as a library
+Add `omml-converter` to your `Cargo.toml`, or use it directly as an internal library:
 
 ```rust
-let summary = omml_converter::convert("input.docx", "output.docx")?;
-println!("{}/{} converted, {} skipped, {} failed",
-         summary.converted, summary.found, summary.skipped, summary.errors);
+use omml_converter::{convert, convert_bytes, ConversionSummary};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Convert files directly on disk
+    let summary: ConversionSummary = convert("document.docx", "document_mathtype.docx")?;
+    println!("Converted {}/{} equations.", summary.converted, summary.found);
+
+    // Or convert in-memory bytes (ideal for web services or WASM)
+    let docx_bytes = std::fs::read("document.docx")?;
+    let (output_bytes, summary) = convert_bytes(&docx_bytes)?;
+
+    Ok(())
+}
 ```
 
-`convert_bytes(&[u8]) -> Result<(Vec<u8>, ConversionSummary)>` works fully in
-memory (handy for servers or WASM-style use). The individual stages are public
-too: `omml_to_mathml`, `mathml_to_mtef_bytes`, `make_equation_native`, `make_ole`.
+Low-level conversion functions are also exposed:
+- `omml::omml_to_mathml`: Decodes OMML XML into an intermediate MathML AST.
+- `mtef::encode::mathml_to_mtef_bytes`: Encodes MathML AST into inner MTEF binary records.
+- `mtef::make_equation_native`: Packages inner MTEF records with the 28-byte `EQNOLEFILEHDR` header.
+- `ole::make_ole`: Packs equation native bytes into an OLE Compound File Binary container.
 
-## How it works
+---
 
-```
-.docx ──▶ OMML  ──▶  MathML  ──▶  MTEF 5.0  ──▶  OLE (CFB) ──▶ .docx
-        omml::    mtef::         ole.rs       (re-zipped by docx::)
-        decode    encode
-                     └──▶ render:: ──▶ preview EMF (or PNG)
-```
-
-MathML is the hub: each format has a `decode` (format → MathML) and an
-`encode` (MathML → format) module, so the planned MTEF → OMML direction is
-`mtef::decode` + `omml::encode`.
+## Architecture
 
 ```
-src/
-├── lib.rs, main.rs, cli.rs, error.rs, xml.rs, mathml.rs, ole.rs
-├── symbols/          shared symbol tables, one file per MathType palette
-│   └── relations, operators, arrows, logic, sets, misc, greek,
-│       embellishments, fences, functions
-├── omml/             decode.rs (OMML → MathML); encode.rs planned
-├── mtef/             records, typeface, templates, encode.rs; decode.rs planned
-├── docx/             options, consts, ole_xml, package, job, pipeline
-└── render/           mod.rs (EMF/PNG preview), font.rs, canvas.rs, png.rs, emf.rs
-    └── layout/       one module per MathType palette group
-        └── row, fence, fraction, radical, script, bigop,
-            integral, bar, embellish, matrix, geom, boxes
+.docx (Word Document)
+   │
+   ▼ [src/docx/package.rs]
+Extract word/document.xml & find <m:oMath> / <m:oMathPara>
+   │
+   ▼ [src/omml/decode.rs]
+Decode OMML structure → MathML abstract syntax tree (MathNode)
+   │
+   ├──▶ [src/render/mod.rs]
+   │    Layout engine calculates geometry & renders EMF / PNG preview
+   │
+   ▼ [src/mtef/encode.rs & src/mtef/templates.rs]
+Encode MathML AST → MTEF 5.0 binary records
+   │
+   ▼ [src/mtef/mod.rs]
+Wrap in MTEF header & EQNOLEFILEHDR (Equation Native stream)
+   │
+   ▼ [src/ole.rs]
+Construct OLE 2.0 Compound File Binary (CompObj, Ole, ObjInfo, Equation Native)
+   │
+   ▼ [src/docx/ole_xml.rs & src/docx/pipeline.rs]
+Embed OLE object (.bin) & preview image into .docx package
 ```
 
-## Limitations
+---
 
-* Same as upstream: matrices are flattened in the MathType data; phantoms are
-  dropped; pre-scripts (`m:sPre`) are not supported.
-* The preview renderer is a compact layout engine, not MathType's:
-  spacing and glyph shapes differ slightly. MathType redraws the picture when you
-  edit the object.
-* **Not verified against MathType itself** (it needs Windows/macOS). The
-  container and streams were checked against a genuine MathType file and with
-  `olefile`; the pictures with LibreOffice.
-* Vertical alignment relies on `w:position`, which Word and WPS honour but
-  LibreOffice ignores for objects (they sit slightly high there).
+## References & Credits
 
-## Development
+This project builds upon and references the following open-source projects, specifications, and resources:
 
-```bash
-cargo run --example render_docx -- in.docx out_dir   # dump equation pictures as EMFs/PNGs
-cargo clippy --all-targets -- -D warnings
-cargo fmt --all
-```
+1. **[mathtypejx](https://github.com/scifabric/mathtypejx)** & **[mathtype_to_mathml](https://github.com/jure/mathtype_to_mathml)**:
+   - Provided extensive specifications and fixtures for MTEF v3 and v5 byte streams, template selector mappings, variation bitmasks, and MathType character mapping tables.
+2. **[omml-converter (Python)](https://github.com/bohdanbodnarenko/omml-converter)**:
+   - Original Python implementation by Bohdan Bodnarenko demonstrating OMML extraction and OLE insertion in `.docx`.
+3. **[Design Science MathType MTEF v5 Specification](https://web.archive.org/web/20120205164947/http://www.dessci.com/en/support/mathtype/tech/mtef5.htm)**:
+   - Official technical documentation for the MathType Equation Format (MTEF) v5.
+4. **[ECMA-376 (Office Open XML File Formats)](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)**:
+   - Standard reference for Office Math Markup Language (OMML) semantics (§22.1).
+5. **[STIX Fonts Project](https://github.com/stipub/stixfonts)**:
+   - Bundled fonts in `assets/fonts/` used for generating standalone equation preview pictures, licensed under the [SIL Open Font License 1.1](assets/fonts/OLF.txt).
+
+---
 
 ## License
 
-[MIT](LICENSE) © Bohdan Bodnarenko (original Python implementation).
-
-The bundled fonts in `assets/fonts/` (STIX Fonts) are
-licensed under the SIL Open Font License 1.1 — see `assets/fonts/OLF.txt` and `assets/fonts/OLF-FAQ.txt`.
+- Code licensed under the [MIT License](LICENSE).
+- Bundled STIX fonts licensed under the [SIL Open Font License 1.1](assets/fonts/OLF.txt).
