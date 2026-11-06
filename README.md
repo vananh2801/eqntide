@@ -148,11 +148,11 @@ Embed OLE object (.bin) & preview image into .docx package
 
 This project builds upon and references the following open-source projects, specifications, and resources:
 
-1. **[mathtypejx](https://github.com/scifabric/mathtypejx)** & **[mathtype_to_mathml](https://github.com/jure/mathtype_to_mathml)**:
+1. **[mathtypejx](https://github.com/a917470154/mathtypejx)** & **[mathtype_to_mathml](https://github.com/jure/mathtype_to_mathml)**:
    - Provided extensive specifications and fixtures for MTEF v3 and v5 byte streams, template selector mappings, variation bitmasks, and MathType character mapping tables.
 2. **[omml-converter (Python)](https://github.com/bohdanbodnarenko/omml-converter)**:
    - Original Python implementation by Bohdan Bodnarenko demonstrating OMML extraction and OLE insertion in `.docx`.
-3. **[Design Science MathType MTEF v5 Specification](https://web.archive.org/web/20120205164947/http://www.dessci.com/en/support/mathtype/tech/mtef5.htm)**:
+3. **[Design Science MathType MTEF v5 Specification](http://www.dessci.com/en/support/mathtype/tech/mtef5.htm)**:
    - Official technical documentation for the MathType Equation Format (MTEF) v5.
 4. **[ECMA-376 (Office Open XML File Formats)](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)**:
    - Standard reference for Office Math Markup Language (OMML) semantics (§22.1).
