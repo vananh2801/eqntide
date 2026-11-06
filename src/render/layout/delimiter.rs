@@ -24,6 +24,16 @@ impl Pieces {
     }
 }
 
+/// Shortest span (in em) for which the pieces of `c` can be overlapped without
+/// their curved ends touching.
+fn min_span(c: char) -> f32 {
+    match c {
+        '(' | ')' => 1.1,
+        '{' | '}' => 2.0, // the middle piece alone is 1.95 em tall
+        _ => 0.9,
+    }
+}
+
 /// Assembly recipe for `c`, or `None` when `c` is not a glyph-assembled delimiter.
 fn recipe(c: char) -> Option<Pieces> {
     Some(match c {
@@ -51,18 +61,13 @@ impl Layout {
         let top_y = -asc;
         let bot_y = desc;
 
-        // The hooks and the cusp have a fixed shape. If the requested span is
-        // shorter than they are, shrink the whole assembly instead of overlapping.
-        let ink_h = |ch: Option<char>, e: f32| ch.map_or(0.0, |ch| {
-            let (a, d) = self.f.ink(face, ch, e);
-            a + d
-        });
-        let fixed = ink_h(r.top, em) + ink_h(r.mid, em) + ink_h(r.bot, em);
         let pad = 0.05 * em;
 
-        // Too short for the hooks to fit at full size: fall back to the ordinary
-        // glyph, scaled uniformly so its ink exactly spans the requested height.
-        if fixed > span {
+        // Below this height the hooks would collide (their curved ends would
+        // overlap), so use the ordinary glyph scaled to fit instead. Above it the
+        // pieces may overlap along their straight stems, which share the same x and
+        // therefore merge into one stroke of the font's natural thickness.
+        if span < min_span(c) * em {
             let (a0, d0) = self.f.ink(face, c, em);
             let h0 = a0 + d0;
             if h0 <= 0.0 {
@@ -175,7 +180,7 @@ mod tests {
         let l = layout();
         let em = 24.0;
         for c in ['(', ')', '[', ']', '{', '}'] {
-            for span in [4.8 * em, 6.5 * em, 9.0 * em] {
+            for span in [2.1 * em, 2.5 * em, 4.8 * em, 6.5 * em, 9.0 * em] {
                 let b = l.stretchy_delimiter(c, span / 2.0 + AXIS * em, span / 2.0 - AXIS * em, em).unwrap();
                 let iv = intervals(&l, &b);
                 assert!(iv.len() >= 2, "{c}: expected several pieces");
@@ -198,7 +203,7 @@ mod tests {
         let em = 24.0;
         let tall = l.stretchy_delimiter('{', 3.0 * em, 3.0 * em, em).unwrap();
         assert!(tall.items.iter().any(|it| matches!(it, Item::Glyph { ch: '\u{23A8}', .. })));
-        let short = l.stretchy_delimiter('(', 0.9 * em, 0.9 * em, em).unwrap();
+        let short = l.stretchy_delimiter('(', 0.4 * em, 0.4 * em, em).unwrap();
         assert_eq!(short.items.len(), 1);
         assert!(l.stretchy_delimiter('|', 1.0, 1.0, em).is_none());
     }
