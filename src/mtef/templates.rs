@@ -904,8 +904,20 @@ pub fn big_operator(
     variation: u16,
 ) -> Vec<u8> {
     let has_lower = lower.is_some_and(|s| !s.is_empty());
-    let has_upper = upper.is_some_and(|s| !s.is_empty());
+    let mut has_upper = upper.is_some_and(|s| !s.is_empty());
     let mut var = variation;
+
+    // In MathType 5, loop integrals (tvINT_LOOP, tvINT_CW_LOOP, tvINT_CCW_LOOP)
+    // and multiple integrals (tvINT_2, tvINT_3) only support lower limits (under text).
+    // Setting TV_BO_UPPER on them is invalid in MathType and causes MathType to crash/hang.
+    if selector == TM_INTEG {
+        let is_loop = (var & (TV_INT_LOOP | TV_INT_CW_LOOP | TV_INT_CCW_LOOP)) != 0;
+        let is_multi = (var & 0x0003) > 1;
+        if is_loop || is_multi {
+            has_upper = false;
+        }
+    }
+
     if has_lower {
         var |= TV_BO_LOWER;
     }
@@ -916,11 +928,13 @@ pub fn big_operator(
         var |= TV_INT_1;
     }
 
+    let upper_slot = if has_upper { upper } else { None };
+
     let mut out = tmpl_header_u16(selector, var, 0);
     append_line_slot(&mut out, main);
     out.extend_from_slice(SUB);
     append_opt_line_slot(&mut out, lower);
-    append_opt_line_slot(&mut out, upper);
+    append_opt_line_slot(&mut out, upper_slot);
     out.extend_from_slice(SYM);
     if selector == TM_INTEG || operator_char.is_empty() {
         out.extend_from_slice(&default_bigop_char(selector, var));
@@ -1534,5 +1548,13 @@ mod tests {
         let loop3 = char_record(TF_MTEXTRA, 0xEE13);
         assert!(oiiint.windows(loop3.len()).any(|w| w == loop3.as_slice()));
         assert_eq!(oiiint.windows(int_char.len()).filter(|w| *w == int_char.as_slice()).count(), 3);
+
+        // Loop integral with upper limit: upper limit must be suppressed (tvBO_UPPER not set)
+        let a = char_record(TF_VARIABLE, 'a' as u32);
+        let b = char_record(TF_VARIABLE, 'b' as u32);
+        let oiint_with_both = integral(&x, Some(&b), Some(&a), &[], TV_INT_2 | TV_INT_LOOP);
+        let var_code = (oiint_with_both[3] as u16) | ((oiint_with_both[4] as u16) << 8);
+        assert_eq!(var_code & TV_BO_UPPER, 0);
+        assert_ne!(var_code & TV_BO_LOWER, 0);
     }
 }
