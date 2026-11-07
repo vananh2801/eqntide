@@ -1,21 +1,46 @@
 //! Entry points: convert a `.docx` held in memory or on disk.
 
-use std::collections::{HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::error::{Error, Result};
-
-
-
-
-
-use crate::xml::{self};
+use crate::xml;
 
 use super::consts::*;
 use super::job::*;
 use super::options::*;
-
 use super::package::*;
+
+fn discover_omml_parts(pkg: &Package) -> Vec<String> {
+    let mut parts = Vec::new();
+    if pkg.contains(DOC_XML_PATH) {
+        parts.push(DOC_XML_PATH.to_owned());
+    }
+    for name in pkg.part_names() {
+        if name == DOC_XML_PATH {
+            continue;
+        }
+        if let Some(rest) = name.strip_prefix("word/") {
+            if !rest.contains('/')
+                && rest.ends_with(".xml")
+                && (rest.starts_with("header")
+                    || rest.starts_with("footer")
+                    || rest == "footnotes.xml"
+                    || rest == "endnotes.xml")
+            {
+                parts.push(name);
+            }
+        }
+    }
+    parts
+}
+
+fn rels_path_for(xml_path: &str) -> String {
+    match xml_path.rsplit_once('/') {
+        Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
+        None => format!("_rels/{xml_path}.rels"),
+    }
+}
 
 // ── Main conversion pipeline ──────────────────────────────────────────────────
 
@@ -31,28 +56,14 @@ pub fn convert_bytes(input: &[u8]) -> Result<(Vec<u8>, ConversionSummary)> {
 /// Like [`convert_bytes`], with explicit [`Options`].
 pub fn convert_bytes_with(input: &[u8], opts: &Options) -> Result<(Vec<u8>, ConversionSummary)> {
     let pkg = Package::read(input)?;
+    if !pkg.contains(DOC_XML_PATH) {
+        return Err(Error::MissingPart(DOC_XML_PATH.into()));
+    }
 
-    let doc_root = xml::parse(
-        pkg.get(DOC_XML_PATH)
-            .ok_or_else(|| Error::MissingPart(DOC_XML_PATH.into()))?,
-    )?;
-    let rels_root = xml::parse(pkg.get(RELS_PATH).unwrap_or(EMPTY_RELS))?;
     let ct_root = xml::parse(
         pkg.get(CT_PATH)
             .ok_or_else(|| Error::MissingPart(CT_PATH.into()))?,
     )?;
-
-    // Collect all m:oMath elements up front (paths stay valid because each
-    // replacement is a 1-for-1 swap in the same child slot).
-    let mut paths = Vec::new();
-    collect_omath_paths(&doc_root, &mut Vec::new(), &mut paths);
-    log::info!("Found {} equation(s)", paths.len());
-
-    // Track which rIds are already used.
-    let existing_ids: HashSet<String> = rels_root
-        .elements()
-        .filter_map(|c| c.attr(None, "Id").map(str::to_owned))
-        .collect();
 
     // Scan existing embeddings to avoid name collisions.
     let mut ole_index = 1;
@@ -60,41 +71,67 @@ pub fn convert_bytes_with(input: &[u8], opts: &Options) -> Result<(Vec<u8>, Conv
         ole_index += 1;
     }
 
+    let parts = discover_omml_parts(&pkg);
+    let dummy_root = xml::parse(b"<root/>")?;
+
     let mut job = Job {
-        doc_root,
-        rels_root,
+        doc_root: dummy_root.clone(),
+        rels_root: dummy_root,
         ct_root,
         pkg,
-        existing_ids,
+        existing_ids: HashSet::new(),
         ole_index,
         img_index: 1,
         opts: *opts,
-        summary: ConversionSummary {
-            found: paths.len(),
-            ..Default::default()
-        },
+        summary: ConversionSummary::default(),
     };
 
-    for (i, path) in paths.iter().enumerate() {
-        let eq_num = i + 1;
-        // Per-equation error isolation: one bad equation never aborts the file.
-        if let Err(e) = job.convert_one(eq_num, path) {
-            job.summary.errors += 1;
-            log::error!("Equation {eq_num}: {e}");
+    let mut global_eq_num = 0usize;
+
+    for xml_path in parts {
+        let Some(xml_bytes) = job.pkg.get(&xml_path) else {
+            continue;
+        };
+        let doc_root = xml::parse(xml_bytes)?;
+        let mut paths = Vec::new();
+        collect_omath_paths(&doc_root, &mut Vec::new(), &mut paths);
+        if paths.is_empty() && xml_path != DOC_XML_PATH {
+            continue;
         }
+
+        let rels_path = rels_path_for(&xml_path);
+        let rels_root = xml::parse(job.pkg.get(&rels_path).unwrap_or(EMPTY_RELS))?;
+        let existing_ids: HashSet<String> = rels_root
+            .elements()
+            .filter_map(|c| c.attr(None, "Id").map(str::to_owned))
+            .collect();
+
+        job.doc_root = doc_root;
+        job.rels_root = rels_root;
+        job.existing_ids = existing_ids;
+        job.summary.found += paths.len();
+
+        for path in &paths {
+            global_eq_num += 1;
+            // Per-equation error isolation: one bad equation never aborts the file.
+            if let Err(e) = job.convert_one(global_eq_num, path) {
+                job.summary.errors += 1;
+                log::error!("Equation {global_eq_num} ({xml_path}): {e}");
+            }
+        }
+
+        job.pkg.set(&xml_path, xml::to_bytes(&job.doc_root));
+        job.pkg.set(&rels_path, xml::to_bytes(&job.rels_root));
     }
 
-    // Serialise the modified XML back and write the output package.
+    log::info!("Found {} equation(s)", job.summary.found);
+
     let Job {
-        doc_root,
-        rels_root,
         ct_root,
         mut pkg,
         summary,
         ..
     } = job;
-    pkg.set(DOC_XML_PATH, xml::to_bytes(&doc_root));
-    pkg.set(RELS_PATH, xml::to_bytes(&rels_root));
     pkg.set(CT_PATH, xml::to_bytes(&ct_root));
 
     Ok((pkg.write()?, summary))

@@ -31,16 +31,18 @@
 //! | `charmap`    | Unicode ↔ MTCode mapping and typeface rules      |
 //! | `templates`  | fraction, radicals, sub/superscripts             |
 //! | `encode`     | MathML → MTEF encoder                            |
-//! | `decode`     | MTEF → MathML decoder (planned)                  |
+//! | `decode`     | MTEF → MathML decoder                            |
 
 pub mod charmap;
 mod records;
 mod templates;
 mod typeface;
 
+pub mod decode;
 pub mod encode;
 
 pub use charmap::*;
+pub use decode::{mtef_to_mathml, ole_to_mathml};
 pub use records::*;
 pub use templates::*;
 pub use typeface::*;

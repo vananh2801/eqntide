@@ -19,7 +19,6 @@ pub(super) const CT_OLEOBJECT: &str = "application/vnd.openxmlformats-officedocu
 pub(super) const MTYPE_NS: &str = "urn:mathtype:oleobject";
 
 pub(super) const DOC_XML_PATH: &str = "word/document.xml";
-pub(super) const RELS_PATH: &str = "word/_rels/document.xml.rels";
 pub(super) const CT_PATH: &str = "[Content_Types].xml";
 
 pub(super) const EMPTY_RELS: &[u8] = br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#;

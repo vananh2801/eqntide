@@ -268,7 +268,26 @@ impl OmmlConverter {
 
         if !(hide_top && hide_bot && hide_left && hide_right) {
             let mut enc = mel("menclose", inner.children);
-            enc.set_attr("notation", "box");
+            if !hide_top && !hide_bot && !hide_left && !hide_right {
+                enc.set_attr("notation", "box");
+            } else if !hide_top && !hide_right && hide_bot && hide_left {
+                enc.set_attr("notation", "actuarial");
+            } else {
+                let mut sides = Vec::new();
+                if !hide_top {
+                    sides.push("top");
+                }
+                if !hide_bot {
+                    sides.push("bottom");
+                }
+                if !hide_left {
+                    sides.push("left");
+                }
+                if !hide_right {
+                    sides.push("right");
+                }
+                enc.set_attr("notation", &sides.join(" "));
+            }
             return Ok(Some(enc));
         }
 
@@ -438,6 +457,7 @@ impl OmmlConverter {
     fn handle_nary(&mut self, node: &Element) -> Result<MathNode> {
         let nary_pr = node.find(NS_M, "naryPr");
         let op_char = m_val(nary_pr, "chr", Some("∫")).unwrap_or_default();
+        let lim_loc = m_val(nary_pr, "limLoc", None);
         let sub_hide = m_bool(nary_pr, "subHide");
         let sup_hide = m_bool(nary_pr, "supHide");
 
@@ -462,12 +482,15 @@ impl OmmlConverter {
         let op_el = MathNode::leaf("mo", &op_char);
         let base = self.child_mrow(node, "e")?;
 
-        let op_with_limits = match (lo_opt, hi_opt) {
+        let mut op_with_limits = match (lo_opt, hi_opt) {
             (Some(lo), Some(hi)) => mel("munderover", vec![op_el, lo, hi]),
             (Some(lo), None) => mel("munder", vec![op_el, lo]),
             (None, Some(hi)) => mel("mover", vec![op_el, hi]),
             (None, None) => op_el,
         };
+        if let Some(loc) = lim_loc.as_deref() {
+            op_with_limits.set_attr("data-limloc", loc);
+        }
         let mut row = mrow();
         row.children.push(op_with_limits);
         row.children.extend(base.children);

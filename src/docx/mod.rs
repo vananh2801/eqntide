@@ -1,18 +1,23 @@
-//! OMML → MathType conversion pipeline for `.docx` files.
+//! Bidirectional OMML ⇄ MathType conversion pipeline for `.docx` files.
 //!
-//! Finds every `m:oMath` equation in a `.docx`, converts each to a MathType OLE
-//! object (`Equation.DSMT4`), and writes a new `.docx` with those objects
-//! embedded in place of the original OMML equations. The original OMML is kept
-//! as a fallback so the equations stay visible in every Word environment.
+//! * **OMML → MathType** ([`convert`], [`convert_with`], [`convert_bytes`], [`convert_bytes_with`]):
+//!   Finds every `m:oMath` equation in a `.docx`, converts each to a MathType OLE
+//!   object (`Equation.DSMT4`), and writes a new `.docx` with those objects
+//!   embedded in place of the original OMML equations.
+//! * **MathType → OMML** ([`convert_to_omml`], [`convert_to_omml_with`], [`convert_bytes_to_omml`], [`convert_bytes_to_omml_with`]):
+//!   Finds every MathType OLE object (`Equation.DSMT4`, `Equation.3`, `Equation.2`)
+//!   and standalone WMF equation in a `.docx`, converts each to an `<m:oMath>`
+//!   element, and removes orphaned `.bin` and preview image files.
 //!
 //! | Module       | Responsibility                                            |
 //! |--------------|-----------------------------------------------------------|
-//! | `options`    | [`Options`], [`EmbedMode`], [`ConversionSummary`]         |
+//! | `options`    | [`Options`], [`ToOmmlOptions`], [`EmbedMode`], [`ConversionSummary`] |
 //! | `consts`     | namespaces, relationship types, package part names        |
 //! | `ole_xml`    | XML that embeds an OLE object (`w:object`, `v:shape`, …)  |
 //! | `package`    | zip entries, relationships and content types              |
 //! | `job`        | per-equation work: OMML → MathML → MTEF → OLE (+ picture) |
-//! | `pipeline`   | public `convert*` entry points                            |
+//! | `pipeline`   | public `convert*` entry points (OMML → MathType)          |
+//! | `to_omml`    | public `convert_to_omml*` entry points (MathType → OMML)  |
 
 mod consts;
 mod job;
@@ -20,9 +25,12 @@ mod ole_xml;
 mod options;
 mod package;
 mod pipeline;
-
+mod to_omml;
 
 pub use ole_xml::{make_object_run, make_ole_xml};
-pub use options::{ConversionSummary, EmbedMode, Options, PreviewFormat};
+pub use options::{ConversionSummary, EmbedMode, Options, PreviewFormat, ToOmmlOptions};
 pub use package::{add_relationship, ensure_content_type, ensure_default_extension};
 pub use pipeline::{convert, convert_bytes, convert_bytes_with, convert_with};
+pub use to_omml::{
+    convert_bytes_to_omml, convert_bytes_to_omml_with, convert_to_omml, convert_to_omml_with,
+};

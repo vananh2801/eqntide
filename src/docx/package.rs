@@ -1,27 +1,19 @@
 //! The `.docx` zip package: relationship / content-type helpers and an
 //! in-memory entry list that preserves the original order.
 
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 
-
-use crate::error::{Result};
-
-
-
-
-
+use crate::error::Result;
 use crate::xml::{Element, Node};
 
 use super::consts::*;
 
-
-
-
-
 pub fn ensure_default_extension(ct_root: &mut Element, ext: &str, content_type: &str) {
     if ct_root.elements().any(|c| {
-        c.local == "Default" && c.attr(None, "Extension").map_or(false, |e| e.eq_ignore_ascii_case(ext))
+        c.local == "Default"
+            && c.attr(None, "Extension")
+                .is_some_and(|e| e.eq_ignore_ascii_case(ext))
     }) {
         return;
     }
@@ -117,6 +109,27 @@ impl Package {
 
     pub(super) fn get(&self, name: &str) -> Option<&[u8]> {
         self.index.get(name).map(|&i| self.entries[i].data.as_slice())
+    }
+
+    pub(super) fn part_names(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|e| !e.is_dir)
+            .map(|e| e.name.clone())
+            .collect()
+    }
+
+    pub(super) fn remove(&mut self, name: &str) -> bool {
+        if self.index.remove(name).is_some() {
+            self.entries.retain(|e| e.name != name);
+            self.index.clear();
+            for (idx, e) in self.entries.iter().enumerate() {
+                self.index.insert(e.name.clone(), idx);
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Replace the content of `name`, or append it as a new entry.

@@ -6,22 +6,32 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use crate::docx::{convert_with, EmbedMode, Options, PreviewFormat};
+use crate::docx::{
+    convert_to_omml_with, convert_with, EmbedMode, Options, PreviewFormat, ToOmmlOptions,
+};
 
-/// Convert OMML equations in a .docx to MathType OLE objects.
+/// Convert equations in a .docx between OMML and MathType OLE objects.
 #[derive(Parser, Debug)]
 #[command(
     name = "omml-converter",
     version,
-    about = "Convert OMML equations in a .docx to MathType OLE objects."
+    about = "Convert equations in a .docx between OMML and MathType OLE objects."
 )]
 struct Args {
     /// Input .docx file
     input: PathBuf,
 
-    /// Output .docx path (default: <input>_mathtype.docx)
+    /// Output .docx path (default: <input>_mathtype.docx, or <input>_omml.docx with --to-omml)
     #[arg(short, long, value_name = "FILE")]
     output: Option<PathBuf>,
+
+    /// Convert MathType OLE / WMF equations in the .docx to Word OMML (<m:oMath>)
+    #[arg(short = 'r', long = "to-omml")]
+    to_omml: bool,
+
+    /// Optional font name (e.g. "Cambria Math") to apply to OMML runs when using --to-omml
+    #[arg(long, value_name = "FONT")]
+    math_font: Option<String>,
 
     /// Show per-equation progress
     #[arg(short, long, conflicts_with = "quiet")]
@@ -91,12 +101,13 @@ fn configure_logging(verbose: bool, quiet: bool) {
     });
 }
 
-fn default_output(input: &Path) -> PathBuf {
+fn default_output(input: &Path, to_omml: bool) -> PathBuf {
     let stem = input
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    input.with_file_name(format!("{stem}_mathtype.docx"))
+    let suffix = if to_omml { "omml" } else { "mathtype" };
+    input.with_file_name(format!("{stem}_{suffix}.docx"))
 }
 
 /// Run the CLI with the process's real stdout / stderr. Returns the exit code.
@@ -138,28 +149,47 @@ where
     }
     let is_docx = inp
         .extension()
-        .map(|e| e.eq_ignore_ascii_case("docx"))
-        .unwrap_or(false);
+        .is_some_and(|e| e.eq_ignore_ascii_case("docx"));
     if !is_docx {
         let _ = writeln!(err, "Error: expected a .docx file, got: {}", inp.display());
         return 1;
     }
 
-    let out_path = args.output.clone().unwrap_or_else(|| default_output(inp));
+    let out_path = args
+        .output
+        .clone()
+        .unwrap_or_else(|| default_output(inp, args.to_omml));
 
-    let opts = Options {
-        mode: if args.omml_fallback { EmbedMode::OmmlFallback } else { EmbedMode::Preview },
-        font_pt: args.font_size,
-        preview: match args.preview {
-             PreviewArg::Emf => PreviewFormat::Emf,
-             PreviewArg::Png => PreviewFormat::Png,
-        },
-    };
-    let summary = match convert_with(inp, &out_path, &opts) {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = writeln!(err, "Error: {e}");
-            return 1;
+    let summary = if args.to_omml {
+        let opts = ToOmmlOptions {
+            math_font: args.math_font,
+        };
+        match convert_to_omml_with(inp, &out_path, &opts) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = writeln!(err, "Error: {e}");
+                return 1;
+            }
+        }
+    } else {
+        let opts = Options {
+            mode: if args.omml_fallback {
+                EmbedMode::OmmlFallback
+            } else {
+                EmbedMode::Preview
+            },
+            font_pt: args.font_size,
+            preview: match args.preview {
+                PreviewArg::Emf => PreviewFormat::Emf,
+                PreviewArg::Png => PreviewFormat::Png,
+            },
+        };
+        match convert_with(inp, &out_path, &opts) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = writeln!(err, "Error: {e}");
+                return 1;
+            }
         }
     };
 

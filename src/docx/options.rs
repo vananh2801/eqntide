@@ -25,8 +25,7 @@ pub enum PreviewFormat {
     Png,
 }
 
-
-/// Conversion settings.
+/// Conversion settings for OMML → MathType (`convert*`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Options {
     /// How equations are embedded.
@@ -39,20 +38,31 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { mode: EmbedMode::Preview, font_pt: 12.0, preview: PreviewFormat::Emf }
+        Options {
+            mode: EmbedMode::Preview,
+            font_pt: 12.0,
+            preview: PreviewFormat::Emf,
+        }
     }
 }
 
-/// Outcome of a [`convert`] run.
+/// Conversion settings for MathType → OMML (`convert_to_omml*`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToOmmlOptions {
+    /// Optional math font name (e.g. `"Cambria Math"`) to apply to `<m:r>` runs.
+    pub math_font: Option<String>,
+}
+
+/// Outcome of a conversion run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ConversionSummary {
-    /// Equations (`m:oMath`) found in the document.
+    /// Equations found in the document.
     pub found: usize,
-    /// Equations replaced by an OLE object.
+    /// Equations successfully converted and replaced.
     pub converted: usize,
     /// Equations left untouched because there was nothing to convert
     /// (empty content, or an unsupported layout — see the log).
     pub skipped: usize,
-    /// Equations that failed to convert (left as their original OMML).
+    /// Equations that failed to convert (left in their original form).
     pub errors: usize,
 }

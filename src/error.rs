@@ -13,6 +13,10 @@ pub enum Error {
     Xml(String),
     /// A mandatory package part (e.g. `word/document.xml`) is missing.
     MissingPart(String),
+    /// An OLE2 compound file or relationship is malformed or missing its equation stream.
+    InvalidOle(String),
+    /// An MTEF binary stream could not be decoded.
+    InvalidMtef(String),
     /// The equation does not fit in the single-FAT-sector OLE container we write.
     EquationTooLarge {
         /// Size of the `Equation Native` stream in bytes.
@@ -39,6 +43,8 @@ impl fmt::Display for Error {
             Error::Zip(e) => write!(f, "{e}"),
             Error::Xml(msg) => write!(f, "malformed XML: {msg}"),
             Error::MissingPart(name) => write!(f, "missing package part: {name}"),
+            Error::InvalidOle(msg) => write!(f, "invalid OLE object: {msg}"),
+            Error::InvalidMtef(msg) => write!(f, "invalid MTEF stream: {msg}"),
             Error::EquationTooLarge { stream_len } => write!(
                 f,
                 "equation is too large for a single-FAT-sector OLE file ({stream_len} bytes)"

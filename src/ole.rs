@@ -1,10 +1,14 @@
-//! Minimal OLE Compound File Binary (CFB v3, 512-byte sectors) writer.
+//! Minimal OLE Compound File Binary (CFB v3, 512-byte sectors) writer and reader,
+//! plus WMF MathType comment extractor.
 //!
 //! Produces the same container layout MathType itself writes for an equation:
 //! four streams (`\x01Ole`, `\x01CompObj`, `\x03ObjInfo`, `Equation Native`),
 //! small streams stored in the mini-stream, and the MathType root CLSID
 //! `{0002CE03-0000-0000-C000-000000000046}`. The three auxiliary streams are
 //! byte-for-byte copies from a genuine MathType 5 file.
+//!
+//! Also provides [`extract_mtef_from_ole`] and [`extract_mtef_from_wmf`] for the
+//! reverse pipeline (MathType OLE / WMF → MTEF → MathML → OMML).
 //!
 //! Reference: \[MS-CFB\] <https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb>
 
@@ -22,10 +26,18 @@ pub const FREESECT: u32 = 0xFFFF_FFFF;
 pub const ENDOFCHAIN: u32 = 0xFFFF_FFFE;
 /// Sector holding the FAT itself.
 pub const FATSECT: u32 = 0xFFFF_FFFD;
+/// Sector holding a DIFAT sector.
+pub const DIFSECT: u32 = 0xFFFF_FFFC;
 /// Streams smaller than this live in the mini-stream.
 pub const MINI_CUTOFF: usize = 4096;
 /// ProgID MathType registers for its equation objects.
 pub const PROG_ID: &str = "Equation.DSMT4";
+
+/// Known ProgIDs for MathType and Equation Editor OLE objects.
+pub const MATHTYPE_PROG_IDS: &[&str] = &["Equation.DSMT4", "Equation.3", "Equation.2"];
+
+/// Known stream names in MathType OLE containers.
+pub const MTEF_STREAM_NAMES: &[&str] = &["Equation Native", "EquationNative", "Equation"];
 
 const COMPOBJ: &[u8] = include_bytes!("../assets/compobj.bin");
 const OLE_STREAM: &[u8] = include_bytes!("../assets/ole.bin");
@@ -42,6 +54,16 @@ fn put_u16(buf: &mut [u8], off: usize, v: u16) {
 
 fn put_u32(buf: &mut [u8], off: usize, v: u32) {
     buf[off..off + 4].copy_from_slice(&v.to_le_bytes());
+}
+
+fn get_u16(buf: &[u8], off: usize) -> Option<u16> {
+    let b = buf.get(off..off + 2)?;
+    Some(u16::from_le_bytes([b[0], b[1]]))
+}
+
+fn get_u32(buf: &[u8], off: usize) -> Option<u32> {
+    let b = buf.get(off..off + 4)?;
+    Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 fn div_ceil(a: usize, b: usize) -> usize {
@@ -261,4 +283,308 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
     }
     debug_assert_eq!(out.len(), (total + 1) * SECTOR);
     Ok(out)
+}
+
+// ── OLE Compound File Reader & MTEF Extractor ─────────────────────────────────
+
+struct DirItem {
+    name: String,
+    entry_type: u8,
+    start_sect: u32,
+    size: usize,
+}
+
+fn read_sector<'a>(data: &'a [u8], sector_size: usize, sect: u32) -> Option<&'a [u8]> {
+    let off = (sect as usize).checked_add(1)?.checked_mul(sector_size)?;
+    data.get(off..off.checked_add(sector_size)?)
+}
+
+fn read_chain(
+    data: &[u8],
+    sector_size: usize,
+    fat: &[u32],
+    start_sect: u32,
+    max_bytes: Option<usize>,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut cur = start_sect;
+    let max_sectors = fat.len().max(1024);
+    let mut steps = 0;
+    while cur < DIFSECT && steps < max_sectors {
+        let Some(slice) = read_sector(data, sector_size, cur) else {
+            break;
+        };
+        out.extend_from_slice(slice);
+        if let Some(limit) = max_bytes {
+            if out.len() >= limit {
+                out.truncate(limit);
+                return out;
+            }
+        }
+        cur = fat.get(cur as usize).copied().unwrap_or(ENDOFCHAIN);
+        steps += 1;
+    }
+    if let Some(limit) = max_bytes {
+        if out.len() > limit {
+            out.truncate(limit);
+        }
+    }
+    out
+}
+
+/// Extract a named stream from an OLE2 Compound File Binary (`data`).
+pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
+    if data.len() < SECTOR || data.get(0..8)? != MAGIC {
+        return None;
+    }
+
+    let sector_shift = get_u16(data, 30)? as usize;
+    let mini_shift = get_u16(data, 32)? as usize;
+    if !(7..=16).contains(&sector_shift) || !(4..=sector_shift).contains(&mini_shift) {
+        return None;
+    }
+    let sector_size = 1usize << sector_shift;
+    let mini_sector_size = 1usize << mini_shift;
+
+    let first_dir_sect = get_u32(data, 48)?;
+    let mini_cutoff = get_u32(data, 56)? as usize;
+    let first_minifat_sect = get_u32(data, 60)?;
+    let num_minifat_sects = get_u32(data, 64)? as usize;
+    let first_difat_sect = get_u32(data, 68)?;
+    let num_difat_sects = get_u32(data, 72)? as usize;
+
+    // 1. Collect DIFAT (FAT sector numbers)
+    let mut fat_sects = Vec::new();
+    for i in 0..109 {
+        let s = get_u32(data, 76 + i * 4)?;
+        if s < DIFSECT {
+            fat_sects.push(s);
+        }
+    }
+    let mut difat_cur = first_difat_sect;
+    let mut difat_steps = 0;
+    while difat_cur < DIFSECT && difat_steps < num_difat_sects {
+        let Some(sec) = read_sector(data, sector_size, difat_cur) else {
+            break;
+        };
+        let entries_per_sect = sector_size / 4;
+        for i in 0..entries_per_sect.saturating_sub(1) {
+            if let Some(s) = get_u32(sec, i * 4) {
+                if s < DIFSECT {
+                    fat_sects.push(s);
+                }
+            }
+        }
+        difat_cur = get_u32(sec, (entries_per_sect - 1) * 4).unwrap_or(ENDOFCHAIN);
+        difat_steps += 1;
+    }
+
+    // 2. Build FAT
+    let mut fat = Vec::with_capacity(fat_sects.len() * (sector_size / 4));
+    for &s in &fat_sects {
+        if let Some(sec) = read_sector(data, sector_size, s) {
+            for chunk in sec.chunks_exact(4) {
+                fat.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            }
+        }
+    }
+
+    // 3. Read Directory stream
+    let dir_bytes = read_chain(data, sector_size, &fat, first_dir_sect, None);
+    let mut entries = Vec::new();
+    for entry in dir_bytes.chunks_exact(128) {
+        let name_len = get_u16(entry, 64).unwrap_or(0) as usize;
+        let entry_type = entry[66];
+        if entry_type == 0 || name_len < 2 || name_len > 64 {
+            continue;
+        }
+        let u16_count = (name_len / 2).saturating_sub(1);
+        let mut utf16 = Vec::with_capacity(u16_count);
+        for i in 0..u16_count {
+            if let Some(ch) = get_u16(entry, i * 2) {
+                if ch == 0 {
+                    break;
+                }
+                utf16.push(ch);
+            }
+        }
+        let name = String::from_utf16_lossy(&utf16);
+        let start_sect = get_u32(entry, 116).unwrap_or(ENDOFCHAIN);
+        let size = get_u32(entry, 120).unwrap_or(0) as usize;
+        entries.push(DirItem {
+            name,
+            entry_type,
+            start_sect,
+            size,
+        });
+    }
+
+    let root = entries.iter().find(|e| e.entry_type == 5)?;
+    let target = target_names.iter().find_map(|&cand| {
+        entries
+            .iter()
+            .find(|e| e.entry_type == 2 && e.name.eq_ignore_ascii_case(cand))
+    })?;
+
+    if target.size == 0 {
+        return Some(Vec::new());
+    }
+
+    if target.size >= mini_cutoff {
+        return Some(read_chain(
+            data,
+            sector_size,
+            &fat,
+            target.start_sect,
+            Some(target.size),
+        ));
+    }
+
+    // 4. Read from MiniStream via MiniFAT
+    let mini_stream = read_chain(data, sector_size, &fat, root.start_sect, Some(root.size));
+    let minifat_bytes = if first_minifat_sect < DIFSECT && num_minifat_sects > 0 {
+        read_chain(
+            data,
+            sector_size,
+            &fat,
+            first_minifat_sect,
+            Some(num_minifat_sects * sector_size),
+        )
+    } else {
+        Vec::new()
+    };
+    let mut minifat = Vec::with_capacity(minifat_bytes.len() / 4);
+    for chunk in minifat_bytes.chunks_exact(4) {
+        minifat.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+
+    let mut out = Vec::with_capacity(target.size);
+    let mut cur = target.start_sect;
+    let max_steps = minifat.len().max(1024);
+    let mut steps = 0;
+    while cur < DIFSECT && steps < max_steps && out.len() < target.size {
+        let off = (cur as usize).checked_mul(mini_sector_size)?;
+        let end = (off + mini_sector_size).min(mini_stream.len());
+        if off >= mini_stream.len() {
+            break;
+        }
+        out.extend_from_slice(&mini_stream[off..end]);
+        cur = minifat.get(cur as usize).copied().unwrap_or(ENDOFCHAIN);
+        steps += 1;
+    }
+    if out.len() > target.size {
+        out.truncate(target.size);
+    }
+    Some(out)
+}
+
+/// Strip the 28-byte `EQNOLEFILEHDR` prefix from a raw `Equation Native` stream
+/// and return the MTEF payload.
+pub fn strip_eqn_ole_header(raw: &[u8]) -> Option<&[u8]> {
+    if raw.len() < 28 {
+        return None;
+    }
+    let cb_hdr = get_u16(raw, 0)?;
+    let cb_object = get_u32(raw, 8)? as usize;
+    if cb_hdr == 28 {
+        let mtef = &raw[28..];
+        if cb_object > 0 && cb_object <= mtef.len() {
+            Some(&mtef[..cb_object])
+        } else {
+            Some(mtef)
+        }
+    } else if matches!(raw.first(), Some(3 | 5)) {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+/// Extract the MTEF byte stream from a MathType OLE compound file.
+pub fn extract_mtef_from_ole(ole_data: &[u8]) -> Option<Vec<u8>> {
+    let raw = read_ole_stream(ole_data, MTEF_STREAM_NAMES)?;
+    strip_eqn_ole_header(&raw).map(|s| s.to_vec())
+}
+
+const WMF_PLACEABLE: [u8; 4] = [0xD7, 0xCD, 0xC6, 0x9A];
+const WMF_SIGNATURE: &[u8] = b"Design Science, Inc.\x00";
+
+/// Extract the MTEF byte stream embedded inside a MathType WMF picture
+/// (`META_ESCAPE` / `MFCOMMENT` with `"AppsMFCC"` signature), if any.
+pub fn extract_mtef_from_wmf(data: &[u8]) -> Option<Vec<u8>> {
+    let off = if data.starts_with(&WMF_PLACEABLE) { 22 } else { 0 };
+    let mut pos = off + 18; // skip standard METAHEADER
+    let mut total: Option<usize> = None;
+    let mut payload = Vec::new();
+
+    while pos + 6 <= data.len() {
+        let size = get_u32(data, pos)? as usize;
+        let func = get_u16(data, pos + 4)?;
+        if size < 3 {
+            break;
+        }
+        if func == 0x0626 && pos + 10 <= data.len() {
+            // META_ESCAPE
+            let esc = get_u16(data, pos + 6)?;
+            let count = get_u16(data, pos + 8)? as usize;
+            let chunk_end = (pos + 10 + count).min(data.len());
+            let chunk = &data[pos + 10..chunk_end];
+            if esc == 15 && chunk.len() >= 18 && &chunk[..8] == b"AppsMFCC" {
+                let size_total = get_u32(chunk, 10)? as usize;
+                let size_chunk = get_u32(chunk, 14)? as usize;
+                let mut body = &chunk[18..];
+                if body.starts_with(WMF_SIGNATURE) {
+                    body = &body[WMF_SIGNATURE.len()..];
+                }
+                if total.is_none() {
+                    total = Some(size_total);
+                }
+                let take = if size_chunk > 0 && size_chunk <= body.len() {
+                    &body[..size_chunk]
+                } else {
+                    body
+                };
+                payload.extend_from_slice(take);
+            }
+        }
+        pos = pos.checked_add(size.checked_mul(2)?)?;
+    }
+
+    if payload.is_empty() {
+        return None;
+    }
+    if let Some(t) = total {
+        if t > 0 && t < payload.len() {
+            payload.truncate(t);
+        }
+    }
+    if matches!(payload.first(), Some(3 | 5)) {
+        Some(payload)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_make_and_extract_ole_roundtrip_small_and_large() {
+        // Small stream (< 4096 bytes -> MiniStream)
+        let eq_small = vec![0x05, 0x00, 0x00, 0x05, 0x00, b'D', b'S', b'M', b'T', b'5', 0x00, 0x00, 0x0A, 0x01, 0x00, 0x00];
+        let native_small = crate::mtef::make_equation_native(&[0x02, 0x00, 0x83, b'x', 0x00]);
+        let ole_small = make_ole(&native_small).unwrap();
+        let extracted_small = extract_mtef_from_ole(&ole_small).unwrap();
+        assert_eq!(extracted_small[0], 5);
+        assert!(extracted_small.len() > 12);
+        let _ = eq_small;
+
+        // Large stream (>= 4096 bytes -> regular FAT sectors)
+        let large_payload = vec![0x02; 5000];
+        let native_large = crate::mtef::make_equation_native(&large_payload);
+        let ole_large = make_ole(&native_large).unwrap();
+        let extracted_large = extract_mtef_from_ole(&ole_large).unwrap();
+        assert_eq!(extracted_large.len(), native_large.len() - 28);
+    }
 }

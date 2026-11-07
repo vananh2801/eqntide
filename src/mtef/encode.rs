@@ -13,12 +13,15 @@ use crate::mtef::{
     presuperscript, slash_fraction, sqrt_radical, strike_through, subscript, subsuperscript,
     superscript, under_harpoon_arrow, under_overscript, under_vector_arrow, underbar, underbrace,
     underbracket, underscript, vector_arrow, EMB_1DOT, EMB_1PRIME, EMB_2DOT, EMB_2PRIME, EMB_3DOT,
-    EMB_3PRIME, EMB_4DOT, EMB_BPRIME, EMB_SMILE, EMB_U_1DOT, EMB_U_2DOT, EMB_U_3DOT, EMB_U_4DOT,
-    EMB_U_FROWN, EMB_U_SMILE, EMB_U_TILDE, END, HALIGN_CENTER, HALIGN_LEFT, TF_FUNCTION,
-    TF_NUMBER, TF_SYMBOL, TF_TEXT, TF_VARIABLE, TF_VECTOR, TM_ANGLE, TM_BAR, TM_BRACE, TM_BRACK,
-    TM_CEILING, TM_COPROD, TM_DBAR, TM_FLOOR, TM_INTER, TM_OBRACK, TM_PAREN, TM_PROD, TM_SUM,
-    TM_SUMOP, TM_UNION, TV_BO_SUM, TV_INT_1, TV_INT_2, TV_INT_3, TV_INT_CCW_LOOP, TV_INT_CW_LOOP,
-    TV_INT_LOOP, TV_ST_DOWN, TV_ST_HORIZ, TV_ST_UP, VALIGN_CENTER_BASELINE,
+    EMB_3PRIME, EMB_4DOT, EMB_BARROW, EMB_BPRIME, EMB_FROWN, EMB_HAT, EMB_L1ARROW, EMB_LARROW,
+    EMB_MBAR, EMB_NOT, EMB_OBAR, EMB_R1ARROW, EMB_RARROW, EMB_SMILE, EMB_TILDE, EMB_U_1DOT,
+    EMB_U_2DOT, EMB_U_3DOT, EMB_U_4DOT, EMB_U_BAR, EMB_U_BARROW, EMB_U_FROWN, EMB_U_L1ARROW,
+    EMB_U_LARROW, EMB_U_R1ARROW, EMB_U_RARROW, EMB_U_SMILE, EMB_U_TILDE, END, HALIGN_CENTER,
+    HALIGN_LEFT, TF_FUNCTION, TF_NUMBER, TF_SYMBOL, TF_TEXT, TF_VARIABLE, TF_VECTOR, TM_ANGLE,
+    TM_BAR, TM_BRACE, TM_BRACK, TM_CEILING, TM_COPROD, TM_DBAR, TM_FLOOR, TM_INTER, TM_OBRACK,
+    TM_PAREN, TM_PROD, TM_SUM, TM_SUMOP, TM_UNION, TV_BO_SUM, TV_INT_1, TV_INT_2, TV_INT_3,
+    TV_INT_CCW_LOOP, TV_INT_CW_LOOP, TV_INT_LOOP, TV_ST_DOWN, TV_ST_HORIZ, TV_ST_UP,
+    VALIGN_CENTER_BASELINE,
 };
 use crate::symbols::{has_foreign_letters, is_function};
 
@@ -348,7 +351,7 @@ impl MathmlEncoder {
                 let base_node = node.children.first();
                 let sub_node = node.children.get(1);
                 let sup_node = node.children.get(2);
-                let base_text = base_node.map(|n| n.text.trim()).unwrap_or("");
+                let base_text = base_node.and_then(unwrap_leaf_text).unwrap_or("");
                 let sub_text = sub_node.map(|n| n.text.trim()).unwrap_or("");
                 let sup_text = sup_node.map(|n| n.text.trim()).unwrap_or("");
 
@@ -370,12 +373,17 @@ impl MathmlEncoder {
                     let sup = self.nth(node, 2)?;
                     let lo_opt = (!sub.is_empty()).then_some(sub.as_slice());
                     let hi_opt = (!sup.is_empty()).then_some(sup.as_slice());
+                    let sum_style = match node.attr("data-limloc") {
+                        Some("subSup") => false,
+                        Some("undOvr") => true,
+                        _ => node.tag == "munderover",
+                    };
                     return Ok(encode_bigop_template(
                         base_text,
                         &[],
                         lo_opt,
                         hi_opt,
-                        node.tag == "munderover",
+                        sum_style,
                     ));
                 }
 
@@ -408,8 +416,20 @@ impl MathmlEncoder {
             "mover" => {
                 let base_node = node.children.first();
                 let over_node = node.children.get(1);
-                let base_text = base_node.map(|n| n.text.trim()).unwrap_or("");
+                let base_text = base_node.and_then(unwrap_leaf_text).unwrap_or("");
                 let over_text = over_node.map(|n| n.text.trim()).unwrap_or("");
+
+                // Case A0: Quotient over `<menclose notation="longdiv">` -> `tmLDIV` with `TV_LD_UPPER`
+                if let Some(enc_base) = base_node.filter(|n| {
+                    n.tag == "menclose" && n.attr("notation").unwrap_or("").contains("longdiv")
+                }) {
+                    let dividend = self.encode_children(enc_base)?;
+                    let quotient = self.nth(node, 1)?;
+                    return Ok(long_division(
+                        &dividend,
+                        (!quotient.is_empty()).then_some(quotient.as_slice()),
+                    ));
+                }
 
                 // Case A: Nested <mover><mover>main <mo>⏞</mo></mover> label</mover>
                 if let Some(inner_base) = base_node.filter(|n| n.tag == "mover") {
@@ -458,7 +478,8 @@ impl MathmlEncoder {
                 if is_bigop_str(base_text) {
                     let over = self.nth(node, 1)?;
                     let hi_opt = (!over.is_empty()).then_some(over.as_slice());
-                    return Ok(encode_bigop_template(base_text, &[], None, hi_opt, true));
+                    let sum_style = node.attr("data-limloc") != Some("subSup");
+                    return Ok(encode_bigop_template(base_text, &[], None, hi_opt, sum_style));
                 }
 
                 let base = self.nth(node, 0)?;
@@ -468,13 +489,11 @@ impl MathmlEncoder {
                     "\u{21BC}" | "\u{20D0}" | "\u{21BD}" => Ok(harpoon_arrow(&base, true)),
                     // Right-pointing harpoon arrow (\rightharpoonup / \overrightharpoon{})
                     "\u{21C0}" | "\u{20D1}" | "\u{21C1}" => Ok(harpoon_arrow(&base, false)),
-                    // Bidirectional arrow over characters (\overleftrightarrow{x} / \overset{\leftrightarrow}{x})
-                    "\u{2194}" | "\u{27F7}" => Ok(extensible_arrow("↔", None, Some(&base))),
-                    // Left arrow over characters (\overleftarrow{x})
-                    "\u{2190}" | "\u{20D6}" | "\u{27F5}" => {
-                        Ok(extensible_arrow("←", None, Some(&base)))
-                    }
-                    // Standard vector arrow over characters (\vec{x})
+                    // Bidirectional vector arrow over characters (\overleftrightarrow{x})
+                    "\u{2194}" | "\u{20E1}" | "\u{27F7}" => Ok(vector_arrow(&base, "↔")),
+                    // Left vector arrow over characters (\overleftarrow{x})
+                    "\u{2190}" | "\u{20D6}" | "\u{27F5}" => Ok(vector_arrow(&base, "←")),
+                    // Standard right vector arrow over characters (\vec{x}, \overrightarrow{AB})
                     "\u{2192}" | "\u{20D7}" | "\u{27F6}" => Ok(vector_arrow(&base, "→")),
                     // Double overbar
                     "\u{033F}" | "==" | "═" => Ok(double_overbar(&base)),
@@ -484,7 +503,7 @@ impl MathmlEncoder {
                     // Tilde over characters (\widetilde{AB}, \tilde{x})
                     "~" | "\u{02DC}" | "\u{0303}" | "\u{223C}" => Ok(over_tilde(&base)),
                     // Arc over characters (\wideparen{AB})
-                    "\u{2312}" | "\u{23DC}" | "\u{2322}" | "\u{25DC}" | "\u{23DF}" => {
+                    "\u{2312}" | "\u{23DC}" | "\u{2322}" | "\u{25DC}" | "\u{23DF}" | "\u{0311}" => {
                         Ok(over_arc(&base))
                     }
                     // Hat / circumflex (\widehat{AB}, \hat{x})
@@ -516,7 +535,7 @@ impl MathmlEncoder {
                     "`" | "\u{2035}" if is_single_char_record(&base) => {
                         Ok(attach_embell(base, EMB_BPRIME))
                     }
-                    "\u{2323}" | "\u{23DD}" if is_single_char_record(&base) => {
+                    "\u{2323}" | "\u{23DD}" | "\u{0306}" | "\u{02D8}" if is_single_char_record(&base) => {
                         Ok(attach_embell(base, EMB_SMILE))
                     }
                     // Fallback: overscript limit (`tmLIM` with `TV_BO_UPPER`)
@@ -535,7 +554,7 @@ impl MathmlEncoder {
             "munder" => {
                 let base_node = node.children.first();
                 let under_node = node.children.get(1);
-                let base_text = base_node.map(|n| n.text.trim()).unwrap_or("");
+                let base_text = base_node.and_then(unwrap_leaf_text).unwrap_or("");
                 let under_text = under_node.map(|n| n.text.trim()).unwrap_or("");
 
                 // Case A: Nested <munder><munder>main <mo>⏟</mo></munder> label</munder>
@@ -585,7 +604,8 @@ impl MathmlEncoder {
                 if is_bigop_str(base_text) {
                     let under = self.nth(node, 1)?;
                     let lo_opt = (!under.is_empty()).then_some(under.as_slice());
-                    return Ok(encode_bigop_template(base_text, &[], lo_opt, None, true));
+                    let sum_style = node.attr("data-limloc") != Some("subSup");
+                    return Ok(encode_bigop_template(base_text, &[], lo_opt, None, sum_style));
                 }
 
                 let base = self.nth(node, 0)?;
@@ -598,7 +618,7 @@ impl MathmlEncoder {
                     return Ok(underbar(&base));
                 }
 
-                // Case F: Harpoons or arrows under characters
+                // Case F: Harpoons or vector arrows under characters
                 if !is_limit_function(base_text) && !base_text.contains("lim") {
                     match under_text {
                         "\u{21BC}" | "\u{20D0}" | "\u{21BD}" => {
@@ -607,12 +627,11 @@ impl MathmlEncoder {
                         "\u{21C0}" | "\u{20D1}" | "\u{21C1}" => {
                             return Ok(under_harpoon_arrow(&base, false));
                         }
-                        "\u{20EC}" | "\u{20ED}" | "\u{20EE}" | "\u{20EF}" | "\u{0362}" => {
+                        "\u{20EC}" | "\u{20ED}" | "\u{20EE}" | "\u{20EF}" | "\u{0362}"
+                        | "\u{2192}" | "\u{20D7}" | "\u{27F6}"
+                        | "\u{2190}" | "\u{20D6}" | "\u{27F5}"
+                        | "\u{2194}" | "\u{20E1}" | "\u{27F7}" => {
                             return Ok(under_vector_arrow(&base, under_text));
-                        }
-                        "\u{2192}" | "\u{20D7}" | "\u{27F6}" | "\u{2190}" | "\u{20D6}"
-                        | "\u{27F5}" | "\u{2194}" | "\u{27F7}" => {
-                            return Ok(extensible_arrow(under_text, Some(&base), None));
                         }
                         _ => {}
                     }
@@ -621,17 +640,25 @@ impl MathmlEncoder {
                 // Case G: Single-character under-embellishments
                 if is_single_char_record(&base) {
                     match under_text {
-                        "\u{02D9}" | "\u{0307}" | "." => return Ok(attach_embell(base, EMB_U_1DOT)),
-                        "\u{00A8}" | "\u{0308}" | ".." => {
+                        "\u{02D9}" | "\u{0307}" | "." | "\u{0323}" => {
+                            return Ok(attach_embell(base, EMB_U_1DOT))
+                        }
+                        "\u{00A8}" | "\u{0308}" | ".." | "\u{0324}" => {
                             return Ok(attach_embell(base, EMB_U_2DOT))
                         }
-                        "\u{20DB}" | "..." => return Ok(attach_embell(base, EMB_U_3DOT)),
+                        "\u{20DB}" | "..." | "\u{20E8}" => {
+                            return Ok(attach_embell(base, EMB_U_3DOT))
+                        }
                         "\u{20DC}" => return Ok(attach_embell(base, EMB_U_4DOT)),
-                        "~" | "\u{02DC}" | "\u{0303}" => {
+                        "~" | "\u{02DC}" | "\u{0303}" | "\u{0330}" => {
                             return Ok(attach_embell(base, EMB_U_TILDE))
                         }
-                        "\u{2322}" | "\u{23DC}" => return Ok(attach_embell(base, EMB_U_FROWN)),
-                        "\u{2323}" | "\u{23DD}" => return Ok(attach_embell(base, EMB_U_SMILE)),
+                        "\u{2322}" | "\u{23DC}" | "\u{032F}" => {
+                            return Ok(attach_embell(base, EMB_U_FROWN))
+                        }
+                        "\u{2323}" | "\u{23DD}" | "\u{032E}" => {
+                            return Ok(attach_embell(base, EMB_U_SMILE))
+                        }
                         _ => {}
                     }
                 }
@@ -763,8 +790,28 @@ impl MathmlEncoder {
             .max()
             .unwrap_or(0);
 
-        // Single-column stack (e.g. from <m:eqArr> or <pile>): encode as MTEF PILE.
+        // Single-column stack (e.g. from <m:eqArr>, <pile>, or long division with quotient).
         if ncols <= 1 {
+            // Check for 2-row long division with quotient (`tmLDIV` with `tvLD_UPPER` decoded by `mtef/decode.rs`)
+            if nrows == 2 {
+                let row1_cell = node.children[1].children.first().unwrap_or(&node.children[1]);
+                if row1_cell.children.len() == 1
+                    && row1_cell.children[0].tag == "menclose"
+                    && row1_cell.children[0]
+                        .attr("notation")
+                        .unwrap_or("")
+                        .contains("longdiv")
+                {
+                    let row0_cell = node.children[0].children.first().unwrap_or(&node.children[0]);
+                    let quotient = self.encode_children(row0_cell)?;
+                    let dividend = self.encode_children(&row1_cell.children[0])?;
+                    return Ok(long_division(
+                        &dividend,
+                        (!quotient.is_empty()).then_some(quotient.as_slice()),
+                    ));
+                }
+            }
+
             let mut encoded_rows: Vec<Vec<u8>> = Vec::with_capacity(nrows);
             for mtr in &node.children {
                 let row_bytes = match mtr.children.first() {
@@ -811,6 +858,20 @@ impl MathmlEncoder {
     }
 }
 
+/// Unwrap single-child `<mstyle>` / `<mrow>` / `<mpadded>` wrappers to get leaf text.
+fn unwrap_leaf_text(mut node: &MathNode) -> Option<&str> {
+    loop {
+        if !node.text.trim().is_empty() {
+            return Some(node.text.trim());
+        }
+        if matches!(node.tag.as_str(), "mstyle" | "mrow" | "mpadded") && node.children.len() == 1 {
+            node = &node.children[0];
+        } else {
+            return Some(node.text.trim());
+        }
+    }
+}
+
 fn is_bigop_str(s: &str) -> bool {
     let mut chars = s.chars();
     match (chars.next(), chars.next()) {
@@ -833,40 +894,76 @@ fn is_limit_function(s: &str) -> bool {
 fn extract_bigop_parts(
     node: &MathNode,
 ) -> Option<(&str, Option<&MathNode>, Option<&MathNode>, bool)> {
+    let explicit_sum_style = match node.attr("data-limloc") {
+        Some("subSup") => Some(false),
+        Some("undOvr") => Some(true),
+        _ => None,
+    };
+
     match node.tag.as_str() {
-        "mo" => {
-            let t = node.text.trim();
-            is_bigop_str(t).then_some((t, None, None, true))
+        "mo" | "mstyle" | "mrow" => {
+            let t = unwrap_leaf_text(node)?;
+            is_bigop_str(t).then_some((t, None, None, explicit_sum_style.unwrap_or(true)))
         }
         "munder" => {
             let base = node.children.first()?;
-            let t = base.text.trim();
-            is_bigop_str(t).then_some((t, node.children.get(1), None, true))
+            let t = unwrap_leaf_text(base)?;
+            is_bigop_str(t).then_some((
+                t,
+                node.children.get(1),
+                None,
+                explicit_sum_style.unwrap_or(true),
+            ))
         }
         "mover" => {
             let base = node.children.first()?;
-            let t = base.text.trim();
-            is_bigop_str(t).then_some((t, None, node.children.get(1), true))
+            let t = unwrap_leaf_text(base)?;
+            is_bigop_str(t).then_some((
+                t,
+                None,
+                node.children.get(1),
+                explicit_sum_style.unwrap_or(true),
+            ))
         }
         "munderover" => {
             let base = node.children.first()?;
-            let t = base.text.trim();
-            is_bigop_str(t).then_some((t, node.children.get(1), node.children.get(2), true))
+            let t = unwrap_leaf_text(base)?;
+            is_bigop_str(t).then_some((
+                t,
+                node.children.get(1),
+                node.children.get(2),
+                explicit_sum_style.unwrap_or(true),
+            ))
         }
         "msub" => {
             let base = node.children.first()?;
-            let t = base.text.trim();
-            is_bigop_str(t).then_some((t, node.children.get(1), None, false))
+            let t = unwrap_leaf_text(base)?;
+            is_bigop_str(t).then_some((
+                t,
+                node.children.get(1),
+                None,
+                explicit_sum_style.unwrap_or(false),
+            ))
         }
         "msup" => {
             let base = node.children.first()?;
-            let t = base.text.trim();
-            is_bigop_str(t).then_some((t, None, node.children.get(1), false))
+            let t = unwrap_leaf_text(base)?;
+            is_bigop_str(t).then_some((
+                t,
+                None,
+                node.children.get(1),
+                explicit_sum_style.unwrap_or(false),
+            ))
         }
         "msubsup" => {
             let base = node.children.first()?;
-            let t = base.text.trim();
-            is_bigop_str(t).then_some((t, node.children.get(1), node.children.get(2), false))
+            let t = unwrap_leaf_text(base)?;
+            is_bigop_str(t).then_some((
+                t,
+                node.children.get(1),
+                node.children.get(2),
+                explicit_sum_style.unwrap_or(false),
+            ))
         }
         _ => None,
     }
@@ -1021,6 +1118,67 @@ fn attach_embell(mut char_bytes: Vec<u8>, embell_code: u8) -> Vec<u8> {
     char_bytes
 }
 
+/// Map a Unicode combining mark (or inline prime) to its MTEF `EMB_*` code.
+fn combining_mark_to_embell(c: char) -> Option<u8> {
+    match c {
+        '\u{0307}' => Some(EMB_1DOT),
+        '\u{0308}' => Some(EMB_2DOT),
+        '\u{20DB}' => Some(EMB_3DOT),
+        '\u{20DC}' => Some(EMB_4DOT),
+        '\u{0302}' => Some(EMB_HAT),
+        '\u{0303}' => Some(EMB_TILDE),
+        '\u{0304}' | '\u{0305}' => Some(EMB_OBAR),
+        '\u{0311}' => Some(EMB_FROWN),
+        '\u{0306}' => Some(EMB_SMILE),
+        '\u{0338}' | '\u{20D2}' => Some(EMB_NOT),
+        '\u{0335}' | '\u{0336}' => Some(EMB_MBAR),
+        '\u{20D7}' => Some(EMB_RARROW),
+        '\u{20D6}' => Some(EMB_LARROW),
+        '\u{20E1}' => Some(EMB_BARROW),
+        '\u{20D1}' => Some(EMB_R1ARROW),
+        '\u{20D0}' => Some(EMB_L1ARROW),
+        '\u{0323}' => Some(EMB_U_1DOT),
+        '\u{0324}' => Some(EMB_U_2DOT),
+        '\u{20E8}' => Some(EMB_U_3DOT),
+        '\u{0331}' | '\u{0332}' => Some(EMB_U_BAR),
+        '\u{0330}' => Some(EMB_U_TILDE),
+        '\u{032F}' => Some(EMB_U_FROWN),
+        '\u{032E}' => Some(EMB_U_SMILE),
+        '\u{20EF}' => Some(EMB_U_RARROW),
+        '\u{20EE}' => Some(EMB_U_LARROW),
+        '\u{034D}' => Some(EMB_U_BARROW),
+        '\u{20EC}' => Some(EMB_U_R1ARROW),
+        '\u{20ED}' => Some(EMB_U_L1ARROW),
+        _ => None,
+    }
+}
+
+fn emit_char_with_combining_marks(
+    chars: &[char],
+    idx: &mut usize,
+    tf: u8,
+    mt_code: u32,
+) -> Vec<u8> {
+    let mut rec = char_record(tf, mt_code);
+    let mut embells = Vec::new();
+    while *idx < chars.len() {
+        if let Some(emb) = combining_mark_to_embell(chars[*idx]) {
+            embells.push(emb);
+            *idx += 1;
+        } else {
+            break;
+        }
+    }
+    if !embells.is_empty() && rec.len() == 5 && rec[0] == 0x02 {
+        rec[1] |= 0x01; // OPT_CHAR_EMBELL
+        for emb in embells {
+            rec.extend_from_slice(&embell_record(emb));
+        }
+        rec.extend_from_slice(END);
+    }
+    rec
+}
+
 fn open_fence_selector(s: &str) -> Option<u8> {
     match s {
         "(" => Some(TM_PAREN),
@@ -1087,8 +1245,8 @@ fn enc_mi(node: &MathNode) -> Vec<u8> {
         return out;
     }
 
-    // 3. General `<mi>` run (may be a single variable or an OMML compound run
-    //    such as `"IR"`, `"4Fe"`, `"x∈ℝ"`, `"sinα"`).
+    // 3. General `<mi>` run (may be a single variable, a variable with combining marks,
+    //    or an OMML compound run such as `"IR"`, `"4Fe"`, `"x∈ℝ"`, `"sinα"`).
     let mut out = Vec::new();
     let chars: Vec<char> = text.chars().collect();
     let mut idx = 0;
@@ -1110,18 +1268,15 @@ fn enc_mi(node: &MathNode) -> Vec<u8> {
                 for c in word.chars() {
                     out.extend(char_record(tf, c as u32));
                 }
-            } else {
-                for c in word.chars() {
-                    let (tf, mt_code) = map_char_with_variant(c, variant, TF_VARIABLE);
-                    out.extend(char_record(tf, mt_code));
-                }
+                continue;
             }
-            continue;
+            // Otherwise, step through each letter so trailing combining marks attach properly
+            idx = start;
         }
 
         let (tf, mt_code) = map_char_with_variant(ch, variant, TF_VARIABLE);
-        out.extend(char_record(tf, mt_code));
         idx += 1;
+        out.extend(emit_char_with_combining_marks(&chars, &mut idx, tf, mt_code));
     }
     out
 }
@@ -1129,16 +1284,21 @@ fn enc_mi(node: &MathNode) -> Vec<u8> {
 fn enc_mn(node: &MathNode) -> Vec<u8> {
     let variant = node.attr("mathvariant");
     let mut out = Vec::new();
-    for ch in node.text.trim().chars() {
+    let chars: Vec<char> = node.text.trim().chars().collect();
+    let mut idx = 0;
+    while idx < chars.len() {
+        let ch = chars[idx];
         if ch.is_whitespace() {
+            idx += 1;
             continue;
         }
-        if ch == '.' || ch == ',' {
-            out.extend(char_record(TF_SYMBOL, ch as u32));
+        let (tf, mt_code) = if ch == '.' || ch == ',' {
+            (TF_SYMBOL, ch as u32)
         } else {
-            let (tf, mt_code) = map_char_with_variant(ch, variant, TF_NUMBER);
-            out.extend(char_record(tf, mt_code));
-        }
+            map_char_with_variant(ch, variant, TF_NUMBER)
+        };
+        idx += 1;
+        out.extend(emit_char_with_combining_marks(&chars, &mut idx, tf, mt_code));
     }
     out
 }
@@ -1153,13 +1313,19 @@ fn enc_mo(node: &MathNode) -> Vec<u8> {
         return char_record(tf, mt_code);
     }
     let variant = node.attr("mathvariant");
-    text.chars()
+    let chars: Vec<char> = text
+        .chars()
         .filter(|c| !c.is_whitespace() && *c != '\u{2061}')
-        .flat_map(|c| {
-            let (tf, mt_code) = map_char_with_variant(c, variant, TF_SYMBOL);
-            char_record(tf, mt_code)
-        })
-        .collect()
+        .collect();
+    let mut out = Vec::new();
+    let mut idx = 0;
+    while idx < chars.len() {
+        let ch = chars[idx];
+        let (tf, mt_code) = map_char_with_variant(ch, variant, TF_SYMBOL);
+        idx += 1;
+        out.extend(emit_char_with_combining_marks(&chars, &mut idx, tf, mt_code));
+    }
+    out
 }
 
 fn enc_mtext(node: &MathNode) -> Vec<u8> {
