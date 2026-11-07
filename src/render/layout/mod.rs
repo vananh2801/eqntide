@@ -19,7 +19,7 @@
 //! are plain data and live in [`crate::symbols`].
 //!
 //! Sizes follow MathType's defaults: fraction parts stay at full size,
-//! sub/superscripts are 65 %.
+//! sub/superscripts are 70% (matching `STIXTwoMath`'s `script_percent_scale_down`).
 
 mod arrow;
 mod bar;
@@ -52,9 +52,9 @@ pub(crate) use boxes::{Item, LBox};
 use geom::{quad_bezier, rect, stroke};
 
 pub(crate) const MAX_DEPTH: usize = 256;
-const SCRIPT: f32 = 0.65;
-const AXIS: f32 = 0.25;
-const RULE: f32 = 0.05;
+pub(crate) const SCRIPT: f32 = 0.70;
+pub(crate) const AXIS: f32 = 0.258;
+pub(crate) const RULE: f32 = 0.068;
 const THIN: f32 = 0.167;
 const MED: f32 = 0.222;
 const THICK: f32 = 0.278;

@@ -26,6 +26,7 @@ log = "0.4"
 uuid = { version = "1", features = ["v4"] }
 ab_glyph = "0.2"
 ab_glyph_rasterizer = "0.1"
+ttf-parser = "0.25"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 crc32fast = "1"
 

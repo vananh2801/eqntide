@@ -11,6 +11,81 @@ static FONT_ITALIC: &[u8] = include_bytes!("../../assets/fonts/stixfonts-2.13b17
 static FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Bold.ttf");
 static FONT_MATH: &[u8] = include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoMath-Regular.ttf");
 
+/// OpenType MATH table constants extracted directly from `STIXTwoMath-Regular.ttf`.
+///
+/// All linear dimensions are stored as fractions of the em square (`value / upem`),
+/// so multiplying by `em_px` yields exact pixel coordinates for any point size.
+#[derive(Clone, Copy, Debug)]
+pub struct MathConstants {
+    /// Height of the mathematical axis above the baseline (fraction of em).
+    pub axis_height: f32,
+    /// Default thickness of fraction rules (fraction of em).
+    pub fraction_rule_thickness: f32,
+    /// Numerator baseline shift up in display style (fraction of em).
+    pub fraction_num_display_style_shift_up: f32,
+    /// Numerator baseline shift up in text/script style (fraction of em).
+    pub fraction_num_shift_up: f32,
+    /// Denominator baseline shift down in display style (fraction of em).
+    pub fraction_den_display_style_shift_down: f32,
+    /// Denominator baseline shift down in text/script style (fraction of em).
+    pub fraction_den_shift_down: f32,
+    /// Minimum gap between numerator bottom and fraction rule in display style (fraction of em).
+    pub fraction_num_display_style_gap_min: f32,
+    /// Minimum gap between numerator bottom and fraction rule in text/script style (fraction of em).
+    pub fraction_num_gap_min: f32,
+    /// Minimum gap between denominator top and fraction rule in display style (fraction of em).
+    pub fraction_den_display_style_gap_min: f32,
+    /// Minimum gap between denominator top and fraction rule in text/script style (fraction of em).
+    pub fraction_den_gap_min: f32,
+    /// Scale factor for script level 1 (e.g. 0.70).
+    pub script_percent_scale_down: f32,
+    /// Scale factor for script level 2 (e.g. 0.55).
+    pub script_script_percent_scale_down: f32,
+    /// Standard superscript baseline shift up (fraction of em).
+    pub superscript_shift_up: f32,
+    /// Superscript baseline shift up in cramped style (fraction of em).
+    pub superscript_shift_up_cramped: f32,
+    /// Standard subscript baseline shift down (fraction of em).
+    pub subscript_shift_down: f32,
+    /// Minimum clearance between subscript top and superscript bottom (fraction of em).
+    pub sub_superscript_gap_min: f32,
+    /// Vertical gap between radicand top and radical rule in text style (fraction of em).
+    pub radical_vertical_gap: f32,
+    /// Vertical gap between radicand top and radical rule in display style (fraction of em).
+    pub radical_display_style_vertical_gap: f32,
+    /// Thickness of the radical rule (fraction of em).
+    pub radical_rule_thickness: f32,
+    /// Extra ascender space above the radical rule (fraction of em).
+    pub radical_extra_ascender: f32,
+}
+
+impl Default for MathConstants {
+    fn default() -> Self {
+        Self {
+            axis_height: 0.258,
+            fraction_rule_thickness: 0.068,
+            fraction_num_display_style_shift_up: 0.640,
+            fraction_num_shift_up: 0.585,
+            fraction_den_display_style_shift_down: 0.640,
+            fraction_den_shift_down: 0.585,
+            fraction_num_display_style_gap_min: 0.150,
+            fraction_num_gap_min: 0.068,
+            fraction_den_display_style_gap_min: 0.150,
+            fraction_den_gap_min: 0.068,
+            script_percent_scale_down: 0.70,
+            script_script_percent_scale_down: 0.55,
+            superscript_shift_up: 0.360,
+            superscript_shift_up_cramped: 0.252,
+            subscript_shift_down: 0.210,
+            sub_superscript_gap_min: 0.150,
+            radical_vertical_gap: 0.085,
+            radical_display_style_vertical_gap: 0.170,
+            radical_rule_thickness: 0.068,
+            radical_extra_ascender: 0.078,
+        }
+    }
+}
+
 /// Which face to draw a character in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MathStyle {
@@ -64,6 +139,8 @@ pub struct Fonts {
     italic: FontRef<'static>,
     bold: FontRef<'static>,
     math: FontRef<'static>,
+    math_face: ttf_parser::Face<'static>,
+    constants: MathConstants,
 }
 
 /// Access the lazily-loaded font set.
@@ -71,18 +148,118 @@ pub fn fonts() -> &'static Fonts {
     static F: OnceLock<Fonts> = OnceLock::new();
     F.get_or_init(|| {
         let load = |d: &'static [u8]| FontRef::try_from_slice(d).expect("bundled font is valid");
+        let math_face = ttf_parser::Face::parse(FONT_MATH, 0).expect("bundled STIX Two Math font is valid");
+        let upem = math_face.units_per_em() as f32;
+        let constants = if let Some(math) = math_face.tables().math {
+            if let Some(c) = math.constants {
+                MathConstants {
+                    axis_height: c.axis_height().value as f32 / upem,
+                    fraction_rule_thickness: c.fraction_rule_thickness().value as f32 / upem,
+                    fraction_num_display_style_shift_up: c.fraction_numerator_display_style_shift_up().value as f32 / upem,
+                    fraction_num_shift_up: c.fraction_numerator_shift_up().value as f32 / upem,
+                    fraction_den_display_style_shift_down: c.fraction_denominator_display_style_shift_down().value as f32 / upem,
+                    fraction_den_shift_down: c.fraction_denominator_shift_down().value as f32 / upem,
+                    fraction_num_display_style_gap_min: c.fraction_num_display_style_gap_min().value as f32 / upem,
+                    fraction_num_gap_min: c.fraction_numerator_gap_min().value as f32 / upem,
+                    fraction_den_display_style_gap_min: c.fraction_denom_display_style_gap_min().value as f32 / upem,
+                    fraction_den_gap_min: c.fraction_denominator_gap_min().value as f32 / upem,
+                    script_percent_scale_down: c.script_percent_scale_down() as f32 / 100.0,
+                    script_script_percent_scale_down: c.script_script_percent_scale_down() as f32 / 100.0,
+                    superscript_shift_up: c.superscript_shift_up().value as f32 / upem,
+                    superscript_shift_up_cramped: c.superscript_shift_up_cramped().value as f32 / upem,
+                    subscript_shift_down: c.subscript_shift_down().value as f32 / upem,
+                    sub_superscript_gap_min: c.sub_superscript_gap_min().value as f32 / upem,
+                    radical_vertical_gap: c.radical_vertical_gap().value as f32 / upem,
+                    radical_display_style_vertical_gap: c.radical_display_style_vertical_gap().value as f32 / upem,
+                    radical_rule_thickness: c.radical_rule_thickness().value as f32 / upem,
+                    radical_extra_ascender: c.radical_extra_ascender().value as f32 / upem,
+                }
+            } else {
+                MathConstants::default()
+            }
+        } else {
+            MathConstants::default()
+        };
+
         Fonts {
             regular: load(FONT_REGULAR),
             italic: load(FONT_ITALIC),
             bold: load(FONT_BOLD),
             math: load(FONT_MATH),
+            math_face,
+            constants,
         }
     })
 }
 
 impl Fonts {
-    fn pick(&self, style: MathStyle, ch: char) -> (&FontRef<'static>, GlyphId) {
+    /// Access OpenType `MATH` table constants from `STIXTwoMath-Regular.ttf`.
+    pub fn constants(&self) -> &MathConstants {
+        &self.constants
+    }
 
+    /// Retrieve the italic correction (in pixels) for `ch` under `style` at `em_px`.
+    pub fn italic_correction(&self, style: MathStyle, ch: char, em_px: f32) -> f32 {
+        let math_ch = if style == MathStyle::Variable {
+            if ch == 'h' {
+                '\u{210E}'
+            } else if ch.is_ascii_lowercase() {
+                char::from_u32(0x1D44E + (ch as u32 - 'a' as u32)).unwrap_or(ch)
+            } else if ch.is_ascii_uppercase() {
+                char::from_u32(0x1D434 + (ch as u32 - 'A' as u32)).unwrap_or(ch)
+            } else {
+                ch
+            }
+        } else {
+            ch
+        };
+
+        if let Some(math) = self.math_face.tables().math {
+            if let Some(gi) = math.glyph_info {
+                if let Some(ics) = gi.italic_corrections {
+                    if let Some(gid) = self.math_face.glyph_index(math_ch) {
+                        if let Some(v) = ics.get(gid) {
+                            return (v.value as f32 / self.math_face.units_per_em() as f32) * em_px;
+                        }
+                    }
+                }
+            }
+        }
+        0.0
+    }
+
+    /// Retrieve the horizontal top accent attachment position (in pixels from left of glyph origin)
+    /// for `ch` under `style` at `em_px`.
+    pub fn top_accent_attachment(&self, style: MathStyle, ch: char, em_px: f32) -> Option<f32> {
+        let math_ch = if style == MathStyle::Variable {
+            if ch == 'h' {
+                '\u{210E}'
+            } else if ch.is_ascii_lowercase() {
+                char::from_u32(0x1D44E + (ch as u32 - 'a' as u32)).unwrap_or(ch)
+            } else if ch.is_ascii_uppercase() {
+                char::from_u32(0x1D434 + (ch as u32 - 'A' as u32)).unwrap_or(ch)
+            } else {
+                ch
+            }
+        } else {
+            ch
+        };
+
+        if let Some(math) = self.math_face.tables().math {
+            if let Some(gi) = math.glyph_info {
+                if let Some(tas) = gi.top_accent_attachments {
+                    if let Some(gid) = self.math_face.glyph_index(math_ch) {
+                        if let Some(v) = tas.get(gid) {
+                            return Some((v.value as f32 / self.math_face.units_per_em() as f32) * em_px);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn pick(&self, style: MathStyle, ch: char) -> (&FontRef<'static>, GlyphId) {
         let mut ch = ch;
         if style == MathStyle::LcGreek && ('\u{03B1}'..='\u{03C9}').contains(&ch) {
             ch = std::char::from_u32(ch as u32 + 0x1D34B).unwrap_or(ch);
@@ -268,5 +445,27 @@ impl Fonts {
 
     pub fn has_glyph(&self, ch: char) -> bool {
         self.pick(MathStyle::Text, ch).1 .0 != 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_math_constants_and_glyph_info() {
+        let f = fonts();
+        let c = f.constants();
+        assert_eq!((c.axis_height * 1000.0).round() as i32, 258);
+        assert_eq!((c.fraction_rule_thickness * 1000.0).round() as i32, 68);
+        assert_eq!((c.script_percent_scale_down * 100.0).round() as i32, 70);
+
+        // Verify italic correction on math italic f
+        let ic_f = f.italic_correction(MathStyle::Variable, 'f', 100.0);
+        assert!(ic_f > 0.0);
+
+        // Verify top accent attachment on V
+        let ta_v = f.top_accent_attachment(MathStyle::Variable, 'V', 100.0);
+        assert!(ta_v.is_some());
     }
 }

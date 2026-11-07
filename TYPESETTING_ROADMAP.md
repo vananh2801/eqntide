@@ -8,10 +8,10 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 
 | File | Vai trò hiện tại |
 | :--- | :--- |
-| `src/render/font.rs` | Nạp các font (`STIXTwoMath-Regular.ttf`, `LiberationSerif`, `OpenSymbol`) qua `ttf-parser`, trích xuất đa giác (`glyph_polys`), hộp mực (`ink`) và độ rộng (`advance`). |
-| `src/render/layout/mod.rs` | Chứa trạng thái `Layout`, các hằng số (`SCRIPT = 0.65`, `AXIS = 0.25`, `RULE = 0.05`, `THIN/MED/THICK`) và hàm duyệt cây `MathNode`. |
+| `src/render/font.rs` | Nạp các font (`STIXTwoMath-Regular.ttf`, `LiberationSerif`, `OpenSymbol`) qua `ttf-parser`, trích xuất đa giác (`glyph_polys`), hộp mực (`ink`), độ rộng (`advance`) và hằng số bảng OpenType `MATH` (`MathConstants`). |
+| `src/render/layout/mod.rs` | Chứa trạng thái `Layout`, các hằng số (`SCRIPT = 0.70`, `AXIS = 0.258`, `RULE = 0.068`, `THIN/MED/THICK`) và hàm duyệt cây `MathNode`. |
 | `src/render/layout/row.rs` | Phân loại `Atom` (`Ord`, `Op`, `Bin`, `Rel`, `Open`, `Close`, `Punct`), tính khoảng cách giữa các `Atom` kế nhau và co giãn dấu ngoặc. |
-| `src/render/layout/fraction.rs` | Dựng phân số (`<mfrac>`). |
+| `src/render/layout/fraction.rs` | Dựng phân số (`<mfrac>`) và hệ số nhị thức theo TeX Rule 15 và OpenType `MATH`. |
 | `src/render/layout/radical.rs` | Dựng căn bậc hai (`<msqrt>`) và căn bậc $n$ (`<mroot>`). |
 | `src/render/layout/script.rs` | Dựng chỉ số dưới/trên (`<msub>`, `<msup>`, `<msubsup>`, `<mmultiscripts>`). |
 | `src/render/layout/embellish.rs` | Dựng dấu phụ trên/dưới ký tự (`<mover>`, `<munder>`, `<munderover>`). |
@@ -24,7 +24,7 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 
 ## Danh sách các Hạng mục Cải tiến (Phases)
 
-### Phase 1: Đọc trực tiếp bảng `MATH` từ `STIXTwoMath-Regular.ttf`
+### Phase 1: Đọc trực tiếp bảng `MATH` từ `STIXTwoMath-Regular.ttf` (✅ Đã hoàn thành)
 - **File mục tiêu**: `src/render/font.rs`, `src/render/layout/mod.rs`
 - **Vấn đề hiện tại**: Các thông số như `AXIS` (`0.25`), `RULE` (`0.05`), khoảng cách tử/mẫu, độ nâng/hạ chỉ số đang dùng hằng số ước lượng cố định.
 - **Giải pháp**:
@@ -74,7 +74,7 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 
 ---
 
-### Phase 3: Chuẩn hóa Baseline Tử số & Mẫu số Phân số (TeX Rule 15b–15d)
+### Phase 3: Chuẩn hóa Baseline Tử số & Mẫu số Phân số (TeX Rule 15b–15d) (✅ Đã hoàn thành)
 - **File mục tiêu**: `src/render/layout/fraction.rs`
 - **Vấn đề hiện tại**: Tử số và mẫu số đang đặt cách thanh phân số một khoảng cố định `gap = 0.12 * em` tính từ đáy hộp mực (`num.desc`) và đỉnh hộp mực (`den.asc`). Khi hai phân số đặt cạnh nhau như $\frac{a}{b} + \frac{g}{y}$, chữ $g$ có chân thò xuống (`desc > 0`) nên bị đẩy cao hơn chữ $a$, làm hai tử số không thẳng hàng trên cùng một baseline.
 - **Giải pháp (TeX Rule 15 / OpenType MATH)**:
@@ -125,6 +125,25 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 
 ---
 
+## ⚠️ Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo (Dành cho AI Agent & Lập trình viên)
+
+Khi tham khảo mã nguồn từ các dự án mã nguồn mở (ví dụ: Typst, KaTeX, MathJax, Chromium MathML, TeX, v.v.) để triển khai các Phase trong lộ trình này, **bắt buộc tuân thủ nghiêm ngặt các nguyên tắc sau**:
+
+1. **Hiểu thuật toán — Không sao chép nguyên văn (Clean-room Implementation)**:
+   - AI Agent chỉ được đọc mã nguồn mở nhằm mục đích **hiểu giải pháp kỹ thuật, công thức toán học và luồng thuật toán** (ví dụ: cách tra cứu bảng OpenType `MATH`, cách chọn size variants cho dấu ngoặc, các bước căn chỉnh baseline của TeX...).
+   - **Tuyệt đối KHÔNG sao chép (copy-paste) nguyên khối mã nguồn**, cấu trúc file hay tên hàm/biến mang tính bản quyền từ các dự án khác vào repo này. Mã nguồn phải được viết lại độc lập bằng Rust, tương thích tự nhiên với kiến trúc module `LBox` / `MathNode` hiện có của dự án.
+  - Khi không chắc một đoạn code có quá giống nguồn hay không, viết lại từ đầu.
+
+2. **Quy định khi Port hoặc Tham chiếu Cụ thể**:
+   - Trường hợp cần port trực tiếp một thuật toán đặc thù, bảng ánh xạ ký tự hoặc hằng số từ một dự án có giấy phép phần mềm tương thích (MIT, BSD, Apache 2.0):
+     - **BẮT BUỘC** phải giữ nguyên hoặc chú thích rõ thông báo bản quyền (copyright notice) cùng nguồn gốc của tác giả gốc ngay tại đầu file hoặc tại hàm/struct liên quan.
+     - **BẮT BUỘC** phải bổ sung ghi nhận trích nguồn và điều khoản giấy phép tương ứng vào file [NOTICE](NOTICE) và mục References của [README.md](README.md) để tránh rủi ro pháp lý.
+   - **Tuyệt đối KHÔNG** sao chép hoặc port mã nguồn từ các dự án mang giấy phép Copyleft mạnh (GPL, AGPL) vì có nguy cơ làm lây lan giấy phép và xung đột với giấy phép [MIT](LICENSE) của repo.
+
+3. **Mọi đóng góp (kể cả do AI Agent sinh ra) phải tương thích để repo giữ nguyên giấy phép MIT.**
+
+---
+
 ## Tài liệu Tham khảo Chuẩn
 
 1. **Donald E. Knuth — *The TeXbook*, Appendix G: "Generating Boxes from Formulas"** (Rules 1–22)
@@ -147,4 +166,4 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 ## Gợi ý Prompt khi giao việc cho AI Agent
 
 Khi muốn nhờ AI Agent thực hiện từng phần, bạn chỉ cần nhắn:
-> *"Hãy đọc file `TYPESETTING_ROADMAP.md` và triển khai **Phase 1 & Phase 3** (đọc `MathConstants` từ `STIXTwoMath-Regular.ttf` và chuẩn hóa baseline phân số theo Rule 15 của TeX), sau đó chạy `cargo test` và render thử `src.docx` để đối chiếu."*
+> *"Hãy đọc kỹ `TYPESETTING_ROADMAP.md`, đặc biệt là phần 'Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo'. Triển khai **Phase 2** (Hệ thống 4 cấp MathStyle và Cramped), tự viết lại code bằng Rust dựa trên thuật toán của TeX/OpenType MATH mà không sao chép nguyên văn từ repo khác, sau đó chạy `cargo test` và đối chiếu ảnh render."*

@@ -1,0 +1,59 @@
+omml-converter
+Copyright (c) 2024-2026 Bohdan Bodnarenko
+Copyright (c) 2026 Anh <vananh2801> and contributors
+
+This product is licensed under the MIT License. See the LICENSE file for details.
+
+===============================================================================
+Third-Party Software, Fonts, and Specifications Notice
+===============================================================================
+
+This project incorporates code, architectural designs, fonts, and specifications
+from the following open-source projects and standards:
+
+1. omml-converter (Rust)
+   Original Project: https://github.com/bohdanbodnarenko/omml-converter
+   Author: Bohdan Bodnarenko
+   License: MIT License
+   Copyright (c) 2024-2026 Bohdan Bodnarenko
+   Description:
+     Initial architecture for forward (OMML → MathType OLE) conversion, .docx
+     package manipulation, and MTEF 5.0 binary generation.
+
+2. mathtypejx (Java)
+   Original Project: https://github.com/a917470154/mathtypejx
+   Author: a917470154
+   License: MIT License
+   Description:
+     Ported and referenced for reverse conversion: MTEF v3 and v5 binary stream
+     decoding, MathML node tree construction, template selector/variation bitmasks,
+     sub/superscript base-mover logic, and MathType character mapping tables.
+
+3. mathtype_to_mathml (Ruby)
+   Original Project: https://github.com/jure/mathtype_to_mathml
+   Author: Jure Triglav
+   License: MIT License
+   Description:
+     Reference implementation and binary test fixtures for MTEF reverse engineering.
+
+4. STIX Fonts Project (STIX Two Text & STIX Two Math)
+   Official Project: https://github.com/stipub/stixfonts
+   Copyright (c) 2001-2021, The STI Pub Companies
+   License: SIL Open Font License, Version 1.1
+   License Location: assets/fonts/stixfonts-2.13b171/OFL.txt
+   Description:
+     Embedded OpenType fonts in `assets/fonts/` used for vector (EMF) and raster (PNG)
+     equation preview rendering, glyph outline extraction, and OpenType 'MATH' table
+     metric constants.
+
+5. Technical Specifications and Standards:
+   - ECMA-376 (Office Open XML File Formats, §22.1 Office Math Markup Language - OMML)
+     ISO/IEC 29500
+   - Microsoft OpenType Specification: The 'MATH' Table
+     https://learn.microsoft.com/en-us/typography/opentype/spec/math
+   - Design Science MathType MTEF v3 and v5 Binary Format Specifications
+     http://www.dessci.com/en/support/mathtype/tech/mtef5.htm
+   - Donald E. Knuth, The TeXbook, Appendix G: "Generating Boxes from Formulas"
+     Addison-Wesley, 1984
+   - W3C MathML Core Specification
+     https://w3c.github.io/mathml-core/
