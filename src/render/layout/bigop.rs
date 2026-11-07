@@ -52,9 +52,13 @@ impl Layout {
             .and_then(|o| o.text.trim().chars().next())
             .filter(|c| is_accent(*c));
         let brace_under = under_n.filter(|u| u.tag == "mo" && u.text.trim() == "\u{23DF}").is_some();
+        let bar_under = under_n
+            .filter(|u| u.tag == "mo" && !big)
+            .and_then(|u| u.text.trim().chars().next())
+            .map_or(false, |c| c == '_' || c == '\u{0332}' || c == '\u{005F}' || c == '\u{00AF}' || c == '\u{203E}');
 
         let under = match under_n {
-            Some(u) if !brace_under => Some(self.node(u, sem, true)?),
+            Some(u) if !brace_under && !bar_under => Some(self.node(u, sem, true)?),
             _ => None,
         };
         let over = match over_n {
@@ -80,6 +84,13 @@ impl Layout {
         }
         if brace_under {
             self.draw_under_brace(&mut b, w, base.desc, em);
+        }
+        if bar_under {
+            let st = 0.045 * em;
+            let y = (base.desc + 0.06 * em).max(0.10 * em);
+            let x0 = (w - base.w) / 2.0;
+            b.items.push(Item::Poly(rect(x0, y, base.w, st)));
+            b.desc = b.desc.max(y + st + 0.04 * em);
         }
         b.w = w;
         Ok(b)
