@@ -67,31 +67,47 @@ impl Layout {
                 b.asc = b.asc.max(-y_shaft + 200.0 * k + 0.04 * em);
             }
             '^' | '\u{0302}' | '\u{02C6}' => {
-                let natural = self.f.glyph_polys(Face::Symbol, '\u{02C6}', em, em, 0.0, 0.0);
-                if !natural.is_empty() {
-                    let (x_lo, x_hi) = natural.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
-                    let (y_lo, y_hi) = natural.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
-                    let w0 = (x_hi - x_lo).max(1.0);
-                    let content_w = w - 2.0 * x0;
-                    let span = if content_w > 0.65 * em {
-                        // Wide angle hat spanning multiple letters (e.g. \widehat{ABC})
-                        content_w.max(0.60 * em)
-                    } else {
-                        // Compact hat for single letter (e.g. \hat{x}, \hat{B})
-                        (content_w * 0.70).clamp(0.25 * em, 0.38 * em)
-                    };
-                    let em_x = em * span / w0;
-                    let em_y = em;
-                    let y_target = -(base_asc + 0.04 * em);
-                    let oy = y_target - y_hi;
-                    let ox = cx - (x_lo + x_hi) / 2.0 * (em_x / em);
-                    let pts = self.f.glyph_polys(Face::Symbol, '\u{02C6}', em_x, em_y, ox, oy);
-                    polys.extend(pts);
-                    b.asc = b.asc.max(-(oy + y_lo) + 0.04 * em);
-                }
+                // Determine the actual content width (e.g. single letter 'B' vs multi-letter 'ABC')
+                let content_w = w - 2.0 * x0;
+                let (hw, h, y_base) = if content_w > 0.65 * em {
+                    // Wide angle hat spanning multiple letters (e.g. \widehat{ABC})
+                    let span = content_w.max(0.60 * em);
+                    let half_w = span / 2.0;
+                    let height = (0.08 * em + 0.04 * span).min(0.22 * em);
+                    let base_y = -(base_asc + 0.06 * em);
+                    (half_w, height, base_y)
+                } else {
+                    // Standard compact hat for a single letter (e.g. \hat{x}, \hat{B})
+                    let half_w = (content_w * 0.65).clamp(0.13 * em, 0.22 * em);
+                    let height = 0.10 * em;
+                    let base_y = -(base_asc + 0.03 * em);
+                    (half_w, height, base_y)
+                };
+                // Stroke thickness measured perpendicular to the arms:
+                // thick at the apex, thin at the two wingtips.
+                let stroke_apex = 0.08 * em;
+                let stroke_end = 0.015 * em;
+                let slope_len = (h * h + hw * hw).sqrt();
+                // Vertical thickness at the apex that gives `stroke_apex` perpendicular thickness.
+                let t_apex = (stroke_apex * slope_len / hw).min(h * 0.8);
+                // Horizontal thickness at the wingtips that gives `stroke_end` perpendicular thickness.
+                let dx_inner = (stroke_end * slope_len / h).clamp(0.006 * em, hw * 0.5);
+                let y_apex = y_base - h;
+                let y_inner = y_apex + t_apex;
+                // 6-point hollow chevron: thick at the top, tapering to thin wingtips
+                polys.push(vec![
+                    (cx, y_apex),                 // Top center peak
+                    (cx + hw, y_base),            // Right outer wingtip
+                    (cx + hw - dx_inner, y_base), // Right inner wingtip
+                    (cx, y_inner),                // Underside hollow apex
+                    (cx - hw + dx_inner, y_base), // Left inner wingtip
+                    (cx - hw, y_base),            // Left outer wingtip
+                ]);
+                // Ensure the bounding box covers the peak of the hat
+                b.asc = b.asc.max(-y_apex + 0.04 * em);
             }
             '\u{2312}' | '\u{23DC}' | '\u{2322}' => {
-                let natural = self.f.glyph_polys(Face::Symbol, '\u{23DC}', em, em, 0.0, 0.0);
+                let natural = self.f.glyph_polys(Face::Symbol, '\u{2322}', em, em, 0.0, 0.0);
                 if !natural.is_empty() {
                     let (x_lo, x_hi) = natural.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
                     let (y_lo, y_hi) = natural.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
@@ -103,7 +119,7 @@ impl Layout {
                     let y_target = -(base_asc + 0.04 * em);
                     let oy = y_target - y_hi;
                     let ox = cx - (x_lo + x_hi) / 2.0 * (em_x / em);
-                    let pts = self.f.glyph_polys(Face::Symbol, '\u{23DC}', em_x, em_y, ox, oy);
+                    let pts = self.f.glyph_polys(Face::Symbol, '\u{2322}', em_x, em_y, ox, oy);
                     polys.extend(pts);
                     b.asc = b.asc.max(-(oy + y_lo) + 0.04 * em);
                 }
