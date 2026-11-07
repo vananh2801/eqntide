@@ -1,14 +1,14 @@
 [package]
 name = "omml-converter"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.75"
-description = "Convert OMML equations in .docx files to MathType OLE objects with rendered previews"
+description = "Bidirectional math equation converter between Word OMML and MathType OLE/WMF in .docx documents"
 readme = "README.md"
 license = "MIT"
 authors = ["Anh <phanvananh01218465035@gmail.com>"]
-keywords = ["omml", "mathtype", "docx", "mathml", "equation"]
-categories = ["command-line-utilities", "text-processing"]
+keywords = ["omml", "mathtype", "docx", "mathml", "mtef"]
+categories = ["command-line-utilities", "text-processing", "parser-implementations"]
 repository = "https://github.com/vananh2801/omml-converter-rust"
 
 [lib]
