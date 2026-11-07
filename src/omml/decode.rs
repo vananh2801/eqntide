@@ -16,6 +16,18 @@ pub const NS_M: &str = "http://schemas.openxmlformats.org/officeDocument/2006/ma
 const MAX_DEPTH: usize = 256;
 
 use crate::symbols::operators::{OMML_OPERATOR_ALIASES as OP_ALIASES, OMML_OPERATOR_CHARS as OPS};
+use crate::symbols::prime_order;
+
+fn collect_text(node: &MathNode) -> String {
+    let mut s = String::new();
+    if !node.text.is_empty() {
+        s.push_str(&node.text);
+    }
+    for c in &node.children {
+        s.push_str(&collect_text(c));
+    }
+    s
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -152,13 +164,36 @@ impl OmmlConverter {
             "sSup" => {
                 let base = self.get_e(node)?;
                 let sup = self.get_child(node, "sup")?;
-                Ok(Some(mel("msup", vec![base, sup])))
+                let sup_text = collect_text(&sup);
+                if let Some(order) = prime_order(&sup_text) {
+                    let prime_str = match order {
+                        1 => "'",
+                        2 => "''",
+                        3.. => "'''",
+                        0 => unreachable!(),
+                    };
+                    Ok(Some(mel("mrow", vec![base, MathNode::leaf("mo", prime_str)])))
+                } else {
+                    Ok(Some(mel("msup", vec![base, sup])))
+                }
             }
             "sSubSup" => {
                 let base = self.get_e(node)?;
                 let sub = self.get_child(node, "sub")?;
                 let sup = self.get_child(node, "sup")?;
-                Ok(Some(mel("msubsup", vec![base, sub, sup])))
+                let sup_text = collect_text(&sup);
+                if let Some(order) = prime_order(&sup_text) {
+                    let prime_str = match order {
+                        1 => "'",
+                        2 => "''",
+                        3.. => "'''",
+                        0 => unreachable!(),
+                    };
+                    let primed_base = mel("mrow", vec![base, MathNode::leaf("mo", prime_str)]);
+                    Ok(Some(mel("msub", vec![primed_base, sub])))
+                } else {
+                    Ok(Some(mel("msubsup", vec![base, sub, sup])))
+                }
             }
             "sPre" => self.handle_s_pre(node).map(Some),
             "limLow" => self.handle_lim(node, "munder").map(Some),

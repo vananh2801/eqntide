@@ -102,7 +102,7 @@ impl MathContext {
         matches!(self.style, MathVariantStyle::Script | MathVariantStyle::ScriptScript)
     }
 
-    /// Optical size alternate level for OpenType GSUB  feature:
+    /// Optical size alternate level for OpenType GSUB `ssty` feature:
     /// 0 for Display/Text, 1 for Script, 2 for ScriptScript.
     #[inline]
     pub fn ssty_level(&self) -> u8 {
@@ -120,6 +120,17 @@ impl MathContext {
             MathVariantStyle::Display | MathVariantStyle::Text => 1.0,
             MathVariantStyle::Script => c.script_percent_scale_down,
             MathVariantStyle::ScriptScript => c.script_script_percent_scale_down,
+        }
+    }
+
+    /// Scale factor for child context relative to this parent context.
+    #[inline]
+    pub fn rel_scale(&self, child: MathContext, c: &crate::render::font::MathConstants) -> f32 {
+        let parent = self.scale(c);
+        if parent > 0.0 {
+            child.scale(c) / parent
+        } else {
+            1.0
         }
     }
 
@@ -316,7 +327,7 @@ impl Layout {
                 let d = match k.get(1) {
                     Some(d) => {
                         let deg_ctx = ctx.for_root_index();
-                        let deg_em = em * deg_ctx.scale(self.f.constants());
+                        let deg_em = em * ctx.rel_scale(deg_ctx, self.f.constants());
                         Some(self.node(d, deg_em, deg_ctx)?)
                     }
                     None => None,

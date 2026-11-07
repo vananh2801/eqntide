@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use crate::mathml::MathNode;
 use crate::omml::decode::NS_M;
 use crate::xml::{Element, Node};
+use crate::symbols::{is_prime_char, prime_order};
 
 const MAX_DEPTH: usize = 256;
 
@@ -360,9 +361,42 @@ fn merge_function_names_in_list(children: Vec<MathNode>) -> Vec<MathNode> {
     out
 }
 
+fn collect_text(node: &MathNode) -> String {
+    let mut s = String::new();
+    if !node.text.is_empty() {
+        s.push_str(&node.text);
+    }
+    for c in &node.children {
+        s.push_str(&collect_text(c));
+    }
+    s
+}
+
 fn normalize_mathml(node: &MathNode) -> MathNode {
     let mut normalized_children: Vec<MathNode> =
         node.children.iter().map(normalize_mathml).collect();
+
+    // <msup> with prime mark as root -> direct row
+    if node.tag == "msup" && normalized_children.len() == 2 {
+        let sup_text = collect_text(&normalized_children[1]);
+        if let Some(order) = prime_order(&sup_text) {
+            let prime_str = match order {
+                1 => "'",
+                2 => "''",
+                3.. => "'''",
+                0 => unreachable!(),
+            };
+            let mut row = Vec::new();
+            let base = normalized_children.remove(0);
+            if base.tag == "mrow" {
+                row.extend(base.children);
+            } else if !is_empty_node(&base) {
+                row.push(base);
+            }
+            row.push(MathNode::leaf("mo", prime_str));
+            return MathNode::with_children("mrow", row);
+        }
+    }
 
     // <mroot> with empty degree -> <msqrt>
     if node.tag == "mroot" && normalized_children.len() == 2 && is_empty_node(&normalized_children[1])
@@ -387,6 +421,68 @@ fn normalize_mathml(node: &MathNode) -> MathNode {
     // Clean empty scripts inside row-like containers
     let mut cleaned_children = Vec::with_capacity(normalized_children.len());
     for child in normalized_children {
+        // Unwrap <msup> with prime mark into direct base + prime
+        if child.tag == "msup" && child.children.len() == 2 {
+            let sup_text = collect_text(&child.children[1]);
+            if let Some(order) = prime_order(&sup_text) {
+                let prime_str = match order {
+                    1 => "'",
+                    2 => "''",
+                    3.. => "'''",
+                    0 => unreachable!(),
+                };
+                let base = child.children.into_iter().next().unwrap();
+                if base.tag == "mrow" {
+                    cleaned_children.extend(base.children);
+                } else if !is_empty_node(&base) {
+                    cleaned_children.push(base);
+                }
+                cleaned_children.push(MathNode::leaf("mo", prime_str));
+                continue;
+            }
+        }
+
+        // Unwrap <msubsup> with prime in sup into <msub> with primed base
+        if child.tag == "msubsup" && child.children.len() == 3 {
+            let sup_text = collect_text(&child.children[2]);
+            if let Some(order) = prime_order(&sup_text) {
+                let prime_str = match order {
+                    1 => "'",
+                    2 => "''",
+                    3.. => "'''",
+                    0 => unreachable!(),
+                };
+                let mut iter = child.children.into_iter();
+                let base = iter.next().unwrap();
+                let sub = iter.next().unwrap();
+                let primed_base = MathNode::with_children("mrow", vec![base, MathNode::leaf("mo", prime_str)]);
+                cleaned_children.push(MathNode::with_children("msub", vec![primed_base, sub]));
+                continue;
+            }
+        }
+
+        // Split <mi> ending with prime marks into base <mi> + prime <mo>
+        if child.tag == "mi" {
+            let t = child.text.trim();
+            if let Some(prime_idx) = t.find(|c: char| is_prime_char(c)) {
+                if prime_idx > 0 {
+                    let (name, prime_part) = t.split_at(prime_idx);
+                    if let Some(order) = prime_order(prime_part) {
+                        let prime_str = match order {
+                            1 => "'",
+                            2 => "''",
+                            3.. => "'''",
+                            0 => unreachable!(),
+                        };
+                        let mut mi_base = MathNode::leaf("mi", name);
+                        mi_base.attrs = child.attrs.clone();
+                        cleaned_children.push(mi_base);
+                        cleaned_children.push(MathNode::leaf("mo", prime_str));
+                        continue;
+                    }
+                }
+            }
+        }
         if matches!(
             child.tag.as_str(),
             "msub" | "msup" | "msubsup" | "munder" | "mover" | "munderover"
@@ -463,7 +559,25 @@ impl MathmlEncoder {
             "msqrt" => self.encode_msqrt(node).map(|e| vec![e]),
             "mroot" => self.encode_mroot(node).map(|e| vec![e]),
             "msub" => self.encode_msub(node).map(|e| vec![e]),
-            "msup" => self.encode_msup(node).map(|e| vec![e]),
+            "msup" => {
+                let sup_text = node.children.get(1).map(collect_text).unwrap_or_default();
+                if let Some(order) = prime_order(&sup_text) {
+                    let prime_str = match order {
+                        1 => "'",
+                        2 => "''",
+                        3.. => "'''",
+                        0 => unreachable!(),
+                    };
+                    let mut row = Vec::new();
+                    if let Some(base) = node.children.first() {
+                        row.push(base.clone());
+                    }
+                    row.push(MathNode::leaf("mo", prime_str));
+                    self.encode_row_slice(&row)
+                } else {
+                    self.encode_msup(node).map(|e| vec![e])
+                }
+            },
             "msubsup" => self.encode_msubsup(node).map(|e| vec![e]),
             "mmultiscripts" => self.encode_mmultiscripts(node),
             "munder" => self.encode_munder(node).map(|e| vec![e]),
@@ -1502,5 +1616,68 @@ mod tests {
         let decoded_box = mtef_to_mathml(&build_mtef(&box_bytes)).unwrap();
         let roundtrip_box_bytes = mathml_to_mtef_bytes(&decoded_box).unwrap();
         assert!(roundtrip_box_bytes.windows(4).any(|w| w[0] == 0x03 && w[2] == TM_LDIV && (w[3] & 0x01) != 0));
+    }
+
+    #[test]
+    fn test_derivative_primes_direct_runs_and_mtef_embellishments() {
+        use crate::mtef::decode::mtef_to_mathml;
+        use crate::mtef::encode::mathml_to_mtef_bytes;
+        use crate::mtef::{build_mtef, EMB_1PRIME, EMB_2PRIME, EMB_3PRIME};
+
+        // 1. msup with prime (1st, 2nd, 3rd) encodes directly to OMML without m:sSup
+        let primes = [("'", "'"), ("''", "''"), ("'''", "'''"), ("\u{2032}", "'"), (",", "'"), (",,", "''")];
+        for (sup_char, expected_prime) in primes {
+            let mml = MathNode::parse(&format!(
+                "<math><msup><mi>y</mi><mo>{}</mo></msup></math>",
+                sup_char
+            ))
+            .unwrap();
+            let omml = mathml_to_omml(&mml).unwrap();
+            assert!(
+                omml.find(NS_M, "sSup").is_none(),
+                "msup with prime '{}' must not emit m:sSup",
+                sup_char
+            );
+            let runs: Vec<String> = omml
+                .find_all(NS_M, "r")
+                .into_iter()
+                .filter_map(|r| r.find(NS_M, "t").map(|t| t.text()))
+                .collect();
+            assert_eq!(runs, vec!["y".to_string(), expected_prime.to_string()]);
+        }
+
+        // 2. Direct sequence [y, '] encodes to MathType EMB_1PRIME, [y, ''] to EMB_2PRIME, [y, '''] to EMB_3PRIME
+        let orders = [("'", EMB_1PRIME), ("''", EMB_2PRIME), ("'''", EMB_3PRIME)];
+        for (prime_str, expected_emb) in orders {
+            let mml = MathNode::parse(&format!(
+                "<math><mrow><mi>y</mi><mo>{}</mo></mrow></math>",
+                prime_str
+            ))
+            .unwrap();
+            let mtef_bytes = mathml_to_mtef_bytes(&mml).unwrap();
+            // Should contain embellishment record: [0x06, 0x00, expected_emb]
+            assert!(
+                mtef_bytes
+                    .windows(3)
+                    .any(|w| w[0] == 0x06 && w[1] == 0x00 && w[2] == expected_emb),
+                "Should attach embellishment code {} for prime {}",
+                expected_emb,
+                prime_str
+            );
+
+            // Decode MathType back to OMML: should produce direct runs without m:sSup
+            let decoded_mml = mtef_to_mathml(&build_mtef(&mtef_bytes)).unwrap();
+            let roundtrip_omml = mathml_to_omml(&decoded_mml).unwrap();
+            assert!(
+                roundtrip_omml.find(NS_M, "sSup").is_none(),
+                "Roundtrip OMML must not contain m:sSup"
+            );
+            let runs: Vec<String> = roundtrip_omml
+                .find_all(NS_M, "r")
+                .into_iter()
+                .filter_map(|r| r.find(NS_M, "t").map(|t| t.text()))
+                .collect();
+            assert_eq!(runs, vec!["y".to_string(), prime_str.to_string()]);
+        }
     }
 }

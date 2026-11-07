@@ -41,7 +41,7 @@ pub const MTEF_SYMBOL_OPERATORS: &str = "+-=<>*/÷×·±∓∞∂∇∑∏∫√
 
 /// OMML → MathML: characters treated as operators (`<mo>`) when they make up
 /// an entire run.
-pub const OMML_OPERATOR_CHARS: &str = "+-=<>*/÷×·±∓∞∂∇∑∏∫√∧∨∩∪≤≥≠≈≡←→↑↓↔⟨⟩(),.:;!?|";
+pub const OMML_OPERATOR_CHARS: &str = "+-=<>*/÷×·±∓∞∂∇∑∏∫√∧∨∩∪≤≥≠≈≡←→↑↓↔⟨⟩(),.:;!?|'′″‴";
 
 /// OMML → MathML: extra operator spellings accepted as operators.
 pub const OMML_OPERATOR_ALIASES: &[char] = &['⋅', '−', '×', '÷', '≤', '≥', '≠', '≈', '≡'];

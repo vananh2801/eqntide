@@ -30,7 +30,7 @@ pub mod operators;
 pub mod relations;
 pub mod sets;
 
-pub use embellishments::is_accent;
+pub use embellishments::{is_accent, is_prime_char, prime_order, PRIME_CHARS};
 pub use fences::{is_bar, is_close, is_open, open_for};
 pub use functions::is_function;
 pub use greek::{is_greek_lower, is_greek_upper};

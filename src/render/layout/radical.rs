@@ -21,19 +21,29 @@ impl Layout {
 
         let mut b = LBox::default();
 
-        // 1. Determine horizontal degree offset and radical sign starting x
+        // 1. Determine horizontal degree offset and radical sign starting x (right-bottom anchored)
+        let (crook_units, hook_font_y): (f32, f32) = match chosen_variant {
+            Some(&(gid, _)) if gid == 1657 => (440.0, 430.0),
+            Some(&(gid, _)) if gid == 1658 => (550.0, 620.0),
+            Some(&(gid, _)) if gid == 1659 => (620.0, 825.0),
+            Some(&(gid, _)) if gid == 1660 => (620.0, 1010.0),
+            Some(&(_gid, _)) => (620.0, 1010.0),
+            None => (720.0, 1675.0),
+        };
+
         let (x_deg, x_rad) = if let Some(d) = deg {
-            let kern_before = consts.radical_kern_before_degree * em;
-            let kern_after = consts.radical_kern_after_degree * em;
-            let x_r = (kern_before + d.w + kern_after).max(0.0);
-            let x_d = x_r - (kern_after + d.w);
+            let tuck_x = (crook_units / upem) * em;
+            let pad_left = 0.05 * em;
+            let shift = (pad_left + d.w - tuck_x).max(0.0);
+            let x_r = shift;
+            let x_d = x_r + tuck_x - d.w;
             (Some(x_d), x_r)
         } else {
             (None, 0.0)
         };
 
         // 2. Lay out radical sign: either by choosing a variant glyph or assembling from parts
-        let (tip_x, rule_top_y, radical_bot_y, total_h) = if let Some(&(variant_gid, _adv)) = chosen_variant {
+        let (tip_x, rule_top_y, radical_bot_y, crook_base_y) = if let Some(&(variant_gid, _adv)) = chosen_variant {
             let (_x_min, y_min, x_max, y_max) = self.f.math_glyph_bbox(variant_gid).unwrap_or((18, -265, 829, 922));
             let glyph_h = (y_max - y_min) as f32 / upem * em;
             let excess = (glyph_h - h_target).max(0.0);
@@ -48,7 +58,7 @@ impl Layout {
             }
 
             let r_bot_y = r_top_y + glyph_h;
-            (t_x, r_top_y, r_bot_y, glyph_h)
+            (t_x, r_top_y, r_bot_y, y_base)
         } else if let Some(ref assembly) = info.assembly {
             // Assembly from STIX Two Math parts: Part 0 (bottom hook), Part 1 (extender), Part 2 (top)
             let part_bot = assembly.parts.first();
@@ -115,7 +125,7 @@ impl Layout {
                 }
 
                 let r_bot_y = r_top_y + glyph_h;
-                (t_x, r_top_y, r_bot_y, glyph_h)
+                (t_x, r_top_y, r_bot_y, y_bot_base)
             } else {
                 // Fallback: draw largest variant
                 let &(variant_gid, _) = info.variants.last().unwrap_or(&(1657, 1188));
@@ -127,7 +137,7 @@ impl Layout {
                 for p in self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base) {
                     b.items.push(Item::Poly(p));
                 }
-                (t_x, r_top_y, r_top_y + glyph_h, glyph_h)
+                (t_x, r_top_y, r_top_y + glyph_h, y_base)
             }
         } else {
             // Minimal fallback
@@ -140,7 +150,7 @@ impl Layout {
             for p in self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base) {
                 b.items.push(Item::Poly(p));
             }
-            (t_x, r_top_y, r_top_y + glyph_h, glyph_h)
+            (t_x, r_top_y, r_top_y + glyph_h, y_base)
         };
 
         // 3. Draw vinculum (horizontal rule across radicand)
@@ -152,11 +162,10 @@ impl Layout {
         let radicand_x = tip_x + 0.04 * em;
         b.place(c, radicand_x, 0.0);
 
-        // 5. Place degree if present
+        // 5. Place degree if present (right-bottom aligned)
         if let (Some(d), Some(x_d)) = (deg, x_deg) {
-            let raise = consts.radical_degree_bottom_raise_percent;
-            let deg_bot_y = radical_bot_y - raise * total_h;
-            let deg_y = deg_bot_y - d.desc;
+            let deg_bottom_y = crook_base_y - (hook_font_y / upem) * em;
+            let deg_y = deg_bottom_y - d.desc;
             b.place(d, x_d, deg_y);
             b.asc = b.asc.max(d.asc - deg_y);
             b.desc = b.desc.max(d.desc + deg_y);
@@ -192,15 +201,17 @@ mod tests {
         // 3. N-th root: \sqrt[3]{x}
         let node_root3 = MathNode::parse("<math><mroot><mi>x</mi><mn>3</mn></mroot></math>").unwrap();
         let b_root3 = l.node(&node_root3, em, MathContext::DISPLAY).unwrap();
-        // The degree '3' should be present and shifted horizontally
-        assert!(b_root3.w > b_sqrt_x.w, "Root with degree should have wider width to accommodate index");
-
-        // Verify degree '3' item is placed
+        // The degree '3' should be present
         let has_three = b_root3.items.iter().any(|it| match it {
             Item::Glyph { ch: '3', .. } => true,
             _ => false,
         });
         assert!(has_three, "Degree '3' must be rendered inside the radical nook");
+
+        // Multi-digit or wide degree should expand width horizontally: \sqrt[n \cdot p]{x}
+        let node_root_np = MathNode::parse("<math><mroot><mi>x</mi><mrow><mi>n</mi><mo>·</mo><mi>p</mi></mrow></mroot></math>").unwrap();
+        let b_root_np = l.node(&node_root_np, em, MathContext::DISPLAY).unwrap();
+        assert!(b_root_np.w > b_sqrt_x.w, "Wide degree expands width to accommodate index");
     }
 
     #[test]

@@ -7,8 +7,8 @@ impl Layout {
         let c = self.f.constants();
         let num_ctx = ctx.for_numerator();
         let den_ctx = ctx.for_denominator();
-        let num_em = em * num_ctx.scale(c);
-        let den_em = em * den_ctx.scale(c);
+        let num_em = em * ctx.rel_scale(num_ctx, c);
+        let den_em = em * ctx.rel_scale(den_ctx, c);
 
         let num = match n.children.first() {
             Some(k) => self.node(k, num_em, num_ctx)?,
@@ -35,17 +35,22 @@ impl Layout {
 
         let (ny, dy) = if has_bar {
             // TeX Rule 15b & 15d: Fraction with a horizontal rule
-            let (mut shift_up, mut shift_down, num_gap_min, den_gap_min) = if is_display {
+            let (mut shift_up, num_gap_min, den_gap_min) = if is_display {
                 (
                     c.fraction_num_display_style_shift_up * em,
-                    c.fraction_den_display_style_shift_down * em,
                     c.fraction_num_display_style_gap_min * em,
                     c.fraction_den_display_style_gap_min * em,
+                )
+            } else if ctx.is_script() {
+                // In script context (e.g. limit or exponent), use compact shift
+                (
+                    (axis + thick / 2.0 + num.desc + c.fraction_num_gap_min * em).max(0.35 * em),
+                    c.fraction_num_gap_min * em,
+                    c.fraction_den_gap_min * em,
                 )
             } else {
                 (
                     c.fraction_num_shift_up * em,
-                    c.fraction_den_shift_down * em,
                     c.fraction_num_gap_min * em,
                     c.fraction_den_gap_min * em,
                 )
@@ -53,21 +58,24 @@ impl Layout {
 
             // Numerator clearance: distance from numerator bottom (-shift_up + num.desc)
             // to the top edge of the fraction rule (-axis - thick / 2.0).
-            // clearance = (-axis - thick / 2.0) - (-shift_up + num.desc)
-            //           = shift_up - num.desc - axis - thick / 2.0
             let num_clearance = shift_up - num.desc - axis - thick / 2.0;
             if num_clearance < num_gap_min {
                 shift_up += num_gap_min - num_clearance;
             }
 
-            // Denominator clearance: distance from bottom edge of the fraction rule
-            // (-axis + thick / 2.0) to denominator top (shift_down - den.asc).
-            // clearance = (shift_down - den.asc) - (-axis + thick / 2.0)
-            //           = shift_down - den.asc + axis - thick / 2.0
-            let den_clearance = shift_down - den.asc + axis - thick / 2.0;
-            if den_clearance < den_gap_min {
-                shift_down += den_gap_min - den_clearance;
-            }
+            // Actual clearance between bottom of numerator and top of fraction rule
+            let actual_num_clearance = shift_up - num.desc - axis - thick / 2.0;
+
+            // Denominator clearance: symmetrical with numerator clearance,
+            // bounded by [den_gap_min, actual_num_clearance]
+            let den_clearance = if ctx.is_script() {
+                actual_num_clearance.max(den_gap_min)
+            } else {
+                actual_num_clearance.min(den_gap_min * 2.2).max(den_gap_min)
+            };
+
+            // Denominator baseline: top edge of denominator sits at (-axis + thick / 2.0 + den_clearance)
+            let shift_down = -axis + thick / 2.0 + den_clearance + den.asc;
 
             (-shift_up, shift_down)
         } else {
@@ -115,6 +123,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_fraction_vertical_clearance_and_limit_symmetry() {
+        let frac_str = "<math><msubsup><mo>∫</mo><mi>π</mi><mrow><mn>100</mn><mo>+</mo><mfrac><mi>π</mi><mn>2</mn></mfrac></mrow></msubsup><mrow><mfrac><mn>1</mn><mn>2</mn></mfrac><mi>sin</mi><mi>x</mi><mi>d</mi><mi>x</mi></mrow></math>";
+        let n = MathNode::parse(frac_str).unwrap();
+        let (b, em) = layout_math(&n, 12.0).unwrap();
+        assert!(em > 0.0);
+        assert!(!b.items.is_empty());
+
+        let poly_bars: Vec<_> = b.items.iter().filter_map(|it| match it {
+            Item::Poly(pts) => Some(pts),
+            _ => None,
+        }).collect();
+        assert!(!poly_bars.is_empty(), "Fraction bar must be present");
+    }
+
+    #[test]
     fn test_fraction_baseline_standardization_tex_rule_15() {
         let frac_a_b = MathNode::parse("<math><mfrac><mi>a</mi><mi>b</mi></mfrac></math>").unwrap();
         let frac_x_y = MathNode::parse("<math><mfrac><mi>x</mi><mi>y</mi></mfrac></math>").unwrap();
@@ -138,8 +161,6 @@ mod tests {
 
         // Under TeX Rule 15, both 'a' and 'x' (whose descenders fit comfortably within shift_up)
         // are placed on the exact same standardized baseline shift up!
-
-        // Numerators without deep descenders (a and x) share the exact same baseline
         assert!((y1 - y2).abs() < 1e-4, "y1 ({}) and y2 ({}) must be equal", y1, y2);
 
         // A numerator with a deep descender (g) pushes shift_up just enough to clear min_gap

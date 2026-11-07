@@ -23,7 +23,7 @@ use crate::mtef::{
     TV_INT_CCW_LOOP, TV_INT_CW_LOOP, TV_INT_LOOP, TV_ST_DOWN, TV_ST_HORIZ, TV_ST_UP,
     VALIGN_CENTER_BASELINE,
 };
-use crate::symbols::{has_foreign_letters, is_function};
+use crate::symbols::{has_foreign_letters, is_function, is_prime_char, prime_order};
 
 const MAX_DEPTH: usize = 256;
 
@@ -127,6 +127,26 @@ impl MathmlEncoder {
                         ));
                         i = split_end;
                         continue;
+                    }
+                }
+            }
+
+            // 5. Check if children[i] is a single character record followed by prime operator
+            if i + 1 < children.len() {
+                if let Some(prime_str) = unwrap_leaf_text(&children[i + 1]) {
+                    if let Some(order) = prime_order(prime_str) {
+                        let base_bytes = self.dispatch(&children[i])?;
+                        if is_single_char_record(&base_bytes) {
+                            let emb = match order {
+                                1 => EMB_1PRIME,
+                                2 => EMB_2PRIME,
+                                3.. => EMB_3PRIME,
+                                0 => unreachable!(),
+                            };
+                            out.extend(attach_embell(base_bytes, emb));
+                            i += 2;
+                            continue;
+                        }
                     }
                 }
             }
@@ -323,22 +343,19 @@ impl MathmlEncoder {
             }
             "msup" => {
                 let mut base = self.nth(node, 0)?;
-                let sup_text = node.children.get(1).map(|n| n.text.trim()).unwrap_or("");
+                let sup_text = node.children.get(1).and_then(unwrap_leaf_text).unwrap_or("");
                 if is_single_char_record(&base) {
-                    match sup_text {
-                        "'" | "\u{2032}" | "\u{00B4}" => {
-                            return Ok(attach_embell(base, EMB_1PRIME));
-                        }
-                        "''" | "\u{2033}" => {
-                            return Ok(attach_embell(base, EMB_2PRIME));
-                        }
-                        "'''" | "\u{2034}" => {
-                            return Ok(attach_embell(base, EMB_3PRIME));
-                        }
-                        "`" | "\u{2035}" => {
-                            return Ok(attach_embell(base, EMB_BPRIME));
-                        }
-                        _ => {}
+                    if let Some(order) = prime_order(sup_text) {
+                        let emb = match order {
+                            1 => EMB_1PRIME,
+                            2 => EMB_2PRIME,
+                            3.. => EMB_3PRIME,
+                            0 => unreachable!(),
+                        };
+                        return Ok(attach_embell(base, emb));
+                    }
+                    if sup_text == "`" || sup_text == "\u{2035}" {
+                        return Ok(attach_embell(base, EMB_BPRIME));
                     }
                 }
                 let sup = self.nth(node, 1)?;
@@ -400,8 +417,23 @@ impl MathmlEncoder {
                     });
                 }
 
-                // Case D: Standard sub + sup
+                // Case D: Standard sub + sup (with prime attachment if sup is prime)
                 let mut out = base;
+                if let Some(order) = prime_order(sup_text) {
+                    if is_single_char_record(&out) {
+                        let emb = match order {
+                            1 => EMB_1PRIME,
+                            2 => EMB_2PRIME,
+                            3.. => EMB_3PRIME,
+                            0 => unreachable!(),
+                        };
+                        out = attach_embell(out, emb);
+                        if !sub.is_empty() {
+                            out.extend(subscript(&sub));
+                        }
+                        return Ok(out);
+                    }
+                }
                 match (!sub.is_empty(), !sup.is_empty()) {
                     (true, true) => out.extend(subsuperscript(&sub, &sup)),
                     (true, false) => out.extend(subscript(&sub)),
@@ -1161,6 +1193,26 @@ fn emit_char_with_combining_marks(
 ) -> Vec<u8> {
     let mut rec = char_record(tf, mt_code);
     let mut embells = Vec::new();
+
+    // Consume any adjacent prime characters (e.g. y', y'', y''')
+    let mut prime_count = 0u8;
+    while *idx < chars.len() && is_prime_char(chars[*idx]) {
+        match chars[*idx] {
+            '\'' | '\u{2032}' | '\u{00B4}' | ',' => prime_count = prime_count.saturating_add(1),
+            '\u{2033}' => prime_count = prime_count.saturating_add(2),
+            '\u{2034}' => prime_count = prime_count.saturating_add(3),
+            '`' | '\u{2035}' => embells.push(EMB_BPRIME),
+            _ => break,
+        }
+        *idx += 1;
+    }
+    match prime_count {
+        1 => embells.push(EMB_1PRIME),
+        2 => embells.push(EMB_2PRIME),
+        3.. => embells.push(EMB_3PRIME),
+        0 => {}
+    }
+
     while *idx < chars.len() {
         if let Some(emb) = combining_mark_to_embell(chars[*idx]) {
             embells.push(emb);

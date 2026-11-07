@@ -1608,6 +1608,15 @@ fn map_pua_char(mt_code: u16, is_textmode: bool) -> Option<MathNode> {
     }
 }
 
+fn append_prime(mut node: MathNode, prime_str: &str) -> MathNode {
+    if node.tag == "mrow" {
+        node.children.push(MathNode::leaf("mo", prime_str));
+        node
+    } else {
+        MathNode::with_children("mrow", vec![node, MathNode::leaf("mo", prime_str)])
+    }
+}
+
 fn wrap_embellishments(mut node: MathNode, embells: &[u8]) -> MathNode {
     for &code in embells {
         node = match code {
@@ -1628,9 +1637,9 @@ fn wrap_embellishments(mut node: MathNode, embells: &[u8]) -> MathNode {
             20 => mover_accent(node, "\u{2323}"),
 
             // Primes
-            5 => MathNode::with_children("msup", vec![node, MathNode::leaf("mo", "\u{2032}")]),
-            6 => MathNode::with_children("msup", vec![node, MathNode::leaf("mo", "\u{2033}")]),
-            18 => MathNode::with_children("msup", vec![node, MathNode::leaf("mo", "\u{2034}")]),
+            5 => append_prime(node, "'"),
+            6 => append_prime(node, "''"),
+            18 => append_prime(node, "'''"),
             7 => MathNode::with_children(
                 "mmultiscripts",
                 vec![
