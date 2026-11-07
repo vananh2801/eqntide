@@ -192,13 +192,94 @@ impl Layout {
         let bot_y = desc;
         let pad = 0.05 * em;
 
-        // Automatically determine the minimum height where pieces can assemble cleanly:
+        // Scale factor for font glyph pieces so their stroke thickness matches complete delimiters:
+        // In STIX Two Math, piece extenders have stem width 112 font units, whereas normal complete
+        // delimiters have stroke width ~82 font units (82 / 112 ≈ 0.732).
+        const PIECE_SCALE: f32 = 82.0 / 112.0;
+
+        // For curly braces ('{', '}'): assemble from the 3 pieces (top hook, mid cusp, bot hook)
+        // for ALL sizes without dividing into cases. The pieces are scaled so their drawn strokes
+        // are thin and graceful.
+        if r.mid.is_some() {
+            // Min span without hook/cusp collision is 1.872 * eff_em (sum of hook + cusp heights).
+            let max_eff_em = span / 1.872;
+            let eff_em = (em * PIECE_SCALE).min(max_eff_em);
+            let k = eff_em / 1000.0;
+
+            let mut items: Vec<Item> = Vec::new();
+            let push = |ch: char, y: f32, items: &mut Vec<Item>| {
+                items.push(Item::Glyph { ch, face, em: eff_em, x: 0.0, y });
+            };
+
+            let ink = |ch: char| self.f.ink(face, ch, eff_em);
+
+            // 1. Top piece (yMax = 1274, yMin = 0):
+            let (a_top, d_top) = ink(r.top.unwrap());
+            let y_top = top_y + a_top;
+            push(r.top.unwrap(), y_top, &mut items);
+            let top_end_y = y_top + d_top;
+
+            // 2. Bottom piece (yMax = 1274, yMin = 0):
+            let (a_bot, d_bot) = ink(r.bot.unwrap());
+            let y_bot = bot_y - d_bot;
+            push(r.bot.unwrap(), y_bot, &mut items);
+            let bot_start_y = y_bot - a_bot;
+
+            // 3. Middle cusp (yMax = 1946, yMin = 0, cusp center at 973):
+            let mid_ch = r.mid.unwrap();
+            let (a_mid, _d_mid) = ink(mid_ch);
+            let centre = (top_y + bot_y) / 2.0;
+            let y_mid = centre + 973.0 * k;
+            push(mid_ch, y_mid, &mut items);
+            let mid_start_y = y_mid - a_mid;
+            let mid_end_y = y_mid; // because yMin = 0
+
+            // 4. Extenders tiled into positive gaps:
+            let (ea, ed) = ink(r.ext);
+            let e_h = (ea + ed).max(1.0);
+            let fill = |from: f32, to: f32, items: &mut Vec<Item>| {
+                let ov = 0.02 * eff_em;
+                let (from, to) = (from - ov, to + ov);
+                let gap = to - from;
+                if gap <= 2.0 * ov + 0.5 {
+                    return;
+                }
+                let count = (gap / e_h).ceil().max(1.0) as usize;
+                let step = if count > 1 { (gap - e_h) / (count - 1) as f32 } else { 0.0 };
+                let first = if count > 1 { from } else { from + (gap - e_h) / 2.0 };
+                for i in 0..count {
+                    push(r.ext, first + i as f32 * step + ea, items);
+                }
+            };
+
+            fill(top_end_y, mid_start_y, &mut items);
+            fill(mid_end_y, bot_start_y, &mut items);
+
+            let width = [Some(r.ext), r.top, r.mid, r.bot]
+                .into_iter()
+                .flatten()
+                .map(|ch| self.f.advance(face, ch, eff_em))
+                .fold(0.0f32, f32::max);
+
+            for it in &mut items {
+                if let Item::Glyph { x, .. } = it {
+                    *x += pad;
+                }
+            }
+
+            return Some(LBox {
+                w: width + 2.0 * pad,
+                asc,
+                desc,
+                items,
+            });
+        }
+
+        // For delimiters without middle cusp ('(', ')', '[', ']'):
+        // Use single complete glyph vertical outline scale when span < min_piece_h
+        // to preserve smooth curves, and scaled piece assembly when tall.
         let min_piece_h = self.min_assembly_span(face, &r, em);
 
-        // Case 1: When actual height is smaller than min_piece_h, the pieces would collide
-        // or protrude past the delimiter bounds.
-        // Scale the single complete character vertically only (em_y = em * span / h0, em_x = em),
-        // keeping horizontal stroke thickness at normal font size.
         if span < min_piece_h {
             let natural: Vec<Vec<(f32, f32)>> = self.f.glyph_polys(face, c, em, em, 0.0, 0.0);
             if natural.is_empty() {
@@ -226,16 +307,13 @@ impl Layout {
             });
         }
 
-        // Case 2: When actual height >= min_piece_h, assemble from font glyph pieces:
-        // - If span >= fixed (no overlap): extenders (\u{23AA}) are tiled into the gaps.
-        // - If min_piece_h <= span < fixed: end pieces (and mid cusp) overlap along their
-        //   straight vertical stems without needing extenders.
-        let eff_em = em;
+        // Tall delimiters without mid (span >= min_piece_h):
+        let eff_em = em * PIECE_SCALE;
         let mut items: Vec<Item> = Vec::new();
         let push = |ch: char, y: f32, items: &mut Vec<Item>| {
             items.push(Item::Glyph { ch, face, em: eff_em, x: 0.0, y });
         };
-        let width = [Some(r.ext), r.top, r.mid, r.bot]
+        let width = [Some(r.ext), r.top, r.bot]
             .into_iter()
             .flatten()
             .map(|ch| self.f.advance(face, ch, eff_em))
@@ -243,7 +321,6 @@ impl Layout {
 
         let ink = |ch: char| self.f.ink(face, ch, eff_em);
 
-        // Pin the end pieces to the ends of the span.
         let mut gap_top = top_y;
         let mut gap_bot = bot_y;
         if let Some(t) = r.top {
@@ -257,11 +334,10 @@ impl Layout {
             gap_bot = bot_y - d - a;
         }
 
-        // Tile the uncovered range [from, to] with extenders if there is a positive gap.
         let (ea, ed) = ink(r.ext);
         let e_h = (ea + ed).max(1.0);
         let fill = |from: f32, to: f32, items: &mut Vec<Item>| {
-            let ov = 0.02 * em;
+            let ov = 0.02 * eff_em;
             let (from, to) = (from - ov, to + ov);
             let gap = to - from;
             if gap <= 2.0 * ov + 0.5 {
@@ -275,17 +351,7 @@ impl Layout {
             }
         };
 
-        match r.mid {
-            Some(m) => {
-                let (a, d) = ink(m);
-                let centre = (top_y + bot_y) / 2.0;
-                let (m_top, m_bot) = (centre - (a + d) / 2.0, centre + (a + d) / 2.0);
-                fill(gap_top, m_top, &mut items);
-                push(m, m_top + a, &mut items);
-                fill(m_bot, gap_bot, &mut items);
-            }
-            None => fill(gap_top, gap_bot, &mut items),
-        }
+        fill(gap_top, gap_bot, &mut items);
 
         for it in &mut items {
             if let Item::Glyph { x, .. } = it {
@@ -326,7 +392,7 @@ mod tests {
     fn tall_delimiters_piece_assembly_and_vertical_stretch() {
         let l = layout();
         let em = 24.0;
-        for c in ['(', ')', '[', ']', '{', '}'] {
+        for c in ['(', ')', '[', ']'] {
             // Short span (< min_piece_h): uses vertical outline scaling (Item::Poly)
             let short_span = 1.0 * em;
             let asc_s = short_span / 2.0 + AXIS * em;
@@ -335,6 +401,20 @@ mod tests {
             assert_eq!(b_s.asc, asc_s);
             assert_eq!(b_s.desc, desc_s);
             assert!(b_s.items.iter().all(|it| matches!(it, Item::Poly(_))), "{c}: short should be Poly");
+        }
+
+        // For '{', '}': unified piece assembly for all sizes:
+        for c in ['{', '}'] {
+            let short_span = 1.0 * em;
+            let asc_s = short_span / 2.0 + AXIS * em;
+            let desc_s = short_span / 2.0 - AXIS * em;
+            let b_s = l.stretchy_delimiter(c, asc_s, desc_s, em).expect("delimiter supported");
+            assert_eq!(b_s.asc, asc_s);
+            assert_eq!(b_s.desc, desc_s);
+            assert!(b_s.items.iter().all(|it| matches!(it, Item::Glyph { .. })), "{c}: should be Glyph");
+        }
+
+        for c in ['(', ')', '[', ']', '{', '}'] {
 
             // Tall span (>= 5.0 * em): uses piece assembly with extenders
             let tall_span = 6.0 * em;
