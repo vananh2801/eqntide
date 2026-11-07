@@ -69,9 +69,10 @@ impl Layout {
                 continue;
             }
 
+            let ssty = ctx.ssty_level();
             match kid.tag.as_str() {
-                "mo" => self.atoms_mo(&kid.text, em, &mut atoms),
-                "mi" => self.atoms_mi(kid, em, &mut atoms),
+                "mo" => self.atoms_mo(&kid.text, em, &mut atoms, ssty),
+                "mi" => self.atoms_mi(kid, em, &mut atoms, ssty),
                 "mn" => {
                     // Strip embedded whitespace inside number runs (e.g. "3 5" -> "35").
                     if !text_clean.is_empty() {
@@ -80,7 +81,7 @@ impl Layout {
                         } else {
                             Face::Number
                         };
-                        atoms.push(Atom { class: Class::Ord, b: self.text(&text_clean, face, em), delim: None, is_table: false });
+                        atoms.push(Atom { class: Class::Ord, b: self.text_styled(&text_clean, face, em, ssty), delim: None, is_table: false });
                     }
                 }
                 "mtext" => {
@@ -92,19 +93,19 @@ impl Layout {
                             let face = if bold { Face::VectorMatrix } else { Face::Number };
                             atoms.push(Atom {
                                 class: Class::Ord, // Ord + Ord gets 0.0 spacing (tightly packed)
-                                b: self.text(t, face, em),
+                                b: self.text_styled(t, face, em, ssty),
                                 delim: None,
                                 is_table: false,
                             });
                         } else if t.chars().count() == 1 {
                             // Single character symbol, operator, relation, or punctuation (e.g. '=', '≈', ',')
-                            self.atoms_mo(t, em, &mut atoms);
+                            self.atoms_mo(t, em, &mut atoms, ssty);
                         } else {
                             // Normal text words (Vietnamese words, text labels); preserve boundary spaces
                             let face = if bold { Face::VectorMatrix } else { Face::Text };
                             atoms.push(Atom {
                                 class: Class::Ord,
-                                b: self.text(&kid.text, face, em),
+                                b: self.text_styled(&kid.text, face, em, ssty),
                                 delim: None,
                                 is_table: false,
                             });
@@ -149,8 +150,8 @@ impl Layout {
                 });
 
                 if is_prime {
-                    if let Some(Item::Glyph { ch, face, em: g_em, .. }) = prev_glyph {
-                        let ic = self.f.italic_correction(*face, *ch, *g_em);
+                    if let Some(Item::Glyph { ch, face, em: g_em, ssty: g_ssty, .. }) = prev_glyph {
+                        let ic = self.f.italic_correction_styled(*face, *ch, *g_em, *g_ssty);
                         if ic > 0.0 {
                             sp += ic + 0.04 * em;
                         }
@@ -206,7 +207,7 @@ impl Layout {
         t * em
     }
 
-    pub(super) fn atoms_mo(&self, text: &str, em: f32, out: &mut Vec<Atom>) {
+    pub(super) fn atoms_mo(&self, text: &str, em: f32, out: &mut Vec<Atom>, ssty: u8) {
         for ch in text.trim().chars() {
             if ch == '\u{2061}' || ch.is_whitespace() {
                 continue;
@@ -214,17 +215,17 @@ impl Layout {
             let class = class_of(ch);
             let delim = if is_open(ch) || is_close(ch) || is_bar(ch) { Some(ch) } else { None };
             let b = if is_integral(ch) {
-                self.integral_without_limits(ch, 1.45 * em, em).unwrap_or_else(|| self.glyph(display_char(ch), Face::Symbol, em))
+                self.integral_without_limits(ch, 1.45 * em, em).unwrap_or_else(|| self.glyph_styled(display_char(ch), Face::Symbol, em, ssty))
             } else if is_big_op(ch) {
                 self.big_glyph(ch, Face::ExtraMath, em, 1.45)
             } else {
-                self.glyph(display_char(ch), Face::Symbol, em)
+                self.glyph_styled(display_char(ch), Face::Symbol, em, ssty)
             };
             out.push(Atom { class, b, delim, is_table: false });
         }
     }
 
-    pub(super) fn atoms_mi(&self, kid: &MathNode, em: f32, out: &mut Vec<Atom>) {
+    pub(super) fn atoms_mi(&self, kid: &MathNode, em: f32, out: &mut Vec<Atom>, ssty: u8) {
         let t = kid.text.trim();
         if t.is_empty() {
             return;
@@ -233,13 +234,13 @@ impl Layout {
         let bold = matches!(variant, Some("bold") | Some("bold-italic"));
         if t.chars().count() > 1 && is_function(t) {
             let face = if bold { Face::VectorMatrix } else { Face::Function };
-            out.push(Atom { class: Class::Op, b: self.text(t, face, em), delim: None, is_table: false });
+            out.push(Atom { class: Class::Op, b: self.text_styled(t, face, em, ssty), delim: None, is_table: false });
             return;
         }
         if has_foreign_letters(t) {
             // A word with Vietnamese letters, not a run of variables.
             let face = if bold { Face::VectorMatrix } else { Face::Text };
-            out.push(Atom { class: Class::Ord, b: self.text(t, face, em), delim: None, is_table: false });
+            out.push(Atom { class: Class::Ord, b: self.text_styled(t, face, em, ssty), delim: None, is_table: false });
             return;
         }
         for ch in t.chars() {
@@ -250,28 +251,28 @@ impl Layout {
             if let Some(styled_ch) = styled_math_glyph(ch, variant) {
                 out.push(Atom {
                     class: Class::Ord,
-                    b: self.glyph(styled_ch, Face::Symbol, em),
+                    b: self.glyph_styled(styled_ch, Face::Symbol, em, ssty),
                     delim: None,
                     is_table: false,
                 });
             } else if bold {
-                out.push(Atom { class: Class::Ord, b: self.glyph(ch, Face::VectorMatrix, em), delim: None, is_table: false });
+                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, Face::VectorMatrix, em, ssty), delim: None, is_table: false });
             } else if ch.is_ascii_digit() {
                 // Digits inside <mi> runs must be upright numbers, not math operators.
-                out.push(Atom { class: Class::Ord, b: self.glyph(ch, Face::Number, em), delim: None, is_table: false });
+                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, Face::Number, em, ssty), delim: None, is_table: false });
             } else if is_latin_letter(ch) {
                 let face = if variant == Some("normal") {
                     Face::Function
                 } else {
                     Face::Variable
                 };
-                out.push(Atom { class: Class::Ord, b: self.glyph(ch, face, em), delim: None, is_table: false });
+                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, face, em, ssty), delim: None, is_table: false });
             } else if is_greek_lower(ch) {
-                out.push(Atom { class: Class::Ord, b: self.glyph(ch, Face::LcGreek, em), delim: None, is_table: false });
+                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, Face::LcGreek, em, ssty), delim: None, is_table: false });
             } else if is_greek_upper(ch) {
-                out.push(Atom { class: Class::Ord, b: self.glyph(ch, Face::UcGreek, em), delim: None, is_table: false });
+                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, Face::UcGreek, em, ssty), delim: None, is_table: false });
             } else {
-                self.atoms_mo(&ch.to_string(), em, out);
+                self.atoms_mo(&ch.to_string(), em, out, ssty);
             }
         }
     }

@@ -50,6 +50,7 @@ impl Layout {
                         em: eff_em,
                         x: arrow_x,
                         y: y_glyph,
+                        ssty: 0,
                     });
                     // 2. Extenders tiled to the left
                     let from_x = x_left;
@@ -67,6 +68,7 @@ impl Layout {
                                 em: eff_em,
                                 x: first + i as f32 * step,
                                 y: y_glyph,
+                                ssty: 0,
                             });
                         }
                     }

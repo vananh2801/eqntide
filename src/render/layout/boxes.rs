@@ -8,8 +8,9 @@ use crate::render::font::Face;
 /// One drawable thing inside a box.
 #[derive(Clone, Debug)]
 pub(crate) enum Item {
-    /// A single glyph at `(x, y)` (baseline origin) drawn at `em` pixels per em.
-    Glyph { ch: char, face: Face, em: f32, x: f32, y: f32 },
+    /// A single glyph at `(x, y)` (baseline origin) drawn at `em` pixels per em,
+    /// with optical size script level `ssty` (0 = normal, 1 = script, 2 = scriptscript).
+    Glyph { ch: char, face: Face, em: f32, x: f32, y: f32, ssty: u8 },
     /// A filled polygon (rules, radical strokes, brace outlines, …).
     Poly(Vec<(f32, f32)>),
 }
@@ -28,12 +29,13 @@ impl LBox {
     pub(crate) fn place(&mut self, o: &LBox, dx: f32, dy: f32) {
         for it in &o.items {
             self.items.push(match it {
-                Item::Glyph { ch, face, em, x, y } => Item::Glyph {
+                Item::Glyph { ch, face, em, x, y, ssty } => Item::Glyph {
                     ch: *ch,
                     face: *face,
                     em: *em,
                     x: x + dx,
                     y: y + dy,
+                    ssty: *ssty,
                 },
                 Item::Poly(p) => Item::Poly(p.iter().map(|(x, y)| (x + dx, y + dy)).collect()),
             });

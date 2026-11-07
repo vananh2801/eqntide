@@ -187,7 +187,7 @@ impl Layout {
         // Assemble from font glyph pieces scaled by PIECE_SCALE for thin, graceful strokes.
         let mut items: Vec<Item> = Vec::new();
         let push = |ch: char, y: f32, items: &mut Vec<Item>| {
-            items.push(Item::Glyph { ch, face, em: eff_em, x: 0.0, y });
+            items.push(Item::Glyph { ch, face, em: eff_em, x: 0.0, y, ssty: 0 });
         };
         let ink = |ch: char| self.f.ink(face, ch, eff_em);
 

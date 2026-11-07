@@ -123,8 +123,8 @@ pub fn render_emf(math: &MathNode, font_pt: f32) -> Result<EmfPreview> {
     let f = fonts();
     for it in &b.items {
         match it {
-            Item::Glyph { ch, face, em, x, y } => {
-                let Some(segs) = f.glyph_segments(*face, *ch, *em, ox + x, oy + y) else {
+            Item::Glyph { ch, face, em, x, y, ssty } => {
+                let Some(segs) = f.glyph_segments_styled(*face, *ch, *em, ox + x, oy + y, *ssty) else {
                     continue;
                 };
                 fill(&mut out, &|o| write_segs(o, &segs, &l, [0, 0, wl, hl]));

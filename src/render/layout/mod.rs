@@ -102,6 +102,17 @@ impl MathContext {
         matches!(self.style, MathVariantStyle::Script | MathVariantStyle::ScriptScript)
     }
 
+    /// Optical size alternate level for OpenType GSUB  feature:
+    /// 0 for Display/Text, 1 for Script, 2 for ScriptScript.
+    #[inline]
+    pub fn ssty_level(&self) -> u8 {
+        match self.style {
+            MathVariantStyle::Display | MathVariantStyle::Text => 0,
+            MathVariantStyle::Script => 1,
+            MathVariantStyle::ScriptScript => 2,
+        }
+    }
+
     /// Scale factor for font size based on the OpenType MATH constants.
     #[inline]
     pub fn scale(&self, c: &crate::render::font::MathConstants) -> f32 {
@@ -209,16 +220,25 @@ struct Layout {
 
 impl Layout {
     pub(super) fn glyph(&self, ch: char, face: Face, em: f32) -> LBox {
-        let (a, d) = self.f.ink(face, ch, em);
-        let items = if ch == ' ' { vec![] } else { vec![Item::Glyph { ch, face, em, x: 0.0, y: 0.0 }] };
-        LBox { w: self.f.advance(face, ch, em), asc: a, desc: d, items }
+        self.glyph_styled(ch, face, em, 0)
     }
 
+    pub(super) fn glyph_styled(&self, ch: char, face: Face, em: f32, ssty: u8) -> LBox {
+        let (a, d) = self.f.ink_styled(face, ch, em, ssty);
+        let items = if ch == ' ' { vec![] } else { vec![Item::Glyph { ch, face, em, x: 0.0, y: 0.0, ssty }] };
+        LBox { w: self.f.advance_styled(face, ch, em, ssty), asc: a, desc: d, items }
+    }
+
+    #[allow(dead_code)]
     pub(super) fn text(&self, s: &str, face: Face, em: f32) -> LBox {
+        self.text_styled(s, face, em, 0)
+    }
+
+    pub(super) fn text_styled(&self, s: &str, face: Face, em: f32, ssty: u8) -> LBox {
         let mut b = LBox::default();
         let mut x = 0.0;
         for ch in s.chars() {
-            let g = self.glyph(ch, face, em);
+            let g = self.glyph_styled(ch, face, em, ssty);
             b.place(&g, x, 0.0);
             x += g.w;
         }
@@ -229,8 +249,8 @@ impl Layout {
     /// Returns the italic correction of the trailing glyph in `b` (or 0.0 if none).
     pub(super) fn italic_correction_of_box(&self, b: &LBox) -> f32 {
         b.items.iter().rev().find_map(|it| match it {
-            Item::Glyph { ch, face, em, .. } => {
-                let ic = self.f.italic_correction(*face, *ch, *em);
+            Item::Glyph { ch, face, em, ssty, .. } => {
+                let ic = self.f.italic_correction_styled(*face, *ch, *em, *ssty);
                 if ic > 0.0 { Some(ic) } else { None }
             }
             _ => None,

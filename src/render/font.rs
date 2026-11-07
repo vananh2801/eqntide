@@ -1,5 +1,6 @@
 //! Embedded fonts and glyph helpers used to draw equation previews.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use ab_glyph::{Font, FontRef, GlyphId, PxScale};
@@ -177,6 +178,7 @@ pub struct Fonts {
     math_face: ttf_parser::Face<'static>,
     constants: MathConstants,
     radical_info: RadicalInfo,
+    ssty_map: HashMap<u16, (u16, u16)>,
 }
 
 /// Access the lazily-loaded font set.
@@ -249,10 +251,57 @@ pub fn fonts() -> &'static Fonts {
                 }
             }
         }
+/// Extract optical size alternate glyph IDs for script levels from OpenType GSUB `ssty` feature.
+///
+/// Maps base `GlyphId (u16)` -> `(script_level_1_glyph, script_level_2_glyph)`.
+fn parse_ssty_map(math_face: &ttf_parser::Face<'static>) -> HashMap<u16, (u16, u16)> {
+    let mut ssty_map = HashMap::new();
+    if let Some(gsub) = math_face.tables().gsub {
+        if let Some(feature) = gsub.features.find(ttf_parser::Tag::from_bytes(b"ssty")) {
+            for lookup_idx in feature.lookup_indices {
+                if let Some(lookup) = gsub.lookups.get(lookup_idx) {
+                    for st_idx in 0..lookup.subtables.len() {
+                        if let Some(ttf_parser::gsub::SubstitutionSubtable::Alternate(alt_sub)) =
+                            lookup.subtables.get::<ttf_parser::gsub::SubstitutionSubtable>(st_idx)
+                        {
+                            match alt_sub.coverage {
+                                ttf_parser::opentype_layout::Coverage::Format1 { glyphs } => {
+                                    for (cov_idx, gid) in glyphs.into_iter().enumerate() {
+                                        if let Some(set) = alt_sub.alternate_sets.get(cov_idx as u16) {
+                                            let s1 = set.alternates.get(0).map(|g| g.0).unwrap_or(gid.0);
+                                            let s2 = set.alternates.get(1).map(|g| g.0).unwrap_or(s1);
+                                            ssty_map.insert(gid.0, (s1, s2));
+                                        }
+                                    }
+                                }
+                                ttf_parser::opentype_layout::Coverage::Format2 { records } => {
+                                    for rec in records {
+                                        for offset in 0..=(rec.end.0 - rec.start.0) {
+                                            let gid = rec.start.0 + offset;
+                                            let cov_idx = rec.value + offset;
+                                            if let Some(set) = alt_sub.alternate_sets.get(cov_idx) {
+                                                let s1 = set.alternates.get(0).map(|g| g.0).unwrap_or(gid);
+                                                let s2 = set.alternates.get(1).map(|g| g.0).unwrap_or(s1);
+                                                ssty_map.insert(gid, (s1, s2));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ssty_map
+}
+
         let radical_info = RadicalInfo {
             variants: variants_list,
             assembly: assembly_opt,
         };
+        let ssty_map = parse_ssty_map(&math_face);
 
         Fonts {
             regular: load(FONT_REGULAR),
@@ -262,6 +311,7 @@ pub fn fonts() -> &'static Fonts {
             math_face,
             constants,
             radical_info,
+            ssty_map,
         }
     })
 }
@@ -372,6 +422,24 @@ impl Fonts {
         &self.radical_info
     }
 
+    /// Access optical size alternates map extracted from OpenType GSUB `ssty` feature.
+    pub fn ssty_map(&self) -> &HashMap<u16, (u16, u16)> {
+        &self.ssty_map
+    }
+
+    /// Look up optical size alternate glyph index in STIX Two Math font for script styles.
+    ///
+    /// - `level == 1`: Script style (`.ssty`)
+    /// - `level >= 2`: ScriptScript style (`.ssty2`)
+    /// - `level == 0`: returns the original glyph ID unchanged.
+    pub fn ssty_glyph(&self, gid: u16, level: u8) -> u16 {
+        match level {
+            1 => self.ssty_map.get(&gid).map(|(s1, _)| *s1).unwrap_or(gid),
+            2.. => self.ssty_map.get(&gid).map(|(_, s2)| *s2).unwrap_or(gid),
+            _ => gid,
+        }
+    }
+
     /// Convert character and style to the appropriate Unicode Mathematical character in STIX Two Math.
     pub fn to_math_char(style: MathStyle, ch: char) -> char {
         if style == MathStyle::Variable {
@@ -393,16 +461,44 @@ impl Fonts {
 
     /// Look up glyph index in STIX Two Math font.
     pub fn glyph_id_for_math(&self, style: MathStyle, ch: char) -> Option<ttf_parser::GlyphId> {
+        self.glyph_id_for_math_styled(style, ch, 0)
+    }
+
+    /// Look up glyph index in STIX Two Math font, optionally substituting optical size variant.
+    pub fn glyph_id_for_math_styled(&self, style: MathStyle, ch: char, ssty: u8) -> Option<ttf_parser::GlyphId> {
         let math_ch = Self::to_math_char(style, ch);
-        self.math_face.glyph_index(math_ch).or_else(|| self.math_face.glyph_index(ch))
+        let base_gid = self.math_face.glyph_index(math_ch).or_else(|| self.math_face.glyph_index(ch))?;
+        if ssty > 0 {
+            Some(ttf_parser::GlyphId(self.ssty_glyph(base_gid.0, ssty)))
+        } else {
+            Some(base_gid)
+        }
     }
 
     /// Retrieve the italic correction (in pixels) for `ch` under `style` at `em_px`.
     pub fn italic_correction(&self, style: MathStyle, ch: char, em_px: f32) -> f32 {
-        if let Some(gid) = self.glyph_id_for_math(style, ch) {
-            if let Some(math) = self.math_face.tables().math {
-                if let Some(gi) = math.glyph_info {
-                    if let Some(ics) = gi.italic_corrections {
+        self.italic_correction_styled(style, ch, em_px, 0)
+    }
+
+    /// Retrieve the italic correction (in pixels) for `ch` under `style` at `em_px`,
+    /// accounting for script optical alternate glyphs if `ssty > 0`.
+    pub fn italic_correction_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> f32 {
+        let base_gid = self.glyph_id_for_math(style, ch);
+        let eff_gid = if ssty > 0 {
+            base_gid.map(|g| ttf_parser::GlyphId(self.ssty_glyph(g.0, ssty)))
+        } else {
+            base_gid
+        };
+
+        if let Some(math) = self.math_face.tables().math {
+            if let Some(gi) = math.glyph_info {
+                if let Some(ics) = gi.italic_corrections {
+                    if let Some(gid) = eff_gid {
+                        if let Some(v) = ics.get(gid) {
+                            return (v.value as f32 / self.math_face.units_per_em() as f32) * em_px;
+                        }
+                    }
+                    if let Some(gid) = base_gid {
                         if let Some(v) = ics.get(gid) {
                             return (v.value as f32 / self.math_face.units_per_em() as f32) * em_px;
                         }
@@ -444,6 +540,20 @@ impl Fonts {
         script_y: f32,
         em_px: f32,
     ) -> f32 {
+        self.math_kern_styled(base_style, base_ch, script_style, script_ch, is_sub, script_y, em_px, 0)
+    }
+
+    pub fn math_kern_styled(
+        &self,
+        base_style: MathStyle,
+        base_ch: char,
+        script_style: MathStyle,
+        script_ch: char,
+        is_sub: bool,
+        script_y: f32,
+        em_px: f32,
+        ssty: u8,
+    ) -> f32 {
         let upem = self.math_face.units_per_em() as f32;
         let mut total_kern_units: i32 = 0;
 
@@ -461,10 +571,10 @@ impl Fonts {
             kern.kern(n).map_or(0, |k| k.value)
         };
 
-        if let (Some(b_gid), Some(s_gid)) = (
-            self.glyph_id_for_math(base_style, base_ch),
-            self.glyph_id_for_math(script_style, script_ch),
-        ) {
+        let b_gid_opt = self.glyph_id_for_math(base_style, base_ch);
+        let s_gid_opt = self.glyph_id_for_math_styled(script_style, script_ch, ssty)
+            .or_else(|| self.glyph_id_for_math(script_style, script_ch));
+        if let (Some(b_gid), Some(s_gid)) = (b_gid_opt, s_gid_opt) {
             if let Some(math) = self.math_face.tables().math {
                 if let Some(gi) = math.glyph_info {
                     if let Some(kern_info) = gi.kern_infos {
@@ -500,6 +610,19 @@ impl Fonts {
     }
 
     fn pick(&self, style: MathStyle, ch: char) -> (&FontRef<'static>, GlyphId) {
+        self.pick_styled(style, ch, 0)
+    }
+
+    fn pick_styled(&self, style: MathStyle, ch: char, ssty: u8) -> (&FontRef<'static>, GlyphId) {
+        if ssty > 0 {
+            if let Some(base_gid) = self.glyph_id_for_math(style, ch) {
+                let alt_gid = self.ssty_glyph(base_gid.0, ssty);
+                if alt_gid != base_gid.0 {
+                    return (&self.math, GlyphId(alt_gid));
+                }
+            }
+        }
+
         let mut ch = ch;
         if style == MathStyle::LcGreek && ('\u{03B1}'..='\u{03C9}').contains(&ch) {
             ch = std::char::from_u32(ch as u32 + 0x1D34B).unwrap_or(ch);
@@ -535,13 +658,21 @@ impl Fonts {
     }
 
     pub fn advance(&self, style: MathStyle, ch: char, em_px: f32) -> f32 {
-        let (f, id) = self.pick(style, ch);
+        self.advance_styled(style, ch, em_px, 0)
+    }
+
+    pub fn advance_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> f32 {
+        let (f, id) = self.pick_styled(style, ch, ssty);
         let adv = f.h_advance_unscaled(id) * em_px / f.units_per_em().unwrap_or(1000.0);
         adv
     }
 
     pub fn ink(&self, style: MathStyle, ch: char, em_px: f32) -> (f32, f32) {
-        let (f, id) = self.pick(style, ch);
+        self.ink_styled(style, ch, em_px, 0)
+    }
+
+    pub fn ink_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> (f32, f32) {
+        let (f, id) = self.pick_styled(style, ch, ssty);
         let g = id.with_scale_and_position(Self::scale_for(f, em_px), ab_glyph::point(0.0, 0.0));
         match f.outline_glyph(g) {
             Some(o) => {
@@ -553,7 +684,11 @@ impl Fonts {
     }
 
     pub fn ink_x(&self, style: MathStyle, ch: char, em_px: f32) -> (f32, f32) {
-        let (f, id) = self.pick(style, ch);
+        self.ink_x_styled(style, ch, em_px, 0)
+    }
+
+    pub fn ink_x_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> (f32, f32) {
+        let (f, id) = self.pick_styled(style, ch, ssty);
         let g = id.with_scale_and_position(Self::scale_for(f, em_px), ab_glyph::point(0.0, 0.0));
         match f.outline_glyph(g) {
             Some(o) => {
@@ -565,7 +700,11 @@ impl Fonts {
     }
 
     pub fn draw(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32, canvas: &mut Canvas) {
-        let (f, id) = self.pick(style, ch);
+        self.draw_styled(style, ch, em_px, x, y, canvas, 0);
+    }
+
+    pub fn draw_styled(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32, canvas: &mut Canvas, ssty: u8) {
+        let (f, id) = self.pick_styled(style, ch, ssty);
         let g = id.with_scale_and_position(Self::scale_for(f, em_px), ab_glyph::point(x, y));
         if let Some(o) = f.outline_glyph(g) {
             let b = o.px_bounds();
@@ -578,7 +717,11 @@ impl Fonts {
     /// baseline origin at `(x, y)` and `em_px` pixels per em. `None` when the glyph has
     /// no outline (e.g. a space).
     pub fn glyph_segments(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32) -> Option<Vec<Seg>> {
-        let (f, id) = self.pick(style, ch);
+        self.glyph_segments_styled(style, ch, em_px, x, y, 0)
+    }
+
+    pub fn glyph_segments_styled(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32, ssty: u8) -> Option<Vec<Seg>> {
+        let (f, id) = self.pick_styled(style, ch, ssty);
         let outline = f.outline(id)?;
         let upem = f.units_per_em().unwrap_or(1000.0);
         Some(outline_to_segments(&outline, upem, em_px, x, y))
@@ -588,7 +731,11 @@ impl Fonts {
     /// independent horizontal and vertical scales: `em_x` / `em_y` pixels per em.
     /// The baseline origin sits at `(x, y)`; pixels grow downwards.
     pub fn glyph_polys(&self, style: MathStyle, ch: char, em_x: f32, em_y: f32, x: f32, y: f32) -> Vec<Vec<(f32, f32)>> {
-        let Some(segs) = self.glyph_segments(style, ch, em_y, 0.0, 0.0) else {
+        self.glyph_polys_styled(style, ch, em_x, em_y, x, y, 0)
+    }
+
+    pub fn glyph_polys_styled(&self, style: MathStyle, ch: char, em_x: f32, em_y: f32, x: f32, y: f32, ssty: u8) -> Vec<Vec<(f32, f32)>> {
+        let Some(segs) = self.glyph_segments_styled(style, ch, em_y, 0.0, 0.0, ssty) else {
             return Vec::new();
         };
         segments_to_polys(&segs, em_x, em_y, x, y)
@@ -654,5 +801,27 @@ mod tests {
         // Verify math kerning on P with subscript
         let mk_p = f.math_kern(MathStyle::Variable, 'P', MathStyle::Variable, 'i', true, 5.0, 100.0);
         assert!(mk_p < 0.0, "Subscript under P should be kerned negatively, got {}", mk_p);
+
+        // Verify GSUB ssty feature (Phase 6)
+        assert_eq!(f.ssty_map().len(), 529, "Expected 529 ssty alternate mappings in STIXTwoMath");
+
+        // Verify optical size substitution for math italic x
+        let x_gid = f.glyph_id_for_math(MathStyle::Variable, 'x').expect("math italic x must exist");
+        let x_ssty1 = f.ssty_glyph(x_gid.0, 1);
+        let x_ssty2 = f.ssty_glyph(x_gid.0, 2);
+        assert_ne!(x_ssty1, x_gid.0, "ssty level 1 alternate should differ from base");
+        assert_ne!(x_ssty2, x_gid.0, "ssty level 2 alternate should differ from base");
+        assert_ne!(x_ssty1, x_ssty2, "ssty level 1 and 2 should differ");
+
+        // Verify optical advance: ssty glyph is designed wider with heavier stems
+        let adv_norm = f.advance(MathStyle::Variable, 'x', 100.0);
+        let adv_ssty1 = f.advance_styled(MathStyle::Variable, 'x', 100.0, 1);
+        let adv_ssty2 = f.advance_styled(MathStyle::Variable, 'x', 100.0, 2);
+        assert!(adv_ssty1 > adv_norm, "ssty level 1 advance ({}) must be wider than base ({})", adv_ssty1, adv_norm);
+        assert!(adv_ssty2 > adv_ssty1, "ssty level 2 advance ({}) must be wider than level 1 ({})", adv_ssty2, adv_ssty1);
+
+        // Verify outline segments are successfully produced for ssty glyph
+        let segs = f.glyph_segments_styled(MathStyle::Variable, 'x', 100.0, 0.0, 0.0, 1);
+        assert!(segs.is_some() && !segs.unwrap().is_empty(), "ssty glyph must produce valid outline segments");
     }
 }

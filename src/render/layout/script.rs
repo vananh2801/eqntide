@@ -326,4 +326,39 @@ mod tests {
         // Since bottom-right kern is negative, sub_p_x < base_p_w + 0.02 * em
         assert!(sub_p_x < base_p_w + 0.02 * em, "Subscript under 'P' should be kerned inward, got sub_p_x = {}, base_p_w = {}", sub_p_x, base_p_w);
     }
+
+    #[test]
+    fn test_script_optical_size_ssty_feature() {
+        let mut l = Layout { f: fonts(), depth: 0 };
+        let em = 20.0;
+
+        // In x^2: base 'x' is at level 0 (Display/Text), superscript '2' is at level 1 (Script style)
+        let node_x2 = MathNode::parse("<math><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
+        let b_x2 = l.scripts(&node_x2.children[0], em, MathContext::DISPLAY).unwrap();
+
+        let ssty_base = b_x2.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: 'x', ssty, .. } => Some(*ssty),
+            _ => None,
+        }).unwrap();
+        assert_eq!(ssty_base, 0, "Base 'x' should have ssty = 0");
+
+        let ssty_sup = b_x2.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: '2', ssty, .. } => Some(*ssty),
+            _ => None,
+        }).unwrap();
+        assert_eq!(ssty_sup, 1, "Superscript '2' should have ssty = 1");
+
+        // In nested script x^{y^z}:
+        // 'x' has ssty = 0
+        // 'y' has ssty = 1
+        // 'z' has ssty = 2 (ScriptScript style)
+        let node_nested = MathNode::parse("<math><msup><mi>x</mi><msup><mi>y</mi><mi>z</mi></msup></msup></math>").unwrap();
+        let b_nested = l.scripts(&node_nested.children[0], em, MathContext::DISPLAY).unwrap();
+
+        let ssty_z = b_nested.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: 'z', ssty, .. } => Some(*ssty),
+            _ => None,
+        }).unwrap();
+        assert_eq!(ssty_z, 2, "Nested superscript 'z' must have ssty = 2 (ScriptScript)");
+    }
 }

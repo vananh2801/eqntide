@@ -71,7 +71,7 @@ pub fn render_preview(math: &MathNode, font_pt: f32) -> Result<Preview> {
     let f = fonts();
     for it in &b.items {
         match it {
-            Item::Glyph { ch, face, em, x, y } => f.draw(*face, *ch, *em, ox + x, oy + y, &mut canvas),
+            Item::Glyph { ch, face, em, x, y, ssty } => f.draw_styled(*face, *ch, *em, ox + x, oy + y, &mut canvas, *ssty),
             Item::Poly(pts) => {
                 let mut p: Vec<(f32, f32)> = pts.iter().map(|(x, y)| (ox + x, oy + y)).collect();
                 let area: f32 = (0..p.len()).map(|i| {

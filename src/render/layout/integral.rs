@@ -111,6 +111,7 @@ impl Layout {
                     em: eff_em,
                     x,
                     y: rel_y[i] + shift,
+                    ssty: 0,
                 });
             }
         }

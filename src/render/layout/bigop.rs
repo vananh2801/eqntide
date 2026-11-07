@@ -12,7 +12,7 @@ impl Layout {
         let (a, d) = self.f.ink(face, ch, size);
         let y = (a - d) / 2.0 - AXIS * em;
         let mut b = LBox { w: self.f.advance(face, ch, size), ..Default::default() };
-        b.items.push(Item::Glyph { ch, face, em: size, x: 0.0, y });
+        b.items.push(Item::Glyph { ch, face, em: size, x: 0.0, y, ssty: 0 });
         b.asc = a - y;
         b.desc = d + y;
         b
