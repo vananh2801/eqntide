@@ -15,6 +15,7 @@ A standalone, high-performance **bidirectional math equation converter** for Mic
   - **OMML → MathType**: `.docx → OMML → MathML AST → MTEF 5.0 → OLE 2.0 Compound File Binary + EMF/PNG Preview → .docx`
   - **MathType → OMML**: `.docx (OLE .bin / WMF MTra) → MTEF v3/v5 → MathML AST → OMML (<m:oMath>) → .docx`
   - Processes equations across the entire document package: `word/document.xml`, `word/header*.xml`, `word/footer*.xml`, `word/footnotes.xml`, and `word/endnotes.xml`.
+  - **Batch Folder Conversion**: Supports converting an entire directory of `.docx` files recursively while preserving the original subfolder hierarchy and filenames.
 - **Comprehensive MathType Template & OMML Element Coverage**:
   - **Fences & Intervals**: Parentheses, brackets, curly braces (including single-sided system braces `{` / `}`), angle brackets, open brackets, absolute values, double vertical bars, floor/ceiling, Dirac notation (`⟨ψ|`, `|ψ⟩`, `⟨ϕ|ψ⟩`), and open/half-open intervals (`(a, b]`, `[a, b)`).
   - **Radicals & Fractions**: Square roots, nth roots, regular bar fractions, skewed / diagonal, and inline slash fractions (`a/b`).
@@ -63,11 +64,17 @@ cargo build --release
 ### 1. Convert Word OMML → MathType (`default`)
 
 ```bash
-# Basic conversion (writes <input>_mathtype.docx)
+# Basic single-file conversion (writes <input>_mathtype.docx)
 omml-converter input.docx
 
-# Specify custom output file
+# Specify custom output file or output directory
 omml-converter input.docx -o output.docx
+omml-converter input.docx -o output_dir/
+
+# Batch convert an entire directory recursively (preserves subfolder structure & filenames)
+# Default output directory: <input_dir>_mathtype/
+omml-converter ./my_documents
+omml-converter ./my_documents -o ./my_documents_mathtype
 
 # Set preview font size (default: 12 pt, matching MathType default)
 omml-converter input.docx --font-size 13
@@ -82,11 +89,16 @@ omml-converter input.docx --omml-fallback
 ### 2. Convert MathType → Word OMML (`-r` / `--to-omml`)
 
 ```bash
-# Convert MathType OLE/WMF equations to native Word OMML (writes <input>_omml.docx)
+# Convert a single file (writes <input>_omml.docx)
 omml-converter input.docx --to-omml
 
 # Short flag with custom output path
 omml-converter input.docx -r -o output_omml.docx
+
+# Batch convert a folder of MathType .docx files to OMML (preserves subfolder structure)
+# Default output directory: <input_dir>_omml/
+omml-converter ./mathtype_docs -r
+omml-converter ./mathtype_docs -r -o ./omml_docs
 
 # Apply a custom math font to all converted OMML runs
 omml-converter input.docx -r --math-font "Cambria Math"
@@ -96,8 +108,8 @@ omml-converter input.docx -r --math-font "Cambria Math"
 
 | Flag / Option | Description |
 | --- | --- |
-| `<INPUT>` | Path to the source `.docx` file (required). |
-| `-o, --output <FILE>` | Destination path (default: `<input>_mathtype.docx`, or `<input>_omml.docx` with `--to-omml`). |
+| `<INPUT>` | Path to the source `.docx` file or directory (scanned recursively for `.docx` files). |
+| `-o, --output <PATH>` | Destination `.docx` file or directory path (default: `<input>_mathtype[.docx]` or `<input>_omml[.docx]`). |
 | `-r, --to-omml` | Reverse direction: convert embedded MathType equations (`.bin` / `.wmf`) to Word native OMML (`<m:oMath>`). |
 | `--math-font <FONT>` | Optional font name applied to converted OMML runs (`<w:rFonts>`) when using `--to-omml`. |
 | `--preview <FORMAT>` | Picture format for OLE previews in OMML → MathType mode: `emf` (vector, default) or `png` (raster). |

@@ -155,7 +155,13 @@ pub fn convert_with(
 ) -> Result<ConversionSummary> {
     let input = std::fs::read(input_path.as_ref())?;
     let (output, summary) = convert_bytes_with(&input, opts)?;
-    std::fs::write(output_path.as_ref(), output)?;
-    log::info!("Saved → {}", output_path.as_ref().display());
+    let out_path = output_path.as_ref();
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(out_path, output)?;
+    log::info!("Saved → {}", out_path.display());
     Ok(summary)
 }
