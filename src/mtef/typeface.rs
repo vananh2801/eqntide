@@ -28,6 +28,19 @@ pub const TF_MTEXTRA: u8 = 11;
 /// Expandable characters / fences / arrows (`fnEXPAND`).
 pub const TF_EXPAND: u8 = 22;
 
+// ── Explicit Euclid font styles (negative signed typeface: `256 - index`) ────
+
+/// Explicit font style #1 (`-1i8 as u8 = 255`): `Euclid Fraktur` (Plain).
+pub const TF_FRAKTUR: u8 = 255;
+/// Explicit font style #2 (`-2i8 as u8 = 254`): `Euclid Math One` (Script/Calligraphic Plain).
+pub const TF_SCRIPT: u8 = 254;
+/// Explicit font style #3 (`-3i8 as u8 = 253`): `Euclid Math Two` (Double-Struck Plain).
+pub const TF_DOUBLESTRUCK: u8 = 253;
+/// Explicit font style #4 (`-4i8 as u8 = 252`): `Euclid Fraktur` (Bold).
+pub const TF_FRAKTUR_BOLD: u8 = 252;
+/// Explicit font style #5 (`-5i8 as u8 = 251`): `Euclid Math One` (Script/Calligraphic Bold).
+pub const TF_SCRIPT_BOLD: u8 = 251;
+
 /// Approximation of Python's `str.isdigit()` for the characters that matter in
 /// math: ASCII digits, super/subscript digits and full-width digits.
 pub(crate) fn py_isdigit(c: char) -> bool {

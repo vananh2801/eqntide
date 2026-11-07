@@ -2,20 +2,24 @@
 //!
 //! MathType 5 stores character codes as 16-bit `MTCode` values alongside a
 //! typeface slot (`TF_TEXT`, `TF_FUNCTION`, `TF_VARIABLE`, `TF_LCGREEK`,
-//! `TF_UCGREEK`, `TF_SYMBOL`, `TF_VECTOR`, `TF_NUMBER`).
+//! `TF_UCGREEK`, `TF_SYMBOL`, `TF_VECTOR`, `TF_NUMBER`) or an explicit
+//! `FONT_STYLE_DEF` reference (`TF_FRAKTUR`, `TF_SCRIPT`, `TF_DOUBLESTRUCK`).
 //!
 //! Because `MTCode` is 16-bit:
 //! - Supplementary Mathematical Alphanumeric Symbols (`U+1D400..=U+1D7FF`) must
 //!   be normalized to their 16-bit `MTCode` equivalents (ASCII, Greek, BMP
 //!   Letterlike Symbols `U+2100..=U+214F`, or MathType Private Use Area codes
-//!   `0xF000..=0xF133`) with the corresponding typeface.
+//!   `0xF000..=0xF133`) with the corresponding typeface (`Euclid Fraktur`,
+//!   `Euclid Math One`, `Euclid Math Two`, or built-in style fallback for
+//!   characters not present in MathType's Euclid fonts).
 //! - Certain BMP operators, differentials, and spacing characters map to
 //!   MathType's Private Use Area (`0xE900..=0xEF08`) as defined in
 //!   `MathType_MTCode.xml` and `char.xsl`.
 
 use super::typeface::{
-    py_isdigit, TF_FUNCTION, TF_LCGREEK, TF_NUMBER, TF_SYMBOL, TF_TEXT, TF_UCGREEK, TF_VARIABLE,
-    TF_VECTOR, TF_MTEXTRA,
+    py_isdigit, TF_DOUBLESTRUCK, TF_FRAKTUR, TF_FRAKTUR_BOLD, TF_FUNCTION, TF_LCGREEK,
+    TF_MTEXTRA, TF_NUMBER, TF_SCRIPT, TF_SCRIPT_BOLD, TF_SYMBOL, TF_TEXT, TF_UCGREEK,
+    TF_VARIABLE, TF_VECTOR,
 };
 
 /// Map an uppercase ASCII letter `'A'..='Z'` to its MathType Double-Struck
@@ -220,17 +224,26 @@ pub fn map_supplementary_math_char(cp: u32) -> Option<(u8, u32)> {
     match cp {
         // BMP Letterlike exceptions for Planck constant ℎ (`U+210E`)
         0x210E => Some((TF_VARIABLE, 'h' as u32)),
-        0x210F => Some((TF_SYMBOL, 0x210F)), // ℏ
+        0x210F => Some((TF_MTEXTRA, 0x210F)), // ℏ in MT Extra
 
-        // BMP Double-Struck letters (ℂ, ℍ, ℕ, ℙ, ℚ, ℝ, ℤ)
-        0x2102 | 0x210D | 0x2115 | 0x2119 | 0x211A | 0x211D | 0x2124 => Some((TF_VARIABLE, cp)),
+        // BMP Double-Struck letters (ℂ, ℍ, ℕ, ℙ, ℚ, ℝ, ℤ) -> Euclid Math Two
+        0x2102 | 0x210D | 0x2115 | 0x2119 | 0x211A | 0x211D | 0x2124 => {
+            Some((TF_DOUBLESTRUCK, cp))
+        }
 
-        // BMP Fraktur letters (ℌ, ℑ, ℜ, ℨ, ℭ)
-        0x210C | 0x2111 | 0x211C | 0x2128 | 0x212D => Some((TF_VARIABLE, cp)),
+        // BMP Fraktur letters (ℌ, ℑ, ℜ, ℨ, ℭ) -> Euclid Fraktur
+        0x210C | 0x2111 | 0x211C | 0x2128 | 0x212D => Some((TF_FRAKTUR, cp)),
 
-        // BMP Script letters (ℊ, ℋ, ℐ, ℒ, ℓ, ℘, ℛ, ℬ, ℯ, ℰ, ℱ, ℳ, ℴ)
-        0x210A | 0x210B | 0x2110 | 0x2112 | 0x2113 | 0x2118 | 0x211B | 0x212C | 0x212F
-        | 0x2130 | 0x2131 | 0x2133 | 0x2134 => Some((TF_VARIABLE, cp)),
+        // BMP Script uppercase letters (ℋ, ℐ, ℒ, ℘, ℛ, ℬ, ℰ, ℱ, ℳ) -> Euclid Math One
+        0x210B | 0x2110 | 0x2112 | 0x2118 | 0x211B | 0x212C | 0x2130 | 0x2131 | 0x2133 => {
+            Some((TF_SCRIPT, cp))
+        }
+        // BMP Script small ℓ (U+2113) -> MT Extra
+        0x2113 => Some((TF_MTEXTRA, 0x2113)),
+        // BMP Script small ℊ, ℯ, ℴ -> Euclid Math One lacks lowercase; fallback to italic variable
+        0x210A => Some((TF_VARIABLE, 'g' as u32)),
+        0x212F => Some((TF_VARIABLE, 'e' as u32)),
+        0x2134 => Some((TF_VARIABLE, 'o' as u32)),
 
         // Mathematical Bold Capital A..=Z
         0x1D400..=0x1D419 => Some((TF_VECTOR, 'A' as u32 + (cp - 0x1D400))),
@@ -245,58 +258,66 @@ pub fn map_supplementary_math_char(cp: u32) -> Option<(u8, u32)> {
         // Mathematical Bold Italic Small a..=z
         0x1D482..=0x1D49B => Some((TF_VECTOR, 'a' as u32 + (cp - 0x1D482))),
 
-        // Mathematical Script Capital A..=Z
+        // Mathematical Script Capital A..=Z -> Euclid Math One
         0x1D49C..=0x1D4B5 => {
             let ch = char::from_u32('A' as u32 + (cp - 0x1D49C)).unwrap_or('A');
-            Some((TF_VARIABLE, script_mtcode_upper(ch)))
+            Some((TF_SCRIPT, script_mtcode_upper(ch)))
         }
-        // Mathematical Script Small a..=z
+        // Mathematical Script Small a..=z -> 'l' in MT Extra, others fallback to TF_VARIABLE
         0x1D4B6..=0x1D4CF => {
             let ch = char::from_u32('a' as u32 + (cp - 0x1D4B6)).unwrap_or('a');
-            Some((TF_VARIABLE, script_mtcode_lower(ch)))
+            if ch == 'l' {
+                Some((TF_MTEXTRA, 0x2113))
+            } else {
+                Some((TF_VARIABLE, ch as u32))
+            }
         }
-        // Mathematical Bold Script Capital A..=Z
+        // Mathematical Bold Script Capital A..=Z -> Euclid Math One Bold
         0x1D4D0..=0x1D4E9 => {
             let ch = char::from_u32('A' as u32 + (cp - 0x1D4D0)).unwrap_or('A');
-            Some((TF_VARIABLE, script_mtcode_upper(ch)))
+            Some((TF_SCRIPT_BOLD, script_mtcode_upper(ch)))
         }
         // Mathematical Bold Script Small a..=z
         0x1D4EA..=0x1D503 => {
             let ch = char::from_u32('a' as u32 + (cp - 0x1D4EA)).unwrap_or('a');
-            Some((TF_VARIABLE, script_mtcode_lower(ch)))
+            Some((TF_VECTOR, ch as u32))
         }
 
-        // Mathematical Fraktur Capital A..=Z
+        // Mathematical Fraktur Capital A..=Z -> Euclid Fraktur
         0x1D504..=0x1D51D => {
             let ch = char::from_u32('A' as u32 + (cp - 0x1D504)).unwrap_or('A');
-            Some((TF_VARIABLE, fraktur_mtcode_upper(ch)))
+            Some((TF_FRAKTUR, fraktur_mtcode_upper(ch)))
         }
-        // Mathematical Fraktur Small a..=z
+        // Mathematical Fraktur Small a..=z -> Euclid Fraktur
         0x1D51E..=0x1D537 => {
             let ch = char::from_u32('a' as u32 + (cp - 0x1D51E)).unwrap_or('a');
-            Some((TF_VARIABLE, fraktur_mtcode_lower(ch)))
+            Some((TF_FRAKTUR, fraktur_mtcode_lower(ch)))
         }
 
-        // Mathematical Double-Struck Capital A..=Z
+        // Mathematical Double-Struck Capital A..=Z -> Euclid Math Two
         0x1D538..=0x1D551 => {
             let ch = char::from_u32('A' as u32 + (cp - 0x1D538)).unwrap_or('A');
-            Some((TF_VARIABLE, double_struck_mtcode_upper(ch)))
+            Some((TF_DOUBLESTRUCK, double_struck_mtcode_upper(ch)))
         }
-        // Mathematical Double-Struck Small a..=z
+        // Mathematical Double-Struck Small a..=z -> 'k' in Euclid Math Two, others fallback to TF_VARIABLE
         0x1D552..=0x1D56B => {
             let ch = char::from_u32('a' as u32 + (cp - 0x1D552)).unwrap_or('a');
-            Some((TF_VARIABLE, double_struck_mtcode_lower(ch)))
+            if ch == 'k' {
+                Some((TF_DOUBLESTRUCK, double_struck_mtcode_lower('k')))
+            } else {
+                Some((TF_VARIABLE, ch as u32))
+            }
         }
 
-        // Mathematical Bold Fraktur Capital A..=Z
+        // Mathematical Bold Fraktur Capital A..=Z -> Euclid Fraktur Bold
         0x1D56C..=0x1D585 => {
             let ch = char::from_u32('A' as u32 + (cp - 0x1D56C)).unwrap_or('A');
-            Some((TF_VARIABLE, fraktur_mtcode_upper(ch)))
+            Some((TF_FRAKTUR_BOLD, fraktur_mtcode_upper(ch)))
         }
-        // Mathematical Bold Fraktur Small a..=z
+        // Mathematical Bold Fraktur Small a..=z -> Euclid Fraktur Bold
         0x1D586..=0x1D59F => {
             let ch = char::from_u32('a' as u32 + (cp - 0x1D586)).unwrap_or('a');
-            Some((TF_VARIABLE, fraktur_mtcode_lower(ch)))
+            Some((TF_FRAKTUR_BOLD, fraktur_mtcode_lower(ch)))
         }
 
         // Mathematical Sans-Serif Capital A..=Z
@@ -341,8 +362,8 @@ pub fn map_supplementary_math_char(cp: u32) -> Option<(u8, u32)> {
 
         // Mathematical Bold Digits 0..=9
         0x1D7CE..=0x1D7D7 => Some((TF_VECTOR, '0' as u32 + (cp - 0x1D7CE))),
-        // Mathematical Double-Struck Digits 0..=9
-        0x1D7D8..=0x1D7E1 => Some((TF_NUMBER, 0xF0C0 + (cp - 0x1D7D8))),
+        // Mathematical Double-Struck Digits 0..=9 (Euclid Math Two lacks digits; fallback to TF_NUMBER)
+        0x1D7D8..=0x1D7E1 => Some((TF_NUMBER, '0' as u32 + (cp - 0x1D7D8))),
         // Mathematical Sans-Serif Digits 0..=9
         0x1D7E2..=0x1D7EB => Some((TF_NUMBER, '0' as u32 + (cp - 0x1D7E2))),
         // Mathematical Sans-Serif Bold Digits 0..=9
@@ -511,29 +532,53 @@ pub fn map_char_with_variant(ch: char, mathvariant: Option<&str>, default_tf: u8
         match variant {
             "double-struck" => {
                 if ch.is_ascii_uppercase() {
-                    return (TF_VARIABLE, double_struck_mtcode_upper(ch));
+                    return (TF_DOUBLESTRUCK, double_struck_mtcode_upper(ch));
+                }
+                if ch == 'k' {
+                    return (TF_DOUBLESTRUCK, double_struck_mtcode_lower('k'));
                 }
                 if ch.is_ascii_lowercase() {
-                    return (TF_VARIABLE, double_struck_mtcode_lower(ch));
+                    // Euclid Math Two lacks lowercase double-struck (except 'k'); fallback to TF_VARIABLE
+                    return (TF_VARIABLE, cp);
                 }
                 if ch.is_ascii_digit() {
-                    return (TF_NUMBER, double_struck_mtcode_digit(ch));
+                    return (TF_NUMBER, cp);
                 }
             }
-            "fraktur" | "bold-fraktur" => {
+            "fraktur" => {
                 if ch.is_ascii_uppercase() {
-                    return (TF_VARIABLE, fraktur_mtcode_upper(ch));
+                    return (TF_FRAKTUR, fraktur_mtcode_upper(ch));
                 }
                 if ch.is_ascii_lowercase() {
-                    return (TF_VARIABLE, fraktur_mtcode_lower(ch));
+                    return (TF_FRAKTUR, fraktur_mtcode_lower(ch));
                 }
             }
-            "script" | "bold-script" => {
+            "bold-fraktur" => {
                 if ch.is_ascii_uppercase() {
-                    return (TF_VARIABLE, script_mtcode_upper(ch));
+                    return (TF_FRAKTUR_BOLD, fraktur_mtcode_upper(ch));
                 }
                 if ch.is_ascii_lowercase() {
-                    return (TF_VARIABLE, script_mtcode_lower(ch));
+                    return (TF_FRAKTUR_BOLD, fraktur_mtcode_lower(ch));
+                }
+            }
+            "script" => {
+                if ch.is_ascii_uppercase() {
+                    return (TF_SCRIPT, script_mtcode_upper(ch));
+                }
+                if ch == 'l' {
+                    return (TF_MTEXTRA, 0x2113);
+                }
+                if ch.is_ascii_lowercase() {
+                    // Euclid Math One lacks lowercase script; fallback to TF_VARIABLE
+                    return (TF_VARIABLE, cp);
+                }
+            }
+            "bold-script" => {
+                if ch.is_ascii_uppercase() {
+                    return (TF_SCRIPT_BOLD, script_mtcode_upper(ch));
+                }
+                if ch.is_ascii_lowercase() {
+                    return (TF_VECTOR, cp);
                 }
             }
             "bold" | "bold-italic" => {
@@ -639,16 +684,20 @@ mod tests {
         assert_eq!(map_char_with_variant('𝐀', None, TF_VARIABLE), (TF_VECTOR, 'A' as u32));
         // Italic x (U+1D465) -> TF_VARIABLE, 'x'
         assert_eq!(map_char_with_variant('𝑥', None, TF_VARIABLE), (TF_VARIABLE, 'x' as u32));
-        // Double-struck R (ℝ U+211D) -> TF_VARIABLE, 0x211D
-        assert_eq!(map_char_with_variant('ℝ', None, TF_VARIABLE), (TF_VARIABLE, 0x211D));
-        // Double-struck A (𝔸 U+1D538) -> TF_VARIABLE, 0xF080
-        assert_eq!(map_char_with_variant('𝔸', None, TF_VARIABLE), (TF_VARIABLE, 0xF080));
-        // Script L (ℒ U+2112) -> TF_VARIABLE, 0x2112
-        assert_eq!(map_char_with_variant('ℒ', None, TF_VARIABLE), (TF_VARIABLE, 0x2112));
-        // Script A (𝒜 U+1D49C) -> TF_VARIABLE, 0xF100
-        assert_eq!(map_char_with_variant('𝒜', None, TF_VARIABLE), (TF_VARIABLE, 0xF100));
-        // Fraktur g (𝔤 U+1D524) -> TF_VARIABLE, 0xF01A + 6 = 0xF020
-        assert_eq!(map_char_with_variant('𝔤', None, TF_VARIABLE), (TF_VARIABLE, 0xF020));
+        // Double-struck R (ℝ U+211D) -> TF_DOUBLESTRUCK, 0x211D
+        assert_eq!(map_char_with_variant('ℝ', None, TF_VARIABLE), (TF_DOUBLESTRUCK, 0x211D));
+        // Double-struck A (𝔸 U+1D538) -> TF_DOUBLESTRUCK, 0xF080
+        assert_eq!(map_char_with_variant('𝔸', None, TF_VARIABLE), (TF_DOUBLESTRUCK, 0xF080));
+        // Double-struck k (𝕜 U+1D55C) -> TF_DOUBLESTRUCK, 0xF0A4
+        assert_eq!(map_char_with_variant('𝕜', None, TF_VARIABLE), (TF_DOUBLESTRUCK, 0xF0A4));
+        // Double-struck a (𝕒 U+1D552, not in Euclid Math Two) -> TF_VARIABLE, 'a'
+        assert_eq!(map_char_with_variant('𝕒', None, TF_VARIABLE), (TF_VARIABLE, 'a' as u32));
+        // Script L (ℒ U+2112) -> TF_SCRIPT, 0x2112
+        assert_eq!(map_char_with_variant('ℒ', None, TF_VARIABLE), (TF_SCRIPT, 0x2112));
+        // Script A (𝒜 U+1D49C) -> TF_SCRIPT, 0xF100
+        assert_eq!(map_char_with_variant('𝒜', None, TF_VARIABLE), (TF_SCRIPT, 0xF100));
+        // Fraktur g (𝔤 U+1D524) -> TF_FRAKTUR, 0xF01A + 6 = 0xF020
+        assert_eq!(map_char_with_variant('𝔤', None, TF_VARIABLE), (TF_FRAKTUR, 0xF020));
         // Italic Greek alpha (𝛼 U+1D6FC) -> TF_LCGREEK, 0x03B1
         assert_eq!(map_char_with_variant('𝛼', None, TF_VARIABLE), (TF_LCGREEK, 0x03B1));
     }
@@ -657,11 +706,11 @@ mod tests {
     fn test_mathvariant_attributes() {
         assert_eq!(
             map_char_with_variant('R', Some("double-struck"), TF_VARIABLE),
-            (TF_VARIABLE, 0x211D)
+            (TF_DOUBLESTRUCK, 0x211D)
         );
         assert_eq!(
             map_char_with_variant('A', Some("double-struck"), TF_VARIABLE),
-            (TF_VARIABLE, 0xF080)
+            (TF_DOUBLESTRUCK, 0xF080)
         );
         assert_eq!(
             map_char_with_variant('v', Some("bold"), TF_VARIABLE),
@@ -669,11 +718,11 @@ mod tests {
         );
         assert_eq!(
             map_char_with_variant('L', Some("script"), TF_VARIABLE),
-            (TF_VARIABLE, 0x2112)
+            (TF_SCRIPT, 0x2112)
         );
         assert_eq!(
             map_char_with_variant('g', Some("fraktur"), TF_VARIABLE),
-            (TF_VARIABLE, 0xF020)
+            (TF_FRAKTUR, 0xF020)
         );
     }
 
@@ -688,5 +737,38 @@ mod tests {
         assert_eq!(map_char_with_variant('ă', None, TF_VARIABLE), (TF_TEXT, 'ă' as u32));
         // Math symbol '∞' inside <mi> -> TF_SYMBOL
         assert_eq!(map_char_with_variant('∞', None, TF_VARIABLE), (TF_SYMBOL, 0x221E));
+    }
+
+    #[test]
+    fn test_euclid_font_defs_and_char_enc_8() {
+        use crate::mtef::{build_mtef, char_record, mtef_to_mathml};
+
+        let mut eq = Vec::new();
+        // Script A (Euclid Math One, font_pos = b'A')
+        let (tf_scr, mt_scr) = map_char_with_variant('A', Some("script"), TF_VARIABLE);
+        let rec_scr = char_record(tf_scr, mt_scr);
+        assert_eq!(rec_scr, vec![0x02, 0x04, 0x7E, 0x00, 0xF1, b'A']);
+        eq.extend_from_slice(&rec_scr);
+
+        // Fraktur g (Euclid Fraktur, font_pos = b'g')
+        let (tf_frk, mt_frk) = map_char_with_variant('g', Some("fraktur"), TF_VARIABLE);
+        let rec_frk = char_record(tf_frk, mt_frk);
+        assert_eq!(rec_frk, vec![0x02, 0x04, 0x7F, 0x20, 0xF0, b'g']);
+        eq.extend_from_slice(&rec_frk);
+
+        // Double-struck R (Euclid Math Two, font_pos = b'R')
+        let (tf_ds, mt_ds) = map_char_with_variant('R', Some("double-struck"), TF_VARIABLE);
+        let rec_ds = char_record(tf_ds, mt_ds);
+        assert_eq!(rec_ds, vec![0x02, 0x04, 0x7D, 0x1D, 0x21, b'R']);
+        eq.extend_from_slice(&rec_ds);
+
+        let mtef = build_mtef(&eq);
+        // Verify ENCODING_DEF (0x13) and FONT_DEF (0x11) and FONT_STYLE_DEF (0x08) are emitted
+        assert!(mtef.windows(14).any(|w| w == b"\x13EuclidFraktur"));
+        assert!(mtef.windows(17).any(|w| w == b"\x11\x06Euclid Math One"));
+
+        // Verify MTEF -> MathML decoder round-trips cleanly
+        let math = mtef_to_mathml(&mtef).expect("should decode MTEF with Euclid defs");
+        assert_eq!(math.children[0].children.len(), 3);
     }
 }

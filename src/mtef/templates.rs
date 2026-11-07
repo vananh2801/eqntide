@@ -1379,16 +1379,11 @@ pub fn embell_record(embell_code: u8) -> Vec<u8> {
 /// `CHAR` record (type `0x02`) with attached character embellishments
 /// (`OPT_CHAR_EMBELL = 0x01`, matching `records5.py` and `embellishment.xsl`).
 pub fn embellished_char(typeface: u8, unicode_val: u32, embell_codes: &[u8]) -> Vec<u8> {
+    let mut out = char_record(typeface, unicode_val);
     if embell_codes.is_empty() {
-        return char_record(typeface, unicode_val);
+        return out;
     }
-    let mut out = vec![
-        0x02,
-        0x01, // OPT_CHAR_EMBELL
-        typeface.wrapping_add(128),
-        (unicode_val & 0xFF) as u8,
-        ((unicode_val >> 8) & 0xFF) as u8,
-    ];
+    out[1] |= 0x01; // OPT_CHAR_EMBELL
     for &code in embell_codes {
         out.extend_from_slice(&embell_record(code));
     }
