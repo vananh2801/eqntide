@@ -2,12 +2,18 @@
 //! stretch to match the exact height of their contents.
 //!
 //! Delimiters are drawn in one of two modes:
-//! 1. Piece assembly (`span >= pieces_h`): When the actual height exceeds the total
-//!    height of the assembly pieces (top hook, middle cusp if any, and bottom hook),
-//!    the delimiter is assembled from font glyph pieces (U+239B..U+23AD) with extenders
-//!    tiled between them.
-//! 2. Vertical scaling (`span < pieces_h`): When the actual height is smaller than the
-//!    total height of the assembly pieces, the single complete glyph is scaled vertically
+//! 1. Piece assembly (`span >= min_piece_h`): When the actual height is sufficient
+//!    for the font glyph pieces (U+239B..U+23AD) to fit without their curved hooks
+//!    colliding, the delimiter is assembled from pieces.
+//!    - For curly braces (`{`, `}`): the 3 pieces (top hook, middle cusp, bottom hook)
+//!      can assemble without `\u{23AA}` extenders down to ~1.85 em by overlapping along
+//!      their straight stems. For taller spans (>= ~4.49 em), `\u{23AA}` extenders are
+//!      tiled in the gaps.
+//!    - For parentheses and square brackets: the top and bottom hooks can assemble without
+//!      extenders down to ~1.20 em by overlapping along their straight stems. For taller
+//!      spans (>= ~2.54 em), extenders are tiled between them.
+//! 2. Vertical scaling (`span < min_piece_h`): When the actual height is too short even
+//!    for the overlapping hooks to fit, the single complete glyph is scaled vertically
 //!    (`em_y`) to match the requested span, while keeping the horizontal axis (`em_x`) at
 //!    the standard font size. This avoids uniform scaling so horizontal strokes and serifs
 //!    do not become abnormally thick.
@@ -57,17 +63,24 @@ impl Layout {
         let bot_y = desc;
         let pad = 0.05 * em;
 
-        // Total height of the fixed assembly pieces (top hook, middle cusp, bottom hook).
-        let ink_h = |ch: Option<char>| ch.map_or(0.0, |ch| {
-            let (a, d) = self.f.ink(face, ch, em);
-            a + d
-        });
-        let pieces_h = ink_h(r.top) + ink_h(r.mid) + ink_h(r.bot);
+        // Minimum height where the end pieces (and middle cusp if any) can overlap
+        // along their straight stems without their curved hooks / cusps colliding:
+        // - For '{' and '}': top hook curve is ~0.63 em, mid cusp curves are ~0.32 em each,
+        //   bottom hook curve is ~0.56 em -> min span is (0.63 + 0.32) + (0.32 + 0.56) = ~1.83 em.
+        //   Between 1.85 em and 4.49 em, the 3 pieces assemble directly without \u{23AA} extenders.
+        // - For '(' and ')': hooks can overlap along straight stems down to ~1.20 em.
+        // - For '[' and ']': hooks can overlap along straight stems down to ~1.15 em.
+        let min_piece_h = match c {
+            '{' | '}' => 1.85 * em,
+            '(' | ')' => 1.20 * em,
+            '[' | ']' | '⌈' | '⌉' | '⌊' | '⌋' => 1.15 * em,
+            _ => 1.50 * em,
+        };
 
-        // Case 1: When actual height is smaller than the combined pieces height,
-        // use vertical scaling on the single complete character so horizontal strokes
-        // and serifs stay at normal font thickness without becoming abnormally thick.
-        if span < pieces_h {
+        // Case 1: When actual height is smaller than min_piece_h, the pieces would collide.
+        // Scale the single complete character vertically only (em_y = em * span / h0, em_x = em),
+        // keeping horizontal stroke thickness at normal font size.
+        if span < min_piece_h {
             let natural: Vec<Vec<(f32, f32)>> = self.f.glyph_polys(face, c, em, em, 0.0, 0.0);
             if natural.is_empty() {
                 return None;
@@ -94,7 +107,10 @@ impl Layout {
             });
         }
 
-        // Case 2: When actual height >= total pieces height, assemble from font glyph pieces.
+        // Case 2: When actual height >= min_piece_h, assemble from font glyph pieces:
+        // - If span >= fixed (no overlap): extenders (\u{23AA}) are tiled into the gaps.
+        // - If min_piece_h <= span < fixed: end pieces (and mid cusp) overlap along their
+        //   straight vertical stems without needing extenders.
         let eff_em = em;
         let mut items: Vec<Item> = Vec::new();
         let push = |ch: char, y: f32, items: &mut Vec<Item>| {
@@ -122,7 +138,7 @@ impl Layout {
             gap_bot = bot_y - d - a;
         }
 
-        // Tile the uncovered range [from, to] with extenders.
+        // Tile the uncovered range [from, to] with extenders if there is a positive gap.
         let (ea, ed) = ink(r.ext);
         let e_h = (ea + ed).max(1.0);
         let fill = |from: f32, to: f32, items: &mut Vec<Item>| {
@@ -180,8 +196,8 @@ mod tests {
         let l = layout();
         let em = 24.0;
         for c in ['(', ')', '[', ']', '{', '}'] {
-            // Short span (< pieces_h): uses vertical outline scaling (Item::Poly)
-            let short_span = 1.5 * em;
+            // Short span (< min_piece_h): uses vertical outline scaling (Item::Poly)
+            let short_span = 1.0 * em;
             let asc_s = short_span / 2.0 + AXIS * em;
             let desc_s = short_span / 2.0 - AXIS * em;
             let b_s = l.stretchy_delimiter(c, asc_s, desc_s, em).expect("delimiter supported");
@@ -189,7 +205,20 @@ mod tests {
             assert_eq!(b_s.desc, desc_s);
             assert!(b_s.items.iter().all(|it| matches!(it, Item::Poly(_))), "{c}: short should be Poly");
 
-            // Tall span (>= pieces_h): uses piece assembly (Item::Glyph)
+            // Moderate span (e.g. 2.5 * em): for '{' this is the 3-piece assembly without extenders!
+            let mod_span = 2.5 * em;
+            let asc_m = mod_span / 2.0 + AXIS * em;
+            let desc_m = mod_span / 2.0 - AXIS * em;
+            let b_m = l.stretchy_delimiter(c, asc_m, desc_m, em).expect("delimiter supported");
+            assert_eq!(b_m.asc, asc_m);
+            assert_eq!(b_m.desc, desc_m);
+            assert!(b_m.items.iter().all(|it| matches!(it, Item::Glyph { .. })), "{c}: mod should be Glyph");
+            if c == '{' {
+                // Exactly 3 pieces: top hook (\u{23A7}), mid cusp (\u{23A8}), bot hook (\u{23A9})
+                assert_eq!(b_m.items.len(), 3, "curly brace at 2.5em should have exactly 3 pieces without extenders");
+            }
+
+            // Tall span (>= 5.0 * em): uses piece assembly with extenders
             let tall_span = 6.0 * em;
             let asc_t = tall_span / 2.0 + AXIS * em;
             let desc_t = tall_span / 2.0 - AXIS * em;
@@ -197,6 +226,10 @@ mod tests {
             assert_eq!(b_t.asc, asc_t);
             assert_eq!(b_t.desc, desc_t);
             assert!(b_t.items.iter().all(|it| matches!(it, Item::Glyph { .. })), "{c}: tall should be Glyph");
+            if c == '{' {
+                // Must have extenders (\u{23AA})
+                assert!(b_t.items.len() > 3, "curly brace at 6.0em should have extenders");
+            }
         }
     }
 
