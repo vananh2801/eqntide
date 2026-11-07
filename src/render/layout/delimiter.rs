@@ -173,8 +173,11 @@ impl Layout {
                 h_mid.max(h_top).max(h_bot).max(collision_top).max(collision_bot)
             }
             None => {
-                let collision = depth_top + depth_bot;
-                h_top.max(h_bot).max(collision)
+                // Without middle cusp (parentheses, brackets): end pieces meet end-to-end.
+                // Overlapping them along straight stems would insert an unnatural straight
+                // vertical bar '|' into parentheses for moderate spans (< h_top + h_bot).
+                // Thus, piece assembly starts at h_top + h_bot.
+                h_top + h_bot
             }
         }
     }
@@ -333,19 +336,6 @@ mod tests {
             assert_eq!(b_s.desc, desc_s);
             assert!(b_s.items.iter().all(|it| matches!(it, Item::Poly(_))), "{c}: short should be Poly");
 
-            // Moderate span (e.g. 2.5 * em): for '{' this is the 3-piece assembly without extenders!
-            let mod_span = 2.5 * em;
-            let asc_m = mod_span / 2.0 + AXIS * em;
-            let desc_m = mod_span / 2.0 - AXIS * em;
-            let b_m = l.stretchy_delimiter(c, asc_m, desc_m, em).expect("delimiter supported");
-            assert_eq!(b_m.asc, asc_m);
-            assert_eq!(b_m.desc, desc_m);
-            assert!(b_m.items.iter().all(|it| matches!(it, Item::Glyph { .. })), "{c}: mod should be Glyph");
-            if c == '{' {
-                // Exactly 3 pieces: top hook (\u{23A7}), mid cusp (\u{23A8}), bot hook (\u{23A9})
-                assert_eq!(b_m.items.len(), 3, "curly brace at 2.5em should have exactly 3 pieces without extenders");
-            }
-
             // Tall span (>= 5.0 * em): uses piece assembly with extenders
             let tall_span = 6.0 * em;
             let asc_t = tall_span / 2.0 + AXIS * em;
@@ -359,6 +349,13 @@ mod tests {
                 assert!(b_t.items.len() > 3, "curly brace at 6.0em should have extenders");
             }
         }
+
+        // For '{': moderate span (e.g. 2.5 * em) assembles with exactly 3 pieces without extenders:
+        let mod_span = 2.5 * em;
+        let asc_m = mod_span / 2.0 + AXIS * em;
+        let desc_m = mod_span / 2.0 - AXIS * em;
+        let b_m = l.stretchy_delimiter('{', asc_m, desc_m, em).expect("delimiter supported");
+        assert_eq!(b_m.items.len(), 3, "curly brace at 2.5em should have exactly 3 pieces without extenders");
     }
 
     #[test]
