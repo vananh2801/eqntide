@@ -170,7 +170,7 @@ impl Layout {
 
                 let collision_top = 2.0 * (depth_top + reach_top);
                 let collision_bot = 2.0 * (depth_bot + reach_bot);
-                h_mid.max(h_top).max(h_bot).max(collision_top).max(collision_bot)
+                (h_top + h_bot).max(h_mid).max(collision_top).max(collision_bot)
             }
             None => {
                 // Without middle cusp (parentheses, brackets): end pieces meet end-to-end.
@@ -351,11 +351,11 @@ mod tests {
         }
 
         // For '{': moderate span (e.g. 2.5 * em) assembles with exactly 3 pieces without extenders:
-        let mod_span = 2.5 * em;
+        let mod_span = 3.0 * em;
         let asc_m = mod_span / 2.0 + AXIS * em;
         let desc_m = mod_span / 2.0 - AXIS * em;
         let b_m = l.stretchy_delimiter('{', asc_m, desc_m, em).expect("delimiter supported");
-        assert_eq!(b_m.items.len(), 3, "curly brace at 2.5em should have exactly 3 pieces without extenders");
+        assert_eq!(b_m.items.len(), 3, "curly brace at 3.0em should have exactly 3 pieces without extenders");
     }
 
     #[test]
