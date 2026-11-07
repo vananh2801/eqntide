@@ -7,13 +7,12 @@
 //!    horizontal scale at normal `em`. This avoids unnatural piece joins.
 //! 2. Tier 2 (Moderate span, specifically for curly braces `{`, `}`): Assembled from exactly
 //!    3 font glyph pieces (top hook, middle cusp, bottom hook) WITHOUT any `\u{23AA}` extenders.
-//!    The pieces overlap along their straight stems, with the allocated span clamped to at least
-//!    `h_3piece_min` so the straight stem overlap never crosses into the curved cusp (preventing
-//!    discontinuous '|' bar artifacts).
+//!    The pieces overlap safely along their straight stems without crossing into the curved cusp.
 //! 3. Tier 3 (Tall span): The pieces are placed at top, center, and bottom, with `\u{23AA}`
 //!    extenders tiled seamlessly into the positive stem gaps.
 
 use super::*;
+use crate::render::font::Seg;
 
 /// The glyph pieces of one stretchy delimiter. `None` means "not present"
 /// (e.g. a floor has no top hook, a ceiling has no bottom hook).
@@ -48,15 +47,78 @@ fn recipe(c: char) -> Option<Pieces> {
 }
 
 impl Layout {
+    /// Calculate the straight stem lengths of a delimiter piece glyph.
+    ///
+    /// Returns `(straight_stem_len_top, straight_stem_len_bot)` in pixels at `eff_em`.
+    /// Points that deviate horizontally from the extender stem `[ext_xmin, ext_xmax]`
+    /// are identified as curved features (hooks or cusps).
+    fn piece_stem_lengths(
+        &self,
+        face: Face,
+        ch: char,
+        eff_em: f32,
+        ext_xmin: f32,
+        ext_xmax: f32,
+    ) -> (f32, f32) {
+        let (asc, desc) = self.f.ink(face, ch, eff_em);
+        let total_h = asc + desc;
+        if total_h <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let y_top = -asc;
+        let y_bot = desc;
+
+        let Some(segs) = self.f.glyph_segments(face, ch, eff_em, 0.0, 0.0) else {
+            return (0.0, 0.0);
+        };
+
+        let tol = 0.02 * eff_em;
+        let mut min_curved_y = f32::INFINITY;
+        let mut max_curved_y = f32::NEG_INFINITY;
+
+        let mut check_pt = |x: f32, y: f32| {
+            if x < ext_xmin - tol || x > ext_xmax + tol {
+                min_curved_y = min_curved_y.min(y);
+                max_curved_y = max_curved_y.max(y);
+            }
+        };
+
+        for s in segs {
+            match s {
+                Seg::Move(x, y) | Seg::Line(x, y) => check_pt(x, y),
+                Seg::Quad(cx, cy, x, y) => {
+                    check_pt(cx, cy);
+                    check_pt(x, y);
+                }
+                Seg::Cubic(c1x, c1y, c2x, c2y, x, y) => {
+                    check_pt(c1x, c1y);
+                    check_pt(c2x, c2y);
+                    check_pt(x, y);
+                }
+                Seg::Close => {}
+            }
+        }
+
+        if min_curved_y.is_infinite() {
+            (total_h, total_h)
+        } else {
+            let top_stem = (min_curved_y - y_top).max(0.0);
+            let bot_stem = (y_bot - max_curved_y).max(0.0);
+            (top_stem, bot_stem)
+        }
+    }
+
     /// Calculate the minimum delimiter height (`span`) at which font glyph pieces can
-    /// begin to be assembled.
+    /// begin to be assembled safely without visual collision artifacts.
     ///
     /// - For delimiters without middle cusp (parentheses, brackets): end pieces meet end-to-end at `h_top + h_bot`.
-    /// - For curly braces (with middle cusp): 3-piece assembly (head, middle, tail) begins at `1.75 * em` (e.g. fractions, 2-line systems).
-    fn min_assembly_span(&self, face: Face, r: &Pieces, em: f32) -> f32 {
+    /// - For delimiters with middle cusp (curly braces): 3 pieces (head, cusp, tail) can safely overlap
+    ///   along their straight stems up to the curved cusp boundary, giving:
+    ///   `min_span = (h_top + h_mid + h_bot) - (safe_overlap_top + safe_overlap_bot)`.
+    fn min_assembly_span(&self, face: Face, r: &Pieces, eff_em: f32) -> f32 {
         let piece_h = |ch: Option<char>| -> f32 {
             ch.map_or(0.0, |c| {
-                let (a, d) = self.f.ink(face, c, em);
+                let (a, d) = self.f.ink(face, c, eff_em);
                 a + d
             })
         };
@@ -64,10 +126,26 @@ impl Layout {
         let h_top = piece_h(r.top);
         let h_bot = piece_h(r.bot);
 
-        match r.mid {
-            Some(_) => 1.75 * em,
-            None => h_top + h_bot,
-        }
+        let Some(mid_ch) = r.mid else {
+            return h_top + h_bot;
+        };
+
+        let h_mid = piece_h(Some(mid_ch));
+        let (ext_xmin, ext_xmax) = self.f.ink_x(face, r.ext, eff_em);
+
+        let (_top_stem_top, bot_stem_top) = r.top.map_or((0.0, 0.0), |t| {
+            self.piece_stem_lengths(face, t, eff_em, ext_xmin, ext_xmax)
+        });
+        let (top_stem_mid, bot_stem_mid) = self.piece_stem_lengths(face, mid_ch, eff_em, ext_xmin, ext_xmax);
+        let (top_stem_bot, _bot_stem_bot) = r.bot.map_or((0.0, 0.0), |b| {
+            self.piece_stem_lengths(face, b, eff_em, ext_xmin, ext_xmax)
+        });
+
+        let safe_overlap_top = bot_stem_top.min(top_stem_mid);
+        let safe_overlap_bot = top_stem_bot.min(bot_stem_mid);
+        let max_safe_overlap = safe_overlap_top + safe_overlap_bot;
+
+        (h_top + h_mid + h_bot - max_safe_overlap).max(0.0)
     }
 
     /// Build the delimiter `c` so that it spans exactly `asc` above and `desc`
@@ -86,23 +164,7 @@ impl Layout {
         const PIECE_SCALE: f32 = 82.0 / 112.0;
         let eff_em = em * PIECE_SCALE;
 
-        let piece_h = |ch: Option<char>| -> f32 {
-            ch.map_or(0.0, |c| {
-                let (a, d) = self.f.ink(face, c, eff_em);
-                a + d
-            })
-        };
-
-        let h_top = piece_h(r.top);
-        let h_bot = piece_h(r.bot);
-        let h_mid = piece_h(r.mid);
-        let h_3piece_natural = h_top + h_mid + h_bot;
-        // The straight stem of STIX Two Math brace pieces extends ~645 font units.
-        // We allow up to 580 font units of safe overlap along the straight stems without touching the cusp:
-        let max_safe_overlap = 580.0 / 1000.0 * eff_em;
-        let h_3piece_min = h_3piece_natural - 2.0 * max_safe_overlap;
-
-        let min_piece_h = self.min_assembly_span(face, &r, em);
+        let min_piece_h = self.min_assembly_span(face, &r, eff_em);
 
         // Tier 1: When span < min_piece_h:
         // Use vertical-only outline scaling of the complete glyph to avoid overlapping piece stems.
@@ -134,20 +196,12 @@ impl Layout {
         }
 
         // Tier 2 & Tier 3:
-        // For curly braces:
-        // - Tier 2 (min_piece_h <= span < h_3piece_natural): Assembled from exactly 3 pieces (head, middle, tail)
-        //   WITHOUT extenders. The span is clamped to at least h_3piece_min so the straight stems overlap
-        //   safely without their flat end caps protruding into the curved cusp.
-        // - Tier 3 (span >= h_3piece_natural): Assembled from 3 pieces + extenders tiled into the gaps.
-        let actual_span = if r.mid.is_some() {
-            span.max(h_3piece_min)
-        } else {
-            span
-        };
-
+        // When span >= min_piece_h, the pieces are assembled from font glyphs:
+        // - Tier 2: 3 pieces without extenders, safely overlapping along their straight stems.
+        // - Tier 3: 3 pieces + extenders tiled seamlessly into positive stem gaps.
         let centre = (top_y + bot_y) / 2.0;
-        let top_y = centre - actual_span / 2.0;
-        let bot_y = centre + actual_span / 2.0;
+        let top_y = centre - span / 2.0;
+        let bot_y = centre + span / 2.0;
         let asc = -top_y;
         let desc = bot_y;
 
@@ -288,9 +342,11 @@ mod tests {
         let l = layout();
         let em = 100.0;
         let face = Face::Symbol;
+        const PIECE_SCALE: f32 = 82.0 / 112.0;
+        let eff_em = em * PIECE_SCALE;
         for c in ['(', ')', '[', ']', '{', '}'] {
             let r = recipe(c).unwrap();
-            let min_span = l.min_assembly_span(face, &r, em);
+            let min_span = l.min_assembly_span(face, &r, eff_em);
             println!("DELIMITER '{c}': auto-calculated min_piece_h = {:.2} px ({:.3} em)", min_span, min_span / em);
         }
     }
