@@ -4,21 +4,21 @@
 //! Delimiters are drawn in one of two modes:
 //! 1. Piece assembly (`span >= min_piece_h`): When the actual height is sufficient
 //!    for the font glyph pieces (U+239B..U+23AD) to fit without their curved hooks
-//!    colliding, the delimiter is assembled from pieces.
+//!    colliding or protruding past the delimiter bounds, the delimiter is assembled
+//!    from pieces.
 //!    - For curly braces (`{`, `}`): the 3 pieces (top hook, middle cusp, bottom hook)
-//!      can assemble without `\u{23AA}` extenders down to ~1.85 em by overlapping along
-//!      their straight stems. For taller spans (>= ~4.49 em), `\u{23AA}` extenders are
-//!      tiled in the gaps.
+//!      can assemble without `\u{23AA}` extenders down to `min_piece_h` by overlapping
+//!      along their straight stems. For taller spans, `\u{23AA}` extenders are tiled in the gaps.
 //!    - For parentheses and square brackets: the top and bottom hooks can assemble without
-//!      extenders down to ~1.20 em by overlapping along their straight stems. For taller
-//!      spans (>= ~2.54 em), extenders are tiled between them.
-//! 2. Vertical scaling (`span < min_piece_h`): When the actual height is too short even
-//!    for the overlapping hooks to fit, the single complete glyph is scaled vertically
-//!    (`em_y`) to match the requested span, while keeping the horizontal axis (`em_x`) at
-//!    the standard font size. This avoids uniform scaling so horizontal strokes and serifs
-//!    do not become abnormally thick.
+//!      extenders down to `min_piece_h` by overlapping along their straight stems. For taller
+//!      spans, extenders are tiled between them.
+//! 2. Vertical scaling (`span < min_piece_h`): When the actual height is too short for
+//!    the pieces to fit, the single complete glyph is scaled vertically (`em_y`) to match
+//!    the requested span, while keeping the horizontal axis (`em_x`) at the standard font size.
+//!    This avoids uniform scaling so horizontal strokes and serifs do not become abnormally thick.
 
 use super::*;
+use crate::render::font::Seg;
 
 /// The glyph pieces of one stretchy delimiter. `None` means "not present"
 /// (e.g. a floor has no top hook, a ceiling has no bottom hook).
@@ -53,6 +53,132 @@ fn recipe(c: char) -> Option<Pieces> {
 }
 
 impl Layout {
+    /// Calculate the minimum delimiter height (`span`) at which font glyph pieces can
+    /// be assembled without protruding past the delimiter bounds or colliding along their features.
+    ///
+    /// This threshold is computed automatically from font glyph metrics and vector outlines:
+    /// - Extender horizontal bounds `[stem_x0, stem_x1]` define the straight stem width.
+    /// - Feature depths: the vertical heights of curved hooks, serifs, and middle cusps
+    ///   where outline points extend horizontally outside the straight stem.
+    /// - Bounds constraint: no individual piece may be taller than the allocated span.
+    fn min_assembly_span(&self, face: Face, r: &Pieces, em: f32) -> f32 {
+        let (stem_x0, stem_x1) = self.f.ink_x(face, r.ext, em);
+        let stem_w = (stem_x1 - stem_x0).abs();
+        let tol = (0.05 * stem_w).max(0.5);
+
+        let piece_h = |ch: Option<char>| -> f32 {
+            ch.map_or(0.0, |c| {
+                let (a, d) = self.f.ink(face, c, em);
+                a + d
+            })
+        };
+
+        let h_top = piece_h(r.top);
+        let h_bot = piece_h(r.bot);
+        let h_mid = piece_h(r.mid);
+
+        let feature_depth = |ch: Option<char>, is_top: bool| -> f32 {
+            let Some(c) = ch else { return 0.0 };
+            let Some(segs) = self.f.glyph_segments(face, c, em, 0.0, 0.0) else { return 0.0 };
+            let mut y_min = f32::MAX;
+            let mut y_max = f32::MIN;
+            let mut out_y_min = f32::MAX;
+            let mut out_y_max = f32::MIN;
+            let mut has_out = false;
+
+            let mut check_pt = |x: f32, y: f32| {
+                y_min = y_min.min(y);
+                y_max = y_max.max(y);
+                if x < stem_x0 - tol || x > stem_x1 + tol {
+                    out_y_min = out_y_min.min(y);
+                    out_y_max = out_y_max.max(y);
+                    has_out = true;
+                }
+            };
+
+            for s in segs {
+                match s {
+                    Seg::Move(x, y) | Seg::Line(x, y) => check_pt(x, y),
+                    Seg::Quad(cx, cy, x, y) => {
+                        check_pt(cx, cy);
+                        check_pt(x, y);
+                    }
+                    Seg::Cubic(c1x, c1y, c2x, c2y, x, y) => {
+                        check_pt(c1x, c1y);
+                        check_pt(c2x, c2y);
+                        check_pt(x, y);
+                    }
+                    Seg::Close => {}
+                }
+            }
+            if !has_out {
+                return 0.0;
+            }
+            if is_top {
+                (out_y_max - y_min).max(0.0)
+            } else {
+                (y_max - out_y_min).max(0.0)
+            }
+        };
+
+        let depth_top = feature_depth(r.top, true);
+        let depth_bot = feature_depth(r.bot, false);
+
+        match r.mid {
+            Some(m) => {
+                let (reach_top, reach_bot) = if let Some(segs) = self.f.glyph_segments(face, m, em, 0.0, 0.0) {
+                    let mut y_min = f32::MAX;
+                    let mut y_max = f32::MIN;
+                    let mut out_y_min = f32::MAX;
+                    let mut out_y_max = f32::MIN;
+                    let mut has_out = false;
+
+                    let mut check_pt = |x: f32, y: f32| {
+                        y_min = y_min.min(y);
+                        y_max = y_max.max(y);
+                        if x < stem_x0 - tol || x > stem_x1 + tol {
+                            out_y_min = out_y_min.min(y);
+                            out_y_max = out_y_max.max(y);
+                            has_out = true;
+                        }
+                    };
+
+                    for s in segs {
+                        match s {
+                            Seg::Move(x, y) | Seg::Line(x, y) => check_pt(x, y),
+                            Seg::Quad(cx, cy, x, y) => {
+                                check_pt(cx, cy);
+                                check_pt(x, y);
+                            }
+                            Seg::Cubic(c1x, c1y, c2x, c2y, x, y) => {
+                                check_pt(c1x, c1y);
+                                check_pt(c2x, c2y);
+                                check_pt(x, y);
+                            }
+                            Seg::Close => {}
+                        }
+                    }
+                    if has_out {
+                        let mid_centre = (y_min + y_max) / 2.0;
+                        ((mid_centre - out_y_min).max(0.0), (out_y_max - mid_centre).max(0.0))
+                    } else {
+                        (0.0, 0.0)
+                    }
+                } else {
+                    (0.0, 0.0)
+                };
+
+                let collision_top = 2.0 * (depth_top + reach_top);
+                let collision_bot = 2.0 * (depth_bot + reach_bot);
+                h_mid.max(h_top).max(h_bot).max(collision_top).max(collision_bot)
+            }
+            None => {
+                let collision = depth_top + depth_bot;
+                h_top.max(h_bot).max(collision)
+            }
+        }
+    }
+
     /// Build the delimiter `c` so that it spans exactly `asc` above and `desc`
     /// below the baseline.
     pub(super) fn stretchy_delimiter(&self, c: char, asc: f32, desc: f32, em: f32) -> Option<LBox> {
@@ -63,21 +189,11 @@ impl Layout {
         let bot_y = desc;
         let pad = 0.05 * em;
 
-        // Minimum height where the end pieces (and middle cusp if any) can overlap
-        // along their straight stems without their curved hooks / cusps colliding:
-        // - For '{' and '}': top hook curve is ~0.63 em, mid cusp curves are ~0.32 em each,
-        //   bottom hook curve is ~0.56 em -> min span is (0.63 + 0.32) + (0.32 + 0.56) = ~1.83 em.
-        //   Between 1.85 em and 4.49 em, the 3 pieces assemble directly without \u{23AA} extenders.
-        // - For '(' and ')': hooks can overlap along straight stems down to ~1.20 em.
-        // - For '[' and ']': hooks can overlap along straight stems down to ~1.15 em.
-        let min_piece_h = match c {
-            '{' | '}' => 1.85 * em,
-            '(' | ')' => 1.20 * em,
-            '[' | ']' | '⌈' | '⌉' | '⌊' | '⌋' => 1.15 * em,
-            _ => 1.50 * em,
-        };
+        // Automatically determine the minimum height where pieces can assemble cleanly:
+        let min_piece_h = self.min_assembly_span(face, &r, em);
 
-        // Case 1: When actual height is smaller than min_piece_h, the pieces would collide.
+        // Case 1: When actual height is smaller than min_piece_h, the pieces would collide
+        // or protrude past the delimiter bounds.
         // Scale the single complete character vertically only (em_y = em * span / h0, em_x = em),
         // keeping horizontal stroke thickness at normal font size.
         if span < min_piece_h {
@@ -189,6 +305,18 @@ mod tests {
 
     fn layout() -> Layout {
         Layout { f: fonts(), depth: 0 }
+    }
+
+    #[test]
+    fn inspect_auto_calculated_min_spans() {
+        let l = layout();
+        let em = 100.0;
+        let face = Face::Symbol;
+        for c in ['(', ')', '[', ']', '{', '}'] {
+            let r = recipe(c).unwrap();
+            let min_span = l.min_assembly_span(face, &r, em);
+            println!("DELIMITER '{c}': auto-calculated min_piece_h = {:.2} px ({:.3} em)", min_span, min_span / em);
+        }
     }
 
     #[test]
