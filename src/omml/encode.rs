@@ -234,6 +234,7 @@ fn map_top_group_char(s: &str) -> Option<&'static str> {
     match s {
         "\u{FE37}" | "\u{23DE}" => Some("\u{23DE}"),
         "\u{23B4}" | "\u{FE39}" => Some("\u{23B4}"),
+        "\u{2322}" | "\u{2312}" | "\u{23DC}" | "\u{FE35}" => Some("\u{23DC}"),
         _ => None,
     }
 }
@@ -242,6 +243,7 @@ fn map_bot_group_char(s: &str) -> Option<&'static str> {
     match s {
         "\u{FE38}" | "\u{23DF}" => Some("\u{23DF}"),
         "\u{23B5}" | "\u{FE3A}" => Some("\u{23B5}"),
+        "\u{2322}" | "\u{2323}" | "\u{23DD}" | "\u{FE36}" | "\u{032F}" => Some("\u{23DD}"),
         _ => None,
     }
 }
@@ -264,8 +266,7 @@ fn map_accent_char(s: &str) -> Option<&'static str> {
         "\u{2194}" | "\u{20E1}" | "\u{27F7}" => Some("\u{20E1}"),
         "\u{21C0}" | "\u{21C1}" | "\u{20D1}" => Some("\u{20D1}"),
         "\u{21BC}" | "\u{21BD}" | "\u{20D0}" => Some("\u{20D0}"),
-        "\u{2322}" | "\u{2312}" | "\u{23DC}" | "\u{FE35}" | "\u{0311}" => Some("\u{2322}"),
-        "\u{2323}" | "\u{23DD}" | "\u{FE36}" => Some("\u{2323}"),
+        "\u{0311}" => Some("\u{0311}"),
         "\u{033F}" | "==" | "═" => Some("\u{033F}"),
         _ => None,
     }
@@ -1060,7 +1061,19 @@ impl MathmlEncoder {
             }
         }
 
-        // 4. General upper limit (<m:limUpp>)
+        // 4. Extensible arrow with label above (<m:groupChr pos="bot">)
+        if is_arrow_mo(base) {
+            let mut g = m_el("groupChr");
+            let mut g_pr = m_el("groupChrPr");
+            g_pr.push(m_val_el("chr", base.text.trim()));
+            g_pr.push(m_val_el("pos", "bot"));
+            g_pr.push(m_val_el("vertJc", "top"));
+            g.push(g_pr);
+            g.push(m_el_children("e", self.encode_node(over)?));
+            return Ok(g);
+        }
+
+        // 5. General upper limit (<m:limUpp>)
         let mut lim_upp = m_el("limUpp");
         lim_upp.push(m_el_children("e", self.encode_node(base)?));
         lim_upp.push(m_el_children("lim", self.encode_node(over)?));
@@ -1119,7 +1132,19 @@ impl MathmlEncoder {
             }
         }
 
-        // 4. General lower limit (<m:limLow>)
+        // 4. Extensible arrow with label below (<m:groupChr pos="top">)
+        if is_arrow_mo(base) {
+            let mut g = m_el("groupChr");
+            let mut g_pr = m_el("groupChrPr");
+            g_pr.push(m_val_el("chr", base.text.trim()));
+            g_pr.push(m_val_el("pos", "top"));
+            g_pr.push(m_val_el("vertJc", "bot"));
+            g.push(g_pr);
+            g.push(m_el_children("e", self.encode_node(under)?));
+            return Ok(g);
+        }
+
+        // 5. General lower limit (<m:limLow>)
         let mut lim_low = m_el("limLow");
         lim_low.push(m_el_children("e", self.encode_node(base)?));
         lim_low.push(m_el_children("lim", self.encode_node(under)?));
