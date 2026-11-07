@@ -1,40 +1,225 @@
-//! Radical templates: square roots and n-th roots.
+//! Radical templates: square roots and n-th roots using OpenType MATH variants and assembly.
 
 use super::*;
 
-
 impl Layout {
-    pub(super) fn radical(&self, c: &LBox, deg: Option<&LBox>, em: f32) -> LBox {
-        let t = (RULE * em).max(1.0);
-        let gap = 0.12 * em;
-        let top = -(c.asc + gap) - t;
-        let bot = c.desc + 0.04 * em;
-        let h = bot - top;
-        let rw = 0.62 * em;
-        let off = deg.map_or(0.0, |d| (d.w - 0.40 * rw + 0.04 * em).max(0.0));
+    pub(super) fn radical(&self, c: &LBox, deg: Option<&LBox>, em: f32, ctx: MathContext) -> LBox {
+        let consts = self.f.constants();
+        let upem = 1000.0;
+        let thick = (consts.radical_rule_thickness * em).max(1.0);
+        let gap = if ctx.is_display() {
+            consts.radical_display_style_vertical_gap * em
+        } else {
+            consts.radical_vertical_gap * em
+        };
+
+        let h_target = c.asc + c.desc + gap + thick;
+        let target_font_units = (h_target / em * upem).ceil() as u16;
+
+        let info = self.f.radical_info();
+        let chosen_variant = info.variants.iter().find(|(_, adv)| *adv >= target_font_units);
+
         let mut b = LBox::default();
-        let pts = [
-            (off, top + 0.60 * h),
-            (off + 0.16 * rw, top + 0.54 * h),
-            (off + 0.46 * rw, bot),
-            (off + rw, top + t / 2.0),
-        ];
-        let widths = [0.04 * em, 0.09 * em, 0.04 * em];
-        for (i, s) in pts.windows(2).enumerate() {
-            for q in stroke(s, widths[i]) {
-                b.items.push(Item::Poly(q));
+
+        // 1. Determine horizontal degree offset and radical sign starting x
+        let (x_deg, x_rad) = if let Some(d) = deg {
+            let kern_before = consts.radical_kern_before_degree * em;
+            let kern_after = consts.radical_kern_after_degree * em;
+            let x_r = (kern_before + d.w + kern_after).max(0.0);
+            let x_d = x_r - (kern_after + d.w);
+            (Some(x_d), x_r)
+        } else {
+            (None, 0.0)
+        };
+
+        // 2. Lay out radical sign: either by choosing a variant glyph or assembling from parts
+        let (tip_x, rule_top_y, radical_bot_y, total_h) = if let Some(&(variant_gid, _adv)) = chosen_variant {
+            let (_x_min, y_min, x_max, y_max) = self.f.math_glyph_bbox(variant_gid).unwrap_or((18, -265, 829, 922));
+            let glyph_h = (y_max - y_min) as f32 / upem * em;
+            let excess = (glyph_h - h_target).max(0.0);
+            let actual_gap = gap + excess / 2.0;
+            let r_top_y = -(c.asc + actual_gap + thick);
+            let y_base = r_top_y + (y_max as f32 / upem * em);
+            let t_x = x_rad + (x_max as f32 / upem * em);
+
+            let polys = self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base);
+            for p in polys {
+                b.items.push(Item::Poly(p));
             }
+
+            let r_bot_y = r_top_y + glyph_h;
+            (t_x, r_top_y, r_bot_y, glyph_h)
+        } else if let Some(ref assembly) = info.assembly {
+            // Assembly from STIX Two Math parts: Part 0 (bottom hook), Part 1 (extender), Part 2 (top)
+            let part_bot = assembly.parts.first();
+            let part_ext = assembly.parts.iter().find(|p| p.is_extender);
+            let part_top = assembly.parts.last();
+
+            if let (Some(bot), Some(ext), Some(top)) = (part_bot, part_ext, part_top) {
+                let min_o = assembly.min_connector_overlap as f32;
+                let max_o = (bot.end_connector.min(ext.start_connector) as f32).max(min_o);
+
+                // Determine number of extenders k needed
+                let adv_bot = bot.full_advance as f32;
+                let adv_ext = ext.full_advance as f32;
+                let adv_top = top.full_advance as f32;
+
+                let mut k = 0usize;
+                loop {
+                    let joints = (k + 1) as f32;
+                    let max_h = adv_bot + (k as f32) * adv_ext + adv_top - joints * min_o;
+                    if max_h >= target_font_units as f32 || k >= 30 {
+                        break;
+                    }
+                    k += 1;
+                }
+
+                let joints = (k + 1) as f32;
+                let total_raw = adv_bot + (k as f32) * adv_ext + adv_top;
+                // Calculate exact overlap o to achieve target height (clamped between min_o and max_o)
+                let o = ((total_raw - target_font_units as f32) / joints).clamp(min_o, max_o);
+                let assembled_units = total_raw - joints * o;
+                let glyph_h = assembled_units / upem * em;
+                let excess = (glyph_h - h_target).max(0.0);
+                let actual_gap = gap + excess / 2.0;
+                let r_top_y = -(c.asc + actual_gap + thick);
+
+                // Top part bbox: y_max = 641, x_max = 1243
+                let (_top_x_min, _top_y_min, top_x_max, top_y_max) =
+                    self.f.math_glyph_bbox(top.glyph_id).unwrap_or((849, 0, 1243, 641));
+                let t_x = x_rad + (top_x_max as f32 / upem * em);
+
+                // Place top part so its tip is at r_top_y
+                let y_top_base = r_top_y + (top_y_max as f32 / upem * em);
+                for p in self.f.math_glyph_polys(top.glyph_id, em, em, x_rad, y_top_base) {
+                    b.items.push(Item::Poly(p));
+                }
+
+                // Place k extenders below top part
+                let (_ext_x_min, _ext_y_min, _ext_x_max, ext_y_max) =
+                    self.f.math_glyph_bbox(ext.glyph_id).unwrap_or((849, 0, 916, 650));
+                let mut current_y_base = y_top_base;
+                for _ in 0..k {
+                    current_y_base += (ext_y_max as f32 - o) / upem * em;
+                    for p in self.f.math_glyph_polys(ext.glyph_id, em, em, x_rad, current_y_base) {
+                        b.items.push(Item::Poly(p));
+                    }
+                }
+
+                // Place bottom part below last extender
+                let (_bot_x_min, _bot_y_min, _bot_x_max, bot_y_max) =
+                    self.f.math_glyph_bbox(bot.glyph_id).unwrap_or((86, -5, 916, 1899));
+                let y_bot_base = current_y_base + (bot_y_max as f32 - o) / upem * em;
+                for p in self.f.math_glyph_polys(bot.glyph_id, em, em, x_rad, y_bot_base) {
+                    b.items.push(Item::Poly(p));
+                }
+
+                let r_bot_y = r_top_y + glyph_h;
+                (t_x, r_top_y, r_bot_y, glyph_h)
+            } else {
+                // Fallback: draw largest variant
+                let &(variant_gid, _) = info.variants.last().unwrap_or(&(1657, 1188));
+                let (_, _, x_max, y_max) = self.f.math_glyph_bbox(variant_gid).unwrap_or((18, -265, 829, 922));
+                let glyph_h = h_target;
+                let r_top_y = -(c.asc + gap + thick);
+                let y_base = r_top_y + (y_max as f32 / upem * em);
+                let t_x = x_rad + (x_max as f32 / upem * em);
+                for p in self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base) {
+                    b.items.push(Item::Poly(p));
+                }
+                (t_x, r_top_y, r_top_y + glyph_h, glyph_h)
+            }
+        } else {
+            // Minimal fallback
+            let &(variant_gid, _) = info.variants.first().unwrap_or(&(1657, 1188));
+            let (_, _, x_max, y_max) = self.f.math_glyph_bbox(variant_gid).unwrap_or((18, -265, 829, 922));
+            let glyph_h = h_target;
+            let r_top_y = -(c.asc + gap + thick);
+            let y_base = r_top_y + (y_max as f32 / upem * em);
+            let t_x = x_rad + (x_max as f32 / upem * em);
+            for p in self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base) {
+                b.items.push(Item::Poly(p));
+            }
+            (t_x, r_top_y, r_top_y + glyph_h, glyph_h)
+        };
+
+        // 3. Draw vinculum (horizontal rule across radicand)
+        let vinculum_x = tip_x;
+        let vinculum_w = c.w + 0.08 * em;
+        b.items.push(Item::Poly(rect(vinculum_x, rule_top_y, vinculum_w, thick)));
+
+        // 4. Place radicand c
+        let radicand_x = tip_x + 0.04 * em;
+        b.place(c, radicand_x, 0.0);
+
+        // 5. Place degree if present
+        if let (Some(d), Some(x_d)) = (deg, x_deg) {
+            let raise = consts.radical_degree_bottom_raise_percent;
+            let deg_bot_y = radical_bot_y - raise * total_h;
+            let deg_y = deg_bot_y - d.desc;
+            b.place(d, x_d, deg_y);
+            b.asc = b.asc.max(d.asc - deg_y);
+            b.desc = b.desc.max(d.desc + deg_y);
         }
-        let cw = c.w + 0.08 * em;
-        b.items.push(Item::Poly(rect(off + rw, top, cw, t)));
-        b.asc = -top;
-        b.desc = bot;
-        b.w = off + rw + cw;
-        b.place(c, off + rw + 0.03 * em, 0.0);
-        if let Some(d) = deg {
-            b.place(d, 0.0, top + 0.40 * h);
-        }
-        b.w = off + rw + cw;
+
+        b.asc = b.asc.max(-rule_top_y + consts.radical_extra_ascender * em);
+        b.desc = b.desc.max(radical_bot_y.max(c.desc));
+        b.w = vinculum_x + vinculum_w;
         b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_radical_variants_and_degrees() {
+        let mut l = Layout { f: fonts(), depth: 0 };
+        let em = 20.0;
+
+        // 1. Small radicand: \sqrt{x}
+        let node_sqrt_x = MathNode::parse("<math><msqrt><mi>x</mi></msqrt></math>").unwrap();
+        let b_sqrt_x = l.node(&node_sqrt_x, em, MathContext::DISPLAY).unwrap();
+        assert!(b_sqrt_x.asc > 0.0);
+        assert!(b_sqrt_x.w > 0.5 * em);
+
+        // 2. Tall radicand: \sqrt{\frac{1}{2}} (fraction requires larger variant)
+        let node_sqrt_frac = MathNode::parse("<math><msqrt><mfrac><mn>1</mn><mn>2</mn></mfrac></msqrt></math>").unwrap();
+        let b_sqrt_frac = l.node(&node_sqrt_frac, em, MathContext::DISPLAY).unwrap();
+        assert!(b_sqrt_frac.asc > b_sqrt_x.asc, "Fraction under sqrt should produce taller radical");
+
+        // 3. N-th root: \sqrt[3]{x}
+        let node_root3 = MathNode::parse("<math><mroot><mi>x</mi><mn>3</mn></mroot></math>").unwrap();
+        let b_root3 = l.node(&node_root3, em, MathContext::DISPLAY).unwrap();
+        // The degree '3' should be present and shifted horizontally
+        assert!(b_root3.w > b_sqrt_x.w, "Root with degree should have wider width to accommodate index");
+
+        // Verify degree '3' item is placed
+        let has_three = b_root3.items.iter().any(|it| match it {
+            Item::Glyph { ch: '3', .. } => true,
+            _ => false,
+        });
+        assert!(has_three, "Degree '3' must be rendered inside the radical nook");
+    }
+
+    #[test]
+    fn test_radical_assembly_for_very_tall_contents() {
+        let mut l = Layout { f: fonts(), depth: 0 };
+        let em = 20.0;
+
+        // Extremely tall radicand (e.g. 5-row tall table) exceeding variant 3 (2892 font units = 2.892 * em)
+        let xml = "<math><msqrt><mtable>\
+            <mtr><mtd><mn>1</mn></mtd></mtr>\
+            <mtr><mtd><mn>2</mn></mtd></mtr>\
+            <mtr><mtd><mn>3</mn></mtd></mtr>\
+            <mtr><mtd><mn>4</mn></mtd></mtr>\
+            <mtr><mtd><mn>5</mn></mtd></mtr>\
+        </mtable></msqrt></math>";
+        let node_tall = MathNode::parse(xml).unwrap();
+        let b_tall = l.node(&node_tall, em, MathContext::DISPLAY).unwrap();
+
+        // The assembled radical should enclose the entire tall matrix
+        assert!(b_tall.asc + b_tall.desc > 4.0 * em, "Assembly should span over 4 em");
     }
 }

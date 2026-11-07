@@ -286,7 +286,7 @@ impl Layout {
             "mfrac" => self.frac(n, em, ctx),
             "msqrt" => {
                 let c = self.row(k, em, ctx.for_radicand())?;
-                Ok(self.radical(&c, None, em))
+                Ok(self.radical(&c, None, em, ctx))
             }
             "mroot" => {
                 let c = match k.first() {
@@ -301,7 +301,7 @@ impl Layout {
                     }
                     None => None,
                 };
-                Ok(self.radical(&c, d.as_ref(), em))
+                Ok(self.radical(&c, d.as_ref(), em, ctx))
             }
             "msub" | "msup" | "msubsup" => self.scripts(n, em, ctx),
             "mmultiscripts" => self.prescripts(n, em, ctx),

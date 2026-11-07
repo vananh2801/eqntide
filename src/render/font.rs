@@ -41,11 +41,11 @@ pub struct MathConstants {
     pub script_percent_scale_down: f32,
     /// Scale factor for script level 2 (e.g. 0.55).
     pub script_script_percent_scale_down: f32,
-    /// Standard superscript baseline shift up (fraction of em).
+    /// Superscript shift up in uncramped style (fraction of em).
     pub superscript_shift_up: f32,
-    /// Superscript baseline shift up in cramped style (fraction of em).
+    /// Superscript shift up in cramped style (fraction of em).
     pub superscript_shift_up_cramped: f32,
-    /// Standard subscript baseline shift down (fraction of em).
+    /// Subscript shift down (fraction of em).
     pub subscript_shift_down: f32,
     /// Minimum clearance between subscript top and superscript bottom (fraction of em).
     pub sub_superscript_gap_min: f32,
@@ -57,6 +57,12 @@ pub struct MathConstants {
     pub radical_rule_thickness: f32,
     /// Extra ascender space above the radical rule (fraction of em).
     pub radical_extra_ascender: f32,
+    /// Height of the bottom of the radical degree in proportion to radical height.
+    pub radical_degree_bottom_raise_percent: f32,
+    /// Extra horizontal kern before the radical degree (fraction of em).
+    pub radical_kern_before_degree: f32,
+    /// Negative horizontal kern after the radical degree (fraction of em).
+    pub radical_kern_after_degree: f32,
 }
 
 impl Default for MathConstants {
@@ -82,8 +88,37 @@ impl Default for MathConstants {
             radical_display_style_vertical_gap: 0.170,
             radical_rule_thickness: 0.068,
             radical_extra_ascender: 0.078,
+            radical_degree_bottom_raise_percent: 0.55,
+            radical_kern_before_degree: 0.065,
+            radical_kern_after_degree: -0.335,
         }
     }
+}
+
+/// Part record for vertical assembly of large radical signs.
+#[derive(Clone, Copy, Debug)]
+pub struct RadicalPart {
+    pub glyph_id: u16,
+    pub start_connector: u16,
+    pub end_connector: u16,
+    pub full_advance: u16,
+    pub is_extender: bool,
+}
+
+/// Assembly recipe for vertically growing radical signs from OpenType MATH table.
+#[derive(Clone, Debug)]
+pub struct RadicalAssembly {
+    pub min_connector_overlap: u16,
+    pub parts: Vec<RadicalPart>,
+}
+
+/// Precomputed radical variants and assembly info for `U+221A`.
+#[derive(Clone, Debug)]
+pub struct RadicalInfo {
+    /// Ascending list of `(glyph_id, advance_in_font_units)`.
+    pub variants: Vec<(u16, u16)>,
+    /// Assembly recipe when expressions exceed the tallest variant.
+    pub assembly: Option<RadicalAssembly>,
 }
 
 /// Which face to draw a character in.
@@ -141,6 +176,7 @@ pub struct Fonts {
     math: FontRef<'static>,
     math_face: ttf_parser::Face<'static>,
     constants: MathConstants,
+    radical_info: RadicalInfo,
 }
 
 /// Access the lazily-loaded font set.
@@ -173,12 +209,49 @@ pub fn fonts() -> &'static Fonts {
                     radical_display_style_vertical_gap: c.radical_display_style_vertical_gap().value as f32 / upem,
                     radical_rule_thickness: c.radical_rule_thickness().value as f32 / upem,
                     radical_extra_ascender: c.radical_extra_ascender().value as f32 / upem,
+                    radical_degree_bottom_raise_percent: c.radical_degree_bottom_raise_percent() as f32 / 100.0,
+                    radical_kern_before_degree: c.radical_kern_before_degree().value as f32 / upem,
+                    radical_kern_after_degree: c.radical_kern_after_degree().value as f32 / upem,
                 }
             } else {
                 MathConstants::default()
             }
         } else {
             MathConstants::default()
+        };
+
+        // Extract radical variants & assembly from OpenType MATH Variants table
+        let gid_radical = math_face.glyph_index('\u{221A}');
+        let mut variants_list = Vec::new();
+        let mut assembly_opt = None;
+        if let Some(gid) = gid_radical {
+            if let Some(variants) = math_face.tables().math.and_then(|m| m.variants) {
+                if let Some(construction) = variants.vertical_constructions.get(gid) {
+                    for v in construction.variants {
+                        variants_list.push((v.variant_glyph.0, v.advance_measurement));
+                    }
+                    if let Some(ga) = construction.assembly {
+                        let mut parts = Vec::new();
+                        for p in ga.parts {
+                            parts.push(RadicalPart {
+                                glyph_id: p.glyph_id.0,
+                                start_connector: p.start_connector_length,
+                                end_connector: p.end_connector_length,
+                                full_advance: p.full_advance,
+                                is_extender: p.part_flags.extender(),
+                            });
+                        }
+                        assembly_opt = Some(RadicalAssembly {
+                            min_connector_overlap: variants.min_connector_overlap,
+                            parts,
+                        });
+                    }
+                }
+            }
+        }
+        let radical_info = RadicalInfo {
+            variants: variants_list,
+            assembly: assembly_opt,
         };
 
         Fonts {
@@ -188,14 +261,115 @@ pub fn fonts() -> &'static Fonts {
             math: load(FONT_MATH),
             math_face,
             constants,
+            radical_info,
         }
     })
+}
+
+fn outline_to_segments(outline: &ab_glyph::Outline, upem: f32, em_px: f32, x: f32, y: f32) -> Vec<Seg> {
+    use ab_glyph::OutlineCurve as C;
+    let k = em_px / upem;
+    let pt = |p: ab_glyph::Point| (x + p.x * k, y - p.y * k);
+    let mut segs = Vec::with_capacity(outline.curves.len() + 8);
+    let mut pen: Option<(f32, f32)> = None;
+    for c in &outline.curves {
+        let start = match c {
+            C::Line(a, _) | C::Quad(a, _, _) | C::Cubic(a, _, _, _) => pt(*a),
+        };
+        if pen != Some(start) {
+            if pen.is_some() {
+                segs.push(Seg::Close);
+            }
+            segs.push(Seg::Move(start.0, start.1));
+        }
+        pen = Some(match c {
+            C::Line(_, b) => {
+                let b = pt(*b);
+                segs.push(Seg::Line(b.0, b.1));
+                b
+            }
+            C::Quad(_, b, e) => {
+                let (b, e) = (pt(*b), pt(*e));
+                segs.push(Seg::Quad(b.0, b.1, e.0, e.1));
+                e
+            }
+            C::Cubic(_, b, c2, e) => {
+                let (b, c2, e) = (pt(*b), pt(*c2), pt(*e));
+                segs.push(Seg::Cubic(b.0, b.1, c2.0, c2.1, e.0, e.1));
+                e
+            }
+        });
+    }
+    if pen.is_some() {
+        segs.push(Seg::Close);
+    }
+    segs
+}
+
+fn segments_to_polys(segs: &[Seg], em_x: f32, em_y: f32, x: f32, y: f32) -> Vec<Vec<(f32, f32)>> {
+    let k = if em_y != 0.0 { em_x / em_y } else { 1.0 };
+    let map = |px: f32, py: f32| (x + px * k, y + py);
+    const STEPS: usize = 12;
+
+    let mut polys: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut cur: Vec<(f32, f32)> = Vec::new();
+    let mut pen = (0.0f32, 0.0f32);
+    for seg in segs {
+        match seg {
+            Seg::Move(a, b) => {
+                if cur.len() >= 3 {
+                    polys.push(std::mem::take(&mut cur));
+                }
+                cur.clear();
+                pen = (*a, *b);
+                cur.push(map(*a, *b));
+            }
+            Seg::Line(a, b) => {
+                pen = (*a, *b);
+                cur.push(map(*a, *b));
+            }
+            Seg::Quad(cx, cy, ex, ey) => {
+                let (sx, sy) = pen;
+                for i in 1..=STEPS {
+                    let t = i as f32 / STEPS as f32;
+                    let u = 1.0 - t;
+                    cur.push(map(u * u * sx + 2.0 * u * t * cx + t * t * ex, u * u * sy + 2.0 * u * t * cy + t * t * ey));
+                }
+                pen = (*ex, *ey);
+            }
+            Seg::Cubic(c1x, c1y, c2x, c2y, ex, ey) => {
+                let (sx, sy) = pen;
+                for i in 1..=STEPS {
+                    let t = i as f32 / STEPS as f32;
+                    let u = 1.0 - t;
+                    let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                    cur.push(map(b0 * sx + b1 * c1x + b2 * c2x + b3 * ex, b0 * sy + b1 * c1y + b2 * c2y + b3 * ey));
+                }
+                pen = (*ex, *ey);
+            }
+            Seg::Close => {
+                if cur.len() >= 3 {
+                    polys.push(std::mem::take(&mut cur));
+                }
+                cur.clear();
+            }
+        }
+    }
+    if cur.len() >= 3 {
+        polys.push(cur);
+    }
+    polys
 }
 
 impl Fonts {
     /// Access OpenType `MATH` table constants from `STIXTwoMath-Regular.ttf`.
     pub fn constants(&self) -> &MathConstants {
         &self.constants
+    }
+
+    /// Access radical variants and assembly information for `\u{221A}`.
+    pub fn radical_info(&self) -> &RadicalInfo {
+        &self.radical_info
     }
 
     /// Convert character and style to the appropriate Unicode Mathematical character in STIX Two Math.
@@ -278,35 +452,43 @@ impl Fonts {
             let mut idx = 0;
             while idx < n {
                 if let Some(h) = kern.height(idx) {
-                    if height < h.value {
-                        break;
+                    if height <= h.value {
+                        return kern.kern(idx).map_or(0, |k| k.value);
                     }
-                } else {
-                    break;
                 }
                 idx += 1;
             }
-            kern.kern(idx).map_or(0, |k| k.value)
+            kern.kern(n).map_or(0, |k| k.value)
         };
 
-        if let Some(math) = self.math_face.tables().math {
-            if let Some(gi) = math.glyph_info {
-                if let Some(kis) = gi.kern_infos {
-                    if let Some(base_gid) = self.glyph_id_for_math(base_style, base_ch) {
-                        if let Some(base_ki) = kis.get(base_gid) {
-                            let kern_opt = if is_sub { base_ki.bottom_right } else { base_ki.top_right };
-                            if let Some(k) = kern_opt {
-                                let h = (-script_y / em_px * upem) as i16;
-                                total_kern_units += eval_kern(&k, h) as i32;
+        if let (Some(b_gid), Some(s_gid)) = (
+            self.glyph_id_for_math(base_style, base_ch),
+            self.glyph_id_for_math(script_style, script_ch),
+        ) {
+            if let Some(math) = self.math_face.tables().math {
+                if let Some(gi) = math.glyph_info {
+                    if let Some(kern_info) = gi.kern_infos {
+                        let h_units = (-(script_y / em_px) * upem).round() as i16;
+
+                        if let Some(b_record) = kern_info.get(b_gid) {
+                            let b_kern = if is_sub {
+                                b_record.bottom_right.as_ref()
+                            } else {
+                                b_record.top_right.as_ref()
+                            };
+                            if let Some(k) = b_kern {
+                                total_kern_units += eval_kern(k, h_units) as i32;
                             }
                         }
-                    }
-                    if let Some(script_gid) = self.glyph_id_for_math(script_style, script_ch) {
-                        if let Some(script_ki) = kis.get(script_gid) {
-                            let kern_opt = if is_sub { script_ki.top_left } else { script_ki.bottom_left };
-                            if let Some(k) = kern_opt {
-                                let h = (script_y / em_px * upem) as i16;
-                                total_kern_units += eval_kern(&k, h) as i32;
+
+                        if let Some(s_record) = kern_info.get(s_gid) {
+                            let s_kern = if is_sub {
+                                s_record.top_left.as_ref()
+                            } else {
+                                s_record.bottom_left.as_ref()
+                            };
+                            if let Some(k) = s_kern {
+                                total_kern_units += eval_kern(k, h_units) as i32;
                             }
                         }
                     }
@@ -396,109 +578,39 @@ impl Fonts {
     /// baseline origin at `(x, y)` and `em_px` pixels per em. `None` when the glyph has
     /// no outline (e.g. a space).
     pub fn glyph_segments(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32) -> Option<Vec<Seg>> {
-        use ab_glyph::OutlineCurve as C;
-
         let (f, id) = self.pick(style, ch);
-        let outline = f.outline(id)?; // font units, y axis pointing up
-        let k = em_px / f.units_per_em().unwrap_or(1000.0);
-        let pt = |p: ab_glyph::Point| (x + p.x * k, y - p.y * k); // flip y: pixels grow downwards
-
-        let mut segs = Vec::with_capacity(outline.curves.len() + 8);
-        let mut pen: Option<(f32, f32)> = None; // end of the previous segment
-        for c in &outline.curves {
-            let start = match c {
-                C::Line(a, _) | C::Quad(a, _, _) | C::Cubic(a, _, _, _) => pt(*a),
-            };
-            if pen != Some(start) {
-                if pen.is_some() {
-                    segs.push(Seg::Close);
-                }
-                segs.push(Seg::Move(start.0, start.1));
-            }
-            pen = Some(match c {
-                C::Line(_, b) => {
-                    let b = pt(*b);
-                    segs.push(Seg::Line(b.0, b.1));
-                    b
-                }
-                C::Quad(_, b, e) => {
-                    let (b, e) = (pt(*b), pt(*e));
-                    segs.push(Seg::Quad(b.0, b.1, e.0, e.1));
-                    e
-                }
-                C::Cubic(_, b, c2, e) => {
-                    let (b, c2, e) = (pt(*b), pt(*c2), pt(*e));
-                    segs.push(Seg::Cubic(b.0, b.1, c2.0, c2.1, e.0, e.1));
-                    e
-                }
-            });
-        }
-        if pen.is_some() {
-            segs.push(Seg::Close);
-        }
-        Some(segs)
+        let outline = f.outline(id)?;
+        let upem = f.units_per_em().unwrap_or(1000.0);
+        Some(outline_to_segments(&outline, upem, em_px, x, y))
     }
 
     /// The outline of `ch` flattened to polygons (one per contour), drawn with
     /// independent horizontal and vertical scales: `em_x` / `em_y` pixels per em.
-    /// The baseline origin sits at `(x, y)`; pixels grow downwards. This is how a
-    /// glyph is stretched vertically without thickening its vertical strokes.
+    /// The baseline origin sits at `(x, y)`; pixels grow downwards.
     pub fn glyph_polys(&self, style: MathStyle, ch: char, em_x: f32, em_y: f32, x: f32, y: f32) -> Vec<Vec<(f32, f32)>> {
         let Some(segs) = self.glyph_segments(style, ch, em_y, 0.0, 0.0) else {
             return Vec::new();
         };
-        let k = if em_y != 0.0 { em_x / em_y } else { 1.0 };
-        let map = |px: f32, py: f32| (x + px * k, y + py);
-        const STEPS: usize = 12;
+        segments_to_polys(&segs, em_x, em_y, x, y)
+    }
 
-        let mut polys: Vec<Vec<(f32, f32)>> = Vec::new();
-        let mut cur: Vec<(f32, f32)> = Vec::new();
-        let mut pen = (0.0f32, 0.0f32);
-        for seg in segs {
-            match seg {
-                Seg::Move(a, b) => {
-                    if cur.len() >= 3 {
-                        polys.push(std::mem::take(&mut cur));
-                    }
-                    cur.clear();
-                    pen = (a, b);
-                    cur.push(map(a, b));
-                }
-                Seg::Line(a, b) => {
-                    pen = (a, b);
-                    cur.push(map(a, b));
-                }
-                Seg::Quad(cx, cy, ex, ey) => {
-                    let (sx, sy) = pen;
-                    for i in 1..=STEPS {
-                        let t = i as f32 / STEPS as f32;
-                        let u = 1.0 - t;
-                        cur.push(map(u * u * sx + 2.0 * u * t * cx + t * t * ex, u * u * sy + 2.0 * u * t * cy + t * t * ey));
-                    }
-                    pen = (ex, ey);
-                }
-                Seg::Cubic(c1x, c1y, c2x, c2y, ex, ey) => {
-                    let (sx, sy) = pen;
-                    for i in 1..=STEPS {
-                        let t = i as f32 / STEPS as f32;
-                        let u = 1.0 - t;
-                        let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-                        cur.push(map(b0 * sx + b1 * c1x + b2 * c2x + b3 * ex, b0 * sy + b1 * c1y + b2 * c2y + b3 * ey));
-                    }
-                    pen = (ex, ey);
-                }
-                Seg::Close => {
-                    if cur.len() >= 3 {
-                        polys.push(std::mem::take(&mut cur));
-                    }
-                    cur.clear();
-                }
-            }
-        }
-        if cur.len() >= 3 {
-            polys.push(cur);
-        }
-        polys
+    /// Extract polygon contours of a glyph directly from `STIXTwoMath` by its raw `glyph_id`.
+    pub fn math_glyph_polys(&self, gid: u16, em_x: f32, em_y: f32, x: f32, y: f32) -> Vec<Vec<(f32, f32)>> {
+        let f = &self.math;
+        let id = ab_glyph::GlyphId(gid);
+        let Some(outline) = f.outline(id) else {
+            return Vec::new();
+        };
+        let upem = f.units_per_em().unwrap_or(1000.0);
+        let segs = outline_to_segments(&outline, upem, em_y, 0.0, 0.0);
+        segments_to_polys(&segs, em_x, em_y, x, y)
+    }
+
+    /// Bounding box `(x_min, y_min, x_max, y_max)` in font design units for a glyph in `STIXTwoMath`.
+    pub fn math_glyph_bbox(&self, gid: u16) -> Option<(i16, i16, i16, i16)> {
+        self.math_face
+            .glyph_bounding_box(ttf_parser::GlyphId(gid))
+            .map(|r| (r.x_min, r.y_min, r.x_max, r.y_max))
     }
 
     pub fn has_glyph(&self, ch: char) -> bool {
@@ -517,6 +629,19 @@ mod tests {
         assert_eq!((c.axis_height * 1000.0).round() as i32, 258);
         assert_eq!((c.fraction_rule_thickness * 1000.0).round() as i32, 68);
         assert_eq!((c.script_percent_scale_down * 100.0).round() as i32, 70);
+
+        // Radical constants
+        assert_eq!((c.radical_degree_bottom_raise_percent * 100.0).round() as i32, 55);
+        assert_eq!((c.radical_kern_before_degree * 1000.0).round() as i32, 65);
+        assert_eq!((c.radical_kern_after_degree * 1000.0).round() as i32, -335);
+
+        // Radical variants and assembly
+        let r_info = f.radical_info();
+        assert_eq!(r_info.variants.len(), 4);
+        assert!(r_info.assembly.is_some());
+        let ass = r_info.assembly.as_ref().unwrap();
+        assert_eq!(ass.parts.len(), 3);
+        assert_eq!(ass.min_connector_overlap, 100);
 
         // Verify italic correction on math italic f
         let ic_f = f.italic_correction(MathStyle::Variable, 'f', 100.0);

@@ -8,11 +8,11 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 
 | File | Vai trò hiện tại |
 | :--- | :--- |
-| `src/render/font.rs` | Nạp các font (`STIXTwoMath-Regular.ttf`, `LiberationSerif`, `OpenSymbol`) qua `ttf-parser`, trích xuất đa giác (`glyph_polys`), hộp mực (`ink`), độ rộng (`advance`), hằng số OpenType `MATH` (`MathConstants`), bảng `MathGlyphInfo` (Italic Correction, Top Accent Attachment, Math Kerning). |
+| `src/render/font.rs` | Nạp các font (`STIXTwoMath-Regular.ttf`, `LiberationSerif`, `OpenSymbol`) qua `ttf-parser`, trích xuất đa giác (`glyph_polys`), hộp mực (`ink`), độ rộng (`advance`), hằng số OpenType `MATH` (`MathConstants`), bảng `MathGlyphInfo` (Italic Correction, Top Accent Attachment, Math Kerning), và bảng `MathVariants` cho căn thức. |
 | `src/render/layout/mod.rs` | Chứa trạng thái `Layout`, các hằng số (`AXIS = 0.258`, `RULE = 0.068`, `THIN/MED/THICK`), hệ thống `MathContext` / `MathVariantStyle` ($D, T, S, SS$, `cramped`), và hàm duyệt cây `MathNode`. |
 | `src/render/layout/row.rs` | Phân loại `Atom` (`Ord`, `Op`, `Bin`, `Rel`, `Open`, `Close`, `Punct`), tính khoảng cách giữa các `Atom` kế nhau và co giãn dấu ngoặc. |
 | `src/render/layout/fraction.rs` | Dựng phân số (`<mfrac>`) và hệ số nhị thức theo TeX Rule 15 và OpenType `MATH`. |
-| `src/render/layout/radical.rs` | Dựng căn bậc hai (`<msqrt>`) và căn bậc $n$ (`<mroot>`). |
+| `src/render/layout/radical.rs` | Dựng căn bậc hai (`<msqrt>`) và căn bậc $n$ (`<mroot>`) bằng OpenType `MATH` glyph variants (`size1`..`size4`), glyph assembly và định vị bậc căn chuẩn. |
 | `src/render/layout/script.rs` | Dựng chỉ số dưới/trên (`<msub>`, `<msup>`, `<msubsup>`, `<mmultiscripts>`). |
 | `src/render/layout/embellish.rs` | Dựng dấu phụ trên/dưới ký tự (`<mover>`, `<munder>`, `<munderover>`). |
 | `src/render/layout/delimiter.rs` | Chọn biến thể kích thước (size variants) và lắp ghép mảnh (glyph assembly) cho dấu ngoặc cao từ `STIXTwoMath-Regular.ttf`. |
@@ -106,14 +106,14 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 
 ---
 
-### Phase 5: Dựng dấu Căn thức (`\u{221A}`) bằng Glyph Variants & Assembly từ `STIXTwoMath`
-- **File mục tiêu**: `src/render/layout/radical.rs`, `src/render/layout/delimiter.rs`
+### Phase 5: Dựng dấu Căn thức (`\u{221A}`) bằng Glyph Variants & Assembly từ `STIXTwoMath` (✅ Đã hoàn thành)
+- **File mục tiêu**: `src/render/layout/radical.rs`, `src/render/font.rs`
 - **Vấn đề hiện tại**: Dấu căn $\sqrt{}$ trong `radical.rs` đang được vẽ thủ công bằng 3 đoạn thẳng nối nhau.
 - **Giải pháp**:
-  1. Tái sử dụng cơ chế `MathVariants` trong `delimiter.rs` cho ký tự `'\u{221A}'` (`Face::Math`):
-     - Với biểu thức dưới căn có chiều cao vừa và nhỏ: chọn glyph biến thể có sẵn (`size1`..`size4`) trong `STIXTwoMath-Regular.ttf`.
-     - Với biểu thức dưới căn rất cao (như căn của phân số hoặc ma trận): dùng bảng `GlyphAssembly` của `U+221A` trong `STIXTwoMath` để ghép phần móc căn + đoạn thẳng đứng kéo dài + góc nối với thanh ngang (`vinculum`) phía trên.
-  2. Định vị bậc căn (`deg` trong $\sqrt[n]{x}$) theo đúng thông số `RadicalDegreeBottomRaisePercent` (`60%`) và `RadicalKernBeforeDegree` / `RadicalKernAfterDegree` của bảng `MATH`.
+  1. Tái sử dụng bảng `MathVariants` của OpenType `MATH` trên ký tự `'\u{221A}'`:
+     - Với biểu thức dưới căn có chiều cao vừa và nhỏ: chọn glyph biến thể có sẵn (`uni221A`, `uni221A.s1`, `uni221A.s2`, `uni221A.s3`) từ font `STIXTwoMath-Regular.ttf`.
+     - Với biểu thức dưới căn rất cao (như căn của phân số hoặc ma trận nhiều tầng): dùng bảng `GlyphAssembly` của `U+221A` để ghép phần móc căn (`uni221A.s4`) + các đoạn thẳng đứng kéo dài (`uni221A.x`) + góc nối (`uni221A.t`) với thanh ngang (`vinculum`) phía trên.
+  2. Định vị bậc căn (`deg` trong $\sqrt[n]{x}$) theo đúng thông số `RadicalDegreeBottomRaisePercent` ($55\%$) và `RadicalKernBeforeDegree` ($0.065 \times em$) / `RadicalKernAfterDegree` ($-0.335 \times em$) của bảng `MATH`.
 
 ---
 
@@ -170,8 +170,5 @@ Khi tham khảo mã nguồn từ các dự án mã nguồn mở (ví dụ: Typst
 
 Khi muốn nhờ AI Agent thực hiện tiếp các hạng mục còn lại, bạn có thể copy trực tiếp câu lệnh tương ứng dưới đây:
 
-### Prompt cho lượt tiếp theo (Phase 5 - Căn thức bằng Glyph Variants & Assembly):
-> *"Hãy đọc kỹ `TYPESETTING_ROADMAP.md`, đặc biệt là phần 'Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo'. Triển khai **Phase 5** (Dựng dấu Căn thức `\u{221A}` bằng Glyph Variants và Glyph Assembly từ `STIXTwoMath`, định vị bậc căn `deg` theo chuẩn OpenType MATH), tự viết lại code bằng Rust mà không sao chép nguyên văn từ repo khác, sau đó chạy `cargo test` và đối chiếu ảnh render."*
-
-### Prompt cho Phase 6 (Optical Size `ssty` GSUB feature cho Chỉ số):
+### Prompt cho lượt tiếp theo (Phase 6 - Optical Size `ssty` GSUB feature cho Chỉ số):
 > *"Hãy đọc kỹ `TYPESETTING_ROADMAP.md`, đặc biệt là phần 'Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo'. Triển khai **Phase 6** (Optical Size thông qua feature `ssty` trong bảng GSUB của font `STIXTwoMath` cho chỉ số trên và dưới), tự viết lại code bằng Rust mà không sao chép nguyên văn từ repo khác, sau đó chạy `cargo test` và đối chiếu ảnh render."*
