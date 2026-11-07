@@ -198,11 +198,11 @@ impl Fonts {
         &self.constants
     }
 
-    /// Retrieve the italic correction (in pixels) for `ch` under `style` at `em_px`.
-    pub fn italic_correction(&self, style: MathStyle, ch: char, em_px: f32) -> f32 {
-        let math_ch = if style == MathStyle::Variable {
+    /// Convert character and style to the appropriate Unicode Mathematical character in STIX Two Math.
+    pub fn to_math_char(style: MathStyle, ch: char) -> char {
+        if style == MathStyle::Variable {
             if ch == 'h' {
-                '\u{210E}'
+                '\u{210E}' // Planck constant h
             } else if ch.is_ascii_lowercase() {
                 char::from_u32(0x1D44E + (ch as u32 - 'a' as u32)).unwrap_or(ch)
             } else if ch.is_ascii_uppercase() {
@@ -210,14 +210,25 @@ impl Fonts {
             } else {
                 ch
             }
+        } else if style == MathStyle::LcGreek && ('\u{03B1}'..='\u{03C9}').contains(&ch) {
+            char::from_u32(ch as u32 + 0x1D34B).unwrap_or(ch)
         } else {
             ch
-        };
+        }
+    }
 
-        if let Some(math) = self.math_face.tables().math {
-            if let Some(gi) = math.glyph_info {
-                if let Some(ics) = gi.italic_corrections {
-                    if let Some(gid) = self.math_face.glyph_index(math_ch) {
+    /// Look up glyph index in STIX Two Math font.
+    pub fn glyph_id_for_math(&self, style: MathStyle, ch: char) -> Option<ttf_parser::GlyphId> {
+        let math_ch = Self::to_math_char(style, ch);
+        self.math_face.glyph_index(math_ch).or_else(|| self.math_face.glyph_index(ch))
+    }
+
+    /// Retrieve the italic correction (in pixels) for `ch` under `style` at `em_px`.
+    pub fn italic_correction(&self, style: MathStyle, ch: char, em_px: f32) -> f32 {
+        if let Some(gid) = self.glyph_id_for_math(style, ch) {
+            if let Some(math) = self.math_face.tables().math {
+                if let Some(gi) = math.glyph_info {
+                    if let Some(ics) = gi.italic_corrections {
                         if let Some(v) = ics.get(gid) {
                             return (v.value as f32 / self.math_face.units_per_em() as f32) * em_px;
                         }
@@ -231,24 +242,10 @@ impl Fonts {
     /// Retrieve the horizontal top accent attachment position (in pixels from left of glyph origin)
     /// for `ch` under `style` at `em_px`.
     pub fn top_accent_attachment(&self, style: MathStyle, ch: char, em_px: f32) -> Option<f32> {
-        let math_ch = if style == MathStyle::Variable {
-            if ch == 'h' {
-                '\u{210E}'
-            } else if ch.is_ascii_lowercase() {
-                char::from_u32(0x1D44E + (ch as u32 - 'a' as u32)).unwrap_or(ch)
-            } else if ch.is_ascii_uppercase() {
-                char::from_u32(0x1D434 + (ch as u32 - 'A' as u32)).unwrap_or(ch)
-            } else {
-                ch
-            }
-        } else {
-            ch
-        };
-
-        if let Some(math) = self.math_face.tables().math {
-            if let Some(gi) = math.glyph_info {
-                if let Some(tas) = gi.top_accent_attachments {
-                    if let Some(gid) = self.math_face.glyph_index(math_ch) {
+        if let Some(gid) = self.glyph_id_for_math(style, ch) {
+            if let Some(math) = self.math_face.tables().math {
+                if let Some(gi) = math.glyph_info {
+                    if let Some(tas) = gi.top_accent_attachments {
                         if let Some(v) = tas.get(gid) {
                             return Some((v.value as f32 / self.math_face.units_per_em() as f32) * em_px);
                         }
@@ -257,6 +254,67 @@ impl Fonts {
             }
         }
         None
+    }
+
+    /// Calculate the horizontal math kerning adjustment between a base glyph and a script glyph.
+    ///
+    /// For superscript (`is_sub == false`), examines base's `top_right` kern and script's `bottom_left` kern.
+    /// For subscript (`is_sub == true`), examines base's `bottom_right` kern and script's `top_left` kern.
+    pub fn math_kern(
+        &self,
+        base_style: MathStyle,
+        base_ch: char,
+        script_style: MathStyle,
+        script_ch: char,
+        is_sub: bool,
+        script_y: f32,
+        em_px: f32,
+    ) -> f32 {
+        let upem = self.math_face.units_per_em() as f32;
+        let mut total_kern_units: i32 = 0;
+
+        let eval_kern = |kern: &ttf_parser::math::Kern, height: i16| -> i16 {
+            let n = kern.count();
+            let mut idx = 0;
+            while idx < n {
+                if let Some(h) = kern.height(idx) {
+                    if height < h.value {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+                idx += 1;
+            }
+            kern.kern(idx).map_or(0, |k| k.value)
+        };
+
+        if let Some(math) = self.math_face.tables().math {
+            if let Some(gi) = math.glyph_info {
+                if let Some(kis) = gi.kern_infos {
+                    if let Some(base_gid) = self.glyph_id_for_math(base_style, base_ch) {
+                        if let Some(base_ki) = kis.get(base_gid) {
+                            let kern_opt = if is_sub { base_ki.bottom_right } else { base_ki.top_right };
+                            if let Some(k) = kern_opt {
+                                let h = (-script_y / em_px * upem) as i16;
+                                total_kern_units += eval_kern(&k, h) as i32;
+                            }
+                        }
+                    }
+                    if let Some(script_gid) = self.glyph_id_for_math(script_style, script_ch) {
+                        if let Some(script_ki) = kis.get(script_gid) {
+                            let kern_opt = if is_sub { script_ki.top_left } else { script_ki.bottom_left };
+                            if let Some(k) = kern_opt {
+                                let h = (script_y / em_px * upem) as i16;
+                                total_kern_units += eval_kern(&k, h) as i32;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        (total_kern_units as f32 / upem) * em_px
     }
 
     fn pick(&self, style: MathStyle, ch: char) -> (&FontRef<'static>, GlyphId) {
@@ -467,5 +525,9 @@ mod tests {
         // Verify top accent attachment on V
         let ta_v = f.top_accent_attachment(MathStyle::Variable, 'V', 100.0);
         assert!(ta_v.is_some());
+
+        // Verify math kerning on P with subscript
+        let mk_p = f.math_kern(MathStyle::Variable, 'P', MathStyle::Variable, 'i', true, 5.0, 100.0);
+        assert!(mk_p < 0.0, "Subscript under P should be kerned negatively, got {}", mk_p);
     }
 }

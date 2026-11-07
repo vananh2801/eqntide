@@ -140,22 +140,47 @@ impl Layout {
             }
         }
 
-        // Shift right slightly to clear the overhanging hook of italic 'f'
-        let italic_corr = match base.items.last() {
-            Some(Item::Glyph { ch: 'f', face: Face::Variable, .. }) => 0.10 * em,
+        let ic = self.italic_correction_of_box(&base);
+        let base_glyph = self.last_glyph_of_box(&base);
+        let sub_glyph = sub.as_ref().and_then(|s| self.first_glyph_of_box(s));
+        let sup_glyph = sup.as_ref().and_then(|s| self.first_glyph_of_box(s));
+
+        // Subscript horizontal placement: tucked in under slanted letters (math_kern or TeX heuristic)
+        let sub_kern = match (base_glyph, sub_glyph, sub_y) {
+            (Some((b_face, b_ch, _)), Some((s_face, s_ch, _)), Some(sy)) => {
+                let k = self.f.math_kern(b_face, b_ch, s_face, s_ch, true, sy, em);
+                if k != 0.0 {
+                    k
+                } else if ic > 0.0 {
+                    -(0.35 * ic).min(0.04 * em)
+                } else {
+                    0.0
+                }
+            }
+            _ => if ic > 0.0 { -(0.35 * ic).min(0.04 * em) } else { 0.0 },
+        };
+        let sub_x = (base.w + 0.02 * em + sub_kern).max(0.0);
+
+        // Superscript horizontal placement: shifted right by italic correction and math kerning
+        let sup_kern = match (base_glyph, sup_glyph, sup_y) {
+            (Some((b_face, b_ch, _)), Some((s_face, s_ch, _)), Some(py)) => {
+                self.f.math_kern(b_face, b_ch, s_face, s_ch, false, py, em)
+            }
             _ => 0.0,
         };
-
-        let x = base.w + 0.02 * em;
-        let sup_x = x + italic_corr;
+        let sup_x = if is_prime {
+            base.w + ic
+        } else {
+            base.w + ic + sup_kern + 0.02 * em
+        };
 
         let mut b = LBox::default();
         b.place(&base, 0.0, 0.0);
         let mut w = base.w;
 
         if let (Some(s), Some(y)) = (&sub, sub_y) {
-            b.place(s, x, y);
-            w = w.max(x + s.w);
+            b.place(s, sub_x, y);
+            w = w.max(sub_x + s.w);
         }
         if let (Some(s), Some(y)) = (&sup, sup_y) {
             b.place(s, sup_x, y);
@@ -258,5 +283,47 @@ mod tests {
         // In cramped style, superscript shift up is smaller (0.252 * em vs 0.360 * em),
         // so its y is less negative (sits lower) than in uncramped style!
         assert!(y_cramped > y_uncramped, "Cramped y ({}) must be lower (greater) than uncramped y ({})", y_cramped, y_uncramped);
+    }
+
+    #[test]
+    fn test_italic_correction_and_math_kerning_attachment() {
+        let mut l = Layout { f: fonts(), depth: 0 };
+        let em = 20.0;
+
+        // Base 'V' has substantial italic correction (100 units in STIX Two Math = 0.10 * em)
+        let ic_v = l.f.italic_correction(Face::Variable, 'V', em);
+        assert!(ic_v > 0.08 * em, "Italic correction for 'V' should exceed 0.08 * em, got {}", ic_v);
+
+        // Base '1' (upright digit) has zero italic correction
+        let ic_1 = l.f.italic_correction(Face::Number, '1', em);
+        assert_eq!(ic_1, 0.0, "Italic correction for '1' must be 0.0");
+
+        // When placing superscript '2' on 'V':
+        let node_v2 = MathNode::parse("<math><msup><mi>V</mi><mn>2</mn></msup></math>").unwrap();
+        let b_v2 = l.scripts(&node_v2.children[0], em, MathContext::DISPLAY).unwrap();
+        let base_v_w = b_v2.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: 'V', .. } => Some(l.f.advance(Face::Variable, 'V', em)),
+            _ => None,
+        }).unwrap();
+        let sup_v_x = b_v2.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: '2', x, .. } => Some(*x),
+            _ => None,
+        }).unwrap();
+        assert!(sup_v_x > base_v_w + 0.08 * em, "Superscript on 'V' should be shifted right by italic correction, got {}", sup_v_x);
+
+        // Base 'P' with subscript '1': STIX Two Math has bottom-right kerning for 'P' (negative),
+        // tucking the subscript in under the overhang.
+        let node_p1 = MathNode::parse("<math><msub><mi>P</mi><mn>1</mn></msub></math>").unwrap();
+        let b_p1 = l.scripts(&node_p1.children[0], em, MathContext::DISPLAY).unwrap();
+        let base_p_w = b_p1.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: 'P', .. } => Some(l.f.advance(Face::Variable, 'P', em)),
+            _ => None,
+        }).unwrap();
+        let sub_p_x = b_p1.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: '1', x, .. } => Some(*x),
+            _ => None,
+        }).unwrap();
+        // Since bottom-right kern is negative, sub_p_x < base_p_w + 0.02 * em
+        assert!(sub_p_x < base_p_w + 0.02 * em, "Subscript under 'P' should be kerned inward, got sub_p_x = {}, base_p_w = {}", sub_p_x, base_p_w);
     }
 }

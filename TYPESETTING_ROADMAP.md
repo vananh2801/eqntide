@@ -8,7 +8,7 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 
 | File | Vai trò hiện tại |
 | :--- | :--- |
-| `src/render/font.rs` | Nạp các font (`STIXTwoMath-Regular.ttf`, `LiberationSerif`, `OpenSymbol`) qua `ttf-parser`, trích xuất đa giác (`glyph_polys`), hộp mực (`ink`), độ rộng (`advance`) và hằng số bảng OpenType `MATH` (`MathConstants`). |
+| `src/render/font.rs` | Nạp các font (`STIXTwoMath-Regular.ttf`, `LiberationSerif`, `OpenSymbol`) qua `ttf-parser`, trích xuất đa giác (`glyph_polys`), hộp mực (`ink`), độ rộng (`advance`), hằng số OpenType `MATH` (`MathConstants`), bảng `MathGlyphInfo` (Italic Correction, Top Accent Attachment, Math Kerning). |
 | `src/render/layout/mod.rs` | Chứa trạng thái `Layout`, các hằng số (`AXIS = 0.258`, `RULE = 0.068`, `THIN/MED/THICK`), hệ thống `MathContext` / `MathVariantStyle` ($D, T, S, SS$, `cramped`), và hàm duyệt cây `MathNode`. |
 | `src/render/layout/row.rs` | Phân loại `Atom` (`Ord`, `Op`, `Bin`, `Rel`, `Open`, `Close`, `Punct`), tính khoảng cách giữa các `Atom` kế nhau và co giãn dấu ngoặc. |
 | `src/render/layout/fraction.rs` | Dựng phân số (`<mfrac>`) và hệ số nhị thức theo TeX Rule 15 và OpenType `MATH`. |
@@ -91,7 +91,7 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 
 ---
 
-### Phase 4: Italic Correction, Math Kerning & Top Accent Attachment
+### Phase 4: Italic Correction, Math Kerning & Top Accent Attachment (✅ Đã hoàn thành)
 - **File mục tiêu**: `src/render/layout/script.rs`, `src/render/layout/embellish.rs`, `src/render/layout/row.rs`
 - **Vấn đề hiện tại**:
   - Chỉ số trên/dưới đang dùng offset ngang cố định (`0.02 * em`, riêng chữ `'f'` cộng thêm `0.10 * em`).
@@ -99,9 +99,10 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 - **Giải pháp**:
   1. **Trong `script.rs`**:
      - Lấy `ic = f.italic_correction(last_glyph)` từ bảng `MATH`.
-     - Đặt chỉ số trên tại `sup_x = base.w + ic` và chỉ số dưới tại `sub_x = base.w - sub_kern` (kéo nhẹ chỉ số dưới vào hốc nghiêng dưới chân chữ như $P_i, V_0, \int_a^b$).
+     - Lấy `sup_kern` / `sub_kern` từ bảng `MathKernInfo` (kiểm tra `TopRightMathKern` / `BottomLeftMathKern` cho chỉ số trên và `BottomRightMathKern` / `TopLeftMathKern` cho chỉ số dưới theo hàm số độ cao `script_y`).
+     - Đặt chỉ số trên tại `sup_x = base.w + ic + sup_kern + 0.02 * em` và chỉ số dưới tại `sub_x = base.w + 0.02 * em + sub_kern` (kéo nhẹ chỉ số dưới vào hốc nghiêng dưới chân chữ như $P_1, V_0, \int_a^b$).
   2. **Trong `embellish.rs`**:
-     - Nếu cơ sở là 1 ký tự đơn, lấy `attach_x = f.top_accent_attachment(base_glyph)` từ bảng `MATH` (hoặc xấp xỉ `base.w / 2.0 + 0.35 * ic`) để đặt tâm dấu mũ đúng đỉnh nghiêng của chữ.
+     - Nếu cơ sở là 1 ký tự đơn, lấy `attach_x = f.top_accent_attachment(base_glyph)` từ bảng `MATH` (hoặc xấp xỉ `base.w / 2.0 + 0.35 * ic`) để đặt tâm dấu mũ đúng đỉnh nghiêng của chữ ($\hat{x}, \vec{v}, \dot{y}$).
 
 ---
 
@@ -169,8 +170,8 @@ Khi tham khảo mã nguồn từ các dự án mã nguồn mở (ví dụ: Typst
 
 Khi muốn nhờ AI Agent thực hiện tiếp các hạng mục còn lại, bạn có thể copy trực tiếp câu lệnh tương ứng dưới đây:
 
-### Prompt cho lượt tiếp theo (Phase 4):
-> *"Hãy đọc kỹ `TYPESETTING_ROADMAP.md`, đặc biệt là phần 'Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo'. Triển khai **Phase 4** (Italic Correction, Math Kerning & Top Accent Attachment: trích xuất italics correction và top accent attachment từ OpenType MATH table trong font.rs, áp dụng vào script.rs và embellish.rs để căn chỉnh tâm dấu phụ và chỉ số nghiêng), tự viết lại code bằng Rust mà không sao chép nguyên văn từ repo khác, sau đó chạy `cargo test` và đối chiếu ảnh render."*
-
-### Prompt cho Phase 5 (Căn thức bằng Glyph Variants & Assembly):
+### Prompt cho lượt tiếp theo (Phase 5 - Căn thức bằng Glyph Variants & Assembly):
 > *"Hãy đọc kỹ `TYPESETTING_ROADMAP.md`, đặc biệt là phần 'Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo'. Triển khai **Phase 5** (Dựng dấu Căn thức `\u{221A}` bằng Glyph Variants và Glyph Assembly từ `STIXTwoMath`, định vị bậc căn `deg` theo chuẩn OpenType MATH), tự viết lại code bằng Rust mà không sao chép nguyên văn từ repo khác, sau đó chạy `cargo test` và đối chiếu ảnh render."*
+
+### Prompt cho Phase 6 (Optical Size `ssty` GSUB feature cho Chỉ số):
+> *"Hãy đọc kỹ `TYPESETTING_ROADMAP.md`, đặc biệt là phần 'Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo'. Triển khai **Phase 6** (Optical Size thông qua feature `ssty` trong bảng GSUB của font `STIXTwoMath` cho chỉ số trên và dưới), tự viết lại code bằng Rust mà không sao chép nguyên văn từ repo khác, sau đó chạy `cargo test` và đối chiếu ảnh render."*

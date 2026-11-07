@@ -226,6 +226,47 @@ impl Layout {
         b
     }
 
+    /// Returns the italic correction of the trailing glyph in `b` (or 0.0 if none).
+    pub(super) fn italic_correction_of_box(&self, b: &LBox) -> f32 {
+        b.items.iter().rev().find_map(|it| match it {
+            Item::Glyph { ch, face, em, .. } => {
+                let ic = self.f.italic_correction(*face, *ch, *em);
+                if ic > 0.0 { Some(ic) } else { None }
+            }
+            _ => None,
+        }).unwrap_or(0.0)
+    }
+
+    /// Returns the top accent attachment x coordinate for `b` if `b` contains a single glyph.
+    pub(super) fn top_accent_attachment_of_box(&self, b: &LBox) -> Option<f32> {
+        let glyphs: Vec<_> = b.items.iter().filter_map(|it| match it {
+            Item::Glyph { ch, face, em, x, .. } => Some((*ch, *face, *em, *x)),
+            _ => None,
+        }).collect();
+        if glyphs.len() == 1 {
+            let (ch, face, em, x) = glyphs[0];
+            self.f.top_accent_attachment(face, ch, em).map(|att| x + att)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the last glyph in `b` if any.
+    pub(super) fn last_glyph_of_box(&self, b: &LBox) -> Option<(Face, char, f32)> {
+        b.items.iter().rev().find_map(|it| match it {
+            Item::Glyph { ch, face, em, .. } => Some((*face, *ch, *em)),
+            _ => None,
+        })
+    }
+
+    /// Returns the first glyph in `b` if any.
+    pub(super) fn first_glyph_of_box(&self, b: &LBox) -> Option<(Face, char, f32)> {
+        b.items.iter().find_map(|it| match it {
+            Item::Glyph { ch, face, em, .. } => Some((*face, *ch, *em)),
+            _ => None,
+        })
+    }
+
     // ── tree walk ────────────────────────────────────────────────────────────
 
     pub(super) fn node(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {

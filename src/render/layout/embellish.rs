@@ -5,22 +5,29 @@ use super::*;
 
 impl Layout {
     pub(super) fn draw_accent(&self, b: &mut LBox, c: char, w: f32, x0: f32, base_asc: f32, em: f32) {
-        // Compensate for rightward slant if the base letter is an italic variable (like italic 'S')
-        let is_italic = b.items.first().map_or(false, |it| match it {
-            Item::Glyph { face: Face::Variable, .. } => true,
-            _ => false,
-        });
-        let cx = w / 2.0 + if is_italic { 0.04 * em } else { 0.0 };
+        // Retrieve top accent attachment position from OpenType MATH table if available;
+        // fallback to italic correction compensation if slanted.
+        let cx = if let Some(att) = self.top_accent_attachment_of_box(b) {
+            x0 + att
+        } else {
+            let ic = self.italic_correction_of_box(b);
+            if ic > 0.0 {
+                w / 2.0 + 0.35 * ic
+            } else {
+                w / 2.0
+            }
+        };
+
         let y = -(base_asc + 0.10 * em);
         let st = 0.045 * em;
         let mut polys: Vec<Vec<(f32, f32)>> = Vec::new();
         match c {
             '\u{20D7}' | '\u{2192}' | '\u{27F6}' => {
+                let ic = self.italic_correction_of_box(b);
                 let eff_em = 0.65 * em;
                 let k = eff_em / 1000.0;
-                let slant = if is_italic { 0.04 * em } else { 0.0 };
-                let x_left = x0 + slant;
-                let x_right = (w - x0 + slant + 0.04 * em).max(x_left + 0.40 * em);
+                let x_left = x0 + 0.35 * ic;
+                let x_right = (w - x0 + ic).max(x_left + 0.40 * em);
                 let span = x_right - x_left;
                 let y_shaft = -(base_asc + 0.10 * em);
                 let y_glyph = y_shaft + 259.0 * k;

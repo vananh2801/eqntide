@@ -139,7 +139,7 @@ impl Layout {
             if i > 0 {
                 let mut sp = self.spacing(cls[i - 1], cls[i], em, ctx.is_script());
 
-                // Add italic correction when a prime/apostrophe follows an italic letter (especially 'f')
+                // Add italic correction when a prime/apostrophe follows an italic letter
                 let prev_glyph = atoms[i - 1].b.items.last();
                 let curr_glyph = atoms[i].b.items.first();
 
@@ -149,14 +149,11 @@ impl Layout {
                 });
 
                 if is_prime {
-                    match prev_glyph {
-                        Some(Item::Glyph { ch: 'f', face: Face::Variable, .. }) => {
-                            sp += 0.15 * em; // Generous clearance for the overhanging top hook of italic 'f'
+                    if let Some(Item::Glyph { ch, face, em: g_em, .. }) = prev_glyph {
+                        let ic = self.f.italic_correction(*face, *ch, *g_em);
+                        if ic > 0.0 {
+                            sp += ic + 0.04 * em;
                         }
-                        Some(Item::Glyph { face: Face::Variable, .. }) => {
-                            sp += 0.05 * em; // Slight clearance for other italic variables
-                        }
-                        _ => {}
                     }
                 }
 
