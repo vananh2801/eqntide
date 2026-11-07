@@ -4,12 +4,13 @@ use super::*;
 
 
 impl Layout {
-    pub(super) fn table(&mut self, n: &MathNode, em: f32, script: bool) -> Result<LBox> {
+    pub(super) fn table(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
+        let cell_ctx = if ctx.is_script() { ctx } else { MathContext::TEXT };
         let mut rows: Vec<Vec<LBox>> = Vec::new();
         for mtr in &n.children {
             let mut cells = Vec::new();
             for mtd in &mtr.children {
-                cells.push(self.row(&mtd.children, em, script)?);
+                cells.push(self.row(&mtd.children, em, cell_ctx)?);
             }
             rows.push(cells);
         }

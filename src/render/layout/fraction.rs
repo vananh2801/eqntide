@@ -3,19 +3,24 @@
 use super::*;
 
 impl Layout {
-    pub(super) fn frac(&mut self, n: &MathNode, em: f32, script: bool) -> Result<LBox> {
+    pub(super) fn frac(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
+        let c = self.f.constants();
+        let num_ctx = ctx.for_numerator();
+        let den_ctx = ctx.for_denominator();
+        let num_em = em * num_ctx.scale(c);
+        let den_em = em * den_ctx.scale(c);
+
         let num = match n.children.first() {
-            Some(c) => self.node(c, em, script)?,
+            Some(k) => self.node(k, num_em, num_ctx)?,
             None => LBox::default(),
         };
         let den = match n.children.get(1) {
-            Some(c) => self.node(c, em, script)?,
+            Some(k) => self.node(k, den_em, den_ctx)?,
             None => LBox::default(),
         };
 
-        let c = self.f.constants();
         let axis = c.axis_height * em;
-        let is_display = !script;
+        let is_display = ctx.is_display();
 
         let has_bar = n.attr("linethickness") != Some("0");
         let thick = if has_bar {
@@ -92,7 +97,7 @@ impl Layout {
             }
 
             (-shift_up, shift_down)
-        };
+        } as (f32, f32);
 
         let mut b = LBox::default();
         b.place(&num, (w - num.w) / 2.0, ny);
@@ -117,8 +122,8 @@ mod tests {
         let mut l = Layout { f: fonts(), depth: 0 };
         let em = 20.0;
 
-        let b1 = l.frac(&frac_a_b.children[0], em, false).unwrap();
-        let b2 = l.frac(&frac_x_y.children[0], em, false).unwrap();
+        let b1 = l.frac(&frac_a_b.children[0], em, MathContext::DISPLAY).unwrap();
+        let b2 = l.frac(&frac_x_y.children[0], em, MathContext::DISPLAY).unwrap();
 
         // Numerator baseline (y position of the glyph)
         let get_glyph_y = |b: &LBox| -> f32 {
@@ -139,13 +144,13 @@ mod tests {
 
         // A numerator with a deep descender (g) pushes shift_up just enough to clear min_gap
         let frac_g_y = MathNode::parse("<math><mfrac><mi>g</mi><mi>y</mi></mfrac></math>").unwrap();
-        let b_g = l.frac(&frac_g_y.children[0], em, false).unwrap();
+        let b_g = l.frac(&frac_g_y.children[0], em, MathContext::DISPLAY).unwrap();
         let y_g = get_glyph_y(&b_g);
         assert!(y_g < y1, "g must be shifted up further to clear the fraction rule (y_g={}, y1={})", y_g, y1);
 
         // Verify binomial coefficient (linethickness = 0)
         let binom = MathNode::parse("<math><mfrac linethickness=\"0\"><mn>10</mn><mn>3</mn></mfrac></math>").unwrap();
-        let b_binom = l.frac(&binom.children[0], em, false).unwrap();
+        let b_binom = l.frac(&binom.children[0], em, MathContext::DISPLAY).unwrap();
         // Binomial should have no horizontal rule polygon
         assert!(!b_binom.items.iter().any(|it| matches!(it, Item::Poly(_))));
     }

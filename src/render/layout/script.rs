@@ -4,9 +4,9 @@ use super::*;
 
 
 impl Layout {
-    pub(super) fn scripts(&mut self, n: &MathNode, em: f32, script: bool) -> Result<LBox> {
+    pub(super) fn scripts(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
         let base = match n.children.first() {
-            Some(c) => self.node(c, em, script)?,
+            Some(c) => self.node(c, em, ctx)?,
             None => LBox::default(),
         };
         let (sub_n, sup_n) = match n.tag.as_str() {
@@ -14,35 +14,45 @@ impl Layout {
             "msup" => (None, n.children.get(1)),
             _ => (n.children.get(1), n.children.get(2)),
         };
-        let sem = em * SCRIPT;
+        let c = self.f.constants();
+        let sub_ctx = ctx.for_subscript();
+        let sup_ctx = ctx.for_superscript();
+        let sub_em = em * sub_ctx.scale(c);
+        let sup_em = em * sup_ctx.scale(c);
+
         let sub = match sub_n {
-            Some(c) => Some(self.node(c, sem, true)?),
+            Some(c) => Some(self.node(c, sub_em, sub_ctx)?),
             None => None,
         };
         let sup = match sup_n {
-            Some(c) => Some(self.node(c, sem, true)?),
+            Some(c) => Some(self.node(c, sup_em, sup_ctx)?),
             None => None,
         };
-        Ok(self.attach_scripts(base, sub, sup, em))
+        Ok(self.attach_scripts(base, sub, sup, em, sup_em, ctx))
     }
 
-    pub(super) fn prescripts(&mut self, n: &MathNode, em: f32, script: bool) -> Result<LBox> {
+    pub(super) fn prescripts(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
         let base = match n.children.first() {
-            Some(c) => self.node(c, em, script)?,
+            Some(c) => self.node(c, em, ctx)?,
             None => LBox::default(),
         };
-        let sem = em * SCRIPT;
+        let c = self.f.constants();
+        let sub_ctx = ctx.for_subscript();
+        let sup_ctx = ctx.for_superscript();
+        let sub_em = em * sub_ctx.scale(c);
+        let sup_em = em * sup_ctx.scale(c);
+
         let mut pre_sub: Option<LBox> = None;
         let mut pre_sup: Option<LBox> = None;
         if let Some(mp_idx) = n.children.iter().position(|c| c.tag == "mprescripts") {
             if let Some(sub_n) = n.children.get(mp_idx + 1) {
                 if sub_n.tag != "none" && (!sub_n.children.is_empty() || !sub_n.text.trim().is_empty()) {
-                    pre_sub = Some(self.node(sub_n, sem, true)?);
+                    pre_sub = Some(self.node(sub_n, sub_em, sub_ctx)?);
                 }
             }
             if let Some(sup_n) = n.children.get(mp_idx + 2) {
                 if sup_n.tag != "none" && (!sup_n.children.is_empty() || !sup_n.text.trim().is_empty()) {
-                    pre_sup = Some(self.node(sup_n, sem, true)?);
+                    pre_sup = Some(self.node(sup_n, sup_em, sup_ctx)?);
                 }
             }
         }
@@ -53,13 +63,22 @@ impl Layout {
             return Ok(base);
         }
 
-        let mut sub_y = pre_sub.as_ref().map(|s| (0.22 * em).max(base.desc + 0.05 * em).max(s.asc - 0.32 * em));
-        let sup_y = pre_sup.as_ref().map(|s| -(0.40 * em).max(base.asc - 0.39 * sem).max(s.desc + 0.25 * 0.45 * em));
+        let shift_up = if ctx.cramped {
+            c.superscript_shift_up_cramped * em
+        } else {
+            c.superscript_shift_up * em
+        };
+        let shift_down = c.subscript_shift_down * em;
+        let gap_min = c.sub_superscript_gap_min * em;
+
+        let mut sub_y = pre_sub.as_ref().map(|s| shift_down.max(base.desc + 0.05 * em).max(s.asc - 0.32 * em));
+        let sup_y = pre_sup.as_ref().map(|s| {
+            -(shift_up.max(base.asc - 0.39 * sup_em).max(s.desc + 0.11 * em))
+        });
         if let (Some(s1), Some(s2), Some(sy), Some(py)) = (&pre_sub, &pre_sup, sub_y, sup_y) {
             let gap = (sy - s1.asc) - (py + s2.desc);
-            let need = 0.18 * em;
-            if gap < need {
-                sub_y = Some(sy + (need - gap));
+            if gap < gap_min {
+                sub_y = Some(sy + (gap_min - gap));
             }
         }
 
@@ -76,9 +95,25 @@ impl Layout {
         Ok(b)
     }
 
-    pub(super) fn attach_scripts(&self, base: LBox, sub: Option<LBox>, sup: Option<LBox>, em: f32) -> LBox {
-        let sem = em * SCRIPT;
-        let mut sub_y = sub.as_ref().map(|s| (0.22 * em).max(base.desc + 0.05 * em).max(s.asc - 0.32 * em));
+    pub(super) fn attach_scripts(
+        &self,
+        base: LBox,
+        sub: Option<LBox>,
+        sup: Option<LBox>,
+        em: f32,
+        sup_em: f32,
+        ctx: MathContext,
+    ) -> LBox {
+        let c = self.f.constants();
+        let shift_up = if ctx.cramped {
+            c.superscript_shift_up_cramped * em
+        } else {
+            c.superscript_shift_up * em
+        };
+        let shift_down = c.subscript_shift_down * em;
+        let gap_min = c.sub_superscript_gap_min * em;
+
+        let mut sub_y = sub.as_ref().map(|s| shift_down.max(base.desc + 0.05 * em).max(s.asc - 0.32 * em));
 
         // Check if the superscript is a prime mark (', ′)
         let is_prime = sup.as_ref().map_or(false, |s| {
@@ -88,8 +123,8 @@ impl Layout {
             })
         });
 
-        let mut sup_y = sup.as_ref().map(|s| {
-            let y = -(0.40 * em).max(base.asc - 0.39 * sem).max(s.desc + 0.25 * 0.45 * em);
+        let sup_y = sup.as_ref().map(|s| {
+            let y = -(shift_up.max(base.asc - 0.39 * sup_em).max(s.desc + 0.11 * em));
             if is_prime {
                 // Lower the prime mark so it hugs the top of the base letter
                 y + 0.12 * em
@@ -100,11 +135,9 @@ impl Layout {
 
         if let (Some(s1), Some(s2), Some(sy), Some(py)) = (&sub, &sup, sub_y, sup_y) {
             let gap = (sy - s1.asc) - (py + s2.desc);
-            let need = 0.18 * em;
-            if gap < need {
-                sub_y = Some(sy + (need - gap));
+            if gap < gap_min {
+                sub_y = Some(sy + (gap_min - gap));
             }
-            let _ = &mut sup_y;
         }
 
         // Shift right slightly to clear the overhanging hook of italic 'f'
@@ -136,5 +169,94 @@ impl Layout {
 
         b.w = if is_prime { w } else { w + 0.03 * em };
         b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_math_style_transitions() {
+        let d = MathContext::DISPLAY;
+        assert_eq!(d.style, MathVariantStyle::Display);
+        assert!(!d.cramped);
+        assert!(d.is_display());
+        assert!(!d.is_script());
+
+        // Numerator transitions
+        let d_num = d.for_numerator();
+        assert_eq!(d_num.style, MathVariantStyle::Text);
+        assert!(!d_num.cramped);
+
+        let t_num = d_num.for_numerator();
+        assert_eq!(t_num.style, MathVariantStyle::Script);
+        assert!(!t_num.cramped);
+
+        let s_num = t_num.for_numerator();
+        assert_eq!(s_num.style, MathVariantStyle::ScriptScript);
+        assert!(!s_num.cramped);
+
+        // Denominator transitions (always cramped)
+        let d_den = d.for_denominator();
+        assert_eq!(d_den.style, MathVariantStyle::Text);
+        assert!(d_den.cramped);
+
+        let t_den = d_den.for_denominator();
+        assert_eq!(t_den.style, MathVariantStyle::Script);
+        assert!(t_den.cramped);
+
+        // Superscript transitions (preserves cramped)
+        let d_sup = d.for_superscript();
+        assert_eq!(d_sup.style, MathVariantStyle::Script);
+        assert!(!d_sup.cramped);
+
+        let den_sup = d_den.for_superscript();
+        assert_eq!(den_sup.style, MathVariantStyle::Script);
+        assert!(den_sup.cramped);
+
+        // Subscript transitions (always cramped)
+        let d_sub = d.for_subscript();
+        assert_eq!(d_sub.style, MathVariantStyle::Script);
+        assert!(d_sub.cramped);
+
+        // Radicand (preserves style, cramped = true)
+        let d_rad = d.for_radicand();
+        assert_eq!(d_rad.style, MathVariantStyle::Display);
+        assert!(d_rad.cramped);
+        assert!(!d_rad.is_display()); // Cramped display is not uncramped display
+
+        // Root index (ScriptScript cramped)
+        let r_idx = d.for_root_index();
+        assert_eq!(r_idx.style, MathVariantStyle::ScriptScript);
+        assert!(r_idx.cramped);
+    }
+
+    #[test]
+    fn test_cramped_superscript_shift_down() {
+        let node = MathNode::parse("<math><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
+        let mut l = Layout { f: fonts(), depth: 0 };
+        let em = 20.0;
+
+        let b_uncramped = l.scripts(&node.children[0], em, MathContext::DISPLAY).unwrap();
+        let b_cramped = l.scripts(&node.children[0], em, MathContext {
+            style: MathVariantStyle::Text,
+            cramped: true,
+        }).unwrap();
+
+        // Get y position of '2' glyph in both cases
+        let y_of_two = |b: &LBox| -> f32 {
+            b.items.iter().find_map(|it| match it {
+                Item::Glyph { ch: '2', y, .. } => Some(*y),
+                _ => None,
+            }).unwrap()
+        };
+
+        let y_uncramped = y_of_two(&b_uncramped);
+        let y_cramped = y_of_two(&b_cramped);
+
+        // In cramped style, superscript shift up is smaller (0.252 * em vs 0.360 * em),
+        // so its y is less negative (sits lower) than in uncramped style!
+        assert!(y_cramped > y_uncramped, "Cramped y ({}) must be lower (greater) than uncramped y ({})", y_cramped, y_uncramped);
     }
 }

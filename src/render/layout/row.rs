@@ -56,7 +56,7 @@ fn styled_math_glyph(ch: char, variant: Option<&str>) -> Option<char> {
 
 impl Layout {
     /// Lay out a run of siblings on one baseline with TeX-style spacing.
-    pub(super) fn row(&mut self, kids: &[MathNode], em: f32, script: bool) -> Result<LBox> {
+    pub(super) fn row(&mut self, kids: &[MathNode], em: f32, ctx: MathContext) -> Result<LBox> {
         let mut atoms: Vec<Atom> = Vec::new();
         for kid in kids {
             // Ignore standalone spacing elements or empty token nodes.
@@ -112,7 +112,7 @@ impl Layout {
                     }
                 }
                 _ => {
-                    let b = self.node(kid, em, script)?;
+                    let b = self.node(kid, em, ctx)?;
                     let class = self.class_of_node(kid);
                     atoms.push(Atom { class, b, delim: None, is_table: kid.tag == "mtable" });
                 }
@@ -137,7 +137,7 @@ impl Layout {
         let mut x = 0.0;
         for i in 0..n {
             if i > 0 {
-                let mut sp = self.spacing(cls[i - 1], cls[i], em, script);
+                let mut sp = self.spacing(cls[i - 1], cls[i], em, ctx.is_script());
 
                 // Add italic correction when a prime/apostrophe follows an italic letter (especially 'f')
                 let prev_glyph = atoms[i - 1].b.items.last();

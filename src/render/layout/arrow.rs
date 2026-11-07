@@ -90,14 +90,17 @@ impl Layout {
         top: Option<&MathNode>,
         bottom: Option<&MathNode>,
         em: f32,
+        ctx: MathContext,
     ) -> Result<LBox> {
-        let sem = em * SCRIPT;
+        let c = self.f.constants();
+        let lim_ctx = ctx.for_limits();
+        let lim_em = em * lim_ctx.scale(c);
         let over = match top {
-            Some(o) => Some(self.node(o, sem, true)?),
+            Some(o) => Some(self.node(o, lim_em, lim_ctx)?),
             None => None,
         };
         let under = match bottom {
-            Some(u) => Some(self.node(u, sem, true)?),
+            Some(u) => Some(self.node(u, lim_em, lim_ctx)?),
             None => None,
         };
 

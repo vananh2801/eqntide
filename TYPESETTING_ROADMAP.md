@@ -9,7 +9,7 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 | File | Vai trò hiện tại |
 | :--- | :--- |
 | `src/render/font.rs` | Nạp các font (`STIXTwoMath-Regular.ttf`, `LiberationSerif`, `OpenSymbol`) qua `ttf-parser`, trích xuất đa giác (`glyph_polys`), hộp mực (`ink`), độ rộng (`advance`) và hằng số bảng OpenType `MATH` (`MathConstants`). |
-| `src/render/layout/mod.rs` | Chứa trạng thái `Layout`, các hằng số (`SCRIPT = 0.70`, `AXIS = 0.258`, `RULE = 0.068`, `THIN/MED/THICK`) và hàm duyệt cây `MathNode`. |
+| `src/render/layout/mod.rs` | Chứa trạng thái `Layout`, các hằng số (`AXIS = 0.258`, `RULE = 0.068`, `THIN/MED/THICK`), hệ thống `MathContext` / `MathVariantStyle` ($D, T, S, SS$, `cramped`), và hàm duyệt cây `MathNode`. |
 | `src/render/layout/row.rs` | Phân loại `Atom` (`Ord`, `Op`, `Bin`, `Rel`, `Open`, `Close`, `Punct`), tính khoảng cách giữa các `Atom` kế nhau và co giãn dấu ngoặc. |
 | `src/render/layout/fraction.rs` | Dựng phân số (`<mfrac>`) và hệ số nhị thức theo TeX Rule 15 và OpenType `MATH`. |
 | `src/render/layout/radical.rs` | Dựng căn bậc hai (`<msqrt>`) và căn bậc $n$ (`<mroot>`). |
@@ -45,13 +45,13 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
 
 ---
 
-### Phase 2: Hệ thống 4 cấp `MathStyle` ($D, T, S, SS$) và trạng thái `Cramped`
-- **File mục tiêu**: `src/render/layout/mod.rs`, `src/render/layout/fraction.rs`, `src/render/layout/radical.rs`, `src/render/layout/script.rs`
+### Phase 2: Hệ thống 4 cấp `MathStyle` ($D, T, S, SS$) và trạng thái `Cramped` (✅ Đã hoàn thành)
+- **File mục tiêu**: `src/render/layout/mod.rs`, `src/render/layout/fraction.rs`, `src/render/layout/radical.rs`, `src/render/layout/script.rs`, `src/render/layout/row.rs`, `src/render/layout/bigop.rs`, `src/render/layout/arrow.rs`, `src/render/layout/integral.rs`, `src/render/layout/matrix.rs`
 - **Vấn đề hiện tại**: `Layout::node` chỉ truyền `script: bool` (2 mức kích thước `1.0` và `0.65`), chưa phân biệt `Display`, `Text`, `Script`, `ScriptScript` và trạng thái `cramped` (nén chiều cao mũ khi nằm dưới thanh căn hoặc mẫu số).
 - **Giải pháp**:
   1. Thay tham số `script: bool` bằng struct/enum:
      ```rust
-     #[derive(Clone, Copy, PartialEq, Eq)]
+     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
      pub enum MathVariantStyle {
          Display,      // D  (100%)
          Text,         // T  (100%)
@@ -59,7 +59,7 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
          ScriptScript, // SS (55% - ScriptScriptPercentScaleDown trong MATH table)
      }
 
-     #[derive(Clone, Copy)]
+     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
      pub struct MathContext {
          pub style: MathVariantStyle,
          pub cramped: bool,
@@ -71,6 +71,8 @@ Tài liệu này tổng hợp các đề xuất cải tiến bộ dựng ảnh c
      - Mẫu số phân số: chuyển `D -> T`, `T -> S`, `S -> SS`, bật `cramped = true`.
      - Chỉ số trên (`sup`): chuyển `D | T -> S`, `S | SS -> SS`, giữ nguyên `cramped`.
      - Chỉ số dưới (`sub`): chuyển `D | T -> S`, `S | SS -> SS`, bật `cramped = true`.
+     - Chỉ số dưới bậc căn (`deg`): chuyển `SS` và bật `cramped = true`.
+     - Giới hạn trên/dưới toán tử lớn: `for_limits()` chuyển `S` hoặc `SS` và bật `cramped = true`.
 
 ---
 
@@ -165,5 +167,10 @@ Khi tham khảo mã nguồn từ các dự án mã nguồn mở (ví dụ: Typst
 
 ## Gợi ý Prompt khi giao việc cho AI Agent
 
-Khi muốn nhờ AI Agent thực hiện từng phần, bạn chỉ cần nhắn:
-> *"Hãy đọc kỹ `TYPESETTING_ROADMAP.md`, đặc biệt là phần 'Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo'. Triển khai **Phase 2** (Hệ thống 4 cấp MathStyle và Cramped), tự viết lại code bằng Rust dựa trên thuật toán của TeX/OpenType MATH mà không sao chép nguyên văn từ repo khác, sau đó chạy `cargo test` và đối chiếu ảnh render."*
+Khi muốn nhờ AI Agent thực hiện tiếp các hạng mục còn lại, bạn có thể copy trực tiếp câu lệnh tương ứng dưới đây:
+
+### Prompt cho lượt tiếp theo (Phase 4):
+> *"Hãy đọc kỹ `TYPESETTING_ROADMAP.md`, đặc biệt là phần 'Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo'. Triển khai **Phase 4** (Italic Correction, Math Kerning & Top Accent Attachment: trích xuất italics correction và top accent attachment từ OpenType MATH table trong font.rs, áp dụng vào script.rs và embellish.rs để căn chỉnh tâm dấu phụ và chỉ số nghiêng), tự viết lại code bằng Rust mà không sao chép nguyên văn từ repo khác, sau đó chạy `cargo test` và đối chiếu ảnh render."*
+
+### Prompt cho Phase 5 (Căn thức bằng Glyph Variants & Assembly):
+> *"Hãy đọc kỹ `TYPESETTING_ROADMAP.md`, đặc biệt là phần 'Nguyên tắc Bản quyền & Đọc Mã nguồn Tham khảo'. Triển khai **Phase 5** (Dựng dấu Căn thức `\u{221A}` bằng Glyph Variants và Glyph Assembly từ `STIXTwoMath`, định vị bậc căn `deg` theo chuẩn OpenType MATH), tự viết lại code bằng Rust mà không sao chép nguyên văn từ repo khác, sau đó chạy `cargo test` và đối chiếu ảnh render."*

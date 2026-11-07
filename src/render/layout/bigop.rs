@@ -18,12 +18,14 @@ impl Layout {
         b
     }
 
-    pub(super) fn under_over(&mut self, n: &MathNode, em: f32, script: bool) -> Result<LBox> {
+    pub(super) fn under_over(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
         let first = n.children.first();
         let base_char = first
             .filter(|b| b.tag == "mo")
             .and_then(|b| b.text.trim().chars().next());
-        let sem = em * SCRIPT;
+        let c = self.f.constants();
+        let lim_ctx = ctx.for_limits();
+        let lim_em = em * lim_ctx.scale(c);
         let (under_n, over_n) = match n.tag.as_str() {
             "munder" => (n.children.get(1), None),
             "mover" => (None, n.children.get(1)),
@@ -31,17 +33,17 @@ impl Layout {
         };
 
         // Integral sign: limits sit above/below the sign (see `integral.rs`).
-        if let Some(c) = base_char.filter(|c| is_integral(*c)) {
-            return self.integral_with_limits(c, under_n, over_n, em);
+        if let Some(ch) = base_char.filter(|ch| is_integral(*ch)) {
+            return self.integral_with_limits(ch, under_n, over_n, em, ctx);
         }
 
         // Labeled arrow (MathType `tmARROW`): stretchy arrow with text above / below (see `arrow.rs`).
         if let Some(t) = arrow::template_of(n) {
-            return self.labeled_arrow(t.dir, t.top, t.bottom, em);
+            return self.labeled_arrow(t.dir, t.top, t.bottom, em, ctx);
         }
 
         let base = match first {
-            Some(f) => self.node(f, em, script)?,
+            Some(f) => self.node(f, em, ctx)?,
             None => LBox::default(),
         };
         let big = base_char.map_or(false, is_big_op) || first.map_or(false, |f| f.tag == "mi" && is_function(f.text.trim()));
@@ -58,11 +60,11 @@ impl Layout {
             .map_or(false, |c| c == '_' || c == '\u{0332}' || c == '\u{005F}' || c == '\u{00AF}' || c == '\u{203E}');
 
         let under = match under_n {
-            Some(u) if !brace_under && !bar_under => Some(self.node(u, sem, true)?),
+            Some(u) if !brace_under && !bar_under => Some(self.node(u, lim_em, lim_ctx)?),
             _ => None,
         };
         let over = match over_n {
-            Some(o) if accent.is_none() => Some(self.node(o, sem, true)?),
+            Some(o) if accent.is_none() => Some(self.node(o, lim_em, lim_ctx)?),
             _ => None,
         };
 

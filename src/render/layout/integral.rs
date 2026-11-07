@@ -140,12 +140,18 @@ impl Layout {
         under_n: Option<&MathNode>,
         over_n: Option<&MathNode>,
         em: f32,
+        ctx: MathContext,
     ) -> Result<LBox> {
-        let sem = em * SCRIPT;
+        let constants = self.f.constants();
+        let sub_ctx = ctx.for_subscript();
+        let sup_ctx = ctx.for_superscript();
+        let sub_em = em * sub_ctx.scale(constants);
+        let sup_em = em * sup_ctx.scale(constants);
+
         // Use the hand-built glyph assembly
         let base = self.integral_without_limits(c, 1.45 * em, em).unwrap_or_else(|| self.glyph(display_char(c), Face::Symbol, em));
-        let sub = match under_n { Some(u) => Some(self.node(u, sem, true)?), None => None };
-        let sup = match over_n { Some(o) => Some(self.node(o, sem, true)?), None => None };
+        let sub = match under_n { Some(u) => Some(self.node(u, sub_em, sub_ctx)?), None => None };
+        let sup = match over_n { Some(o) => Some(self.node(o, sup_em, sup_ctx)?), None => None };
 
         let mut b = LBox::default();
         let w_base = base.w;

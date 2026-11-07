@@ -19,7 +19,7 @@
 //! are plain data and live in [`crate::symbols`].
 //!
 //! Sizes follow MathType's defaults: fraction parts stay at full size,
-//! sub/superscripts are 70% (matching `STIXTwoMath`'s `script_percent_scale_down`).
+//! sub/superscripts are scaled according to `STIXTwoMath`'s `script_percent_scale_down`.
 
 mod arrow;
 mod bar;
@@ -52,12 +52,146 @@ pub(crate) use boxes::{Item, LBox};
 use geom::{quad_bezier, rect, stroke};
 
 pub(crate) const MAX_DEPTH: usize = 256;
-pub(crate) const SCRIPT: f32 = 0.70;
 pub(crate) const AXIS: f32 = 0.258;
 pub(crate) const RULE: f32 = 0.068;
 const THIN: f32 = 0.167;
 const MED: f32 = 0.222;
 const THICK: f32 = 0.278;
+
+/// TeX / OpenType MATH style levels (The TeXbook, Appendix G, Rule 1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MathVariantStyle {
+    /// Display style (D): large unconstrained equations on their own line.
+    Display,
+    /// Text style (T): equations inline within a paragraph.
+    Text,
+    /// Script style (S): first-level subscripts, superscripts, and fraction parts.
+    Script,
+    /// ScriptScript style (SS): second-level (nested) scripts and root indices.
+    ScriptScript,
+}
+
+/// The typesetting context tracking the active `MathVariantStyle` and whether
+/// the style is "cramped" (e.g. inside denominators or under radical signs).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MathContext {
+    pub style: MathVariantStyle,
+    pub cramped: bool,
+}
+
+impl MathContext {
+    pub const DISPLAY: Self = Self {
+        style: MathVariantStyle::Display,
+        cramped: false,
+    };
+
+    pub const TEXT: Self = Self {
+        style: MathVariantStyle::Text,
+        cramped: false,
+    };
+
+    /// Whether this context is display style (un-cramped display).
+    #[inline]
+    pub fn is_display(&self) -> bool {
+        self.style == MathVariantStyle::Display && !self.cramped
+    }
+
+    /// Whether this context is script or scriptscript level.
+    #[inline]
+    pub fn is_script(&self) -> bool {
+        matches!(self.style, MathVariantStyle::Script | MathVariantStyle::ScriptScript)
+    }
+
+    /// Scale factor for font size based on the OpenType MATH constants.
+    #[inline]
+    pub fn scale(&self, c: &crate::render::font::MathConstants) -> f32 {
+        match self.style {
+            MathVariantStyle::Display | MathVariantStyle::Text => 1.0,
+            MathVariantStyle::Script => c.script_percent_scale_down,
+            MathVariantStyle::ScriptScript => c.script_script_percent_scale_down,
+        }
+    }
+
+    /// Transition for fraction numerator (TeX Rule 15b): D -> T, T -> S, S/SS -> SS (preserves cramped).
+    #[inline]
+    pub fn for_numerator(&self) -> Self {
+        Self {
+            style: match self.style {
+                MathVariantStyle::Display => MathVariantStyle::Text,
+                MathVariantStyle::Text => MathVariantStyle::Script,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+            },
+            cramped: self.cramped,
+        }
+    }
+
+    /// Transition for fraction denominator (TeX Rule 15b): D -> T', T -> S', S/SS -> SS' (always cramped).
+    #[inline]
+    pub fn for_denominator(&self) -> Self {
+        Self {
+            style: match self.style {
+                MathVariantStyle::Display => MathVariantStyle::Text,
+                MathVariantStyle::Text => MathVariantStyle::Script,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+            },
+            cramped: true,
+        }
+    }
+
+    /// Transition for superscript (TeX Rule 18a): D, T -> S; S, SS -> SS (preserves cramped).
+    #[inline]
+    pub fn for_superscript(&self) -> Self {
+        Self {
+            style: match self.style {
+                MathVariantStyle::Display | MathVariantStyle::Text => MathVariantStyle::Script,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+            },
+            cramped: self.cramped,
+        }
+    }
+
+    /// Transition for subscript (TeX Rule 18b): D, T -> S'; S, SS -> SS' (always cramped).
+    #[inline]
+    pub fn for_subscript(&self) -> Self {
+        Self {
+            style: match self.style {
+                MathVariantStyle::Display | MathVariantStyle::Text => MathVariantStyle::Script,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+            },
+            cramped: true,
+        }
+    }
+
+    /// Transition for radicand under a square root or n-th root (TeX Rule 11): same style, cramped = true.
+    #[inline]
+    pub fn for_radicand(&self) -> Self {
+        Self {
+            style: self.style,
+            cramped: true,
+        }
+    }
+
+    /// Transition for root index (deg in \sqrt[n]{x}): SS' (cramped ScriptScript).
+    #[inline]
+    pub fn for_root_index(&self) -> Self {
+        Self {
+            style: MathVariantStyle::ScriptScript,
+            cramped: true,
+        }
+    }
+
+    /// Transition for limits over/under big operators: cramped Script/ScriptScript.
+    #[inline]
+    pub fn for_limits(&self) -> Self {
+        Self {
+            style: match self.style {
+                MathVariantStyle::Display | MathVariantStyle::Text => MathVariantStyle::Script,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+            },
+            cramped: true,
+        }
+    }
+}
 
 /// A run item together with its TeX class, used while spacing a row.
 struct Atom {
@@ -94,46 +228,50 @@ impl Layout {
 
     // ── tree walk ────────────────────────────────────────────────────────────
 
-    pub(super) fn node(&mut self, n: &MathNode, em: f32, script: bool) -> Result<LBox> {
+    pub(super) fn node(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
         if self.depth >= MAX_DEPTH {
             return Err(Error::TooDeep);
         }
         self.depth += 1;
-        let r = self.node_inner(n, em, script);
+        let r = self.node_inner(n, em, ctx);
         self.depth -= 1;
         r
     }
 
-    pub(super) fn node_inner(&mut self, n: &MathNode, em: f32, script: bool) -> Result<LBox> {
+    pub(super) fn node_inner(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
         let k = &n.children;
         match n.tag.as_str() {
-            "mi" | "mn" | "mo" | "mtext" => self.row(std::slice::from_ref(n), em, script),
-            "mfrac" => self.frac(n, em, script),
+            "mi" | "mn" | "mo" | "mtext" => self.row(std::slice::from_ref(n), em, ctx),
+            "mfrac" => self.frac(n, em, ctx),
             "msqrt" => {
-                let c = self.row(k, em, script)?;
+                let c = self.row(k, em, ctx.for_radicand())?;
                 Ok(self.radical(&c, None, em))
             }
             "mroot" => {
                 let c = match k.first() {
-                    Some(b) => self.node(b, em, script)?,
+                    Some(b) => self.node(b, em, ctx.for_radicand())?,
                     None => LBox::default(),
                 };
                 let d = match k.get(1) {
-                    Some(d) => Some(self.node(d, em * SCRIPT, true)?),
+                    Some(d) => {
+                        let deg_ctx = ctx.for_root_index();
+                        let deg_em = em * deg_ctx.scale(self.f.constants());
+                        Some(self.node(d, deg_em, deg_ctx)?)
+                    }
                     None => None,
                 };
                 Ok(self.radical(&c, d.as_ref(), em))
             }
-            "msub" | "msup" | "msubsup" => self.scripts(n, em, script),
-            "mmultiscripts" => self.prescripts(n, em, script),
-            "munder" | "mover" | "munderover" => self.under_over(n, em, script),
-            "mtable" => self.table(n, em, script),
+            "msub" | "msup" | "msubsup" => self.scripts(n, em, ctx),
+            "mmultiscripts" => self.prescripts(n, em, ctx),
+            "munder" | "mover" | "munderover" => self.under_over(n, em, ctx),
+            "mtable" => self.table(n, em, ctx),
             "mphantom" => {
-                let mut b = self.row(k, em, script)?;
+                let mut b = self.row(k, em, ctx)?;
                 b.items.clear();
                 Ok(b)
             }
-            _ => self.row(k, em, script),
+            _ => self.row(k, em, ctx),
         }
     }
 }
@@ -146,6 +284,6 @@ pub(crate) fn layout_math(math: &MathNode, font_pt: f32) -> Result<(LBox, f32)> 
         [only] if only.tag == "mrow" => &only.children,
         all => all,
     };
-    let b = l.row(kids, em, false)?;
+    let b = l.row(kids, em, MathContext::DISPLAY)?;
     Ok((b, em))
 }
