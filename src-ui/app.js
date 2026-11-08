@@ -6,7 +6,7 @@
 
   // State
   let activeSessionId = null;
-  let activeTargetMode = 'omml';
+  let activeTargetMode = 'mathtype';
   let isModified = false;
   const BRIDGE_URL = 'http://127.0.0.1:17890';
 
@@ -187,6 +187,15 @@
 
   // Window close interception logic
   async function handleCloseRequested() {
+    if (activeSessionId) {
+      try {
+        await fetch(`${BRIDGE_URL}/session/${activeSessionId}/cancel`, {
+          method: "POST"
+        });
+      } catch (_) {}
+      activeSessionId = null;
+    }
+    isModified = false;
     await hideAppWindow();
   }
 
@@ -737,7 +746,7 @@
           })
         });
         if (res.ok) {
-          showNotice(btnInsertUpdate, 'Saved to Document!');
+          showNotice(btnInsertUpdate, 'Saved!');
           isModified = false;
           activeSessionId = null;
           await hideAppWindow();
@@ -748,7 +757,7 @@
       }
     }
 
-    showNotice(btnInsertUpdate, 'Equation Ready!');
+    showNotice(btnInsertUpdate, 'Saved!');
     isModified = false;
   }
 

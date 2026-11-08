@@ -455,7 +455,7 @@ fn handle_http_request(
             let sid = show_req
                 .session_id
                 .filter(|s| !s.is_empty())
-                .or_else(|| session_mgr.get_latest_session_id())
+                // do not revive stale session
                 .unwrap_or_default();
 
             let (m, l) = if !sid.is_empty() {
@@ -537,6 +537,7 @@ fn handle_http_request(
             };
 
             let trimmed_data = open_req.data.trim();
+            log::info!("POST /session/open received payload len={}", trimmed_data.len());
             let is_latex = open_req.format == "latex"
                 || trimmed_data.starts_with('$')
                 || trimmed_data.starts_with('\\')

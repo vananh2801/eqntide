@@ -180,16 +180,22 @@ fn main() {
     let window_cb: omml_converter::WindowCallback = Arc::new(move |session_id, mathml, latex| {
         let lock = app_handle_cb.lock().unwrap();
         if let Some(ref app) = *lock {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-                let _ = window.emit("open-session", serde_json::json!({
-                    "session_id": session_id,
-                    "mathml": mathml,
-                    "latex": latex
-                }));
-            }
+            let app_clone = app.clone();
+            let sid = session_id.to_string();
+            let m = mathml.map(|s| s.to_string());
+            let l = latex.map(|s| s.to_string());
+            let _ = app.run_on_main_thread(move || {
+                if let Some(window) = app_clone.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                    let _ = window.emit("open-session", serde_json::json!({
+                        "session_id": sid,
+                        "mathml": m,
+                        "latex": l
+                    }));
+                }
+            });
         }
     });
 

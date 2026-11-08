@@ -15,9 +15,11 @@ function ensureBridgeRunning(callback) {
           if (s === 200) {
             clearInterval(poll);
             callback();
-          } else if (attempts >= 12) {
+          } else if (attempts >= 10) {
             clearInterval(poll);
-            alert("Could not connect to Math Editor Bridge (127.0.0.1:17890).\n\nPlease check that Math Editor is installed and running.");
+            setTimeout(function () {
+              alert("Math Editor is currently not running.\n\nPlease launch Math Editor from your application menu, then try again.");
+            }, 50);
           }
         });
       }, 500);
@@ -31,6 +33,27 @@ function ensureBridgeRunning(callback) {
 
 var BRIDGE_URL = "http://127.0.0.1:17890";
 var g_ribbonUI = null;
+var g_currentSessionId = null;
+var g_currentWaitXhr = null;
+
+/**
+ * Cancel any ongoing session wait requests to prevent hangs or race conditions.
+ */
+function cancelPendingSession() {
+  if (g_currentWaitXhr) {
+    try {
+      g_currentWaitXhr.abort();
+    } catch (_) {}
+    g_currentWaitXhr = null;
+  }
+  if (g_currentSessionId) {
+    var sid = g_currentSessionId;
+    g_currentSessionId = null;
+    try {
+      ajaxPost(BRIDGE_URL + "/session/" + sid + "/cancel", "{}", function () {});
+    } catch (_) {}
+  }
+}
 
 /**
  * Called when WPS loads the add-in
@@ -48,28 +71,33 @@ function GetImage(control) {
 }
 
 /**
- * Main Ribbon Action Dispatcher
+ * Main Ribbon Action Dispatcher.
+ * Uses setTimeout(..., 0) so the ribbon callback returns immediately to WPS,
+ * preventing ribbon dispatcher deadlocks or freezes on Linux.
  */
 function OnAction(control) {
-  switch (control.Id) {
-    case "btnInsertEquation":
-      InsertEquation();
-      break;
-    case "btnEditEquation":
-      EditEquation();
-      break;
-    case "btnToggleLatex":
-      ToggleLatex();
-      break;
-    case "btnUpgradeLegacy":
-      UpgradeLegacyEquations();
-      break;
-    case "btnBatchConverter":
-      OpenBatchConverter();
-      break;
-    default:
-      console.warn("Unknown control action:", control.Id);
-  }
+  var controlId = control.Id;
+  setTimeout(function () {
+    switch (controlId) {
+      case "btnInsertEquation":
+        InsertEquation();
+        break;
+      case "btnEditEquation":
+        EditEquation();
+        break;
+      case "btnToggleLatex":
+        ToggleLatex();
+        break;
+      case "btnUpgradeLegacy":
+        UpgradeLegacyEquations();
+        break;
+      case "btnBatchConverter":
+        OpenBatchConverter();
+        break;
+      default:
+        console.warn("Unknown control action:", controlId);
+    }
+  }, 0);
 }
 
 /**
@@ -77,18 +105,20 @@ function OnAction(control) {
  * Opens a new session in desktop editor and inserts the resulting Flat OPC XML.
  */
 function InsertEquation() {
+  cancelPendingSession();
   ensureBridgeRunning(function () {
     ajaxPost(
       BRIDGE_URL + "/session/open",
-      JSON.stringify({ data: "", format: "auto", target_mode: "omml" }),
+      JSON.stringify({ data: "", format: "auto", target_mode: "mathtype" }),
       function (status, responseText) {
         if (status !== 200) {
-          alert("Bridge error (" + status + "): " + responseText);
+          console.error("Bridge error (" + status + "): " + responseText);
           return;
         }
 
         var res = JSON.parse(responseText);
         var sessionId = res.session_id;
+        g_currentSessionId = sessionId;
 
         // Launch desktop popup editor
         LaunchDesktopEditor(sessionId);
@@ -106,55 +136,91 @@ function InsertEquation() {
 
 /**
  * 2. Edit Equation:
- * Extracts selected equation XML or text from WPS Selection and opens it in editor.
+ * Extracts selected equation from WPS Selection and opens it in editor.
+ * If no equation is selected, gracefully opens a clean new equation canvas
+ * instead of popping up an error or freezing the ribbon.
  */
 function EditEquation() {
   try {
     var app = wps.Application;
-    var selection = app.Selection;
+    var selection = app ? app.Selection : null;
     if (!selection) {
-      alert("Please select an equation to edit.");
+      InsertEquation();
       return;
     }
 
     var selData = "";
+    var hasEquation = false;
     var targetRange = null;
 
     // 1. Check for OMML equation under cursor or in selection
     try {
       if (selection.OMaths && selection.OMaths.Count > 0) {
         targetRange = selection.OMaths.Item(1).Range;
+        hasEquation = true;
       }
     } catch (_) {}
 
-    if (!targetRange) {
+    if (!hasEquation) {
       try {
         if (selection.Range && selection.Range.OMaths && selection.Range.OMaths.Count > 0) {
           targetRange = selection.Range.OMaths.Item(1).Range;
+          hasEquation = true;
         }
       } catch (_) {}
     }
 
     // 2. Check for MathType OLE / EMF inline shape
-    if (!targetRange) {
+    if (!hasEquation) {
       try {
         if (selection.InlineShapes && selection.InlineShapes.Count > 0) {
           targetRange = selection.InlineShapes.Item(1).Range;
+          hasEquation = true;
         }
       } catch (_) {}
     }
 
-    if (!targetRange) {
+    if (!hasEquation) {
       try {
         if (selection.Range && selection.Range.InlineShapes && selection.Range.InlineShapes.Count > 0) {
           targetRange = selection.Range.InlineShapes.Item(1).Range;
+          hasEquation = true;
         }
       } catch (_) {}
     }
 
-    // 3. Fallback to active selection range
-    if (!targetRange) {
-      targetRange = selection.Range;
+    // 3. Check for floating ShapeRange
+    if (!hasEquation) {
+      try {
+        if (selection.ShapeRange && selection.ShapeRange.Count > 0) {
+          targetRange = selection.ShapeRange.Item(1).Anchor;
+          hasEquation = true;
+        }
+      } catch (_) {}
+    }
+
+    // 4. Check if selection text is LaTeX formula ($...$, \[...\], \begin{...}, \frac, etc.)
+    if (!hasEquation) {
+      try {
+        var rawText = (selection.Text || "").trim();
+        if (
+          (rawText.startsWith("$") && rawText.endsWith("$")) ||
+          (rawText.startsWith("\\[") && rawText.endsWith("\\]")) ||
+          rawText.includes("\\frac") ||
+          rawText.includes("\\sqrt") ||
+          rawText.startsWith("\\begin")
+        ) {
+          selData = rawText;
+          hasEquation = true;
+        }
+      } catch (_) {}
+    }
+
+    // If no equation was detected at selection:
+    // Graceful fallback: Open editor as a new equation canvas instead of failing with an alert!
+    if (!hasEquation) {
+      InsertEquation();
+      return;
     }
 
     // Expand selection to fully encapsulate the equation if found
@@ -164,33 +230,29 @@ function EditEquation() {
       } catch (_) {}
     }
 
-    // 4. Try extracting WordOpenXML (Flat OPC)
-    try {
-      if (targetRange && targetRange.WordOpenXML) {
-        selData = targetRange.WordOpenXML;
+    // Extract WordOpenXML if not already LaTeX
+    if (!selData) {
+      try {
+        if (selection.WordOpenXML) {
+          selData = selection.WordOpenXML;
+        }
+      } catch (_) {}
+      if (!selData) {
+        try {
+          if (targetRange && targetRange.WordOpenXML) {
+            selData = targetRange.WordOpenXML;
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
-
-    if (!selData) {
-      try {
-        if (selection.Range && selection.Range.WordOpenXML) {
-          selData = selection.Range.WordOpenXML;
-        }
-      } catch (_) {}
+      if (!selData) {
+        try {
+          if (selection.Range && selection.Range.WordOpenXML) {
+            selData = selection.Range.WordOpenXML;
+          }
+        } catch (_) {}
+      }
     }
 
-    // 5. Try extracting XML property
-    if (!selData) {
-      try {
-        if (targetRange && typeof targetRange.XML === "string") {
-          selData = targetRange.XML;
-        } else if (targetRange && typeof targetRange.XML === "function") {
-          selData = targetRange.XML(true);
-        }
-      } catch (_) {}
-    }
-
-    // 6. Try extracting Text property
     if (!selData) {
       try {
         if (targetRange && targetRange.Text) {
@@ -202,9 +264,11 @@ function EditEquation() {
     }
 
     if (!selData || selData.trim().length === 0) {
-      alert("No equation detected at current selection.\n\nPlease click inside an equation or select it before clicking \x27Edit Equation\x27.");
+      InsertEquation();
       return;
     }
+
+    cancelPendingSession();
 
     ensureBridgeRunning(function () {
       ajaxPost(
@@ -212,16 +276,17 @@ function EditEquation() {
         JSON.stringify({
           data: selData,
           format: "auto",
-          target_mode: "omml"
+          target_mode: "mathtype"
         }),
         function (status, responseText) {
           if (status !== 200) {
-            alert("Bridge error (" + status + "): " + responseText);
+            console.error("Bridge error (" + status + "): " + responseText);
             return;
           }
 
           var res = JSON.parse(responseText);
           var sessionId = res.session_id;
+          g_currentSessionId = sessionId;
 
           LaunchDesktopEditor(sessionId);
 
@@ -234,7 +299,8 @@ function EditEquation() {
       );
     });
   } catch (err) {
-    alert("Error reading equation from selection: " + err);
+    console.error("Error reading equation from selection:", err);
+    InsertEquation();
   }
 }
 
@@ -276,7 +342,7 @@ function ToggleLatex() {
             var conv = JSON.parse(responseText);
             InsertFlatOpcToSelection(conv.result);
           } else {
-            alert("LaTeX conversion failed.");
+            console.error("LaTeX conversion failed.");
           }
         }
       );
@@ -456,7 +522,14 @@ function LaunchDesktopEditor(param) {
  * Helper: Long-poll wait for session result
  */
 function WaitSession(sessionId, callback) {
-  ajaxGet(BRIDGE_URL + "/session/" + sessionId + "/wait?timeout=300", function (status, responseText) {
+  g_currentSessionId = sessionId;
+  if (g_currentWaitXhr) {
+    try {
+      g_currentWaitXhr.abort();
+    } catch (_) {}
+  }
+  g_currentWaitXhr = ajaxGet(BRIDGE_URL + "/session/" + sessionId + "/wait?timeout=300", function (status, responseText) {
+    g_currentWaitXhr = null;
     if (status === 200) {
       try {
         var json = JSON.parse(responseText);
@@ -480,6 +553,7 @@ function ajaxGet(url, callback) {
     }
   };
   xhr.send();
+  return xhr;
 }
 
 /**
@@ -495,4 +569,5 @@ function ajaxPost(url, payload, callback) {
     }
   };
   xhr.send(payload);
+  return xhr;
 }

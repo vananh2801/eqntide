@@ -364,7 +364,7 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
             }
         }
 
-        let norm_name = normalize_part_name(name);
+        let norm_name = normalize_part_name(name).to_ascii_lowercase();
         parts.insert(
             norm_name,
             PartData {
@@ -375,29 +375,39 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
         );
     }
 
-    // Attempt 1: Document XML traversal
-    if let Some(doc_part) = parts.get("word/document.xml") {
+    // Attempt 1: Document XML traversal (completely case-insensitive)
+    let doc_part = parts.get("word/document.xml").or_else(|| {
+        parts.iter().find(|(k, _)| k.ends_with("word/document.xml") || k.ends_with("/document.xml")).map(|(_, v)| v)
+    });
+    if let Some(doc_part) = doc_part {
         if let Some(ref doc_el) = doc_part.xml_data {
             // Build rel_map from word/_rels/document.xml.rels
-            let rel_map = parts
-                .get("word/_rels/document.xml.rels")
+            let rels_part = parts.get("word/_rels/document.xml.rels").or_else(|| {
+                parts.iter().find(|(k, _)| k.ends_with("document.xml.rels")).map(|(_, v)| v)
+            });
+            let rel_map = rels_part
                 .and_then(|p| p.xml_data.as_ref())
                 .map(|rels| build_rel_map(rels, "word/document.xml"))
                 .unwrap_or_default();
 
             // 1a. MathType OLE object in document.xml
-            let ole_nodes = find_mathtype_ole_in_subtree(doc_el);
-            for ole in ole_nodes {
-                let rid = ole
-                    .attr(Some(NS_R), "id")
-                    .or_else(|| ole.attr(None, "id"));
-                if let Some(rid) = rid {
-                    if let Some(target) = rel_map.get(rid) {
-                        let norm_target = normalize_part_name(target);
-                        if let Some(target_part) = parts.get(&norm_target) {
-                            if let Some(ref bin) = target_part.binary_data {
-                                if let Some(math) = ole_to_mathml(bin) {
-                                    return Ok(math);
+            for el in doc_el.iter() {
+                let is_candidate = el.is(NS_O, "OLEObject")
+                    || el.local == "OLEObject"
+                    || el.is(NS_W, "object")
+                    || el.local == "object";
+                if is_candidate {
+                    let rid = el
+                        .attr(Some(NS_R), "id")
+                        .or_else(|| el.attr(None, "id"));
+                    if let Some(rid) = rid {
+                        if let Some(target) = rel_map.get(rid) {
+                            let norm_target = normalize_part_name(target).to_ascii_lowercase();
+                            if let Some(target_part) = parts.get(&norm_target) {
+                                if let Some(ref bin) = target_part.binary_data {
+                                    if let Some(math) = ole_to_mathml(bin) {
+                                        return Ok(math);
+                                    }
                                 }
                             }
                         }
@@ -418,7 +428,7 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
             let img_rids = collect_imagedata_rids(doc_el);
             for rid in img_rids {
                 if let Some(target) = rel_map.get(&rid) {
-                    let norm_target = normalize_part_name(target);
+                    let norm_target = normalize_part_name(target).to_ascii_lowercase();
                     if let Some(target_part) = parts.get(&norm_target) {
                         if let Some(ref data) = target_part.binary_data {
                             if let Some(mtef) = extract_mtef_from_emf(data)
@@ -435,26 +445,37 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
         }
     }
 
-    // Attempt 2: Search any other binary or XML parts in the package
+    // Attempt 2: Search any other binary or XML parts in the package (case-insensitive & robust)
     for (name, part) in &parts {
+        let name_lower = name.to_ascii_lowercase();
+        let ct_lower = part.content_type.to_ascii_lowercase();
         if let Some(ref bin) = part.binary_data {
-            if name.contains("oleObject") || name.ends_with(".bin") {
+            if name_lower.contains("oleobject") || name_lower.ends_with(".bin") || ct_lower.contains("oleobject") {
                 if let Some(math) = ole_to_mathml(bin) {
                     return Ok(math);
                 }
             }
-            if name.ends_with(".emf") {
+            if name_lower.ends_with(".emf") || ct_lower.contains("emf") {
                 if let Some(mtef) = extract_mtef_from_emf(bin) {
                     if let Some(math) = mtef_to_mathml(&mtef) {
                         return Ok(math);
                     }
                 }
             }
-            if name.ends_with(".wmf") {
+            if name_lower.ends_with(".wmf") || ct_lower.contains("wmf") {
                 if let Some(mtef) = extract_mtef_from_wmf(bin) {
                     if let Some(math) = mtef_to_mathml(&mtef) {
                         return Ok(math);
                     }
+                }
+            }
+            // Universal fallback for any binary part
+            if let Some(math) = ole_to_mathml(bin) {
+                return Ok(math);
+            }
+            if let Some(mtef) = extract_mtef_from_emf(bin).or_else(|| extract_mtef_from_wmf(bin)) {
+                if let Some(math) = mtef_to_mathml(&mtef) {
+                    return Ok(math);
                 }
             }
         }
@@ -478,6 +499,7 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
 }
 
 fn extract_from_raw_snippet(root: &Element) -> Result<MathNode> {
+    // 1. Direct <m:oMath>
     for el in root.iter() {
         if el.is(NS_M, "oMath") || el.local == "oMath" {
             if let Ok(math) = omml_to_mathml(el) {
@@ -486,8 +508,49 @@ fn extract_from_raw_snippet(root: &Element) -> Result<MathNode> {
         }
     }
 
+    // 2. Base64 embedded binary data (<w:binData>, <pkg:binaryData>, etc.)
+    for el in root.iter() {
+        if el.local == "binData" || el.local == "binaryData" {
+            let text = all_text(el);
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                if let Some(bin) = base64_decode(trimmed) {
+                    if let Some(math) = ole_to_mathml(&bin) {
+                        return Ok(math);
+                    }
+                    if let Some(mtef) = extract_mtef_from_emf(&bin).or_else(|| extract_mtef_from_wmf(&bin)) {
+                        if let Some(math) = mtef_to_mathml(&mtef) {
+                            return Ok(math);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Scan all large text nodes for base64 MTEF / OLE payload
+    for el in root.iter() {
+        for child in &el.children {
+            if let Node::Text(ref text) = child {
+                let trimmed = text.trim();
+                if trimmed.len() > 100 {
+                    if let Some(bin) = base64_decode(trimmed) {
+                        if let Some(math) = ole_to_mathml(&bin) {
+                            return Ok(math);
+                        }
+                        if let Some(mtef) = extract_mtef_from_emf(&bin).or_else(|| extract_mtef_from_wmf(&bin)) {
+                            if let Some(math) = mtef_to_mathml(&mtef) {
+                                return Ok(math);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Err(Error::Xml(
-        "no math equation (<m:oMath>) found in XML snippet".into(),
+        "no math equation (<m:oMath> or embedded MTEF) found in XML snippet".into(),
     ))
 }
 
