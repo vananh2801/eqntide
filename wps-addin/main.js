@@ -201,11 +201,12 @@ function UpgradeLegacyEquations() {
       var confirmMsg = "Document is saved at:\n" + filePath + "\n\nDo you want to run instant Rust batch conversion directly on this file?";
       if (confirm(confirmMsg)) {
         doc.Save();
+        var upgradeTarget = confirm("Click [OK] to upgrade to Modern MathType 7 (OLE DSMT4 + EMF-MTEF).\n\nClick [Cancel] to upgrade to Modern Native OMML (<m:oMath>).") ? "upgrade_mathtype" : "upgrade_omml";
         ajaxPost(
           BRIDGE_URL + "/convert/document",
           JSON.stringify({
             input_path: filePath,
-            target: "upgrade_omml"
+            target: upgradeTarget
           }),
           function (status, responseText) {
             if (status === 200) {

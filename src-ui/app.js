@@ -121,12 +121,8 @@
   }
 
   // Window close interception logic
-  function handleCloseRequested() {
-    if (isModified) {
-      closeModal.classList.remove('hidden');
-    } else {
-      hideAppWindow();
-    }
+  async function handleCloseRequested() {
+    await hideAppWindow();
   }
 
   // Listen to Tauri single instance, close interception, or batch tab events
@@ -636,6 +632,21 @@
     const mathml = getStandardMathML();
     const latex = mathField && mathField.getValue ? mathField.getValue('latex') : latexSource.value;
     const fontSize = parseFloat(fontSizeInput.value) || 12.0;
+
+    if (!activeSessionId) {
+      try {
+        const latestRes = await fetch(`${BRIDGE_URL}/session/latest`);
+        if (latestRes.ok) {
+          const latestJson = await latestRes.json();
+          if (latestJson.session_id) {
+            activeSessionId = latestJson.session_id;
+            console.log("Auto-attached to latest active bridge session:", activeSessionId);
+          }
+        }
+      } catch (e) {
+        console.warn("Could not check latest bridge session:", e);
+      }
+    }
 
     if (activeSessionId) {
       try {

@@ -432,6 +432,19 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
             }
         }
 
+        (Method::Get, "/session/latest") => {
+            let active = session_mgr.get_latest_session_id();
+            let resp = json_response(
+                200,
+                &serde_json::json!({
+                    "status": "ok",
+                    "session_id": active
+                }),
+                origin,
+            );
+            let _ = req.respond(resp);
+        }
+
         (Method::Post, "/session/open") => {
             let body = read_body(&mut req);
             let open_req: SessionOpenRequest = match serde_json::from_str(&body) {

@@ -48,6 +48,22 @@ impl SessionManager {
         }
     }
 
+    /// Retrieve the most recently created waiting session ID, if any.
+    pub fn get_latest_session_id(&self) -> Option<String> {
+        let lock = self.sessions.lock().unwrap();
+        let mut latest: Option<(String, Instant)> = None;
+        for (id, entry) in lock.iter() {
+            if let Ok(data) = entry.data.lock() {
+                if matches!(data.state, SessionState::Waiting) {
+                    if latest.as_ref().map_or(true, |(_, t)| data.created_at > *t) {
+                        latest = Some((id.clone(), data.created_at));
+                    }
+                }
+            }
+        }
+        latest.map(|(id, _)| id)
+    }
+
     /// Register a new session with initial MathML and optional LaTeX.
     pub fn create_session(&self, initial_mathml: String, initial_latex: Option<String>) -> String {
         let id = uuid::Uuid::new_v4().to_string();
