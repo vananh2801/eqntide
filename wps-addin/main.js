@@ -93,18 +93,92 @@ function EditEquation() {
     }
 
     var selData = "";
+    var targetRange = null;
+
+    // 1. Check for OMML equation under cursor or in selection
     try {
-      if (selection.Range && selection.Range.WordOpenXML) {
-        selData = selection.Range.WordOpenXML;
+      if (selection.OMaths && selection.OMaths.Count > 0) {
+        targetRange = selection.OMaths.Item(1).Range;
+      }
+    } catch (_) {}
+
+    if (!targetRange) {
+      try {
+        if (selection.Range && selection.Range.OMaths && selection.Range.OMaths.Count > 0) {
+          targetRange = selection.Range.OMaths.Item(1).Range;
+        }
+      } catch (_) {}
+    }
+
+    // 2. Check for MathType OLE / EMF inline shape
+    if (!targetRange) {
+      try {
+        if (selection.InlineShapes && selection.InlineShapes.Count > 0) {
+          targetRange = selection.InlineShapes.Item(1).Range;
+        }
+      } catch (_) {}
+    }
+
+    if (!targetRange) {
+      try {
+        if (selection.Range && selection.Range.InlineShapes && selection.Range.InlineShapes.Count > 0) {
+          targetRange = selection.Range.InlineShapes.Item(1).Range;
+        }
+      } catch (_) {}
+    }
+
+    // 3. Fallback to active selection range
+    if (!targetRange) {
+      targetRange = selection.Range;
+    }
+
+    // Expand selection to fully encapsulate the equation if found
+    if (targetRange && typeof targetRange.Select === "function") {
+      try {
+        targetRange.Select();
+      } catch (_) {}
+    }
+
+    // 4. Try extracting WordOpenXML (Flat OPC)
+    try {
+      if (targetRange && targetRange.WordOpenXML) {
+        selData = targetRange.WordOpenXML;
       }
     } catch (_) {}
 
     if (!selData) {
       try {
-        if (selection.Text) {
+        if (selection.Range && selection.Range.WordOpenXML) {
+          selData = selection.Range.WordOpenXML;
+        }
+      } catch (_) {}
+    }
+
+    // 5. Try extracting XML property
+    if (!selData) {
+      try {
+        if (targetRange && typeof targetRange.XML === "string") {
+          selData = targetRange.XML;
+        } else if (targetRange && typeof targetRange.XML === "function") {
+          selData = targetRange.XML(true);
+        }
+      } catch (_) {}
+    }
+
+    // 6. Try extracting Text property
+    if (!selData) {
+      try {
+        if (targetRange && targetRange.Text) {
+          selData = targetRange.Text;
+        } else if (selection.Text) {
           selData = selection.Text;
         }
       } catch (_) {}
+    }
+
+    if (!selData || selData.trim().length === 0) {
+      alert("No equation detected at current selection.\n\nPlease click inside an equation or select it before clicking \x27Edit Equation\x27.");
+      return;
     }
 
     ajaxPost(

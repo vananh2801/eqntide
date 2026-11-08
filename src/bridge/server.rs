@@ -536,22 +536,26 @@ fn handle_http_request(
                 }
             };
 
-            let mathml = if open_req.data.trim().is_empty() {
-                String::new()
+            let trimmed_data = open_req.data.trim();
+            let is_latex = open_req.format == "latex"
+                || trimmed_data.starts_with('$')
+                || trimmed_data.starts_with('\\')
+                || trimmed_data.contains("\\frac")
+                || trimmed_data.contains("\\sqrt");
+
+            let (mathml, latex) = if is_latex {
+                let clean = trimmed_data.trim_matches('$').trim().to_string();
+                (String::new(), Some(clean))
+            } else if trimmed_data.is_empty() {
+                (String::new(), None)
             } else {
-                match decode_input_to_mathml(&open_req.data, &open_req.format) {
-                    Ok(m) => m.to_xml(),
+                match decode_input_to_mathml(trimmed_data, &open_req.format) {
+                    Ok(m) => (m.to_xml(), None),
                     Err(e) => {
                         log::warn!("Could not parse equation data in /session/open ({e}), opening session as empty canvas");
-                        String::new()
+                        (String::new(), None)
                     }
                 }
-            };
-
-            let latex = if open_req.format == "latex" {
-                Some(open_req.data.clone())
-            } else {
-                None
             };
 
             let session_id = session_mgr.create_session(mathml.clone(), latex.clone());
@@ -971,7 +975,12 @@ fn decode_input_to_mathml(data: &str, format: &str) -> crate::error::Result<Math
         return flat_opc_to_mathml(trimmed);
     }
 
-    if format == "omml" || trimmed.contains("<m:oMath") || trimmed.contains("<w:p") {
+    if format == "omml"
+        || trimmed.contains("<m:oMath")
+        || trimmed.contains("<w:p")
+        || trimmed.contains("<w:wordDocument")
+        || trimmed.contains("<m:oMathPara")
+    {
         return flat_opc_to_mathml(trimmed);
     }
 

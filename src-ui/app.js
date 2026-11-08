@@ -127,10 +127,22 @@
           }
         } else if (data.mathml && data.mathml.trim().length > 0) {
           if (mathField && typeof mathField.setValue === "function") {
-            mathField.setValue(data.mathml.trim(), { format: "mathml" });
+            try {
+              mathField.setValue(data.mathml.trim(), { format: "math-ml" });
+            } catch (_) {
+              mathField.setValue(data.mathml.trim(), { format: "mathml" });
+            }
             if (typeof mathField.getValue === "function") {
               latexSource.value = mathField.getValue("latex");
             }
+          }
+        } else {
+          // Fresh/empty session: clear canvas so no stale formula is displayed
+          if (mathField && typeof mathField.setValue === "function") {
+            mathField.setValue("", { format: "latex" });
+          }
+          if (latexSource) {
+            latexSource.value = "";
           }
         }
       }
@@ -444,18 +456,22 @@
 
   // 5. MathML Extraction Helper
   function getStandardMathML() {
+    let mathml = '';
     if (mathField && typeof mathField.getValue === 'function') {
       try {
-        const mathml = mathField.getValue('math-ml');
-        if (mathml && mathml.trim().length > 0) {
-          return mathml;
-        }
+        mathml = (mathField.getValue('math-ml') || '').trim();
       } catch (e) {
         console.warn('MathLive getValue(math-ml) error:', e);
       }
     }
-    const val = (latexSource.value || '').trim();
-    return `<math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><mtext>${escapeXml(val)}</mtext></mrow></math>`;
+    if (!mathml) {
+      const val = (latexSource.value || '').trim();
+      return `<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow><mtext>${escapeXml(val)}</mtext></mrow></math>`;
+    }
+    if (!mathml.startsWith('<math')) {
+      mathml = `<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow>${mathml}</mrow></math>`;
+    }
+    return mathml;
   }
 
   // 6. Check Local Bridge Server Health

@@ -217,7 +217,13 @@ fn build_document_xml(mode: FlatOpcMode, content_element: Element) -> Element {
     }
     let mut body = Element::new(Some(NS_W), Some("w"), "body");
     let mut p = Element::new(Some(NS_W), Some("w"), "p");
-    p.push(content_element);
+    if mode == FlatOpcMode::ModernOmml {
+        let mut omath_para = Element::new(Some(NS_M), Some("m"), "oMathPara");
+        omath_para.push(content_element);
+        p.push(omath_para);
+    } else {
+        p.push(content_element);
+    }
     body.push(p);
     doc.push(body);
     doc
