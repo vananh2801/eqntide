@@ -314,6 +314,7 @@ fn main() {
         .expect("error while building tauri application");
 
     app.run(move |_app_handle, event| {
+        println!("Tauri RunEvent: {:?}", event);
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             if !is_quitting_exit.load(Ordering::SeqCst) {
                 api.prevent_exit();

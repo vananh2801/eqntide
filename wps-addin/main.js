@@ -55,7 +55,11 @@ function InsertEquation() {
     JSON.stringify({ data: "", format: "auto", target_mode: "omml" }),
     function (status, responseText) {
       if (status !== 200) {
-        alert("Could not connect to Math Editor Bridge (127.0.0.1:17890). Please ensure the editor app is running.");
+        if (status === 0) {
+          alert("Could not connect to Math Editor Bridge (127.0.0.1:17890). Please ensure the editor app is running.");
+        } else {
+          alert("Bridge error (" + status + "): " + responseText);
+        }
         return;
       }
 
@@ -77,29 +81,46 @@ function InsertEquation() {
 
 /**
  * 2. Edit Equation:
- * Extracts selected equation XML from WPS Selection and opens it in editor.
+ * Extracts selected equation XML or text from WPS Selection and opens it in editor.
  */
 function EditEquation() {
   try {
     var app = wps.Application;
     var selection = app.Selection;
-    if (!selection || !selection.Range) {
+    if (!selection) {
       alert("Please select an equation to edit.");
       return;
     }
 
-    var selXml = selection.Range.WordOpenXML || "";
+    var selData = "";
+    try {
+      if (selection.Range && selection.Range.WordOpenXML) {
+        selData = selection.Range.WordOpenXML;
+      }
+    } catch (_) {}
+
+    if (!selData) {
+      try {
+        if (selection.Text) {
+          selData = selection.Text;
+        }
+      } catch (_) {}
+    }
 
     ajaxPost(
       BRIDGE_URL + "/session/open",
       JSON.stringify({
-        data: selXml,
-        format: "flat_opc",
+        data: selData,
+        format: "auto",
         target_mode: "omml"
       }),
       function (status, responseText) {
         if (status !== 200) {
-          alert("Could not connect to Math Editor Bridge.");
+          if (status === 0) {
+            alert("Could not connect to Math Editor Bridge (127.0.0.1:17890). Please ensure the editor app is running.");
+          } else {
+            alert("Bridge error (" + status + "): " + responseText);
+          }
           return;
         }
 

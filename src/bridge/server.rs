@@ -542,12 +542,8 @@ fn handle_http_request(
                 match decode_input_to_mathml(&open_req.data, &open_req.format) {
                     Ok(m) => m.to_xml(),
                     Err(e) => {
-                        let _ = req.respond(error_response(
-                            422,
-                            &format!("failed to parse equation data: {e}"),
-                            origin,
-                        ));
-                        return;
+                        log::warn!("Could not parse equation data in /session/open ({e}), opening session as empty canvas");
+                        String::new()
                     }
                 }
             };
