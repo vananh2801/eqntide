@@ -90,24 +90,42 @@
   });
 
   // 3. Bidirectional Sync between MathLive Canvas and LaTeX Source
+  function syncFromMathField() {
+    if (!mathField) return;
+    const latex = (typeof mathField.getValue === "function")
+      ? mathField.getValue("latex")
+      : (mathField.value || mathField.textContent || "");
+    if (latex && latex.trim().length > 0) {
+      latexSource.value = latex.trim();
+    }
+  }
+
+  // Wait for MathLive Web Component custom element upgrade
+  if (window.customElements) {
+    customElements.whenDefined("math-field").then(() => {
+      syncFromMathField();
+    });
+  }
+
+  // Initial sync attempt
   if (mathField) {
-    // Initial sync
-    latexSource.value = mathField.getValue ? mathField.getValue('latex') : mathField.value;
+    syncFromMathField();
 
     // Visual Canvas -> LaTeX Source Sync
-    mathField.addEventListener('input', () => {
-      const latex = mathField.getValue ? mathField.getValue('latex') : mathField.value;
-      if (document.activeElement === mathField) {
-        latexSource.value = latex;
-      }
+    mathField.addEventListener("input", () => {
+      syncFromMathField();
       isModified = true;
     });
 
     // LaTeX Source -> Visual Canvas Sync
-    latexSource.addEventListener('input', () => {
-      const newLatex = latexSource.value.trim().replace(/^\$|\$$/g, '');
-      if (document.activeElement === latexSource && mathField.setValue) {
-        mathField.setValue(newLatex, { format: 'latex' });
+    latexSource.addEventListener("input", () => {
+      const newLatex = latexSource.value.trim().replace(/^\$|\$$/g, "");
+      if (document.activeElement === latexSource && mathField) {
+        if (typeof mathField.setValue === "function") {
+          mathField.setValue(newLatex, { format: "latex" });
+        } else {
+          mathField.value = newLatex;
+        }
       }
       isModified = true;
     });
