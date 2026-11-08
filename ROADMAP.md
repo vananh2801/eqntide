@@ -185,9 +185,9 @@ The goal of this project is to build a modern, open-source, cross-platform equat
 ### Phase 5: WPS Office JS Add-in (Windows, Linux & macOS)
 **Goal:** Deliver the exact same Ribbon UI and equation editing experience inside WPS Office Writer across Windows, Linux, and macOS.
 
-- [ ] **Task 5.1: WPS Add-in Structure (`ribbon.xml`, `main.js`)**
+- [x] **Task 5.1: WPS Add-in Structure (`ribbon.xml`, `main.js`)**
   - Mirror the Word Ribbon buttons (**Insert Equation**, **Edit Equation**, **Toggle LaTeX**, **Convert Legacy ➔ Modern**, **Batch Converter**).
-- [ ] **Task 5.2: WPS Document Selection & Flat OPC Insertion**
+- [x] **Task 5.2: WPS Document Selection & Flat OPC Insertion**
   - Insert/update equations via `wps.Application.Selection.Range.InsertXML(flatOpcPayload)`.
   - Extract selected equation XML from `wps.Application.Selection.Range.WordOpenXML` and pass it to the local Rust bridge.
   - Bonus for WPS on Linux/Windows: Since WPS JS Add-in has access to `wps.Application.ActiveDocument.FullName`, the **Batch Convert** button can optionally save the active document, invoke the Rust engine on the `.docx` path directly (< 1 second), and reload it cleanly.

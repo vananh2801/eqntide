@@ -236,7 +236,8 @@ fn parse_query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// Serve static files for Office Word/WPS Add-ins directly from the bridge server.
-fn serve_word_addin_file(
+fn serve_addin_file(
+    folder: &str,
     rel_path: &str,
     origin: Option<&str>,
 ) -> Option<Response<std::io::Cursor<Vec<u8>>>> {
@@ -245,9 +246,9 @@ fn serve_word_addin_file(
     }
 
     let candidates = [
-        std::path::PathBuf::from("word-addin").join(rel_path),
+        std::path::PathBuf::from(folder).join(rel_path),
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("word-addin")
+            .join(folder)
             .join(rel_path),
     ];
 
@@ -404,7 +405,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
         }
 
         (Method::Get, "/manifest.xml") => {
-            if let Some(resp) = serve_word_addin_file("manifest.xml", origin) {
+            if let Some(resp) = serve_addin_file("word-addin", "manifest.xml", origin) {
                 let _ = req.respond(resp);
             } else {
                 let _ = req.respond(error_response(404, "file not found", origin));
@@ -413,7 +414,16 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
 
         (Method::Get, p) if p.starts_with("/word-addin/") => {
             let rel_path = p.strip_prefix("/word-addin/").unwrap_or("");
-            if let Some(resp) = serve_word_addin_file(rel_path, origin) {
+            if let Some(resp) = serve_addin_file("word-addin", rel_path, origin) {
+                let _ = req.respond(resp);
+            } else {
+                let _ = req.respond(error_response(404, "file not found", origin));
+            }
+        }
+
+        (Method::Get, p) if p.starts_with("/wps-addin/") => {
+            let rel_path = p.strip_prefix("/wps-addin/").unwrap_or("");
+            if let Some(resp) = serve_addin_file("wps-addin", rel_path, origin) {
                 let _ = req.respond(resp);
             } else {
                 let _ = req.respond(error_response(404, "file not found", origin));
@@ -1097,10 +1107,11 @@ mod tests {
     }
 
     #[test]
-    fn test_server_serves_word_addin_files() {
+    fn test_server_serves_addin_files() {
         let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
         let addr = server_handle.addr();
 
+        // 1. Word Add-in files
         let req = format!("GET /word-addin/manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         let resp = send_raw_http(addr, &req);
         assert_eq!(resp.status, 200);
@@ -1118,5 +1129,18 @@ mod tests {
         let resp3 = send_raw_http(addr, &req3);
         assert_eq!(resp3.status, 200);
         assert!(resp3.body.contains("Math Editor"));
+
+        // 2. WPS Add-in files
+        let req_wps = format!("GET /wps-addin/ribbon.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let resp_wps = send_raw_http(addr, &req_wps);
+        assert_eq!(resp_wps.status, 200);
+        assert!(resp_wps.body.contains("TabMathEditor"));
+        assert!(resp_wps.body.contains("btnInsertEquation"));
+
+        let req_wps_js = format!("GET /wps-addin/main.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let resp_wps_js = send_raw_http(addr, &req_wps_js);
+        assert_eq!(resp_wps_js.status, 200);
+        assert!(resp_wps_js.body.contains("InsertEquation"));
+        assert!(resp_wps_js.body.contains("WordOpenXML"));
     }
 }
