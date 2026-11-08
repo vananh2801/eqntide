@@ -214,11 +214,11 @@ The goal of this project is to build a modern, open-source, cross-platform equat
 ### Phase 7: Packaging, Sideloading & CI Compliance
 **Goal:** One-click installers and automated license verification.
 
-- [ ] **Task 7.1: Cross-Platform Installers**
+- [x] **Task 7.1: Cross-Platform Installers**
   - **Windows:** `.msi` / `.exe` (NSIS) — installs Tauri app + registers Word & WPS Add-ins.
   - **macOS:** Universal `.dmg` — installs app + links Word Add-in manifest into `~/Library/Containers/com.microsoft.Word/Data/Documents/wef/`.
   - **Linux:** `.deb`, `.rpm`, `.AppImage` — installs app + registers WPS JS Add-in in `~/.local/share/Kingsoft/wps/jsaddons/`.
-- [ ] **Task 7.2: Automated License & Test Suite in CI**
+- [x] **Task 7.2: Automated License & Test Suite in CI**
   - Unit roundtrip tests for `EMR_COMMENT` MTEF embedding & extraction (`render_emf` ➔ `extract_mtef_from_emf`).
   - Unit roundtrip tests for Flat OPC single-equation packaging (`mathml_to_flat_opc` ➔ `flat_opc_to_mathml`).
   - Run `cargo-deny` in GitHub Actions to enforce strict MIT/Apache-2.0/BSD/OFL-1.1 compliance.
