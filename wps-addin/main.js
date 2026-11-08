@@ -403,20 +403,43 @@ function OpenTaskpane() {
  */
 function LaunchDesktopEditor(param) {
   var sessionId = param === "batch" ? "" : (param || "");
-  // 1. Direct local bridge HTTP call to immediately show & focus desktop window
+  var binPath = "/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/omml-editor-desktop";
+  var uri = "matheditor://open?" + (param === "batch" ? "tab=batch" : "session_id=" + sessionId);
+
+  // 1. Direct local bridge HTTP call to immediately show & focus desktop window (if running)
   ajaxPost(
     BRIDGE_URL + "/window/show",
     JSON.stringify({ session_id: sessionId, tab: param === "batch" ? "batch" : "editor" }),
     function () {}
   );
 
-  // 2. Custom URI fallback (for cold start)
-  var uri = "matheditor://open?" + (param === "batch" ? "tab=batch" : "session_id=" + sessionId);
+  // 2. Cold-start via OAAssist.ShellExecute on Linux
   if (wps.OAAssist && typeof wps.OAAssist.ShellExecute === "function") {
+    try {
+      wps.OAAssist.ShellExecute("xdg-open", uri);
+    } catch (_) {}
+    try {
+      wps.OAAssist.ShellExecute(binPath, uri);
+    } catch (_) {}
     try {
       wps.OAAssist.ShellExecute(uri);
     } catch (_) {}
-  } else {
+  }
+
+  // 3. Anchor click protocol dispatch (triggers OS xdg-mime registered handler)
+  try {
+    var a = document.createElement("a");
+    a.href = uri;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () {
+      try { document.body.removeChild(a); } catch (_) {}
+    }, 1000);
+  } catch (_) {}
+
+  // 4. Iframe fallback
+  try {
     var iframe = document.createElement("iframe");
     iframe.style.display = "none";
     iframe.src = uri;
@@ -426,7 +449,7 @@ function LaunchDesktopEditor(param) {
         document.body.removeChild(iframe);
       } catch (_) {}
     }, 2000);
-  }
+  } catch (_) {}
 }
 
 /**
