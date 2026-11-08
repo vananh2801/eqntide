@@ -143,27 +143,26 @@ impl MathContext {
         }
     }
 
-    /// Transition for fraction numerator (TeX Rule 15b): D -> T, T -> S, S/SS -> SS (preserves cramped).
+    /// Transition for fraction numerator: in MathType/OMML, fraction parts stay at full size
+    /// (Display and Text -> Text, Script -> Script, ScriptScript -> ScriptScript).
     #[inline]
     pub fn for_numerator(&self) -> Self {
         Self {
             style: match self.style {
-                MathVariantStyle::Display => MathVariantStyle::Text,
-                MathVariantStyle::Text => MathVariantStyle::Script,
-                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+                MathVariantStyle::Display | MathVariantStyle::Text => MathVariantStyle::Text,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => self.style,
             },
             cramped: self.cramped,
         }
     }
 
-    /// Transition for fraction denominator (TeX Rule 15b): D -> T', T -> S', S/SS -> SS' (always cramped).
+    /// Transition for fraction denominator: in MathType/OMML, fraction parts stay at full size (always cramped).
     #[inline]
     pub fn for_denominator(&self) -> Self {
         Self {
             style: match self.style {
-                MathVariantStyle::Display => MathVariantStyle::Text,
-                MathVariantStyle::Text => MathVariantStyle::Script,
-                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+                MathVariantStyle::Display | MathVariantStyle::Text => MathVariantStyle::Text,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => self.style,
             },
             cramped: true,
         }

@@ -175,4 +175,30 @@ mod tests {
         // Binomial should have no horizontal rule polygon
         assert!(!b_binom.items.iter().any(|it| matches!(it, Item::Poly(_))));
     }
+
+    #[test]
+    fn test_fraction_parts_full_size_in_text_and_table() {
+        let mut l = Layout { f: fonts(), depth: 0 };
+        let em = 24.0;
+        let frac = MathNode::parse("<math><mfrac><mn>1</mn><mn>2</mn></mfrac></math>").unwrap();
+
+        // In DISPLAY context:
+        let b_disp = l.frac(&frac.children[0], em, MathContext::DISPLAY).unwrap();
+        // In TEXT context (e.g. inside mtable or inline):
+        let b_text = l.frac(&frac.children[0], em, MathContext::TEXT).unwrap();
+
+        let get_em = |b: &LBox| -> f32 {
+            b.items.iter().find_map(|it| match it {
+                Item::Glyph { ch: '1', em, .. } => Some(*em),
+                _ => None,
+            }).unwrap()
+        };
+
+        let em_disp = get_em(&b_disp);
+        let em_text = get_em(&b_text);
+
+        // In MathType / OMML, fraction numerator & denominator stay at full size in both display and text/table!
+        assert_eq!(em_disp, em);
+        assert_eq!(em_text, em);
+    }
 }
