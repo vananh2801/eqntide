@@ -1,3 +1,30 @@
+/**
+ * Ensure desktop app & bridge server is running before executing bridge requests.
+ * Automatically wakes up the app via custom URI if bridge is offline.
+ */
+function ensureBridgeRunning(callback) {
+  ajaxGet(BRIDGE_URL + "/health", function (status) {
+    if (status === 200) {
+      callback();
+    } else {
+      LaunchDesktopEditor("");
+      var attempts = 0;
+      var poll = setInterval(function () {
+        attempts++;
+        ajaxGet(BRIDGE_URL + "/health", function (s) {
+          if (s === 200) {
+            clearInterval(poll);
+            callback();
+          } else if (attempts >= 12) {
+            clearInterval(poll);
+            alert("Could not connect to Math Editor Bridge (127.0.0.1:17890).\n\nPlease check that Math Editor is installed and running.");
+          }
+        });
+      }, 500);
+    }
+  });
+}
+
 // WPS Office JS Add-in: Main Controller & Ribbon Handlers
 // Compatible with WPS Office Writer on Windows, Linux, and macOS
 // Connected to OMML Converter Local Bridge (http://127.0.0.1:17890)
@@ -50,33 +77,31 @@ function OnAction(control) {
  * Opens a new session in desktop editor and inserts the resulting Flat OPC XML.
  */
 function InsertEquation() {
-  ajaxPost(
-    BRIDGE_URL + "/session/open",
-    JSON.stringify({ data: "", format: "auto", target_mode: "omml" }),
-    function (status, responseText) {
-      if (status !== 200) {
-        if (status === 0) {
-          alert("Could not connect to Math Editor Bridge (127.0.0.1:17890). Please ensure the editor app is running.");
-        } else {
+  ensureBridgeRunning(function () {
+    ajaxPost(
+      BRIDGE_URL + "/session/open",
+      JSON.stringify({ data: "", format: "auto", target_mode: "omml" }),
+      function (status, responseText) {
+        if (status !== 200) {
           alert("Bridge error (" + status + "): " + responseText);
+          return;
         }
-        return;
+
+        var res = JSON.parse(responseText);
+        var sessionId = res.session_id;
+
+        // Launch desktop popup editor
+        LaunchDesktopEditor(sessionId);
+
+        // Long-poll wait for user confirmation
+        WaitSession(sessionId, function (waitData) {
+          if (waitData && waitData.status === "ready" && waitData.flat_opc) {
+            InsertFlatOpcToSelection(waitData.flat_opc);
+          }
+        });
       }
-
-      var res = JSON.parse(responseText);
-      var sessionId = res.session_id;
-
-      // Launch desktop popup editor
-      LaunchDesktopEditor(sessionId);
-
-      // Long-poll wait for user confirmation
-      WaitSession(sessionId, function (waitData) {
-        if (waitData && waitData.status === "ready" && waitData.flat_opc) {
-          InsertFlatOpcToSelection(waitData.flat_opc);
-        }
-      });
-    }
-  );
+    );
+  });
 }
 
 /**
@@ -181,35 +206,33 @@ function EditEquation() {
       return;
     }
 
-    ajaxPost(
-      BRIDGE_URL + "/session/open",
-      JSON.stringify({
-        data: selData,
-        format: "auto",
-        target_mode: "omml"
-      }),
-      function (status, responseText) {
-        if (status !== 200) {
-          if (status === 0) {
-            alert("Could not connect to Math Editor Bridge (127.0.0.1:17890). Please ensure the editor app is running.");
-          } else {
+    ensureBridgeRunning(function () {
+      ajaxPost(
+        BRIDGE_URL + "/session/open",
+        JSON.stringify({
+          data: selData,
+          format: "auto",
+          target_mode: "omml"
+        }),
+        function (status, responseText) {
+          if (status !== 200) {
             alert("Bridge error (" + status + "): " + responseText);
+            return;
           }
-          return;
+
+          var res = JSON.parse(responseText);
+          var sessionId = res.session_id;
+
+          LaunchDesktopEditor(sessionId);
+
+          WaitSession(sessionId, function (waitData) {
+            if (waitData && waitData.status === "ready" && waitData.flat_opc) {
+              InsertFlatOpcToSelection(waitData.flat_opc);
+            }
+          });
         }
-
-        var res = JSON.parse(responseText);
-        var sessionId = res.session_id;
-
-        LaunchDesktopEditor(sessionId);
-
-        WaitSession(sessionId, function (waitData) {
-          if (waitData && waitData.status === "ready" && waitData.flat_opc) {
-            InsertFlatOpcToSelection(waitData.flat_opc);
-          }
-        });
-      }
-    );
+      );
+    });
   } catch (err) {
     alert("Error reading equation from selection: " + err);
   }
