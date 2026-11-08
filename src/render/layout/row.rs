@@ -156,6 +156,22 @@ impl Layout {
         for i in 0..n {
             if i > 0 {
                 x += self.spacing(cls[i - 1], cls[i], em);
+
+                // If this atom is a prime mark following a base glyph:
+                let is_prime = atoms[i].b.items.first().map_or(false, |it| match it {
+                    Item::Glyph { ch, .. } => is_prime_char(*ch),
+                    _ => false,
+                });
+                if is_prime {
+                    let last_g = self.last_glyph_of_box(&atoms[i - 1].b);
+                    let (overhang, ic) = last_g.map_or((0.0, 0.0), |(face, ch, gem)| {
+                        let (_, x_max) = self.f.ink_x(face, ch, gem);
+                        let adv = self.f.advance(face, ch, gem);
+                        ((x_max - adv).max(0.0), self.f.italic_correction(face, ch, gem))
+                    });
+                    let clearance = ic.max(overhang);
+                    x += clearance.max(0.04 * em) + 0.03 * em;
+                }
             }
             out.place(&atoms[i].b, x, 0.0);
             x += atoms[i].b.w;

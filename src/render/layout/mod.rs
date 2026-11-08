@@ -44,7 +44,7 @@ use crate::render::PX_PER_PT;
 #[allow(unused_imports)]
 use crate::symbols::{
     class_of, display_char, has_foreign_letters, is_accent, is_bar, is_big_op, is_close,
-    is_function, is_greek_lower, is_greek_upper, is_integral, is_latin_letter, is_open, open_for,
+    is_function, is_greek_lower, is_greek_upper, is_integral, is_latin_letter, is_open, open_for, is_prime_char,
     Class,
 };
 

@@ -155,6 +155,13 @@ impl Layout {
         let sub_glyph = sub.as_ref().and_then(|s| self.first_glyph_of_box(s));
         let sup_glyph = sup.as_ref().and_then(|s| self.first_glyph_of_box(s));
 
+        let overhang = base_glyph.map_or(0.0, |(face, ch, gem)| {
+            let (_, x_max) = self.f.ink_x(face, ch, gem);
+            let adv = self.f.advance(face, ch, gem);
+            (x_max - adv).max(0.0)
+        });
+        let clearance = ic.max(overhang);
+
         // Subscript horizontal placement: tucked in under slanted letters (math_kern or TeX heuristic)
         let sub_kern = match (base_glyph, sub_glyph, sub_y) {
             (Some((b_face, b_ch, _)), Some((s_face, s_ch, _)), Some(sy)) => {
@@ -171,7 +178,7 @@ impl Layout {
         };
         let sub_x = (base.w + 0.02 * em + sub_kern).max(0.0);
 
-        // Superscript horizontal placement: shifted right by italic correction and math kerning
+        // Superscript horizontal placement: shifted right by italic correction/overhang and math kerning
         let sup_kern = match (base_glyph, sup_glyph, sup_y) {
             (Some((b_face, b_ch, _)), Some((s_face, s_ch, _)), Some(py)) => {
                 self.f.math_kern(b_face, b_ch, s_face, s_ch, false, py, em)
@@ -180,10 +187,10 @@ impl Layout {
         };
         let sup_x = if is_prime {
             // Prime mark needs sufficient clearance from the base glyph, especially for
-            // letters like 'y' or 'x' where OpenType italic correction is very small.
-            base.w + ic.max(0.04 * em) + 0.03 * em
+            // letters like 'f' (with large top hook overhang) or 'y'/'x' (with small font ic).
+            base.w + clearance.max(0.04 * em) + 0.03 * em
         } else {
-            base.w + ic + sup_kern + 0.02 * em
+            base.w + clearance + sup_kern + 0.02 * em
         };
 
         let mut b = LBox::default();
@@ -310,6 +317,29 @@ mod tests {
             _ => None,
         }).unwrap();
         assert!(sup_prime_x >= base_y_w + 0.06 * em, "Prime on 'y' should have sufficient clearance, got sup_prime_x = {}, base_y_w = {}", sup_prime_x, base_y_w);
+
+        // Base 'f' with prime: prime mark clears 'f' top hook overhang
+        let node_f_prime = MathNode::parse("<math><msup><mi>f</mi><mo>′</mo></msup></math>").unwrap();
+        let b_f_prime = l.scripts(&node_f_prime.children[0], em, MathContext::DISPLAY).unwrap();
+        let (_, f_xmax) = l.f.ink_x(Face::Variable, 'f', em);
+        let f_prime_x = b_f_prime.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: '′', x, .. } => Some(*x),
+            _ => None,
+        }).unwrap();
+        let (prime_xmin, _) = l.f.ink_x(Face::Symbol, '′', em);
+        assert!(f_prime_x + prime_xmin > f_xmax, "Prime mark must clear 'f' top hook ink: f_prime_x + prime_xmin = {}, f_xmax = {}", f_prime_x + prime_xmin, f_xmax);
+
+        // Row 'f'' directly in mrow clears 'f' top hook overhang
+        let node_row_f_prime = MathNode::parse("<math><mrow><mi>f</mi><mo>′</mo></mrow></math>").unwrap();
+        let (b_row, _) = layout_math(&node_row_f_prime, 12.0).unwrap();
+        let row_prime_x = b_row.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: '′', x, .. } => Some(*x),
+            _ => None,
+        }).unwrap();
+        let em12 = 12.0 * PX_PER_PT;
+        let (_, f_xmax12) = l.f.ink_x(Face::Variable, 'f', em12);
+        let (prime_xmin12, _) = l.f.ink_x(Face::Symbol, '′', em12);
+        assert!(row_prime_x + prime_xmin12 > f_xmax12, "Row prime mark must clear 'f' top hook ink");
     }
 
     #[test]
