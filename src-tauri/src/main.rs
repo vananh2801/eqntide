@@ -212,10 +212,12 @@ fn main() {
 
     let is_quitting = Arc::new(AtomicBool::new(false));
     let is_quitting_clone = Arc::clone(&is_quitting);
+    let is_quitting_setup = Arc::clone(&is_quitting);
+    let is_quitting_exit = Arc::clone(&is_quitting);
 
     let app_handle_setup = Arc::clone(&app_handle_state);
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -238,7 +240,7 @@ fn main() {
                 .tooltip("Math Equation Editor & Converter (Word/WPS)")
                 .show_menu_on_left_click(false)
                 .on_menu_event({
-                    let is_quitting_menu = Arc::clone(&is_quitting);
+                    let is_quitting_menu = Arc::clone(&is_quitting_setup);
                     move |app, event| match event.id.as_ref() {
                         "show" => {
                             if let Some(window) = app.get_webview_window("main") {
@@ -308,8 +310,16 @@ fn main() {
             convert_document,
             open_folder
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(move |_app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if !is_quitting_exit.load(Ordering::SeqCst) {
+                api.prevent_exit();
+            }
+        }
+    });
 }
 
 #[cfg(test)]
