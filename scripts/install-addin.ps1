@@ -38,12 +38,14 @@ if ($Uninstall) {
         New-Item -ItemType Directory -Path $WpsTargetPath -Force | Out-Null
     }
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsTargetPath -Recurse -Force
+    $WpsVersionPath = Join-Path $WpsBasePath "MathEditor_1.0.0"
+    Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsVersionPath -Recurse -Force
 
     $PublishXml = Join-Path $WpsBasePath "publish.xml"
     @'
 <?xml version="1.0" encoding="UTF-8"?>
 <jsplugins>
-  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor/" />
+  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor_1.0.0/" />
   <jspluginonline name="MathEditor" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
 </jsplugins>
 '@ | Set-Content -Path $PublishXml -Encoding UTF8
@@ -57,7 +59,7 @@ if ($Uninstall) {
       "name": "MathEditor",
       "enable": true,
       "isload": true,
-      "path": "MathEditor/",
+      "path": "MathEditor_1.0.0/",
       "md5": "",
       "mode": 2
     }

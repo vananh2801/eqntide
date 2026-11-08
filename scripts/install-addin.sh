@@ -46,6 +46,7 @@ install_linux_wps() {
 
     echo "--> Registering WPS Office JS Add-in into ${TARGET_BASE}..."
     mkdir -p "${TARGET_DIR}"
+    ln -sfn MathEditor "${TARGET_BASE}/MathEditor_1.0.0"
     cp -r "${WPS_ADDIN_DIR}"/* "${TARGET_DIR}/"
 
     # Write publish.xml using standard WPS jsplugins schema
@@ -53,7 +54,7 @@ install_linux_wps() {
     cat << 'EOF' > "${PUBLISH_XML}"
 <?xml version="1.0" encoding="UTF-8"?>
 <jsplugins>
-  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor/" />
+  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor_1.0.0/" />
   <jspluginonline name="MathEditor" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
 </jsplugins>
 EOF
@@ -68,7 +69,7 @@ EOF
       "name": "MathEditor",
       "enable": true,
       "isload": true,
-      "path": "MathEditor/",
+      "path": "MathEditor_1.0.0/",
       "md5": "",
       "mode": 2
     }
@@ -116,11 +117,11 @@ install_macos_word() {
     else
       echo "--> Registering WPS Office JS Add-in for Mac..."
       mkdir -p "${WPS_MAC_DIR}/MathEditor"
-      cp -r "${WPS_ADDIN_DIR}"/* "${WPS_MAC_DIR}/MathEditor/"
+      cp -r "${WPS_ADDIN_DIR}"/* "${WPS_MAC_DIR}/MathEditor_1.0.0/"
       cat << 'EOF' > "${WPS_MAC_DIR}/publish.xml"
 <?xml version="1.0" encoding="UTF-8"?>
 <jsplugins>
-  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor/" />
+  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor_1.0.0/" />
   <jspluginonline name="MathEditor" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
 </jsplugins>
 EOF
@@ -132,7 +133,7 @@ EOF
       "name": "MathEditor",
       "enable": true,
       "isload": true,
-      "path": "MathEditor/",
+      "path": "MathEditor_1.0.0/",
       "md5": "",
       "mode": 2
     }
