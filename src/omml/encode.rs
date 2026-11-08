@@ -914,11 +914,13 @@ impl MathmlEncoder {
             let lt_trim = lt.trim();
             if lt_trim == "0" || lt_trim.starts_with("0pt") || lt_trim.starts_with("0px") {
                 f_pr.push(m_val_el("type", "noBar"));
+            } else {
+                f_pr.push(m_val_el("type", "bar"));
             }
+        } else {
+            f_pr.push(m_val_el("type", "bar"));
         }
-        if !f_pr.is_empty() {
-            f.push(f_pr);
-        }
+        f.push(f_pr);
 
         let num_els = match node.children.first() {
             Some(c) => self.encode_node(c)?,

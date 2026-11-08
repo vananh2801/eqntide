@@ -87,6 +87,59 @@
     activeSessionId = urlParams.get('session_id');
   }
 
+  async function loadSessionData(sessionId, mathml, latex) {
+    if (!sessionId) return;
+    activeSessionId = sessionId;
+    console.log("Loaded active session:", activeSessionId);
+
+    if (latex && typeof latex === "string" && latex.trim().length > 0) {
+      latexSource.value = latex.trim();
+      if (mathField && typeof mathField.setValue === "function") {
+        mathField.setValue(latex.trim(), { format: "latex" });
+      }
+      isModified = false;
+      return;
+    }
+
+    if (mathml && typeof mathml === "string" && mathml.trim().length > 0) {
+      if (mathField && typeof mathField.setValue === "function") {
+        try {
+          mathField.setValue(mathml.trim(), { format: "mathml" });
+          if (typeof mathField.getValue === "function") {
+            latexSource.value = mathField.getValue("latex");
+          }
+          isModified = false;
+          return;
+        } catch (e) {
+          console.warn("mathField.setValue(mathml) failed:", e);
+        }
+      }
+    }
+
+    try {
+      const res = await fetch(`${BRIDGE_URL}/session/${sessionId}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.latex && data.latex.trim().length > 0) {
+          latexSource.value = data.latex.trim();
+          if (mathField && typeof mathField.setValue === "function") {
+            mathField.setValue(data.latex.trim(), { format: "latex" });
+          }
+        } else if (data.mathml && data.mathml.trim().length > 0) {
+          if (mathField && typeof mathField.setValue === "function") {
+            mathField.setValue(data.mathml.trim(), { format: "mathml" });
+            if (typeof mathField.getValue === "function") {
+              latexSource.value = mathField.getValue("latex");
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to fetch session data:", err);
+    }
+    isModified = false;
+  }
+
   // 1. Navigation Tabs
   tabEditorBtn.addEventListener('click', () => {
     tabEditorBtn.classList.add('active');
@@ -135,6 +188,13 @@
       listen('window-close-requested', () => {
         handleCloseRequested();
       });
+      listen('open-session', (event) => {
+        const payload = event.payload || {};
+        console.log('Received open-session from Tauri:', payload);
+        if (payload.session_id) {
+          loadSessionData(payload.session_id, payload.mathml, payload.latex);
+        }
+      });
       listen('single-instance-launch', (event) => {
         const argv = event.payload || [];
         console.log('Single instance launched with args:', argv);
@@ -144,7 +204,7 @@
               const url = new URL(arg);
               const sid = url.searchParams.get('session_id');
               if (sid) {
-                activeSessionId = sid;
+                loadSessionData(sid);
               }
             } catch (e) {
               console.warn('Failed to parse custom URI:', e);
@@ -663,6 +723,7 @@
         if (res.ok) {
           showNotice(btnInsertUpdate, 'Saved to Document!');
           isModified = false;
+          activeSessionId = null;
           await hideAppWindow();
           return;
         }
@@ -694,6 +755,7 @@
           method: 'POST'
         });
       } catch (_) {}
+      activeSessionId = null;
     }
     isModified = false;
     await hideAppWindow();

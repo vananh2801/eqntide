@@ -57,7 +57,7 @@ pub mod symbols;
 pub mod xml;
 
 pub use bridge::{
-    start_bridge_server, CustomUriAction, ServerHandle, SessionManager, SessionState, DEFAULT_HOST,
+    start_bridge_server, start_bridge_server_with_callback, WindowCallback, CustomUriAction, ServerHandle, SessionManager, SessionState, DEFAULT_HOST,
     DEFAULT_PORT,
 };
 pub use docx::{

@@ -284,9 +284,20 @@ function OpenTaskpane() {
  * Helper: Launch desktop editor via custom URI
  */
 function LaunchDesktopEditor(param) {
-  var uri = "matheditor://open?" + (param === "batch" ? "tab=batch" : "session_id=" + param);
+  var sessionId = param === "batch" ? "" : (param || "");
+  // 1. Direct local bridge HTTP call to immediately show & focus desktop window
+  ajaxPost(
+    BRIDGE_URL + "/window/show",
+    JSON.stringify({ session_id: sessionId, tab: param === "batch" ? "batch" : "editor" }),
+    function () {}
+  );
+
+  // 2. Custom URI fallback (for cold start)
+  var uri = "matheditor://open?" + (param === "batch" ? "tab=batch" : "session_id=" + sessionId);
   if (wps.OAAssist && typeof wps.OAAssist.ShellExecute === "function") {
-    wps.OAAssist.ShellExecute(uri);
+    try {
+      wps.OAAssist.ShellExecute(uri);
+    } catch (_) {}
   } else {
     var iframe = document.createElement("iframe");
     iframe.style.display = "none";

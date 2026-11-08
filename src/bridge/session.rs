@@ -91,6 +91,14 @@ impl SessionManager {
         Some(data.initial_mathml.clone())
     }
 
+    /// Retrieve the initial MathML and LaTeX of an active session.
+    pub fn get_session(&self, id: &str) -> Option<(String, Option<String>)> {
+        let lock = self.sessions.lock().unwrap();
+        let entry = lock.get(id)?;
+        let data = entry.data.lock().unwrap();
+        Some((data.initial_mathml.clone(), data.initial_latex.clone()))
+    }
+
     /// Update a session with the newly generated equation payloads, notifying any waiting long-poll request.
     pub fn update_session(
         &self,

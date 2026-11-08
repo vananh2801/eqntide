@@ -29,6 +29,10 @@ pub const DEFAULT_PORT: u16 = 17890;
 /// Default bind host address.
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 
+/// Callback invoked when a session is opened or window show is requested.
+/// Arguments: `(session_id, mathml, latex)`
+pub type WindowCallback = Arc<dyn Fn(&str, Option<&str>, Option<&str>) + Send + Sync + 'static>;
+
 /// Handle to a running bridge server instance.
 pub struct ServerHandle {
     server: Arc<Server>,
@@ -300,6 +304,14 @@ fn serve_addin_file(
 
 /// Start the local HTTP bridge server on `addr` (e.g. `"127.0.0.1:17890"`).
 pub fn start_bridge_server(addr: &str) -> crate::error::Result<ServerHandle> {
+    start_bridge_server_with_callback(addr, None)
+}
+
+/// Start the local HTTP bridge server with an optional window-show callback.
+pub fn start_bridge_server_with_callback(
+    addr: &str,
+    window_cb: Option<WindowCallback>,
+) -> crate::error::Result<ServerHandle> {
     let server = Server::http(addr).map_err(|e| {
         crate::error::Error::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -333,8 +345,9 @@ pub fn start_bridge_server(addr: &str) -> crate::error::Result<ServerHandle> {
             };
 
             let session_for_worker = session_clone.clone();
+            let window_cb_for_worker = window_cb.clone();
             std::thread::spawn(move || {
-                handle_http_request(request, session_for_worker);
+                handle_http_request(request, session_for_worker, window_cb_for_worker);
             });
         }
     });
@@ -348,7 +361,11 @@ pub fn start_bridge_server(addr: &str) -> crate::error::Result<ServerHandle> {
     })
 }
 
-fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
+fn handle_http_request(
+    mut req: Request,
+    session_mgr: SessionManager,
+    window_cb: Option<WindowCallback>,
+) {
     let method = req.method().clone();
     let raw_url = req.url().to_owned();
     let (path, query) = match raw_url.split_once('?') {
@@ -432,6 +449,66 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
             }
         }
 
+        (Method::Post, "/window/show") => {
+            let body = read_body(&mut req);
+            let show_req: WindowShowRequest = serde_json::from_str(&body).unwrap_or_default();
+            let sid = show_req
+                .session_id
+                .filter(|s| !s.is_empty())
+                .or_else(|| session_mgr.get_latest_session_id())
+                .unwrap_or_default();
+
+            let (m, l) = if !sid.is_empty() {
+                session_mgr
+                    .get_session(&sid)
+                    .map(|(m, l)| (Some(m), l))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
+
+            if let Some(ref cb) = window_cb {
+                cb(&sid, m.as_deref(), l.as_deref());
+            }
+
+            let resp = json_response(
+                200,
+                &serde_json::json!({
+                    "status": "ok",
+                    "session_id": sid
+                }),
+                origin,
+            );
+            let _ = req.respond(resp);
+        }
+
+        (Method::Get, p)
+            if p.starts_with("/session/")
+                && !p.ends_with("/wait")
+                && !p.ends_with("/update")
+                && !p.ends_with("/submit")
+                && !p.ends_with("/cancel")
+                && !p.ends_with("/close")
+                && p != "/session/latest" =>
+        {
+            let sid = p.strip_prefix("/session/").unwrap_or("");
+            if let Some((mathml, latex)) = session_mgr.get_session(sid) {
+                let resp = json_response(
+                    200,
+                    &serde_json::json!({
+                        "status": "ok",
+                        "session_id": sid,
+                        "mathml": mathml,
+                        "latex": latex
+                    }),
+                    origin,
+                );
+                let _ = req.respond(resp);
+            } else {
+                let _ = req.respond(error_response(404, "session not found", origin));
+            }
+        }
+
         (Method::Get, "/session/latest") => {
             let active = session_mgr.get_latest_session_id();
             let resp = json_response(
@@ -482,6 +559,9 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
             };
 
             let session_id = session_mgr.create_session(mathml.clone(), latex.clone());
+            if let Some(ref cb) = window_cb {
+                cb(&session_id, Some(&mathml), latex.as_deref());
+            }
             let resp = json_response(
                 200,
                 &SessionOpenResponse {

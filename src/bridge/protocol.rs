@@ -144,3 +144,12 @@ pub struct ErrorResponse {
     pub status: String,
     pub error: String,
 }
+
+/// Request payload for `POST /window/show`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WindowShowRequest {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub tab: Option<String>,
+}

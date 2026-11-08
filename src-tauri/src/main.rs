@@ -174,13 +174,32 @@ fn open_folder(path: String) -> Result<(), String> {
 }
 
 fn main() {
+    let app_handle_state = Arc::new(std::sync::Mutex::new(None::<tauri::AppHandle>));
+    let app_handle_cb = Arc::clone(&app_handle_state);
+
+    let window_cb: omml_converter::WindowCallback = Arc::new(move |session_id, mathml, latex| {
+        let lock = app_handle_cb.lock().unwrap();
+        if let Some(ref app) = *lock {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+                let _ = window.emit("open-session", serde_json::json!({
+                    "session_id": session_id,
+                    "mathml": mathml,
+                    "latex": latex
+                }));
+            }
+        }
+    });
+
     // 1. Start background local loopback bridge server (127.0.0.1:17890)
     let bind_addr = format!(
         "{}:{}",
         omml_converter::DEFAULT_HOST,
         omml_converter::DEFAULT_PORT
     );
-    let _bridge_server = match omml_converter::start_bridge_server(&bind_addr) {
+    let _bridge_server = match omml_converter::start_bridge_server_with_callback(&bind_addr, Some(window_cb)) {
         Ok(handle) => {
             log::info!("Local bridge HTTP server active on {}", handle.addr());
             Some(handle)
@@ -194,6 +213,8 @@ fn main() {
     let is_quitting = Arc::new(AtomicBool::new(false));
     let is_quitting_clone = Arc::clone(&is_quitting);
 
+    let app_handle_setup = Arc::clone(&app_handle_state);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -205,6 +226,7 @@ fn main() {
             }
         }))
         .setup(move |app| {
+            *app_handle_setup.lock().unwrap() = Some(app.handle().clone());
             // Build Tray Menu
             let show_item = MenuItem::with_id(app, "show", "Show Equation Editor", true, None::<&str>)?;
             let batch_item = MenuItem::with_id(app, "batch", "Batch Document Converter", true, None::<&str>)?;
