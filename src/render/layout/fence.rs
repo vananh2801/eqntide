@@ -30,7 +30,7 @@ impl Layout {
                 stack.push(i);
             }
         }
-        for (j, i) in pairs {
+        for (j, i) in pairs.iter().copied() {
             let (mut asc, mut desc) = (0.0f32, 0.0f32);
             for a in &atoms[j + 1..i] {
                 asc = asc.max(a.b.asc);
@@ -50,6 +50,21 @@ impl Layout {
                 self.stretch_pair(atoms, i, a, d, em);
             }
         }
+        // Unmatched closing bar / bracket after an expression (e.g. evaluation bar \left. F(x) \right|):
+        for i in 0..atoms.len() {
+            let Some(c) = atoms[i].delim else { continue };
+            if (is_bar(c) || is_close(c)) && !pairs.iter().any(|&(_, close_idx)| close_idx == i) && i > 0 {
+                let mut asc = 0.0f32;
+                let mut desc = 0.0f32;
+                for a in &atoms[..i] {
+                    asc = asc.max(a.b.asc);
+                    desc = desc.max(a.b.desc);
+                }
+                if asc + desc > 1.25 * em {
+                    self.stretch_pair(atoms, i, asc, desc, em);
+                }
+            }
+        }
     }
 
     pub(super) fn stretch_pair(&self, atoms: &mut [Atom], idx: usize, asc: f32, desc: f32, em: f32) {
@@ -63,8 +78,8 @@ impl Layout {
     }
 
     pub(super) fn delim_box(&self, c: char, asc: f32, desc: f32, em: f32) -> LBox {
-        // Parentheses, brackets, braces, floors and ceilings are assembled from
-        // font glyph pieces so they follow the height of their content.
+        // Parentheses, brackets, braces, floors, ceilings, absolute value, and norm are
+        // assembled or outline-scaled from font glyphs so they follow the height of their content.
         if let Some(b) = self.stretchy_delimiter(c, asc, desc, em) {
             return b;
         }

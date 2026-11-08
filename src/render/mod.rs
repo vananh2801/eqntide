@@ -6,7 +6,7 @@
 //! delimiters, big operators, matrices, accents) on top of the embedded STIX Two
 //! fonts, following MathType's style conventions.
 //!
-//! * [`layout`] – box layout, one module per MathType palette group
+//! * `layout` – box layout, one module per MathType palette group
 //! * [`font`]   – font loading and glyph metrics / drawing
 //! * [`canvas`] – coverage canvas the glyphs are drawn onto
 //! * [`emf`]    – the same picture as vector EMF (what Word/WPS prefer for OLE previews)

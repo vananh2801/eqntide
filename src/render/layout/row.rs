@@ -1,15 +1,13 @@
-//! Rows of atoms: spacing between neighbours (MathType "spaces and ellipses"
-//! behaviour) and the conversion of token elements (`mi`, `mn`, `mo`,
-//! `mtext`) into atoms.
+//! Layout a single horizontal row (`<mrow>`) of math tokens.
+//!
+//! Applies TeX-like inter-element spacing based on symbol classification
+//! (Ord, Op, Bin, Rel, Open, Close, Punct) and standard math spacing
+//! constants (thin space = 3/18 em, med space = 4/18 em, thick space = 5/18 em).
 
 use super::*;
 
-/// Map an ASCII character with `mathvariant` (`double-struck`, `fraktur`,
-/// `script`, …) to its Unicode Mathematical Alphanumeric / Letterlike glyph
-/// present in `STIXTwoMath-Regular.ttf`.
-fn styled_math_glyph(ch: char, variant: Option<&str>) -> Option<char> {
-    let v = variant?;
-    let cp = match v {
+pub(super) fn unicode_math_styled_char(ch: char, mathvariant: Option<&str>) -> Option<char> {
+    let cp = match mathvariant? {
         "double-struck" => match ch {
             'C' => 0x2102,
             'H' => 0x210D,
@@ -113,7 +111,26 @@ impl Layout {
                     }
                 }
                 _ => {
-                    let b = self.node(kid, em, ctx)?;
+                    let b = if matches!(kid.tag.as_str(), "msub" | "msup" | "msubsup")
+                        && kid.children.first().map_or(false, delimiter::is_eval_bar_base)
+                        && !atoms.is_empty()
+                    {
+                        let start_idx = atoms.iter().rposition(|a| matches!(a.class, Class::Rel | Class::Open)).map_or(0, |idx| idx + 1);
+                        let expr_atoms = if start_idx < atoms.len() { &atoms[start_idx..] } else { &atoms[..] };
+                        let prev_asc = expr_atoms.iter().map(|a| a.b.asc).fold(0.0f32, f32::max);
+                        let prev_desc = expr_atoms.iter().map(|a| a.b.desc).fold(0.0f32, f32::max);
+                        let h2 = (prev_asc - AXIS * em).max(prev_desc + AXIS * em);
+                        let bar_asc = AXIS * em + h2;
+                        let bar_desc = h2 - AXIS * em;
+                        let (sub_n, sup_n) = match kid.tag.as_str() {
+                            "msub" => (kid.children.get(1), None),
+                            "msup" => (None, kid.children.get(1)),
+                            _ => (kid.children.get(1), kid.children.get(2)),
+                        };
+                        self.evaluation_bar(sub_n, sup_n, bar_asc, bar_desc, em, ctx)?
+                    } else {
+                        self.node(kid, em, ctx)?
+                    };
                     let class = self.class_of_node(kid);
                     atoms.push(Atom { class, b, delim: None, is_table: kid.tag == "mtable" });
                 }
@@ -138,65 +155,43 @@ impl Layout {
         let mut x = 0.0;
         for i in 0..n {
             if i > 0 {
-                let mut sp = self.spacing(cls[i - 1], cls[i], em, ctx.is_script());
-
-                // Add italic correction when a prime/apostrophe follows an italic letter
-                let prev_glyph = atoms[i - 1].b.items.last();
-                let curr_glyph = atoms[i].b.items.first();
-
-                let is_prime = curr_glyph.map_or(false, |it| match it {
-                    Item::Glyph { ch, .. } => matches!(*ch, '\'' | '\u{2032}' | '\u{2033}' | '\u{2034}'),
-                    _ => false,
-                });
-
-                if is_prime {
-                    if let Some(Item::Glyph { ch, face, em: g_em, ssty: g_ssty, .. }) = prev_glyph {
-                        let ic = self.f.italic_correction_styled(*face, *ch, *g_em, *g_ssty);
-                        if ic > 0.0 {
-                            sp += ic + 0.04 * em;
-                        }
-                    }
-                }
-
-                x += sp;
+                x += self.spacing(cls[i - 1], cls[i], em);
             }
             out.place(&atoms[i].b, x, 0.0);
             x += atoms[i].b.w;
         }
-
         out.w = x;
         Ok(out)
     }
 
-    pub(super) fn class_of_node(&self, k: &MathNode) -> Class {
-        if arrow::template_of(k).is_some() {
-            return Class::Rel; // a labeled arrow spaces like a relation
+    /// Classification of an element for spacing purposes.
+    fn class_of_node(&self, k: &MathNode) -> Class {
+        if k.tag == "mo" {
+            if let Some(c) = k.text.trim().chars().next() {
+                return class_of(c);
+            }
         }
         if matches!(k.tag.as_str(), "munder" | "mover" | "munderover" | "msub" | "msup" | "msubsup") {
-            if let Some(b) = k.children.first() {
-                let t = b.text.trim();
-                if b.tag == "mo" && t.chars().next().map_or(false, |c| is_big_op(c) || is_integral(c)) {
-                    return Class::Op;
-                }
-                if b.tag == "mi" && is_function(t) {
-                    return Class::Op;
+            if let Some(base) = k.children.first() {
+                if base.tag == "mo" {
+                    if let Some(c) = base.text.trim().chars().next() {
+                        if is_big_op(c) || is_integral(c) {
+                            return Class::Op;
+                        }
+                    }
                 }
             }
         }
         Class::Ord
     }
 
-    pub(super) fn spacing(&self, l: Class, r: Class, em: f32, script: bool) -> f32 {
+    /// TeX spacing table in units of `em`.
+    fn spacing(&self, left: Class, right: Class, em: f32) -> f32 {
+        const THIN: f32 = 3.0 / 18.0;
+        const MED: f32 = 4.0 / 18.0;
+        const THICK: f32 = 5.0 / 18.0;
         use Class::*;
-        if script {
-            return 0.0;
-        }
-        if l == Open || r == Close {
-            return 0.0;
-        }
-        let l = if l == Close { Ord } else { l };
-        let r = if r == Open { Ord } else { r };
-        let t = match (l, r) {
+        let t = match (left, right) {
             (Ord, Op) | (Op, Ord) | (Op, Op) => THIN,
             (Ord, Bin) | (Bin, Ord) | (Bin, Op) => MED,
             (Ord, Rel) | (Rel, Ord) | (Rel, Op) | (Op, Rel) => THICK,
@@ -248,7 +243,7 @@ impl Layout {
             if ch.is_whitespace() || ch == '\u{00A0}' || ch == '\u{200B}' {
                 continue;
             }
-            if let Some(styled_ch) = styled_math_glyph(ch, variant) {
+            if let Some(styled_ch) = unicode_math_styled_char(ch, variant) {
                 out.push(Atom {
                     class: Class::Ord,
                     b: self.glyph_styled(styled_ch, Face::Symbol, em, ssty),

@@ -1,15 +1,12 @@
-//! Tall delimiters (parentheses, brackets, braces, floors and ceilings) that
-//! stretch to match the exact height of their contents.
+//! Tall delimiters (parentheses, brackets, braces, floors, ceilings,
+//! absolute value, norm, and evaluation bars) that stretch to match the exact height of their contents.
 //!
 //! Delimiters are drawn in one of three tiers:
-//! 1. Tier 1 (Small span < min_piece_h): When the actual height is small (e.g. single-line
-//!    expressions), the single complete glyph is scaled vertically (`em_y`) while keeping
-//!    horizontal scale at normal `em`. This avoids unnatural piece joins.
-//! 2. Tier 2 (Moderate span, specifically for curly braces `{`, `}`): Assembled from exactly
-//!    3 font glyph pieces (top hook, middle cusp, bottom hook) WITHOUT any `\u{23AA}` extenders.
-//!    The pieces overlap safely along their straight stems without crossing into the curved cusp.
-//! 3. Tier 3 (Tall span): The pieces are placed at top, center, and bottom, with `\u{23AA}`
-//!    extenders tiled seamlessly into the positive stem gaps.
+//! 1. Straight bars (Absolute value `|`, Norm `‖`): Stretched vertically via exact vector
+//!    outline scaling from `STIXTwoMath-Regular.ttf`, preserving font line weight and double-bar spacing.
+//! 2. Curved delimiters (Tier 1, Small span < min_piece_h): Single complete glyph scaled vertically (`em_y`)
+//!    while keeping horizontal scale at normal `em`.
+//! 3. Tier 2 & Tier 3 (Moderate and tall spans): Glyph piece assembly (head, mid, tail, extenders).
 
 use super::*;
 use crate::render::font::Seg;
@@ -44,6 +41,20 @@ fn recipe(c: char) -> Option<Pieces> {
         '}' => Pieces::new(Some('\u{23AB}'), '\u{23AA}', Some('\u{23AC}'), Some('\u{23AD}')),
         _ => return None,
     })
+}
+
+/// Helper to check if a node represents a vertical evaluation bar base `|`.
+pub(crate) fn is_eval_bar_base(node: &MathNode) -> bool {
+    let t = node.text.trim();
+    if (node.tag == "mo" || node.tag == "mi") && (t == "|" || t == "\u{2223}") {
+        return true;
+    }
+    if node.tag == "mrow" && node.children.len() == 1 {
+        let child = &node.children[0];
+        let ct = child.text.trim();
+        return (child.tag == "mo" || child.tag == "mi") && (ct == "|" || ct == "\u{2223}");
+    }
+    false
 }
 
 impl Layout {
@@ -149,9 +160,52 @@ impl Layout {
     }
 
     /// Build the delimiter `c` so that it spans exactly `asc` above and `desc`
-    /// below the baseline.
+    /// below the baseline. Supports parentheses, brackets, braces, floors, ceilings,
+    /// absolute value (`|`), and norm (`‖`).
     pub(super) fn stretchy_delimiter(&self, c: char, asc: f32, desc: f32, em: f32) -> Option<LBox> {
-        let r = recipe(c)?;
+        let norm_c = match c {
+            '|' | '\u{2223}' => '|',
+            '‖' | '\u{2225}' => '‖',
+            _ => c,
+        };
+
+        // Straight vertical bars (absolute value `|.|` and norm `||.||`):
+        // Scaled vertically using their exact font glyph contours from STIX Two Math,
+        // preserving horizontal stroke thickness and double-bar gap identically to the font design.
+        if norm_c == '|' || norm_c == '‖' {
+            let face = Face::Symbol;
+            let span = asc + desc;
+            let top_y = -asc;
+            let bot_y = desc;
+            let pad = 0.04 * em;
+
+            let natural: Vec<Vec<(f32, f32)>> = self.f.glyph_polys(face, norm_c, em, em, 0.0, 0.0);
+            if natural.is_empty() {
+                return None;
+            }
+            let (y_lo, y_hi) = natural.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
+            let h0 = y_hi - y_lo;
+            if h0 <= 0.0 {
+                return None;
+            }
+
+            let em_y = em * span / h0;
+            let em_x = em; // Preserve line thickness and double-bar gap
+
+            let centre = (top_y + bot_y) / 2.0;
+            let y = centre - (y_lo + y_hi) / 2.0 * (em_y / em);
+            let polys = self.f.glyph_polys(face, norm_c, em_x, em_y, pad, y);
+            let w = self.f.advance(face, norm_c, em_x) + 2.0 * pad;
+
+            return Some(LBox {
+                w,
+                asc,
+                desc,
+                items: polys.into_iter().map(Item::Poly).collect(),
+            });
+        }
+
+        let r = recipe(norm_c)?;
         let face = Face::Symbol;
         let span = asc + desc;
         let top_y = -asc;
@@ -169,7 +223,7 @@ impl Layout {
         // Tier 1: When span < min_piece_h:
         // Use vertical-only outline scaling of the complete glyph to avoid overlapping piece stems.
         if span < min_piece_h {
-            let natural: Vec<Vec<(f32, f32)>> = self.f.glyph_polys(face, c, em, em, 0.0, 0.0);
+            let natural: Vec<Vec<(f32, f32)>> = self.f.glyph_polys(face, norm_c, em, em, 0.0, 0.0);
             if natural.is_empty() {
                 return None;
             }
@@ -184,8 +238,8 @@ impl Layout {
 
             let centre = (top_y + bot_y) / 2.0;
             let y = centre - (y_lo + y_hi) / 2.0 * (em_y / em);
-            let polys = self.f.glyph_polys(face, c, em_x, em_y, pad, y);
-            let w = self.f.advance(face, c, em_x) + 2.0 * pad;
+            let polys = self.f.glyph_polys(face, norm_c, em_x, em_y, pad, y);
+            let w = self.f.advance(face, norm_c, em_x) + 2.0 * pad;
 
             return Some(LBox {
                 w,
@@ -327,6 +381,91 @@ impl Layout {
             items,
         })
     }
+
+    /// Build an evaluation bar (substitution bar for definite integrals) `|_{sub}^{sup}`
+    /// that stretches vertically to match `asc` and `desc`, with the lower limit
+    /// placed at the bottom and the upper limit placed at the top of the bar.
+    pub(super) fn evaluation_bar(
+        &mut self,
+        sub_node: Option<&MathNode>,
+        sup_node: Option<&MathNode>,
+        asc: f32,
+        desc: f32,
+        em: f32,
+        ctx: MathContext,
+    ) -> Result<LBox> {
+        let span = (asc + desc).max(1.35 * em);
+        let centre = (desc - asc) / 2.0;
+        let actual_asc = (span / 2.0 - centre).max(asc);
+        let actual_desc = (span / 2.0 + centre).max(desc);
+
+        let bar_box = self
+            .stretchy_delimiter('|', actual_asc, actual_desc, em)
+            .unwrap_or_else(|| self.glyph('|', Face::Symbol, em));
+
+        let c = self.f.constants();
+        let sub_ctx = ctx.for_subscript();
+        let sup_ctx = ctx.for_superscript();
+        let sub_em = em * ctx.rel_scale(sub_ctx, c);
+        let sup_em = em * ctx.rel_scale(sup_ctx, c);
+
+        let sub = match sub_node {
+            Some(n) if n.tag != "none" && (!n.children.is_empty() || !n.text.trim().is_empty()) => {
+                Some(self.node(n, sub_em, sub_ctx)?)
+            }
+            _ => None,
+        };
+        let sup = match sup_node {
+            Some(n) if n.tag != "none" && (!n.children.is_empty() || !n.text.trim().is_empty()) => {
+                Some(self.node(n, sup_em, sup_ctx)?)
+            }
+            _ => None,
+        };
+
+        if sub.is_none() && sup.is_none() {
+            return Ok(bar_box);
+        }
+
+        let script_x = bar_box.w + 0.04 * em;
+        let shift_up = c.superscript_shift_up * em;
+        let shift_down = c.subscript_shift_down * em;
+        let gap_min = c.sub_superscript_gap_min * em;
+
+        // Position superscript near top of bar:
+        let sup_y = sup.as_ref().map(|s| {
+            (-actual_asc + s.asc + 0.04 * em).min(-shift_up)
+        });
+
+        // Position subscript near bottom of bar:
+        let mut sub_y = sub.as_ref().map(|s| {
+            (actual_desc - s.desc - 0.04 * em).max(shift_down)
+        });
+
+        // Ensure minimum gap between sub and sup:
+        if let (Some(s1), Some(s2), Some(sy), Some(py)) = (&sub, &sup, sub_y, sup_y) {
+            let gap = (sy - s1.asc) - (py + s2.desc);
+            if gap < gap_min {
+                sub_y = Some(sy + (gap_min - gap));
+            }
+        }
+
+        let mut out = LBox {
+            w: script_x + sub.as_ref().map_or(0.0, |s| s.w).max(sup.as_ref().map_or(0.0, |s| s.w)),
+            asc: actual_asc.max(sup.as_ref().map_or(0.0, |s| -sup_y.unwrap_or(0.0) + s.asc)),
+            desc: actual_desc.max(sub.as_ref().map_or(0.0, |s| sub_y.unwrap_or(0.0) + s.desc)),
+            items: Vec::new(),
+        };
+
+        out.place(&bar_box, 0.0, 0.0);
+        if let (Some(s), Some(y)) = (&sub, sub_y) {
+            out.place(s, script_x, y);
+        }
+        if let (Some(s), Some(y)) = (&sup, sup_y) {
+            out.place(s, script_x, y);
+        }
+
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -355,8 +494,8 @@ mod tests {
     fn tall_delimiters_piece_assembly_and_vertical_stretch() {
         let l = layout();
         let em = 24.0;
-        for c in ['(', ')', '[', ']', '{', '}'] {
-            // Short span (< min_piece_h): uses vertical outline scaling (Item::Poly)
+        for c in ['(', ')', '[', ']', '{', '}', '|', '‖'] {
+            // Short span:
             let short_span = 1.0 * em;
             let asc_s = short_span / 2.0 + AXIS * em;
             let desc_s = short_span / 2.0 - AXIS * em;
@@ -365,17 +504,20 @@ mod tests {
             assert_eq!(b_s.desc, desc_s);
             assert!(b_s.items.iter().all(|it| matches!(it, Item::Poly(_))), "{c}: short should be Poly");
 
-            // Tall span (>= 5.0 * em): uses piece assembly with extenders
+            // Tall span:
             let tall_span = 6.0 * em;
             let asc_t = tall_span / 2.0 + AXIS * em;
             let desc_t = tall_span / 2.0 - AXIS * em;
             let b_t = l.stretchy_delimiter(c, asc_t, desc_t, em).expect("delimiter supported");
             assert_eq!(b_t.asc, asc_t);
             assert_eq!(b_t.desc, desc_t);
-            assert!(b_t.items.iter().all(|it| matches!(it, Item::Glyph { .. })), "{c}: tall should be Glyph");
-            if c == '{' {
-                // Must have extenders (\u{23AA})
-                assert!(b_t.items.len() > 3, "curly brace at 6.0em should have extenders");
+            if c == '|' || c == '‖' {
+                assert!(b_t.items.iter().all(|it| matches!(it, Item::Poly(_))), "{c}: tall bar should be Poly");
+            } else {
+                assert!(b_t.items.iter().all(|it| matches!(it, Item::Glyph { .. })), "{c}: tall should be Glyph");
+                if c == '{' {
+                    assert!(b_t.items.len() > 3, "curly brace at 6.0em should have extenders");
+                }
             }
         }
 
@@ -389,10 +531,28 @@ mod tests {
     }
 
     #[test]
+    fn evaluation_bar_layout_and_limits() {
+        let mut l = layout();
+        let em = 24.0;
+        let ctx = MathContext::DISPLAY;
+        let sub = MathNode::leaf("mn", "0");
+        let sup = MathNode::leaf("mn", "1");
+
+        let b = l.evaluation_bar(Some(&sub), Some(&sup), 1.5 * em, 1.2 * em, em, ctx).unwrap();
+        assert!(b.w > 0.4 * em);
+        assert!(b.asc >= 1.5 * em);
+        assert!(b.desc >= 1.2 * em);
+        // Verify bar poly and limits are present
+        assert!(b.items.iter().any(|it| matches!(it, Item::Poly(_))));
+        assert!(b.items.iter().any(|it| matches!(it, Item::Glyph { ch: '0', .. })));
+        assert!(b.items.iter().any(|it| matches!(it, Item::Glyph { ch: '1', .. })));
+    }
+
+    #[test]
     fn unsupported_characters_return_none() {
         let l = layout();
         let em = 24.0;
-        assert!(l.stretchy_delimiter('|', 1.0, 1.0, em).is_none());
         assert!(l.stretchy_delimiter('x', 1.0, 1.0, em).is_none());
+        assert!(l.stretchy_delimiter('?', 1.0, 1.0, em).is_none());
     }
 }

@@ -7,7 +7,7 @@ pub const OPEN: &str = "([{⟨⌊⌈";
 pub const CLOSE: &str = ")]}⟩⌋⌉";
 
 /// Vertical bars.
-pub const BARS: &str = "|‖";
+pub const BARS: &str = "|‖\u{2223}\u{2225}";
 
 /// `true` for an opening fence.
 pub fn is_open(c: char) -> bool {

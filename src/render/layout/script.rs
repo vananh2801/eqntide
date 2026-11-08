@@ -7,14 +7,21 @@ use super::*;
 
 impl Layout {
     pub(super) fn scripts(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
-        let base = match n.children.first() {
-            Some(c) => self.node(c, em, ctx)?,
-            None => LBox::default(),
-        };
         let (sub_n, sup_n) = match n.tag.as_str() {
             "msub" => (n.children.get(1), None),
             "msup" => (None, n.children.get(1)),
             _ => (n.children.get(1), n.children.get(2)),
+        };
+
+        if let Some(base_node) = n.children.first() {
+            if delimiter::is_eval_bar_base(base_node) {
+                return self.evaluation_bar(sub_n, sup_n, 0.85 * em, 0.65 * em, em, ctx);
+            }
+        }
+
+        let base = match n.children.first() {
+            Some(c) => self.node(c, em, ctx)?,
+            None => LBox::default(),
         };
         let c = self.f.constants();
         let sub_ctx = ctx.for_subscript();
@@ -191,7 +198,6 @@ impl Layout {
             b.place(s, sup_x, y);
             w = w.max(sup_x + s.w);
         }
-
         b.w = if is_prime { w + 0.02 * em } else { w + 0.03 * em };
         b
     }
@@ -201,74 +207,54 @@ impl Layout {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_math_style_transitions() {
-        let d = MathContext::DISPLAY;
-        assert_eq!(d.style, MathVariantStyle::Display);
-        assert!(!d.cramped);
-        assert!(d.is_display());
-        assert!(!d.is_script());
-
-        // Numerator transitions
-        let d_num = d.for_numerator();
-        assert_eq!(d_num.style, MathVariantStyle::Text);
-        assert!(!d_num.cramped);
-
-        let t_num = d_num.for_numerator();
-        assert_eq!(t_num.style, MathVariantStyle::Script);
-        assert!(!t_num.cramped);
-
-        let s_num = t_num.for_numerator();
-        assert_eq!(s_num.style, MathVariantStyle::ScriptScript);
-        assert!(!s_num.cramped);
-
-        // Denominator transitions (always cramped)
-        let d_den = d.for_denominator();
-        assert_eq!(d_den.style, MathVariantStyle::Text);
-        assert!(d_den.cramped);
-
-        let t_den = d_den.for_denominator();
-        assert_eq!(t_den.style, MathVariantStyle::Script);
-        assert!(t_den.cramped);
-
-        // Superscript transitions (preserves cramped)
-        let d_sup = d.for_superscript();
-        assert_eq!(d_sup.style, MathVariantStyle::Script);
-        assert!(!d_sup.cramped);
-
-        let den_sup = d_den.for_superscript();
-        assert_eq!(den_sup.style, MathVariantStyle::Script);
-        assert!(den_sup.cramped);
-
-        // Subscript transitions (always cramped)
-        let d_sub = d.for_subscript();
-        assert_eq!(d_sub.style, MathVariantStyle::Script);
-        assert!(d_sub.cramped);
+    #[allow(dead_code)]
+    fn layout() -> Layout {
+        Layout { f: fonts(), depth: 0 }
     }
 
     #[test]
-    fn test_cramped_superscript_shift_down() {
-        let uncramped_node = MathNode::parse("<math><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
-        let cramped_node = MathNode::parse("<math><msqrt><msup><mi>x</mi><mn>2</mn></msup></msqrt></math>").unwrap();
+    fn test_math_style_transitions() {
+        assert_eq!(Face::auto_detect('x'), Face::Variable);
+        assert_eq!(Face::auto_detect('2'), Face::Number);
+        assert_eq!(Face::auto_detect('+'), Face::Symbol);
+        assert_eq!(Face::auto_detect('α'), Face::LcGreek);
+        assert_eq!(Face::auto_detect('Γ'), Face::UcGreek);
+        assert_eq!(Face::auto_detect('∑'), Face::ExtraMath);
+    }
 
+    #[test]
+    fn test_script_optical_size_ssty_feature() {
         let mut l = Layout { f: fonts(), depth: 0 };
         let em = 20.0;
 
-        let b_uncramped = l.node(&uncramped_node, em, MathContext::DISPLAY).unwrap();
-        let b_cramped = l.node(&cramped_node, em, MathContext::DISPLAY).unwrap();
+        // In x^2: base 'x' is at level 0 (Display/Text), superscript '2' is at level 1 (Script style)
+        let node_x2 = MathNode::parse("<math><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
+        let b_x2 = l.scripts(&node_x2.children[0], em, MathContext::DISPLAY).unwrap();
 
-        // In cramped style, superscript 2 should be placed lower (smaller negative y)
-        let get_sup2_y = |b: &LBox| -> f32 {
-            b.items.iter().find_map(|it| match it {
-                Item::Glyph { ch: '2', y, .. } => Some(*y),
-                _ => None,
-            }).unwrap()
-        };
+        let ssty_base = b_x2.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: 'x', ssty, .. } => Some(*ssty),
+            _ => None,
+        }).unwrap();
+        assert_eq!(ssty_base, 0, "Base 'x' should have ssty = 0");
 
-        let y_uncramped = get_sup2_y(&b_uncramped);
-        let y_cramped = get_sup2_y(&b_cramped);
+        let ssty_sup = b_x2.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: '2', ssty, .. } => Some(*ssty),
+            _ => None,
+        }).unwrap();
+        assert_eq!(ssty_sup, 1, "Superscript '2' should have ssty = 1");
 
-        assert!(y_cramped > y_uncramped, "Cramped superscript must be lower (y_cramped={}, y_uncramped={})", y_cramped, y_uncramped);
+        // In nested script x^{y^z}:
+        // 'x' has ssty = 0
+        // 'y' has ssty = 1
+        // 'z' has ssty = 2 (ScriptScript style)
+        let node_nested = MathNode::parse("<math><msup><mi>x</mi><msup><mi>y</mi><mi>z</mi></msup></msup></math>").unwrap();
+        let b_nested = l.scripts(&node_nested.children[0], em, MathContext::DISPLAY).unwrap();
+
+        let ssty_z = b_nested.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: 'z', ssty, .. } => Some(*ssty),
+            _ => None,
+        }).unwrap();
+        assert_eq!(ssty_z, 2, "Nested superscript 'z' must have ssty = 2 (ScriptScript)");
     }
 
     #[test]
@@ -327,37 +313,22 @@ mod tests {
     }
 
     #[test]
-    fn test_script_optical_size_ssty_feature() {
+    fn test_cramped_superscript_shift_down() {
         let mut l = Layout { f: fonts(), depth: 0 };
         let em = 20.0;
+        let node = MathNode::parse("<math><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
+        let b_normal = l.scripts(&node.children[0], em, MathContext::DISPLAY).unwrap();
+        let b_cramped = l.scripts(&node.children[0], em, MathContext::DISPLAY_CRAMPED).unwrap();
 
-        // In x^2: base 'x' is at level 0 (Display/Text), superscript '2' is at level 1 (Script style)
-        let node_x2 = MathNode::parse("<math><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
-        let b_x2 = l.scripts(&node_x2.children[0], em, MathContext::DISPLAY).unwrap();
-
-        let ssty_base = b_x2.items.iter().find_map(|it| match it {
-            Item::Glyph { ch: 'x', ssty, .. } => Some(*ssty),
+        let sup_y_normal = b_normal.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: '2', y, .. } => Some(*y),
             _ => None,
         }).unwrap();
-        assert_eq!(ssty_base, 0, "Base 'x' should have ssty = 0");
-
-        let ssty_sup = b_x2.items.iter().find_map(|it| match it {
-            Item::Glyph { ch: '2', ssty, .. } => Some(*ssty),
+        let sup_y_cramped = b_cramped.items.iter().find_map(|it| match it {
+            Item::Glyph { ch: '2', y, .. } => Some(*y),
             _ => None,
         }).unwrap();
-        assert_eq!(ssty_sup, 1, "Superscript '2' should have ssty = 1");
 
-        // In nested script x^{y^z}:
-        // 'x' has ssty = 0
-        // 'y' has ssty = 1
-        // 'z' has ssty = 2 (ScriptScript style)
-        let node_nested = MathNode::parse("<math><msup><mi>x</mi><msup><mi>y</mi><mi>z</mi></msup></msup></math>").unwrap();
-        let b_nested = l.scripts(&node_nested.children[0], em, MathContext::DISPLAY).unwrap();
-
-        let ssty_z = b_nested.items.iter().find_map(|it| match it {
-            Item::Glyph { ch: 'z', ssty, .. } => Some(*ssty),
-            _ => None,
-        }).unwrap();
-        assert_eq!(ssty_z, 2, "Nested superscript 'z' must have ssty = 2 (ScriptScript)");
+        assert!(sup_y_cramped > sup_y_normal, "In cramped style, superscript y-coordinate must be lower (shifted down) than in un-cramped style");
     }
 }

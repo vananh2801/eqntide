@@ -54,9 +54,6 @@ use geom::{quad_bezier, rect, stroke};
 pub(crate) const MAX_DEPTH: usize = 256;
 pub(crate) const AXIS: f32 = 0.258;
 pub(crate) const RULE: f32 = 0.068;
-const THIN: f32 = 0.167;
-const MED: f32 = 0.222;
-const THICK: f32 = 0.278;
 
 /// TeX / OpenType MATH style levels (The TeXbook, Appendix G, Rule 1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -85,9 +82,21 @@ impl MathContext {
         cramped: false,
     };
 
+    #[allow(dead_code)]
+    pub const DISPLAY_CRAMPED: Self = Self {
+        style: MathVariantStyle::Display,
+        cramped: true,
+    };
+
     pub const TEXT: Self = Self {
         style: MathVariantStyle::Text,
         cramped: false,
+    };
+
+    #[allow(dead_code)]
+    pub const TEXT_CRAMPED: Self = Self {
+        style: MathVariantStyle::Text,
+        cramped: true,
     };
 
     /// Whether this context is display style (un-cramped display).
