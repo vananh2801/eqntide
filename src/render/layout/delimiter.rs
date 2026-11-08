@@ -58,11 +58,42 @@ pub(crate) fn is_eval_bar_base(node: &MathNode) -> bool {
 }
 
 impl Layout {
+    /// Exact (unrounded) ink box of `ch` at `em`: `(asc, desc, xmin, xmax)` in pixels.
+    ///
+    /// `Fonts::ink` / `Fonts::ink_x` snap to the pixel grid, which is too coarse for
+    /// aligning assembly pieces and for detecting where a stem stops being straight.
+    fn exact_ink(&self, face: Face, ch: char, em: f32) -> (f32, f32, f32, f32) {
+        let Some(segs) = self.f.glyph_segments(face, ch, em, 0.0, 0.0) else {
+            return (0.0, 0.0, 0.0, 0.0);
+        };
+        let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+        let mut add = |x: f32, y: f32| {
+            x0 = x0.min(x);
+            x1 = x1.max(x);
+            y0 = y0.min(y);
+            y1 = y1.max(y);
+        };
+        for s in segs {
+            match s {
+                Seg::Move(x, y) | Seg::Line(x, y) | Seg::Quad(_, _, x, y) | Seg::Cubic(_, _, _, _, x, y) => add(x, y),
+                Seg::Close => {}
+            }
+        }
+        if x0 > x1 {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
+        ((-y0).max(0.0), y1.max(0.0), x0, x1)
+    }
+
     /// Calculate the straight stem lengths of a delimiter piece glyph.
     ///
     /// Returns `(straight_stem_len_top, straight_stem_len_bot)` in pixels at `eff_em`.
-    /// Points that deviate horizontally from the extender stem `[ext_xmin, ext_xmax]`
-    /// are identified as curved features (hooks or cusps).
+    ///
+    /// A piece is "straight" only where its outline runs exactly along the extender
+    /// column edges `ext_xmin` / `ext_xmax`. Any segment that leaves those edges —
+    /// whether it bends *outside* the column (hook tip, cusp point) or *inside* it
+    /// (the stroke starting to drift towards the hook) — is a curved feature, and its
+    /// whole vertical range (including its start point) is excluded from the stem.
     fn piece_stem_lengths(
         &self,
         face: Face,
@@ -71,7 +102,7 @@ impl Layout {
         ext_xmin: f32,
         ext_xmax: f32,
     ) -> (f32, f32) {
-        let (asc, desc) = self.f.ink(face, ch, eff_em);
+        let (asc, desc, _, _) = self.exact_ink(face, ch, eff_em);
         let total_h = asc + desc;
         if total_h <= 0.0 {
             return (0.0, 0.0);
@@ -83,30 +114,45 @@ impl Layout {
             return (0.0, 0.0);
         };
 
-        let tol = 0.02 * eff_em;
+        // ~5 font units: only points lying on the column edges count as stem.
+        let tol = 0.005 * eff_em;
+        let on_edge = |x: f32| (x - ext_xmin).abs() <= tol || (x - ext_xmax).abs() <= tol;
+
         let mut min_curved_y = f32::INFINITY;
         let mut max_curved_y = f32::NEG_INFINITY;
-
-        let mut check_pt = |x: f32, y: f32| {
-            if x < ext_xmin - tol || x > ext_xmax + tol {
-                min_curved_y = min_curved_y.min(y);
-                max_curved_y = max_curved_y.max(y);
+        let mut mark = |pts: &[(f32, f32)]| {
+            if pts.iter().any(|&(x, _)| !on_edge(x)) {
+                for &(_, y) in pts {
+                    min_curved_y = min_curved_y.min(y);
+                    max_curved_y = max_curved_y.max(y);
+                }
             }
         };
 
+        let mut cur = (0.0f32, 0.0f32);
+        let mut start = cur;
         for s in segs {
             match s {
-                Seg::Move(x, y) | Seg::Line(x, y) => check_pt(x, y),
+                Seg::Move(x, y) => {
+                    cur = (x, y);
+                    start = cur;
+                }
+                Seg::Line(x, y) => {
+                    mark(&[cur, (x, y)]);
+                    cur = (x, y);
+                }
                 Seg::Quad(cx, cy, x, y) => {
-                    check_pt(cx, cy);
-                    check_pt(x, y);
+                    mark(&[cur, (cx, cy), (x, y)]);
+                    cur = (x, y);
                 }
                 Seg::Cubic(c1x, c1y, c2x, c2y, x, y) => {
-                    check_pt(c1x, c1y);
-                    check_pt(c2x, c2y);
-                    check_pt(x, y);
+                    mark(&[cur, (c1x, c1y), (c2x, c2y), (x, y)]);
+                    cur = (x, y);
                 }
-                Seg::Close => {}
+                Seg::Close => {
+                    mark(&[cur, start]);
+                    cur = start;
+                }
             }
         }
 
@@ -129,7 +175,7 @@ impl Layout {
     fn min_assembly_span(&self, face: Face, r: &Pieces, eff_em: f32) -> f32 {
         let piece_h = |ch: Option<char>| -> f32 {
             ch.map_or(0.0, |c| {
-                let (a, d) = self.f.ink(face, c, eff_em);
+                let (a, d, _, _) = self.exact_ink(face, c, eff_em);
                 a + d
             })
         };
@@ -142,7 +188,7 @@ impl Layout {
         };
 
         let h_mid = piece_h(Some(mid_ch));
-        let (ext_xmin, ext_xmax) = self.f.ink_x(face, r.ext, eff_em);
+        let (_, _, ext_xmin, ext_xmax) = self.exact_ink(face, r.ext, eff_em);
 
         let (_top_stem_top, bot_stem_top) = r.top.map_or((0.0, 0.0), |t| {
             self.piece_stem_lengths(face, t, eff_em, ext_xmin, ext_xmax)
@@ -154,7 +200,9 @@ impl Layout {
 
         let safe_overlap_top = bot_stem_top.min(top_stem_mid);
         let safe_overlap_bot = top_stem_bot.min(bot_stem_mid);
-        let max_safe_overlap = safe_overlap_top + safe_overlap_bot;
+        // The cusp is centred between head and tail, so both joints overlap by the
+        // same amount: the tighter joint limits the total overlap.
+        let max_safe_overlap = 2.0 * safe_overlap_top.min(safe_overlap_bot);
 
         (h_top + h_mid + h_bot - max_safe_overlap).max(0.0)
     }
@@ -263,11 +311,12 @@ impl Layout {
         let push = |ch: char, y: f32, items: &mut Vec<Item>| {
             items.push(Item::Glyph { ch, face, em: eff_em, x: 0.0, y, ssty: 0 });
         };
-        let ink = |ch: char| self.f.ink(face, ch, eff_em);
+        let ink = |ch: char| {
+            let (a, d, _, _) = self.exact_ink(face, ch, eff_em);
+            (a, d)
+        };
 
         if r.mid.is_some() {
-            let k = eff_em / 1000.0;
-
             // 1. Top piece (head):
             let (a_top, d_top) = ink(r.top.unwrap());
             let y_top = top_y + a_top;
@@ -282,11 +331,12 @@ impl Layout {
 
             // 3. Middle cusp:
             let mid_ch = r.mid.unwrap();
-            let (a_mid, _d_mid) = ink(mid_ch);
-            let y_mid = centre + 973.0 * k;
+            let (a_mid, d_mid) = ink(mid_ch);
+            // Centre the cusp's ink box on the delimiter centre.
+            let y_mid = centre + (a_mid - d_mid) / 2.0;
             push(mid_ch, y_mid, &mut items);
             let mid_start_y = y_mid - a_mid;
-            let mid_end_y = y_mid; // because yMin = 0
+            let mid_end_y = y_mid + d_mid;
 
             // 4. Extenders tiled into positive gaps (Tier 3 only):
             let (ea, ed) = ink(r.ext);
@@ -554,5 +604,24 @@ mod tests {
         let em = 24.0;
         assert!(l.stretchy_delimiter('x', 1.0, 1.0, em).is_none());
         assert!(l.stretchy_delimiter('?', 1.0, 1.0, em).is_none());
+    }
+
+    /// Regression: the straight stem must stop where the outline leaves the extender
+    /// column edges, even when it drifts *inside* the column (the hook of `⎧` starts
+    /// bending at y = 645 units, the cusp `⎨` at 1946 - 1386 = 560 / 558 units).
+    /// Over-estimating these lets the cusp's flat end poke out as a stray `|` stub.
+    #[test]
+    fn brace_piece_stems_stop_where_curve_starts() {
+        let l = layout();
+        let face = Face::Symbol;
+        let em = 1000.0; // 1 px == 1 font unit
+        let (_, _, xmin, xmax) = l.exact_ink(face, '\u{23AA}', em);
+        let near = |a: f32, b: f32| (a - b).abs() <= 2.0;
+        let (_, bot) = l.piece_stem_lengths(face, '\u{23A7}', em, xmin, xmax);
+        assert!(near(bot, 645.0), "⎧ bottom stem = {bot}");
+        let (top, bot) = l.piece_stem_lengths(face, '\u{23A8}', em, xmin, xmax);
+        assert!(near(top, 560.0) && near(bot, 558.0), "⎨ stems = {top}, {bot}");
+        let (top, _) = l.piece_stem_lengths(face, '\u{23A9}', em, xmin, xmax);
+        assert!(near(top, 646.0), "⎩ top stem = {top}");
     }
 }
