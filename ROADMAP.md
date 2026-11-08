@@ -124,7 +124,7 @@ The goal of this project is to build a modern, open-source, cross-platform equat
 ### Phase 2: Local Communication Bridge Server
 **Goal:** Expose the Rust engine over a local loopback server that Office/WPS Add-ins and the Tauri UI can communicate with reliably.
 
-- [ ] **Task 2.1: Local HTTP/WebSocket Bridge (`127.0.0.1:17890`)**
+- [x] **Task 2.1: Local HTTP/WebSocket Bridge (`127.0.0.1:17890`)**
   - Embed a lightweight server (`axum` or `tiny_http`) inside the Rust application.
   - Include CORS headers AND `Access-Control-Allow-Private-Network: true` to satisfy modern Chromium/WebView2 Private Network Access rules when called from HTTPS Office Add-in origins.
   - Support Custom URI Scheme (`matheditor://open?...`) as a fallback trigger on macOS/Windows if the desktop agent is not yet running.

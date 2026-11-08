@@ -32,6 +32,7 @@
 //! | Module      | Role                                                    |
 //! |-------------|---------------------------------------------------------|
 //! | [`docx`]    | `.docx` package handling and both conversion pipelines  |
+//! | [`bridge`]  | local HTTP bridge server for Word/WPS Add-ins & Tauri   |
 //! | [`omml`]    | OMML ⇄ MathML                                           |
 //! | [`mtef`]    | MathML ⇄ MTEF binary                                    |
 //! | [`ole`]     | OLE compound file & WMF wrapper/extractor for MTEF      |
@@ -43,6 +44,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bridge;
 pub mod cli;
 pub mod docx;
 pub mod error;
@@ -54,6 +56,10 @@ pub mod render;
 pub mod symbols;
 pub mod xml;
 
+pub use bridge::{
+    start_bridge_server, CustomUriAction, ServerHandle, SessionManager, SessionState, DEFAULT_HOST,
+    DEFAULT_PORT,
+};
 pub use docx::{
     convert, convert_bytes, convert_bytes_to_omml, convert_bytes_to_omml_with, convert_bytes_with,
     convert_to_omml, convert_to_omml_with, convert_with, flat_opc_to_mathml, mathml_to_flat_opc,

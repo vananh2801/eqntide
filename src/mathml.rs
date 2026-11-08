@@ -104,4 +104,24 @@ impl MathNode {
     pub fn parse(src: &str) -> Result<MathNode> {
         Ok(MathNode::from_xml(&xml::parse(src.as_bytes())?))
     }
+
+    /// Convert this [`MathNode`] tree into an [`xml::Element`].
+    pub fn to_xml_element(&self) -> xml::Element {
+        let mut el = xml::Element::new(None, None, &self.tag);
+        for (k, v) in &self.attrs {
+            el.set_attr(None, None, k, v);
+        }
+        if !self.text.is_empty() {
+            el.children.push(xml::Node::Text(self.text.clone()));
+        }
+        for child in &self.children {
+            el.children.push(xml::Node::Element(child.to_xml_element()));
+        }
+        el
+    }
+
+    /// Serialise this [`MathNode`] tree to a MathML XML string.
+    pub fn to_xml(&self) -> String {
+        xml::to_string(&self.to_xml_element())
+    }
 }

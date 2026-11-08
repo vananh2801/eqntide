@@ -21,7 +21,20 @@ use crate::error::Result as ConvResult;
 )]
 struct Args {
     /// Input .docx file or directory containing .docx files (scanned recursively)
-    input: PathBuf,
+    #[arg(required_unless_present = "server")]
+    input: Option<PathBuf>,
+
+    /// Start the local loopback HTTP bridge server (127.0.0.1:17890) for Office/WPS Add-ins and Tauri GUI
+    #[arg(long, short = 's')]
+    server: bool,
+
+    /// Host IP address to bind the bridge server to (default: 127.0.0.1)
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// Port to bind the bridge server to (default: 17890)
+    #[arg(long, default_value_t = 17890)]
+    port: u16,
 
     /// Output .docx file or directory path (default: <input>_mathtype[.docx] or <input>_omml[.docx])
     #[arg(short, long, value_name = "PATH")]
@@ -276,7 +289,29 @@ where
 
     configure_logging(args.verbose, args.quiet);
 
-    let inp = &args.input;
+    // ── Server Mode ───────────────────────────────────────────────────────────
+    if args.server {
+        let addr = format!("{}:{}", args.host, args.port);
+        let _ = writeln!(out, "Starting local bridge server on http://{addr} ...");
+        match crate::bridge::start_bridge_server(&addr) {
+            Ok(handle) => {
+                let _ = writeln!(out, "Bridge server running on http://{addr}. Press Ctrl+C to stop.");
+                while handle.addr().port() != 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                return 0;
+            }
+            Err(e) => {
+                let _ = writeln!(err, "Error: failed to start bridge server: {e}");
+                return 1;
+            }
+        }
+    }
+
+    let Some(ref inp) = args.input else {
+        let _ = writeln!(err, "Error: missing input file or directory");
+        return 2;
+    };
     if !inp.exists() {
         let _ = writeln!(err, "Error: path not found: {}", inp.display());
         return 1;
