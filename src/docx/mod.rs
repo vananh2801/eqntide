@@ -18,8 +18,10 @@
 //! | `job`        | per-equation work: OMML → MathML → MTEF → OLE (+ picture) |
 //! | `pipeline`   | public `convert*` entry points (OMML → MathType)          |
 //! | `to_omml`    | public `convert_to_omml*` entry points (MathType → OMML)  |
+//! | `flat_opc`   | single-equation Flat OPC (`pkg:package`) packager & parser|
 
 mod consts;
+mod flat_opc;
 mod job;
 mod ole_xml;
 mod options;
@@ -28,6 +30,7 @@ mod pipeline;
 mod to_omml;
 mod upgrade;
 
+pub use flat_opc::{flat_opc_to_mathml, mathml_to_flat_opc, FlatOpcMode};
 pub use ole_xml::{make_object_run, make_ole_xml};
 pub use options::{ConversionSummary, EmbedMode, Options, PreviewFormat, ToOmmlOptions, UpgradeOptions, UpgradeTarget};
 pub use package::{add_relationship, ensure_content_type, ensure_default_extension};

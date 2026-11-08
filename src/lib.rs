@@ -56,10 +56,10 @@ pub mod xml;
 
 pub use docx::{
     convert, convert_bytes, convert_bytes_to_omml, convert_bytes_to_omml_with, convert_bytes_with,
-    convert_to_omml, convert_to_omml_with, convert_with, upgrade_legacy_mathtype_bytes,
-    upgrade_legacy_mathtype_bytes_with, upgrade_legacy_mathtype_docx,
-    upgrade_legacy_mathtype_docx_with, ConversionSummary, EmbedMode, Options, PreviewFormat,
-    ToOmmlOptions, UpgradeOptions, UpgradeTarget,
+    convert_to_omml, convert_to_omml_with, convert_with, flat_opc_to_mathml, mathml_to_flat_opc,
+    upgrade_legacy_mathtype_bytes, upgrade_legacy_mathtype_bytes_with, upgrade_legacy_mathtype_docx,
+    upgrade_legacy_mathtype_docx_with, ConversionSummary, EmbedMode, FlatOpcMode, Options,
+    PreviewFormat, ToOmmlOptions, UpgradeOptions, UpgradeTarget,
 };
 pub use error::{Error, Result};
 pub use mtef::decode::{mtef_to_mathml, ole_to_mathml};

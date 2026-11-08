@@ -114,7 +114,7 @@ The goal of this project is to build a modern, open-source, cross-platform equat
     - Decodes them to `MathNode` (MathML) and re-encodes to either:
       1. **Modern OMML (`<m:oMath>`)** (for modern MathType Web Add-in & native Word editing), or
       2. **Modern MathType 7 (`Equation.DSMT4` MTEF 5.0 + Vector `.emf` with `EMR_COMMENT` MTEF)**.
-- [ ] **Task 1.4: Single-Equation Flat OPC (`pkg:package`) Packager & Parser**
+- [x] **Task 1.4: Single-Equation Flat OPC (`pkg:package`) Packager & Parser**
   - Create `src/docx/flat_opc.rs`:
     - **Packager (`mathml_to_flat_opc`):** Takes a `MathNode` and target mode (`ModernOmml` or `ModernMathtypeOleEmf`), and returns a complete `<pkg:package>` XML string containing `/word/document.xml`, `/word/_rels/document.xml.rels`, `/word/embeddings/oleObject1.bin` (base64), and `/word/media/equation1.emf` (base64 with embedded MTEF).
     - **Extractor (`flat_opc_to_mathml`):** Takes the OOXML string returned by Word's `getSelection().getOoxml()` or WPS's selection XML, locates `<m:oMath>`, `oleObject*.bin`, `.emf`, or `.wmf` inside the `<pkg:part>` entries, and decodes it to MathML.
