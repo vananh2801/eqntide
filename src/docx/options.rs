@@ -53,6 +53,38 @@ pub struct ToOmmlOptions {
     pub math_font: Option<String>,
 }
 
+/// Target format for upgrading legacy MathType equations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UpgradeTarget {
+    /// Modern MathType 7 format (default): upgrade MTEF 3.0/WMF/Equation.3 to genuine MathType 5.0 OLE (`Equation.DSMT4`)
+    /// with sharp vector EMF previews embedding MTEF in `EMR_COMMENT`.
+    #[default]
+    ModernMathType,
+    /// Modern Add-in format: convert legacy MathType/Equation 3.0 to native Word OMML (<m:oMath>).
+    ModernOmml,
+}
+
+/// Settings for upgrading legacy MathType equations in a `.docx`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpgradeOptions {
+    /// Target format for the upgraded equations.
+    pub target: UpgradeTarget,
+    /// Font size (points) for re-rendered preview pictures (used when `target == ModernMathType`).
+    pub font_pt: f32,
+    /// Optional math font name (e.g. `"Cambria Math"`) applied when `target == ModernOmml`.
+    pub math_font: Option<String>,
+}
+
+impl Default for UpgradeOptions {
+    fn default() -> Self {
+        UpgradeOptions {
+            target: UpgradeTarget::ModernMathType,
+            font_pt: 12.0,
+            math_font: None,
+        }
+    }
+}
+
 /// Outcome of a conversion run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ConversionSummary {

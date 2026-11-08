@@ -26,11 +26,17 @@ mod options;
 mod package;
 mod pipeline;
 mod to_omml;
+mod upgrade;
 
 pub use ole_xml::{make_object_run, make_ole_xml};
-pub use options::{ConversionSummary, EmbedMode, Options, PreviewFormat, ToOmmlOptions};
+pub use options::{ConversionSummary, EmbedMode, Options, PreviewFormat, ToOmmlOptions, UpgradeOptions, UpgradeTarget};
 pub use package::{add_relationship, ensure_content_type, ensure_default_extension};
 pub use pipeline::{convert, convert_bytes, convert_bytes_with, convert_with};
 pub use to_omml::{
     convert_bytes_to_omml, convert_bytes_to_omml_with, convert_to_omml, convert_to_omml_with,
+};
+
+pub use upgrade::{
+    upgrade_legacy_mathtype_bytes, upgrade_legacy_mathtype_bytes_with,
+    upgrade_legacy_mathtype_docx, upgrade_legacy_mathtype_docx_with,
 };

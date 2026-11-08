@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 
 use crate::docx::{
-    convert_to_omml_with, convert_with, ConversionSummary, EmbedMode, Options, PreviewFormat,
-    ToOmmlOptions,
+    convert_to_omml_with, convert_with, upgrade_legacy_mathtype_docx_with, ConversionSummary,
+    EmbedMode, Options, PreviewFormat, ToOmmlOptions, UpgradeOptions, UpgradeTarget,
 };
 use crate::error::Result as ConvResult;
 
@@ -30,6 +30,14 @@ struct Args {
     /// Convert MathType OLE / WMF equations in the .docx to Word OMML (<m:oMath>)
     #[arg(short = 'r', long = "to-omml")]
     to_omml: bool,
+
+    /// Upgrade and re-typeset all MathType equations (legacy Equation.3/WMF and existing MathType) with this repo's typesetting engine
+    #[arg(short = 'u', long = "upgrade", conflicts_with = "to_omml")]
+    upgrade: bool,
+
+    /// Target format for --upgrade: 'mathtype' (Modern MathType 7 DSMT4 OLE + vector EMF, default) or 'omml' (native Word OMML)
+    #[arg(long, value_enum, default_value_t = UpgradeTargetArg::Mathtype)]
+    upgrade_target: UpgradeTargetArg,
 
     /// Optional font name (e.g. "Cambria Math") to apply to OMML runs when using --to-omml
     #[arg(long, value_name = "FONT")]
@@ -57,6 +65,14 @@ struct Args {
     /// Font size (points) used to draw the preview pictures
     #[arg(long, value_name = "PT", default_value_t = 12.0, value_parser = parse_font_size)]
     font_size: f32,
+}
+
+/// `--upgrade-target` values.
+#[derive(Clone, Copy, Debug, clap::ValueEnum, Default)]
+pub enum UpgradeTargetArg {
+    #[default]
+    Mathtype,
+    Omml,
 }
 
 /// `--preview` values.
@@ -103,17 +119,35 @@ fn configure_logging(verbose: bool, quiet: bool) {
     });
 }
 
-fn default_file_output(input: &Path, to_omml: bool) -> PathBuf {
+fn default_file_output(input: &Path, to_omml: bool, upgrade: bool, upgrade_target: UpgradeTargetArg) -> PathBuf {
     let stem = input
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let suffix = if to_omml { "omml" } else { "mathtype" };
+    let suffix = if upgrade {
+        match upgrade_target {
+            UpgradeTargetArg::Omml => "upgraded_omml",
+            UpgradeTargetArg::Mathtype => "upgraded_mathtype",
+        }
+    } else if to_omml {
+        "omml"
+    } else {
+        "mathtype"
+    };
     input.with_file_name(format!("{stem}_{suffix}.docx"))
 }
 
-fn default_dir_output(input: &Path, to_omml: bool) -> PathBuf {
-    let suffix = if to_omml { "omml" } else { "mathtype" };
+fn default_dir_output(input: &Path, to_omml: bool, upgrade: bool, upgrade_target: UpgradeTargetArg) -> PathBuf {
+    let suffix = if upgrade {
+        match upgrade_target {
+            UpgradeTargetArg::Omml => "upgraded_omml",
+            UpgradeTargetArg::Mathtype => "upgraded_mathtype",
+        }
+    } else if to_omml {
+        "omml"
+    } else {
+        "mathtype"
+    };
     // Resolve trailing slashes or `.` if needed
     let resolved = if input.file_name().is_some() {
         input.to_path_buf()
@@ -178,7 +212,17 @@ fn convert_single_file(src: &Path, dst: &Path, args: &Args) -> ConvResult<Conver
             std::fs::create_dir_all(parent)?;
         }
     }
-    if args.to_omml {
+    if args.upgrade {
+        let opts = UpgradeOptions {
+            target: match args.upgrade_target {
+                UpgradeTargetArg::Omml => UpgradeTarget::ModernOmml,
+                UpgradeTargetArg::Mathtype => UpgradeTarget::ModernMathType,
+            },
+            font_pt: args.font_size,
+            math_font: args.math_font.clone(),
+        };
+        upgrade_legacy_mathtype_docx_with(src, dst, &opts)
+    } else if args.to_omml {
         let opts = ToOmmlOptions {
             math_font: args.math_font.clone(),
         };
@@ -254,7 +298,7 @@ where
                     o.clone()
                 }
             }
-            None => default_file_output(inp, args.to_omml),
+            None => default_file_output(inp, args.to_omml, args.upgrade, args.upgrade_target),
         };
 
         let summary = match convert_single_file(inp, &out_path, &args) {
@@ -291,7 +335,7 @@ where
         let out_dir = args
             .output
             .clone()
-            .unwrap_or_else(|| default_dir_output(inp, args.to_omml));
+            .unwrap_or_else(|| default_dir_output(inp, args.to_omml, args.upgrade, args.upgrade_target));
 
         // Avoid scanning `out_dir` if it is a subdirectory of `inp` (unless in-place `out_dir == inp`).
         let same_dir = *inp == out_dir
@@ -534,5 +578,77 @@ mod tests {
             .is_file());
 
         let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_cli_upgrade_single_file() {
+        let temp_dir = std::env::temp_dir().join(format!("omml_cli_upgrade_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let src_file = temp_dir.join("input.docx");
+        let dst_file = temp_dir.join("upgraded.docx");
+
+        let node = crate::mathml::MathNode::with_children("math", vec![crate::mathml::MathNode::leaf("mi", "a")]);
+        let preview = crate::render::emf::render_emf(&node, 12.0).unwrap();
+
+        let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:v="urn:schemas-microsoft-com:vml">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:pict>
+          <v:shape id="_x0000_i1025" style="width:10pt;height:10pt">
+            <v:imagedata r:id="rId1"/>
+          </v:shape>
+        </w:pict>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"#;
+
+        let rels_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.emf"/>
+</Relationships>"#;
+
+        let ct_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Default Extension="emf" ContentType="image/x-emf"/>
+</Types>"#;
+
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        w.start_file("[Content_Types].xml", opts).unwrap();
+        std::io::Write::write_all(&mut w, ct_xml.as_bytes()).unwrap();
+        w.start_file("word/document.xml", opts).unwrap();
+        std::io::Write::write_all(&mut w, doc_xml.as_bytes()).unwrap();
+        w.start_file("word/_rels/document.xml.rels", opts).unwrap();
+        std::io::Write::write_all(&mut w, rels_xml.as_bytes()).unwrap();
+        w.start_file("word/media/image1.emf", opts).unwrap();
+        std::io::Write::write_all(&mut w, &preview.emf).unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        std::fs::write(&src_file, bytes).unwrap();
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_with_io(
+            [
+                "omml-converter",
+                src_file.to_str().unwrap(),
+                "-o",
+                dst_file.to_str().unwrap(),
+                "--upgrade",
+                "--upgrade-target",
+                "mathtype",
+            ],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(dst_file.exists());
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

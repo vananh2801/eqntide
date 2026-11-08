@@ -138,7 +138,7 @@ pub fn convert_to_omml_with(
 
 // ── Part & Relationship Discovery ────────────────────────────────────────────
 
-fn discover_content_parts(pkg: &Package) -> Vec<String> {
+pub(crate) fn discover_content_parts(pkg: &Package) -> Vec<String> {
     let mut parts = Vec::new();
     for name in pkg.part_names() {
         if name == "word/document.xml"
@@ -153,14 +153,14 @@ fn discover_content_parts(pkg: &Package) -> Vec<String> {
     parts
 }
 
-fn rels_path_for_part(xml_path: &str) -> String {
+pub(crate) fn rels_path_for_part(xml_path: &str) -> String {
     match xml_path.rsplit_once('/') {
         Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
         None => format!("_rels/{xml_path}.rels"),
     }
 }
 
-fn resolve_target_path(part_dir: &str, target: &str) -> String {
+pub(crate) fn resolve_target_path(part_dir: &str, target: &str) -> String {
     if let Some(stripped) = target.strip_prefix('/') {
         return stripped.to_owned();
     }
@@ -183,7 +183,7 @@ fn resolve_target_path(part_dir: &str, target: &str) -> String {
     segs.join("/")
 }
 
-fn build_rel_map(rels_root: &Element, xml_path: &str) -> HashMap<String, String> {
+pub(crate) fn build_rel_map(rels_root: &Element, xml_path: &str) -> HashMap<String, String> {
     let part_dir = xml_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
     let mut map = HashMap::new();
     for el in rels_root.elements() {
@@ -201,28 +201,28 @@ fn build_rel_map(rels_root: &Element, xml_path: &str) -> HashMap<String, String>
 
 // ── XML Tree Rewriting ───────────────────────────────────────────────────────
 
-fn is_mathtype_prog_id(prog_id: &str) -> bool {
+pub(crate) fn is_mathtype_prog_id(prog_id: &str) -> bool {
     matches!(prog_id, "Equation.DSMT4" | "Equation.3" | "Equation.2")
         || prog_id.starts_with("Equation.DSMT")
 }
 
-fn is_mathtype_ole_element(el: &Element) -> bool {
+pub(crate) fn is_mathtype_ole_element(el: &Element) -> bool {
     (el.is(NS_O, "OLEObject") || el.local == "OLEObject")
         && el.attr(None, "ProgID").is_some_and(is_mathtype_prog_id)
 }
 
-fn get_r_attr<'a>(el: &'a Element, local: &str) -> Option<&'a str> {
+pub(crate) fn get_r_attr<'a>(el: &'a Element, local: &str) -> Option<&'a str> {
     el.attr(Some(NS_R), local).or_else(|| el.attr(None, local))
 }
 
-fn find_mathtype_ole_in_subtree(el: &Element) -> Vec<&Element> {
+pub(crate) fn find_mathtype_ole_in_subtree(el: &Element) -> Vec<&Element> {
     el.iter()
         .into_iter()
         .filter(|e| is_mathtype_ole_element(e))
         .collect()
 }
 
-fn collect_imagedata_rids(el: &Element) -> Vec<String> {
+pub(crate) fn collect_imagedata_rids(el: &Element) -> Vec<String> {
     let mut out = Vec::new();
     for d in el.iter() {
         if d.is(NS_V, "imagedata") || d.local == "imagedata" {
@@ -458,9 +458,9 @@ fn try_convert_metafile_run(
             continue;
         };
         let mtef_bytes = if is_wmf {
-            extract_mtef_from_wmf(img_bytes)
+            extract_mtef_from_wmf(img_bytes).or_else(|| extract_mtef_from_emf(img_bytes))
         } else {
-            extract_mtef_from_emf(img_bytes)
+            extract_mtef_from_emf(img_bytes).or_else(|| extract_mtef_from_wmf(img_bytes))
         };
         let Some(mtef_bytes) = mtef_bytes else {
             continue;
@@ -495,7 +495,7 @@ fn try_convert_metafile_run(
 
 // ── Orphan Cleanup ───────────────────────────────────────────────────────────
 
-fn collect_referenced_rids(root: &Element) -> HashSet<String> {
+pub(crate) fn collect_referenced_rids(root: &Element) -> HashSet<String> {
     let mut rids = HashSet::new();
     for el in root.iter() {
         for attr in &el.attrs {
@@ -510,7 +510,7 @@ fn collect_referenced_rids(root: &Element) -> HashSet<String> {
     rids
 }
 
-fn cleanup_unreferenced_files(pkg: &mut Package, candidates: &HashSet<String>) -> Result<()> {
+pub(crate) fn cleanup_unreferenced_files(pkg: &mut Package, candidates: &HashSet<String>) -> Result<()> {
     // Collect all targets still referenced across ALL .rels files in the package
     let mut still_referenced: HashSet<String> = HashSet::new();
     for name in pkg.part_names() {

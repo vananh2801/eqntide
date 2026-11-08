@@ -108,7 +108,7 @@ The goal of this project is to build a modern, open-source, cross-platform equat
 - [x] **Task 1.2: Extract MTEF Data from `.emf` Pictures (`extract_mtef_from_emf`)**
   - Implement `extract_mtef_from_emf(data: &[u8]) -> Option<Vec<u8>>` in [`src/ole.rs`](src/ole.rs) to parse `EMR_COMMENT` (`0x46`) records and reassemble `AppsMFCC` MTEF chunks (mirroring [`extract_mtef_from_wmf`](src/ole.rs)).
   - Update [`src/docx/to_omml.rs`](src/docx/to_omml.rs) (`try_convert_wmf_run` ➔ `try_convert_metafile_run`) so standalone `.emf` equations (where OLE `.bin` was stripped) are also detected and converted seamlessly.
-- [ ] **Task 1.3: Legacy MathType ➔ Modern MathType Upgrader Pipeline**
+- [x] **Task 1.3: Legacy MathType ➔ Modern MathType Upgrader Pipeline**
   - Implement `upgrade_legacy_mathtype_docx` in [`src/docx/`](src/docx/mod.rs):
     - Scans `.docx` for legacy `Equation.3` / `Equation.2` OLE objects, MTEF 3.0 streams, standalone `.wmf` equations, or old MathType OLE objects with blurry WMF previews.
     - Decodes them to `MathNode` (MathML) and re-encodes to either:
