@@ -272,9 +272,9 @@ fn main() {
         })
         .on_window_event(move |window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // If user did not explicitly select "Quit" from tray, prevent close and emit event to frontend
                 if !is_quitting_clone.load(Ordering::SeqCst) {
                     api.prevent_close();
+                    let _ = window.hide();
                     let _ = window.emit("window-close-requested", ());
                 }
             }
