@@ -68,6 +68,7 @@ pub use docx::{
     PreviewFormat, ToOmmlOptions, UpgradeOptions, UpgradeTarget,
 };
 pub use error::{Error, Result};
+pub use mathml::MathNode;
 pub use mtef::decode::{mtef_to_mathml, ole_to_mathml};
 pub use mtef::encode::mathml_to_mtef_bytes;
 pub use mtef::make_equation_native;

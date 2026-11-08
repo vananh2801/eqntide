@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Math Equation Editor & Converter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header Bar -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="app-logo">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4h16v16H4z" rx="2" fill="#1e40af" stroke="#1e40af"/>
+            <path d="M7 8h10l-6 8 6 0" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="app-title">Math Editor</span>
+        </div>
+        <nav class="nav-tabs">
+          <button class="nav-tab active" id="tab-editor-btn">Editor</button>
+          <button class="nav-tab" id="tab-batch-btn">Batch Converter</button>
+        </nav>
+      </div>
+
+      <div class="header-right">
+        <div class="format-selector-group">
+          <label for="format-select">Target Format:</label>
+          <select id="format-select" class="format-select">
+            <option value="omml" selected>Modern OMML (&lt;m:oMath&gt;)</option>
+            <option value="mathtype">Modern MathType 7 (OLE + EMF-MTEF)</option>
+          </select>
+        </div>
+        <div class="bridge-status-badge" id="bridge-badge" title="Local Loopback Server Status">
+          <span class="status-dot"></span>
+          <span class="status-text" id="status-text">Bridge: 127.0.0.1:17890</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content Area: Editor Tab -->
+    <main class="tab-content" id="tab-editor">
+      <!-- MathType-style Palette Toolbar -->
+      <section class="palette-toolbar" id="palette-toolbar">
+        <div class="palette-group">
+          <button class="palette-btn" data-insert="\frac{#?}{#?}" title="Fraction">
+            <span class="palette-preview">&frac12;</span>
+            <span class="palette-label">Fraction</span>
+          </button>
+          <button class="palette-btn" data-insert="\sqrt{#?}" title="Square Root">
+            <span class="palette-preview">&radic;x</span>
+            <span class="palette-label">Radical</span>
+          </button>
+          <button class="palette-btn" data-insert="^{#?}" title="Superscript">
+            <span class="palette-preview">x<sup>2</sup></span>
+            <span class="palette-label">Superscript</span>
+          </button>
+          <button class="palette-btn" data-insert="_{#?}" title="Subscript">
+            <span class="palette-preview">x<sub>2</sub></span>
+            <span class="palette-label">Subscript</span>
+          </button>
+        </div>
+
+        <div class="palette-divider"></div>
+
+        <div class="palette-group">
+          <button class="palette-btn" data-insert="\int_{#?}^{#?} #? \, d#?" title="Definite Integral">
+            <span class="palette-preview">&int;</span>
+            <span class="palette-label">Integral</span>
+          </button>
+          <button class="palette-btn" data-insert="\sum_{#?}^{#?} #?" title="Summation">
+            <span class="palette-preview">&sum;</span>
+            <span class="palette-label">Sum</span>
+          </button>
+          <button class="palette-btn" data-insert="\prod_{#?}^{#?} #?" title="Product">
+            <span class="palette-preview">&prod;</span>
+            <span class="palette-label">Product</span>
+          </button>
+          <button class="palette-btn" data-insert="\lim_{#? \to #?} #?" title="Limit">
+            <span class="palette-preview">lim</span>
+            <span class="palette-label">Limit</span>
+          </button>
+        </div>
+
+        <div class="palette-divider"></div>
+
+        <div class="palette-group">
+          <button class="palette-btn" data-insert="\left( #? \right)" title="Parentheses">
+            <span class="palette-preview">( &bull; )</span>
+            <span class="palette-label">Fences</span>
+          </button>
+          <button class="palette-btn" data-insert="\left[ #? \right]" title="Brackets">
+            <span class="palette-preview">[ &bull; ]</span>
+            <span class="palette-label">Brackets</span>
+          </button>
+          <button class="palette-btn" data-insert="\begin{cases} #? & #? \\ #? & #? \end{cases}" title="Cases">
+            <span class="palette-preview">{ &bull;</span>
+            <span class="palette-label">Cases</span>
+          </button>
+          <button class="palette-btn" data-insert="\begin{pmatrix} #? & #? \\ #? & #? \end{pmatrix}" title="2x2 Matrix">
+            <span class="palette-preview">[::]</span>
+            <span class="palette-label">Matrix</span>
+          </button>
+        </div>
+
+        <div class="palette-divider"></div>
+
+        <div class="palette-group">
+          <button class="palette-btn" data-insert="\alpha" title="Alpha">&alpha;</button>
+          <button class="palette-btn" data-insert="\beta" title="Beta">&beta;</button>
+          <button class="palette-btn" data-insert="\theta" title="Theta">&theta;</button>
+          <button class="palette-btn" data-insert="\pi" title="Pi">&pi;</button>
+          <button class="palette-btn" data-insert="\le" title="Less than or equal">&le;</button>
+          <button class="palette-btn" data-insert="\ge" title="Greater than or equal">&ge;</button>
+          <button class="palette-btn" data-insert="\pm" title="Plus-minus">&plusmn;</button>
+          <button class="palette-btn" data-insert="\to" title="Arrow">&rarr;</button>
+        </div>
+      </section>
+
+      <!-- Equation Canvas -->
+      <section class="editor-canvas-container">
+        <div class="canvas-label-bar">
+          <span class="canvas-label">Interactive Equation Field:</span>
+          <span class="canvas-hint">Supports inline LaTeX typing, copy/paste MathML &amp; shortcuts</span>
+        </div>
+        <div class="canvas-wrapper">
+          <textarea id="equation-input" class="equation-textarea" spellcheck="false" placeholder="Type LaTeX equation or formula here, e.g. \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"></textarea>
+          <div id="equation-preview" class="equation-rendered-preview"></div>
+        </div>
+      </section>
+
+      <!-- Live LaTeX Source Bar -->
+      <section class="latex-sync-section">
+        <div class="latex-label-bar">
+          <label for="latex-source">LaTeX Source:</label>
+          <button class="action-btn-small" id="btn-copy-latex">Copy LaTeX</button>
+        </div>
+        <input type="text" id="latex-source" class="latex-input" value="\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}" spellcheck="false">
+      </section>
+
+      <!-- Bottom Action Footer -->
+      <footer class="app-footer">
+        <div class="footer-left">
+          <button class="secondary-btn" id="btn-copy-mathml">Copy MathML</button>
+          <button class="secondary-btn" id="btn-copy-flat-opc">Copy Flat OPC XML</button>
+          <button class="secondary-btn" id="btn-toggle-latex">Toggle $...$ LaTeX</button>
+        </div>
+        <div class="footer-right">
+          <button class="cancel-btn" id="btn-cancel">Cancel</button>
+          <button class="primary-btn" id="btn-insert-update">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <span>Insert / Update in Document</span>
+          </button>
+        </div>
+      </footer>
+    </main>
+
+    <!-- Main Content Area: Batch Converter Tab -->
+    <main class="tab-content hidden" id="tab-batch">
+      <section class="batch-container">
+        <div class="batch-card">
+          <h2>Batch Document Converter (.docx)</h2>
+          <p class="batch-subtitle">Convert legacy Microsoft Equation 3.0 / WMF to Modern MathType (OMML or DSMT4 + EMF-MTEF) in entire Word documents without losing formatting.</p>
+          
+          <div class="batch-dropzone" id="batch-dropzone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p>Drag and drop <strong>.docx</strong> files or folders here, or click to browse</p>
+            <input type="file" id="batch-file-input" accept=".docx" multiple style="display: none;">
+          </div>
+
+          <div class="batch-options">
+            <div class="option-item">
+              <label>Conversion Direction:</label>
+              <select id="batch-direction-select">
+                <option value="upgrade_modern_omml">Upgrade Legacy MathType &rarr; Modern Native OMML</option>
+                <option value="upgrade_modern_mathtype">Upgrade Legacy MathType &rarr; Modern MathType 7 (DSMT4 + EMF)</option>
+                <option value="omml_to_mathtype">Word OMML &rarr; MathType OLE</option>
+                <option value="mathtype_to_omml">MathType OLE &rarr; Word OMML</option>
+              </select>
+            </div>
+            <button class="primary-btn" id="btn-run-batch" disabled>Start Batch Conversion</button>
+          </div>
+
+          <div class="batch-log-panel" id="batch-log-panel">
+            <div class="log-header">Conversion Progress:</div>
+            <pre class="log-output" id="batch-log-output">Ready. Select or drop .docx files to start.</pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Prompt-on-Close Modal Dialog -->
+    <div class="modal-overlay hidden" id="close-modal">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h3>Unsaved Equation</h3>
+        </div>
+        <div class="modal-body">
+          <p>Do you want to insert or update this equation in the Microsoft Word / WPS Office document?</p>
+        </div>
+        <div class="modal-footer">
+          <button class="primary-btn" id="modal-btn-yes">Yes, Save to Document</button>
+          <button class="secondary-btn" id="modal-btn-no">No, Discard</button>
+          <button class="cancel-btn" id="modal-btn-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -140,7 +140,7 @@ The goal of this project is to build a modern, open-source, cross-platform equat
 ### Phase 3: Tauri v2 Desktop App & MathType-Style Editor UI
 **Goal:** Build the fast popup equation editor and standalone batch converter using Tauri v2 and MathLive.
 
-- [ ] **Task 3.1: Tauri v2 Shell & System Tray Lifecycle**
+- [x] **Task 3.1: Tauri v2 Shell & System Tray Lifecycle**
   - Initialize `src-tauri/` and frontend `src-ui/`.
   - Configure `@tauri-apps/plugin-single-instance` and System Tray residency so closing the window hides it to the tray, enabling instant (< 150ms) warm popup when triggered from Word/WPS.
 - [ ] **Task 3.2: MathLive Canvas & Bidirectional LaTeX/MathML Sync**

@@ -1,0 +1,17 @@
+[package]
+name = "omml-editor-desktop"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+omml-converter = { path = ".." }
+
+[build-dependencies]
+tauri-build = { version = "2", default-features = false }
