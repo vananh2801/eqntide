@@ -49,7 +49,7 @@ use crate::symbols::{
 };
 
 pub(crate) use boxes::{Item, LBox};
-use geom::{quad_bezier, rect, stroke};
+use geom::{clip_poly_y, quad_bezier, rect, stroke};
 
 pub(crate) const MAX_DEPTH: usize = 256;
 pub(crate) const AXIS: f32 = 0.258;

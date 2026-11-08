@@ -26,6 +26,27 @@ impl Pieces {
     }
 }
 
+/// Vertical metrics of one assembly piece (pixels).
+#[derive(Clone, Copy)]
+struct PieceGeom {
+    asc: f32,
+    h: f32,
+    stem_top: f32,
+    stem_bot: f32,
+}
+
+/// A piece pinned in the assembly, with the band `[clip_top, clip_bot]` it is cut to.
+struct Placed {
+    ch: char,
+    y: f32,
+    top: f32,
+    bot: f32,
+    stem_top: f32,
+    stem_bot: f32,
+    clip_top: f32,
+    clip_bot: f32,
+}
+
 /// Assembly recipe for `c`, or `None` when `c` is not a glyph-assembled delimiter.
 fn recipe(c: char) -> Option<Pieces> {
     Some(match c {
@@ -165,46 +186,39 @@ impl Layout {
         }
     }
 
-    /// Calculate the minimum delimiter height (`span`) at which font glyph pieces can
-    /// begin to be assembled safely without visual collision artifacts.
+    /// Height, ascent and straight-stem lengths of one assembly piece at `eff_em`.
+    fn piece_geom(&self, face: Face, ch: char, eff_em: f32, ext_xmin: f32, ext_xmax: f32) -> PieceGeom {
+        let (asc, desc, _, _) = self.exact_ink(face, ch, eff_em);
+        let (stem_top, stem_bot) = self.piece_stem_lengths(face, ch, eff_em, ext_xmin, ext_xmax);
+        PieceGeom { asc, h: asc + desc, stem_top, stem_bot }
+    }
+
+    /// The smallest span (in pixels) that can be built by *clipped* glyph assembly.
     ///
-    /// - For delimiters without middle cusp (parentheses, brackets): end pieces meet end-to-end at `h_top + h_bot`.
-    /// - For delimiters with middle cusp (curly braces): 3 pieces (head, cusp, tail) can safely overlap
-    ///   along their straight stems up to the curved cusp boundary, giving:
-    ///   `min_span = (h_top + h_mid + h_bot) - (safe_overlap_top + safe_overlap_bot)`.
+    /// Two neighbouring pieces are cut along one horizontal line that lies inside the
+    /// straight stem of both, so a joint can hide up to `stem_below_upper +
+    /// stem_above_lower` of overlap without showing any flat piece end. With a middle
+    /// cusp (braces) the cusp is centred, so each half of the span must hold one end
+    /// piece plus half the cusp, minus what its joint can hide.
     fn min_assembly_span(&self, face: Face, r: &Pieces, eff_em: f32) -> f32 {
-        let piece_h = |ch: Option<char>| -> f32 {
-            ch.map_or(0.0, |c| {
-                let (a, d, _, _) = self.exact_ink(face, c, eff_em);
-                a + d
-            })
+        let (_, _, xmin, xmax) = self.exact_ink(face, r.ext, eff_em);
+        let geom = |ch: Option<char>| ch.map(|c| self.piece_geom(face, c, eff_em, xmin, xmax));
+        let (top, mid, bot) = (geom(r.top), geom(r.mid), geom(r.bot));
+
+        let span = match mid {
+            Some(m) => {
+                let upper = top.map_or(m.h / 2.0 - m.stem_top, |t| t.h + m.h / 2.0 - (t.stem_bot + m.stem_top));
+                let lower = bot.map_or(m.h / 2.0 - m.stem_bot, |b| b.h + m.h / 2.0 - (b.stem_top + m.stem_bot));
+                2.0 * upper.max(lower)
+            }
+            None => match (top, bot) {
+                (Some(t), Some(b)) => t.h + b.h - (t.stem_bot + b.stem_top),
+                (Some(t), None) => t.h - t.stem_bot,
+                (None, Some(b)) => b.h - b.stem_top,
+                (None, None) => 0.0,
+            },
         };
-
-        let h_top = piece_h(r.top);
-        let h_bot = piece_h(r.bot);
-
-        let Some(mid_ch) = r.mid else {
-            return h_top + h_bot;
-        };
-
-        let h_mid = piece_h(Some(mid_ch));
-        let (_, _, ext_xmin, ext_xmax) = self.exact_ink(face, r.ext, eff_em);
-
-        let (_top_stem_top, bot_stem_top) = r.top.map_or((0.0, 0.0), |t| {
-            self.piece_stem_lengths(face, t, eff_em, ext_xmin, ext_xmax)
-        });
-        let (top_stem_mid, bot_stem_mid) = self.piece_stem_lengths(face, mid_ch, eff_em, ext_xmin, ext_xmax);
-        let (top_stem_bot, _bot_stem_bot) = r.bot.map_or((0.0, 0.0), |b| {
-            self.piece_stem_lengths(face, b, eff_em, ext_xmin, ext_xmax)
-        });
-
-        let safe_overlap_top = bot_stem_top.min(top_stem_mid);
-        let safe_overlap_bot = top_stem_bot.min(bot_stem_mid);
-        // The cusp is centred between head and tail, so both joints overlap by the
-        // same amount: the tighter joint limits the total overlap.
-        let max_safe_overlap = 2.0 * safe_overlap_top.min(safe_overlap_bot);
-
-        (h_top + h_mid + h_bot - max_safe_overlap).max(0.0)
+        span.max(0.0)
     }
 
     /// Build the delimiter `c` so that it spans exactly `asc` above and `desc`
@@ -258,6 +272,7 @@ impl Layout {
         let span = asc + desc;
         let top_y = -asc;
         let bot_y = desc;
+        let centre = (top_y + bot_y) / 2.0;
         let pad = 0.05 * em;
 
         // Scale factor for font glyph pieces so their stroke thickness matches complete delimiters:
@@ -284,7 +299,6 @@ impl Layout {
             let em_y = em * span / h0;
             let em_x = em; // Scale vertically only; keep horizontal scale at normal em.
 
-            let centre = (top_y + bot_y) / 2.0;
             let y = centre - (y_lo + y_hi) / 2.0 * (em_y / em);
             let polys = self.f.glyph_polys(face, norm_c, em_x, em_y, pad, y);
             let w = self.f.advance(face, norm_c, em_x) + 2.0 * pad;
@@ -297,132 +311,108 @@ impl Layout {
             });
         }
 
-        // Tier 2 & Tier 3:
-        // When span >= min_piece_h, the pieces are assembled from font glyphs:
-        // - Tier 2: 3 pieces without extenders, safely overlapping along their straight stems.
-        // - Tier 3: 3 pieces + extenders tiled seamlessly into positive stem gaps.
-        let centre = (top_y + bot_y) / 2.0;
-        let top_y = centre - span / 2.0;
-        let bot_y = centre + span / 2.0;
-        let asc = -top_y;
-        let desc = bot_y;
+        // Tier 2 & Tier 3: clipped glyph assembly.
+        // End pieces are pinned to the top / bottom, the cusp (if any) is centred.
+        // - Where neighbours overlap (Tier 2), both are *cut* along one horizontal line
+        //   inside their straight stems, so no flat piece end can poke out past a curve.
+        // - Where they leave a gap (Tier 3), extenders are tiled in and the last one is
+        //   cut to fit exactly, instead of being centred and overflowing.
+        let (_, _, ext_xmin, ext_xmax) = self.exact_ink(face, r.ext, eff_em);
+        let ov = 0.02 * eff_em; // seam overlap inside straight stems (hides AA hairlines)
 
-        let mut items: Vec<Item> = Vec::new();
-        let push = |ch: char, y: f32, items: &mut Vec<Item>| {
-            items.push(Item::Glyph { ch, face, em: eff_em, x: 0.0, y, ssty: 0 });
-        };
-        let ink = |ch: char| {
-            let (a, d, _, _) = self.exact_ink(face, ch, eff_em);
-            (a, d)
-        };
-
-        if r.mid.is_some() {
-            // 1. Top piece (head):
-            let (a_top, d_top) = ink(r.top.unwrap());
-            let y_top = top_y + a_top;
-            push(r.top.unwrap(), y_top, &mut items);
-            let top_end_y = y_top + d_top;
-
-            // 2. Bottom piece (tail):
-            let (a_bot, d_bot) = ink(r.bot.unwrap());
-            let y_bot = bot_y - d_bot;
-            push(r.bot.unwrap(), y_bot, &mut items);
-            let bot_start_y = y_bot - a_bot;
-
-            // 3. Middle cusp:
-            let mid_ch = r.mid.unwrap();
-            let (a_mid, d_mid) = ink(mid_ch);
-            // Centre the cusp's ink box on the delimiter centre.
-            let y_mid = centre + (a_mid - d_mid) / 2.0;
-            push(mid_ch, y_mid, &mut items);
-            let mid_start_y = y_mid - a_mid;
-            let mid_end_y = y_mid + d_mid;
-
-            // 4. Extenders tiled into positive gaps (Tier 3 only):
-            let (ea, ed) = ink(r.ext);
-            let e_h = (ea + ed).max(1.0);
-            let fill = |from: f32, to: f32, items: &mut Vec<Item>| {
-                let ov = 0.02 * eff_em;
-                let (from, to) = (from - ov, to + ov);
-                let gap = to - from;
-                if gap <= 2.0 * ov + 0.5 {
-                    return;
-                }
-                let count = (gap / e_h).ceil().max(1.0) as usize;
-                let step = if count > 1 { (gap - e_h) / (count - 1) as f32 } else { 0.0 };
-                let first = if count > 1 { from } else { from + (gap - e_h) / 2.0 };
-                for i in 0..count {
-                    push(r.ext, first + i as f32 * step + ea, items);
-                }
-            };
-
-            fill(top_end_y, mid_start_y, &mut items);
-            fill(mid_end_y, bot_start_y, &mut items);
-
-            let width = [Some(r.ext), r.top, r.mid, r.bot]
-                .into_iter()
-                .flatten()
-                .map(|ch| self.f.advance(face, ch, eff_em))
-                .fold(0.0f32, f32::max);
-
-            for it in &mut items {
-                if let Item::Glyph { x, .. } = it {
-                    *x += pad;
-                }
-            }
-
-            return Some(LBox {
-                w: width + 2.0 * pad,
-                asc,
-                desc,
-                items,
+        let mut pieces: Vec<Placed> = Vec::new();
+        let mut place = |ch: char, top: f32| {
+            let g = self.piece_geom(face, ch, eff_em, ext_xmin, ext_xmax);
+            pieces.push(Placed {
+                ch,
+                y: top + g.asc,
+                top,
+                bot: top + g.h,
+                stem_top: g.stem_top,
+                stem_bot: g.stem_bot,
+                clip_top: f32::NEG_INFINITY,
+                clip_bot: f32::INFINITY,
             });
+        };
+        if let Some(t) = r.top {
+            place(t, top_y);
+        }
+        if let Some(m) = r.mid {
+            let (a, d, _, _) = self.exact_ink(face, m, eff_em);
+            place(m, centre - (a + d) / 2.0);
+        }
+        if let Some(b) = r.bot {
+            let (a, d, _, _) = self.exact_ink(face, b, eff_em);
+            place(b, bot_y - (a + d));
         }
 
-        // Without mid piece (parentheses, brackets):
-        let width = [Some(r.ext), r.top, r.bot]
+        // Resolve every joint, including the outer boundaries for pieces without a
+        // top / bottom hook (floors, ceilings).
+        let n = pieces.len();
+        let mut fills: Vec<(f32, f32)> = Vec::new();
+        for i in 0..=n {
+            let up = i.checked_sub(1);
+            let lo = (i < n).then_some(i);
+            let up_end = up.map_or(top_y, |k| pieces[k].bot);
+            let lo_start = lo.map_or(bot_y, |k| pieces[k].top);
+            if lo_start > up_end {
+                let from = up_end - if up.is_some() { ov } else { 0.0 };
+                let to = lo_start + if lo.is_some() { ov } else { 0.0 };
+                fills.push((from, to));
+                continue;
+            }
+            let (j_lo, j_hi, seam) = match (up, lo) {
+                (Some(u), Some(l)) => {
+                    let (u, l) = (&pieces[u], &pieces[l]);
+                    ((u.bot - u.stem_bot).max(l.top), u.bot.min(l.top + l.stem_top), ov / 2.0)
+                }
+                (None, Some(_)) => (top_y, top_y, 0.0),
+                (Some(_), None) => (bot_y, bot_y, 0.0),
+                (None, None) => continue,
+            };
+            let want = (up_end + lo_start) / 2.0;
+            let j = if j_lo <= j_hi { want.clamp(j_lo, j_hi) } else { (j_lo + j_hi) / 2.0 };
+            if let Some(u) = up {
+                pieces[u].clip_bot = pieces[u].clip_bot.min(j + seam);
+            }
+            if let Some(l) = lo {
+                pieces[l].clip_top = pieces[l].clip_top.max(j - seam);
+            }
+        }
+
+        // Unclipped pieces stay exact glyphs; clipped ones become cut polygons.
+        let mut items: Vec<Item> = Vec::new();
+        let emit = |ch: char, y: f32, ink: (f32, f32), clip: (f32, f32), items: &mut Vec<Item>| {
+            if clip.0 <= ink.0 + 1e-3 && clip.1 >= ink.1 - 1e-3 {
+                items.push(Item::Glyph { ch, face, em: eff_em, x: pad, y, ssty: 0 });
+                return;
+            }
+            for poly in self.f.glyph_polys(face, ch, eff_em, eff_em, pad, y) {
+                let cut = clip_poly_y(&poly, clip.0, clip.1);
+                if cut.len() >= 3 {
+                    items.push(Item::Poly(cut));
+                }
+            }
+        };
+        for p in &pieces {
+            emit(p.ch, p.y, (p.top, p.bot), (p.clip_top, p.clip_bot), &mut items);
+        }
+        let (ea, ed, _, _) = self.exact_ink(face, r.ext, eff_em);
+        let e_h = (ea + ed).max(1.0);
+        let step = (e_h - ov).max(1.0);
+        for (from, to) in fills {
+            let mut t = from;
+            while t < to - 1e-3 {
+                emit(r.ext, t + ea, (t, t + e_h), (from, to), &mut items);
+                t += step;
+            }
+        }
+
+        let width = [Some(r.ext), r.top, r.mid, r.bot]
             .into_iter()
             .flatten()
             .map(|ch| self.f.advance(face, ch, eff_em))
             .fold(0.0f32, f32::max);
-
-        let mut gap_top = top_y;
-        let mut gap_bot = bot_y;
-        if let Some(t) = r.top {
-            let (a, d) = ink(t);
-            push(t, top_y + a, &mut items);
-            gap_top = top_y + a + d;
-        }
-        if let Some(b) = r.bot {
-            let (a, d) = ink(b);
-            push(b, bot_y - d, &mut items);
-            gap_bot = bot_y - d - a;
-        }
-
-        let (ea, ed) = ink(r.ext);
-        let e_h = (ea + ed).max(1.0);
-        let fill = |from: f32, to: f32, items: &mut Vec<Item>| {
-            let ov = 0.02 * eff_em;
-            let (from, to) = (from - ov, to + ov);
-            let gap = to - from;
-            if gap <= 2.0 * ov + 0.5 {
-                return;
-            }
-            let count = (gap / e_h).ceil().max(1.0) as usize;
-            let step = if count > 1 { (gap - e_h) / (count - 1) as f32 } else { 0.0 };
-            let first = if count > 1 { from } else { from + (gap - e_h) / 2.0 };
-            for i in 0..count {
-                push(r.ext, first + i as f32 * step + ea, items);
-            }
-        };
-
-        fill(gap_top, gap_bot, &mut items);
-
-        for it in &mut items {
-            if let Item::Glyph { x, .. } = it {
-                *x += pad;
-            }
-        }
 
         Some(LBox {
             w: width + 2.0 * pad,
@@ -545,16 +535,21 @@ mod tests {
         let l = layout();
         let em = 24.0;
         for c in ['(', ')', '[', ']', '{', '}', '|', '‖'] {
-            // Short span:
-            let short_span = 1.0 * em;
+            // Very short span (0.6em): below min_assembly_span for all curved delimiters,
+            // so even brackets use Tier 1 outline scaling.
+            let short_span = 0.6 * em;
             let asc_s = short_span / 2.0 + AXIS * em;
             let desc_s = short_span / 2.0 - AXIS * em;
             let b_s = l.stretchy_delimiter(c, asc_s, desc_s, em).expect("delimiter supported");
             assert_eq!(b_s.asc, asc_s);
             assert_eq!(b_s.desc, desc_s);
+            if c != '[' && c != ']' {
+                assert_eq!(b_s.items.len(), usize::from(c == '‖') + 1);
+            }
             assert!(b_s.items.iter().all(|it| matches!(it, Item::Poly(_))), "{c}: short should be Poly");
 
-            // Tall span:
+            // Tall span (6em): Tier 3 assembly. Unclipped end/mid pieces stay Glyph,
+            // while the last tiled extender is cut to fit and emitted as a Poly.
             let tall_span = 6.0 * em;
             let asc_t = tall_span / 2.0 + AXIS * em;
             let desc_t = tall_span / 2.0 - AXIS * em;
@@ -564,20 +559,29 @@ mod tests {
             if c == '|' || c == '‖' {
                 assert!(b_t.items.iter().all(|it| matches!(it, Item::Poly(_))), "{c}: tall bar should be Poly");
             } else {
-                assert!(b_t.items.iter().all(|it| matches!(it, Item::Glyph { .. })), "{c}: tall should be Glyph");
+                assert!(b_t.items.iter().any(|it| matches!(it, Item::Glyph { .. })), "{c}: tall should have Glyph pieces");
                 if c == '{' {
                     assert!(b_t.items.len() > 3, "curly brace at 6.0em should have extenders");
                 }
             }
         }
 
-        // For '{': moderate span (Tier 2, e.g. 2.5 * em) assembles with EXACTLY 3 pieces without extenders:
-        let mod_span = 2.5 * em;
-        let asc_m = mod_span / 2.0 + AXIS * em;
-        let desc_m = mod_span / 2.0 - AXIS * em;
-        let b_m = l.stretchy_delimiter('{', asc_m, desc_m, em).expect("delimiter supported");
-        assert_eq!(b_m.items.len(), 3, "curly brace at 2.5em should have exactly 3 pieces without extenders");
-        assert!(b_m.items.iter().all(|it| matches!(it, Item::Glyph { .. })), "curly brace at 2.5em should be Glyphs");
+        // For '{' across Tier 2 (1.6em..=3.2em): always 3 clipped pieces (no extenders),
+        // and no piece contour extends outside the delimiter's vertical span.
+        for k in [1.6f32, 2.0, 2.5, 3.0] {
+            let span = k * em;
+            let asc = span / 2.0 + AXIS * em;
+            let desc = span / 2.0 - AXIS * em;
+            let b = l.stretchy_delimiter('{', asc, desc, em).expect("delimiter supported");
+            assert_eq!(b.items.len(), 3, "curly brace at {k}em should be 3 pieces without extenders");
+            for it in &b.items {
+                if let Item::Poly(pts) = it {
+                    for &(_, y) in pts {
+                        assert!(y >= -asc - 1e-2 && y <= desc + 1e-2, "point y={y} outside [{}, {desc}]", -asc);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
