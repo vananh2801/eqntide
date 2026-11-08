@@ -36,6 +36,7 @@ const EMR_BEGINPATH: u32 = 59;
 const EMR_ENDPATH: u32 = 60;
 const EMR_CLOSEFIGURE: u32 = 61;
 const EMR_FILLPATH: u32 = 62;
+const EMR_COMMENT: u32 = 0x0000_0046;
 
 const MM_ANISOTROPIC: u32 = 8;
 const WINDING: u32 = 2;
@@ -85,7 +86,25 @@ fn i32s(v: &[i32]) -> Vec<u8> {
 }
 
 /// Draw `math` (a `<math>` tree) at `font_pt` points per em, as EMF.
+/// Automatically encodes `math` to MTEF 5.0 and embeds it inside an `EMR_COMMENT` record.
 pub fn render_emf(math: &MathNode, font_pt: f32) -> Result<EmfPreview> {
+    let mtef = crate::mtef::encode::mathml_to_mtef_bytes(math)
+        .ok()
+        .filter(|b| !b.is_empty())
+        .map(|b| crate::mtef::build_mtef(&b));
+    render_emf_with_mtef(math, font_pt, mtef.as_deref())
+}
+
+/// Draw `math` (a `<math>` tree) at `font_pt` points per em, as EMF.
+/// If `mtef` binary data is provided, it is embedded inside an `EMR_COMMENT` record
+/// with the MathType `AppsMFCC` signature immediately following the header.
+/// Both complete MTEF streams (starting with version 3 or 5) and raw inner equation
+/// bytes (which will be wrapped via `build_mtef`) are supported.
+pub fn render_emf_with_mtef(
+    math: &MathNode,
+    font_pt: f32,
+    mtef: Option<&[u8]>,
+) -> Result<EmfPreview> {
     let (b, em) = layout::layout_math(math, font_pt)?;
     let asc = b.asc.max(0.70 * em);
     let desc = b.desc.max(0.22 * em);
@@ -102,6 +121,35 @@ pub fn render_emf(math: &MathNode, font_pt: f32) -> Result<EmfPreview> {
     );
 
     let mut out = Writer::new();
+
+    // Embed MTEF 5.0 binary inside an EMR_COMMENT record if present.
+    let full_mtef: Option<std::borrow::Cow<[u8]>> = match mtef {
+        Some(bytes) if !bytes.is_empty() => {
+            if matches!(bytes.first(), Some(3 | 5)) {
+                Some(std::borrow::Cow::Borrowed(bytes))
+            } else {
+                Some(std::borrow::Cow::Owned(crate::mtef::build_mtef(bytes)))
+            }
+        }
+        _ => None,
+    };
+
+    if let Some(mtef_bytes) = full_mtef {
+        let mut comment_data = Vec::with_capacity(39 + mtef_bytes.len());
+        comment_data.extend_from_slice(b"AppsMFCC");
+        comment_data.extend_from_slice(&1u16.to_le_bytes()); // version 1
+        comment_data.extend_from_slice(&(mtef_bytes.len() as u32).to_le_bytes()); // size_total
+        comment_data.extend_from_slice(&(mtef_bytes.len() as u32).to_le_bytes()); // size_chunk
+        comment_data.extend_from_slice(crate::ole::WMF_SIGNATURE); // "Design Science, Inc.\0"
+        comment_data.extend_from_slice(&mtef_bytes);
+
+        let mut body = Vec::with_capacity(4 + comment_data.len());
+        body.extend_from_slice(&(comment_data.len() as u32).to_le_bytes()); // cbData
+        body.extend_from_slice(&comment_data);
+
+        out.record(EMR_COMMENT, &body);
+    }
+
     // The header is written last (it needs the totals); reserve nothing here and
     // prepend it at the end.
     out.record(EMR_SETMAPMODE, &u32s(&[MM_ANISOTROPIC]));
@@ -204,5 +252,39 @@ fn write_segs(o: &mut Writer, segs: &[Seg], l: &dyn Fn(f32) -> i32, bounds: [i32
             }
             Seg::Close => o.record(EMR_CLOSEFIGURE, &[]),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mathml::MathNode;
+
+    #[test]
+    fn test_render_emf_embeds_mtef_comment() {
+        let node = MathNode::with_children("math", vec![MathNode::leaf("mi", "x")]);
+        let preview = render_emf(&node, 12.0).expect("renders emf");
+        assert!(!preview.emf.is_empty());
+        let extracted = crate::ole::extract_mtef_from_emf(&preview.emf);
+        assert!(extracted.is_some(), "MTEF must be extracted from EMF comment");
+        let mtef = extracted.unwrap();
+        assert_eq!(mtef[0], 5, "Must be MTEF 5.0");
+    }
+
+    #[test]
+    fn test_render_emf_with_explicit_mtef() {
+        let node = MathNode::leaf("mi", "y");
+        let custom_mtef = vec![5, 0, 1, 2, 3, 4];
+        let preview = render_emf_with_mtef(&node, 12.0, Some(&custom_mtef)).expect("renders emf");
+        let extracted = crate::ole::extract_mtef_from_emf(&preview.emf).expect("extracted");
+        assert_eq!(extracted, custom_mtef);
+    }
+
+    #[test]
+    fn test_render_emf_without_mtef() {
+        let node = MathNode::leaf("mi", "z");
+        let preview = render_emf_with_mtef(&node, 12.0, None).expect("renders emf");
+        let extracted = crate::ole::extract_mtef_from_emf(&preview.emf);
+        assert!(extracted.is_none());
     }
 }

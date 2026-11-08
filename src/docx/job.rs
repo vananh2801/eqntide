@@ -10,7 +10,7 @@ use crate::mtef::encode::mathml_to_mtef_bytes;
 use crate::mtef::make_equation_native;
 use crate::ole::{make_ole};
 use crate::omml::decode::{omml_to_mathml, NS_M};
-use crate::render::emf::render_emf;
+use crate::render::emf::render_emf_with_mtef;
 use crate::render::render_preview;
 use crate::xml::{Element, Node};
 
@@ -153,7 +153,7 @@ impl Job {
                     }
                 }
                 PreviewFormat::Emf => {
-                    let p = render_emf(&mathml, self.opts.font_pt)?;
+                    let p = render_emf_with_mtef(&mathml, self.opts.font_pt, Some(&eq_bytes))?;
                     Picture {
                         data: p.emf,
                         ext: "emf",

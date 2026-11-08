@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::mtef::decode::{mtef_to_mathml, ole_to_mathml};
-use crate::ole::extract_mtef_from_wmf;
+use crate::ole::{extract_mtef_from_emf, extract_mtef_from_wmf};
 use crate::omml::decode::NS_M;
 use crate::omml::encode::{apply_math_font, mathml_to_omml};
 use crate::xml::{self, Element, Node};
@@ -328,10 +328,10 @@ fn rewrite_element(
                 continue;
             }
 
-            // Case 3: `<w:r>` without `<o:OLEObject>`, but with a standalone `.wmf` image
+            // Case 3: `<w:r>` without `<o:OLEObject>`, but with a standalone `.wmf` or `.emf` image
             // containing embedded MathType MTEF data.
             if let Some(omml) =
-                try_convert_wmf_run(&el, pkg, rel_map, opts, summary, converted_rids)
+                try_convert_metafile_run(&el, pkg, rel_map, opts, summary, converted_rids)
             {
                 new_children.push(Node::Element(omml));
                 continue;
@@ -433,9 +433,9 @@ fn convert_ole_run(
     }
 }
 
-/// Inspect a `<w:r>` without `<o:OLEObject>`: if it references a `.wmf` image that
+/// Inspect a `<w:r>` without `<o:OLEObject>`: if it references a `.wmf` or `.emf` image that
 /// embeds MathType MTEF data, convert it to `<m:oMath>`.
-fn try_convert_wmf_run(
+fn try_convert_metafile_run(
     run_el: &Element,
     pkg: &Package,
     rel_map: &HashMap<String, String>,
@@ -448,21 +448,30 @@ fn try_convert_wmf_run(
         let Some(target_path) = rel_map.get(&rid) else {
             continue;
         };
-        if !target_path.to_ascii_lowercase().ends_with(".wmf") {
+        let lower = target_path.to_ascii_lowercase();
+        let is_wmf = lower.ends_with(".wmf");
+        let is_emf = lower.ends_with(".emf");
+        if !is_wmf && !is_emf {
             continue;
         }
-        let Some(wmf_bytes) = pkg.get(target_path) else {
+        let Some(img_bytes) = pkg.get(target_path) else {
             continue;
         };
-        let Some(mtef_bytes) = extract_mtef_from_wmf(wmf_bytes) else {
+        let mtef_bytes = if is_wmf {
+            extract_mtef_from_wmf(img_bytes)
+        } else {
+            extract_mtef_from_emf(img_bytes)
+        };
+        let Some(mtef_bytes) = mtef_bytes else {
             continue;
         };
 
-        // Found a standalone WMF equation with embedded MTEF!
+        // Found a standalone WMF/EMF equation with embedded MTEF!
         summary.found += 1;
         let eq_num = summary.found;
+        let kind_str = if is_wmf { "WMF" } else { "EMF" };
         match mtef_to_mathml(&mtef_bytes)
-            .ok_or_else(|| Error::InvalidMtef(format!("failed to decode WMF MTEF in {target_path}")))
+            .ok_or_else(|| Error::InvalidMtef(format!("failed to decode {kind_str} MTEF in {target_path}")))
             .and_then(|mml| mathml_to_omml(&mml))
         {
             Ok(mut omml) => {
@@ -471,7 +480,7 @@ fn try_convert_wmf_run(
                 }
                 converted_rids.insert(rid.clone());
                 summary.converted += 1;
-                log::info!("Equation {eq_num}: converted WMF ({rid}) → m:oMath");
+                log::info!("Equation {eq_num}: converted {kind_str} ({rid}) → m:oMath");
                 return Some(omml);
             }
             Err(e) => {
@@ -579,6 +588,64 @@ mod tests {
         w.start_file("word/document.xml", opts).unwrap();
         w.write_all(doc.as_bytes()).unwrap();
         w.finish().unwrap().into_inner()
+    }
+
+
+    #[test]
+    fn test_docx_convert_standalone_emf_with_mtef_to_omml() {
+        let node = crate::mathml::MathNode::with_children("math", vec![crate::mathml::MathNode::leaf("mi", "z")]);
+        let preview = crate::render::emf::render_emf(&node, 12.0).unwrap();
+
+        let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:v="urn:schemas-microsoft-com:vml">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:pict>
+          <v:shape id="_x0000_i1025" style="width:10pt;height:10pt">
+            <v:imagedata r:id="rId1"/>
+          </v:shape>
+        </w:pict>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"#;
+
+        let rels_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/equation1.emf"/>
+</Relationships>"#;
+
+        let ct_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Default Extension="emf" ContentType="image/x-emf"/>
+</Types>"#;
+
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        w.start_file("[Content_Types].xml", opts).unwrap();
+        w.write_all(ct_xml.as_bytes()).unwrap();
+        w.start_file("word/document.xml", opts).unwrap();
+        w.write_all(doc_xml.as_bytes()).unwrap();
+        w.start_file("word/_rels/document.xml.rels", opts).unwrap();
+        w.write_all(rels_xml.as_bytes()).unwrap();
+        w.start_file("word/media/equation1.emf", opts).unwrap();
+        w.write_all(&preview.emf).unwrap();
+        let src_docx = w.finish().unwrap().into_inner();
+
+        let (omml_docx, summary) = convert_bytes_to_omml(&src_docx).unwrap();
+        assert_eq!(summary.found, 1);
+        assert_eq!(summary.converted, 1);
+        assert_eq!(summary.errors, 0);
+
+        let pkg = Package::read(&omml_docx).unwrap();
+        let doc_el = xml::parse(pkg.get("word/document.xml").unwrap()).unwrap();
+        let omaths: Vec<_> = doc_el.iter().into_iter().filter(|e| e.is(NS_M, "oMath")).collect();
+        assert_eq!(omaths.len(), 1);
     }
 
     #[test]

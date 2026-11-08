@@ -507,10 +507,89 @@ pub fn extract_mtef_from_ole(ole_data: &[u8]) -> Option<Vec<u8>> {
 }
 
 const WMF_PLACEABLE: [u8; 4] = [0xD7, 0xCD, 0xC6, 0x9A];
-const WMF_SIGNATURE: &[u8] = b"Design Science, Inc.\x00";
+pub const WMF_SIGNATURE: &[u8] = b"Design Science, Inc.\x00";
 
 /// Extract the MTEF byte stream embedded inside a MathType WMF picture
 /// (`META_ESCAPE` / `MFCOMMENT` with `"AppsMFCC"` signature), if any.
+
+/// Extract the MTEF byte stream embedded inside a MathType EMF picture
+/// (`EMR_COMMENT` with `"AppsMFCC"` signature), if any.
+pub fn extract_mtef_from_emf(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 88 {
+        return None;
+    }
+    // Verify EMF signature at offset 40 (dSignature == 0x464D_4520 " EMF") and record type 1 (EMR_HEADER)
+    if get_u32(data, 0)? != 1 || get_u32(data, 40)? != 0x464D_4520 {
+        return None;
+    }
+
+    let mut pos = 0;
+    let mut total: Option<usize> = None;
+    let mut payload = Vec::new();
+
+    while pos + 8 <= data.len() {
+        let kind = get_u32(data, pos)?;
+        let size = get_u32(data, pos + 4)? as usize;
+        if size < 8 || size % 4 != 0 {
+            break;
+        }
+        let next_pos = pos.checked_add(size)?;
+        if next_pos > data.len() {
+            break;
+        }
+
+        if kind == 0x0000_0046 && size >= 12 {
+            // EMR_COMMENT record:
+            // offset + 8: cbData (u32)
+            // offset + 12: CommentData (cbData bytes)
+            let cb_data = get_u32(data, pos + 8)? as usize;
+            let data_end = (pos + 12 + cb_data).min(next_pos);
+            if pos + 12 <= data_end {
+                let comment_data = &data[pos + 12..data_end];
+                if let Some(app_off) = comment_data.windows(8).position(|w| w == b"AppsMFCC") {
+                    let chunk = &comment_data[app_off..];
+                    if chunk.len() >= 18 {
+                        let size_total = get_u32(chunk, 10)? as usize;
+                        let size_chunk = get_u32(chunk, 14)? as usize;
+                        let mut body = &chunk[18..];
+                        if body.starts_with(WMF_SIGNATURE) {
+                            body = &body[WMF_SIGNATURE.len()..];
+                        }
+                        if total.is_none() {
+                            total = Some(size_total);
+                        }
+                        let take = if size_chunk > 0 && size_chunk <= body.len() {
+                            &body[..size_chunk]
+                        } else {
+                            body
+                        };
+                        payload.extend_from_slice(take);
+                    }
+                }
+            }
+        } else if kind == 14 {
+            // EMR_EOF record
+            break;
+        }
+
+        pos = next_pos;
+    }
+
+    if payload.is_empty() {
+        return None;
+    }
+    if let Some(t) = total {
+        if t > 0 && t < payload.len() {
+            payload.truncate(t);
+        }
+    }
+    if matches!(payload.first(), Some(3 | 5)) {
+        Some(payload)
+    } else {
+        None
+    }
+}
+
 pub fn extract_mtef_from_wmf(data: &[u8]) -> Option<Vec<u8>> {
     let off = if data.starts_with(&WMF_PLACEABLE) { 22 } else { 0 };
     let mut pos = off + 18; // skip standard METAHEADER
@@ -568,6 +647,17 @@ pub fn extract_mtef_from_wmf(data: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn test_extract_mtef_from_emf_roundtrip() {
+        let node = crate::mathml::MathNode::with_children("math", vec![crate::mathml::MathNode::leaf("mi", "x")]);
+        let preview = crate::render::emf::render_emf(&node, 12.0).unwrap();
+        let extracted = extract_mtef_from_emf(&preview.emf).expect("MTEF extracted from EMF");
+        assert_eq!(extracted[0], 5, "MTEF version should be 5");
+        let mathml = crate::mtef::decode::mtef_to_mathml(&extracted).expect("decodes to mathml");
+        assert_eq!(mathml.children[0].children[0].text, "x");
+    }
 
     #[test]
     fn test_make_and_extract_ole_roundtrip_small_and_large() {

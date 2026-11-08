@@ -101,11 +101,11 @@ The goal of this project is to build a modern, open-source, cross-platform equat
   - OLE CFB `.bin` reader/writer & WMF `AppsMFCC` extractor ([`src/ole.rs`](src/ole.rs)).
   - Vector EMF & high-DPI PNG renderer ([`src/render/`](src/render/mod.rs)).
   - Full `.docx` batch conversion OMML ⇄ MathType OLE ([`src/docx/`](src/docx/mod.rs)).
-- [ ] **Task 1.1: Embed MTEF 5.0 Data into Vector `.emf` (`EMR_COMMENT`)**
+- [x] **Task 1.1: Embed MTEF 5.0 Data into Vector `.emf` (`EMR_COMMENT`)**
   - Update [`render_emf`](src/render/emf.rs) (or add `render_emf_with_mtef`) in [`src/render/emf.rs`](src/render/emf.rs) to write an `EMR_COMMENT` (`0x00000046`) record immediately after `EMR_HEADER`.
   - Format the comment payload using the standard MathType `AppsMFCC` header (`b"AppsMFCC"`, version `1u16`, `size_total`, `size_chunk`, `"Design Science, Inc.\0"`, followed by the raw MTEF 5.0 bytes).
   - Ensure all `.emf` previews generated during `.docx` conversion ([`src/docx/job.rs`](src/docx/job.rs)) and single-equation export automatically carry embedded MTEF 5.0 data so new MathType versions can open the equation directly from the `.emf`.
-- [ ] **Task 1.2: Extract MTEF Data from `.emf` Pictures (`extract_mtef_from_emf`)**
+- [x] **Task 1.2: Extract MTEF Data from `.emf` Pictures (`extract_mtef_from_emf`)**
   - Implement `extract_mtef_from_emf(data: &[u8]) -> Option<Vec<u8>>` in [`src/ole.rs`](src/ole.rs) to parse `EMR_COMMENT` (`0x46`) records and reassemble `AppsMFCC` MTEF chunks (mirroring [`extract_mtef_from_wmf`](src/ole.rs)).
   - Update [`src/docx/to_omml.rs`](src/docx/to_omml.rs) (`try_convert_wmf_run` ➔ `try_convert_metafile_run`) so standalone `.emf` equations (where OLE `.bin` was stripped) are also detected and converted seamlessly.
 - [ ] **Task 1.3: Legacy MathType ➔ Modern MathType Upgrader Pipeline**

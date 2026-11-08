@@ -63,7 +63,8 @@ pub use error::{Error, Result};
 pub use mtef::decode::{mtef_to_mathml, ole_to_mathml};
 pub use mtef::encode::mathml_to_mtef_bytes;
 pub use mtef::make_equation_native;
-pub use ole::{extract_mtef_from_ole, extract_mtef_from_wmf, make_ole};
+pub use ole::{extract_mtef_from_emf, extract_mtef_from_ole, extract_mtef_from_wmf, make_ole};
+pub use render::emf::{render_emf, render_emf_with_mtef};
 pub use omml::decode::omml_to_mathml;
 pub use omml::encode::{apply_math_font, mathml_to_omml, mathml_to_omml_xml};
 
@@ -80,6 +81,15 @@ pub fn wmf_to_omml_xml(wmf_data: &[u8]) -> Result<String> {
         .ok_or_else(|| Error::InvalidMtef("no MathType MTEF found in WMF data".into()))?;
     let mathml = mtef_to_mathml(&mtef)
         .ok_or_else(|| Error::InvalidMtef("could not decode MTEF from WMF data".into()))?;
+    mathml_to_omml_xml(&mathml)
+}
+
+/// Convenience helper: convert an EMF image containing embedded MathType MTEF data directly to an `<m:oMath>` XML string.
+pub fn emf_to_omml_xml(emf_data: &[u8]) -> Result<String> {
+    let mtef = extract_mtef_from_emf(emf_data)
+        .ok_or_else(|| Error::InvalidMtef("no MathType MTEF found in EMF data".into()))?;
+    let mathml = mtef_to_mathml(&mtef)
+        .ok_or_else(|| Error::InvalidMtef("could not decode MTEF from EMF data".into()))?;
     mathml_to_omml_xml(&mathml)
 }
 
