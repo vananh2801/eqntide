@@ -40,13 +40,31 @@ if ($Uninstall) {
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsTargetPath -Recurse -Force
 
     $PublishXml = Join-Path $WpsBasePath "publish.xml"
-    if (!(Test-Path $PublishXml)) {
-        @'
-<jsaddons>
-  <jsaddon name="MathEditor" enable="true" />
-</jsaddons>
+    @'
+<?xml version="1.0" encoding="UTF-8"?>
+<jsplugins>
+  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor/" />
+  <jspluginonline name="MathEditor" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
+</jsplugins>
 '@ | Set-Content -Path $PublishXml -Encoding UTF8
+
+    $AuthJson = Join-Path $WpsBasePath "authaddin.json"
+    @'
+{
+  "wps": {
+    "namelist": "MathEditor",
+    "MathEditor": {
+      "name": "MathEditor",
+      "enable": true,
+      "isload": true,
+      "path": "MathEditor/",
+      "md5": "",
+      "mode": 2
     }
+  }
+}
+'@ | Set-Content -Path $AuthJson -Encoding UTF8
+
     Write-Host "✓ WPS Add-in successfully installed to $WpsTargetPath" -ForegroundColor Green
 }
 

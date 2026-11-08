@@ -27,37 +27,62 @@ OS="$(uname -s)"
 # Linux Installation (WPS Office JS Add-in)
 # ------------------------------------------------------------------------------
 install_linux_wps() {
-  local TARGET_BASE="${HOME}/.local/share/Kingsoft/wps/jsaddons"
-  local TARGET_DIR="${TARGET_BASE}/MathEditor"
+  local DIRS=(
+    "${HOME}/.local/share/Kingsoft/wps/jsaddons"
+    "${HOME}/.local/share/Kingsoft/wps_intl/jsaddons"
+  )
 
-  if [[ "${ACTION}" == "uninstall" ]]; then
-    if [[ -d "${TARGET_DIR}" ]]; then
-      echo "--> Removing WPS Add-in from ${TARGET_DIR}..."
-      rm -rf "${TARGET_DIR}"
-      echo "✓ WPS Add-in successfully uninstalled."
-    else
-      echo "ℹ WPS Add-in directory not found, skipping."
+  for TARGET_BASE in "${DIRS[@]}"; do
+    local TARGET_DIR="${TARGET_BASE}/MathEditor"
+
+    if [[ "${ACTION}" == "uninstall" ]]; then
+      if [[ -d "${TARGET_DIR}" ]]; then
+        echo "--> Removing WPS Add-in from ${TARGET_DIR}..."
+        rm -rf "${TARGET_DIR}"
+        echo "✓ WPS Add-in successfully uninstalled."
+      fi
+      continue
     fi
-    return
-  fi
 
-  echo "--> Registering WPS Office JS Add-in..."
-  mkdir -p "${TARGET_DIR}"
-  cp -r "${WPS_ADDIN_DIR}"/* "${TARGET_DIR}/"
+    echo "--> Registering WPS Office JS Add-in into ${TARGET_BASE}..."
+    mkdir -p "${TARGET_DIR}"
+    cp -r "${WPS_ADDIN_DIR}"/* "${TARGET_DIR}/"
 
-  # Ensure publish.xml exists so WPS automatically loads the addin
-  local PUBLISH_XML="${TARGET_BASE}/publish.xml"
-  if [[ ! -f "${PUBLISH_XML}" ]]; then
+    # Write publish.xml using standard WPS jsplugins schema
+    local PUBLISH_XML="${TARGET_BASE}/publish.xml"
     cat << 'EOF' > "${PUBLISH_XML}"
-<jsaddons>
-  <jsaddon name="MathEditor" enable="true" />
-</jsaddons>
+<?xml version="1.0" encoding="UTF-8"?>
+<jsplugins>
+  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor/" />
+  <jspluginonline name="MathEditor" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
+</jsplugins>
 EOF
-  fi
 
-  echo "✓ WPS Add-in successfully installed to:"
-  echo "    ${TARGET_DIR}"
-  echo "ℹ Restart WPS Office Writer. The 'Math Editor' tab will appear on the ribbon."
+    # Write authaddin.json to authorize MathEditor execution
+    local AUTH_JSON="${TARGET_BASE}/authaddin.json"
+    cat << 'EOF' > "${AUTH_JSON}"
+{
+  "wps": {
+    "namelist": "MathEditor",
+    "MathEditor": {
+      "name": "MathEditor",
+      "enable": true,
+      "isload": true,
+      "path": "MathEditor/",
+      "md5": "",
+      "mode": 2
+    }
+  }
+}
+EOF
+
+    echo "✓ WPS Add-in registered in ${TARGET_BASE}."
+  done
+
+  if [[ "${ACTION}" != "uninstall" ]]; then
+    echo "ℹ Please completely exit WPS Office (close all windows) and reopen it."
+    echo "  The 'Math Editor' tab will now appear on the Ribbon."
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -84,14 +109,36 @@ install_macos_word() {
   fi
 
   # Also install WPS if installed on macOS
-  local WPS_MAC_DIR="${HOME}/Library/Containers/com.kingsoft.wpsoffice.mac/Data/Library/Application Support/Kingsoft/wps/jsaddons/MathEditor"
-  if [[ -d "$(dirname "${WPS_MAC_DIR}")" || -d "/Applications/wpsoffice.app" ]]; then
+  local WPS_MAC_DIR="${HOME}/Library/Containers/com.kingsoft.wpsoffice.mac/Data/.kingsoft/wps/jsaddons"
+  if [[ -d "$(dirname "${WPS_MAC_DIR}")" ]]; then
     if [[ "${ACTION}" == "uninstall" ]]; then
-      rm -rf "${WPS_MAC_DIR}"
+      rm -rf "${WPS_MAC_DIR}/MathEditor"
     else
       echo "--> Registering WPS Office JS Add-in for Mac..."
-      mkdir -p "${WPS_MAC_DIR}"
-      cp -r "${WPS_ADDIN_DIR}"/* "${WPS_MAC_DIR}/"
+      mkdir -p "${WPS_MAC_DIR}/MathEditor"
+      cp -r "${WPS_ADDIN_DIR}"/* "${WPS_MAC_DIR}/MathEditor/"
+      cat << 'EOF' > "${WPS_MAC_DIR}/publish.xml"
+<?xml version="1.0" encoding="UTF-8"?>
+<jsplugins>
+  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor/" />
+  <jspluginonline name="MathEditor" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
+</jsplugins>
+EOF
+      cat << 'EOF' > "${WPS_MAC_DIR}/authaddin.json"
+{
+  "wps": {
+    "namelist": "MathEditor",
+    "MathEditor": {
+      "name": "MathEditor",
+      "enable": true,
+      "isload": true,
+      "path": "MathEditor/",
+      "md5": "",
+      "mode": 2
+    }
+  }
+}
+EOF
       echo "✓ WPS Add-in installed to ${WPS_MAC_DIR}."
     fi
   fi
