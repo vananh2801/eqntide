@@ -1,5 +1,5 @@
 // Math Equation Editor & Converter Client Application
-// Task 3.2: MathLive Canvas & Bidirectional LaTeX/MathML Sync
+// Task 3.4: Output Format Selector & Close Confirmation ([X])
 
 (function () {
   'use strict';
@@ -17,6 +17,8 @@
   const tabBatch = document.getElementById('tab-batch');
 
   const formatSelect = document.getElementById('format-select');
+  const fontSizeGroup = document.getElementById('font-size-group');
+  const fontSizeInput = document.getElementById('font-size-input');
   const bridgeBadge = document.getElementById('bridge-badge');
   const statusText = document.getElementById('status-text');
 
@@ -34,6 +36,26 @@
   const modalBtnYes = document.getElementById('modal-btn-yes');
   const modalBtnNo = document.getElementById('modal-btn-no');
   const modalBtnCancel = document.getElementById('modal-btn-cancel');
+
+  // Disable MathLive audio feedback (soundOnError: null) to prevent Linux WebKit GStreamer warnings
+  function disableMathLiveSounds() {
+    if (window.MathfieldElement) {
+      try {
+        window.MathfieldElement.soundsDirectory = null;
+        window.MathfieldElement.keypressSound = null;
+      } catch (_) {}
+    }
+    if (mathField) {
+      try {
+        mathField.soundsDirectory = null;
+        mathField.soundOnError = null;
+        if (typeof mathField.setOptions === 'function') {
+          mathField.setOptions({ soundOnError: null });
+        }
+      } catch (_) {}
+    }
+  }
+  disableMathLiveSounds();
 
   // Parse session_id from URL query params (when opened via custom URI or bridge)
   const urlParams = new URLSearchParams(window.location.search);
@@ -56,12 +78,42 @@
     tabEditor.classList.add('hidden');
   });
 
-  // Listen to Tauri single instance or batch tab event if running under Tauri
+  // Window hide helper for Tauri
+  async function hideAppWindow() {
+    if (window.__TAURI__) {
+      if (window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
+        try {
+          await window.__TAURI__.core.invoke('hide_window');
+          return;
+        } catch (_) {}
+      }
+      if (window.__TAURI__.window) {
+        try {
+          await window.__TAURI__.window.getCurrentWindow().hide();
+          return;
+        } catch (_) {}
+      }
+    }
+  }
+
+  // Window close interception logic
+  function handleCloseRequested() {
+    if (isModified) {
+      closeModal.classList.remove('hidden');
+    } else {
+      hideAppWindow();
+    }
+  }
+
+  // Listen to Tauri single instance, close interception, or batch tab events
   if (window.__TAURI__) {
     const { listen } = window.__TAURI__.event || {};
     if (listen) {
       listen('open-batch-tab', () => {
         tabBatchBtn.click();
+      });
+      listen('window-close-requested', () => {
+        handleCloseRequested();
       });
       listen('single-instance-launch', (event) => {
         const argv = event.payload || [];
@@ -83,18 +135,34 @@
     }
   }
 
-  // 2. Format Selector
-  formatSelect.addEventListener('change', (e) => {
-    activeTargetMode = e.target.value;
+  // 2. Format Selector & Font Size (Task 3.4)
+  function updateFormatSelector() {
+    activeTargetMode = formatSelect.value;
+    if (activeTargetMode === 'mathtype') {
+      fontSizeGroup.classList.remove('hidden');
+    } else {
+      fontSizeGroup.classList.add('hidden');
+    }
+  }
+
+  formatSelect.addEventListener('change', () => {
+    updateFormatSelector();
     isModified = true;
   });
+
+  if (fontSizeInput) {
+    fontSizeInput.addEventListener('input', () => {
+      isModified = true;
+    });
+  }
+  updateFormatSelector();
 
   // 3. Bidirectional Sync between MathLive Canvas and LaTeX Source
   function syncFromMathField() {
     if (!mathField) return;
-    const latex = (typeof mathField.getValue === "function")
-      ? mathField.getValue("latex")
-      : (mathField.value || mathField.textContent || "");
+    const latex = (typeof mathField.getValue === 'function')
+      ? mathField.getValue('latex')
+      : (mathField.value || mathField.textContent || '');
     if (latex && latex.trim().length > 0) {
       latexSource.value = latex.trim();
     }
@@ -102,7 +170,8 @@
 
   // Wait for MathLive Web Component custom element upgrade
   if (window.customElements) {
-    customElements.whenDefined("math-field").then(() => {
+    customElements.whenDefined('math-field').then(() => {
+      disableMathLiveSounds();
       syncFromMathField();
     });
   }
@@ -112,17 +181,17 @@
     syncFromMathField();
 
     // Visual Canvas -> LaTeX Source Sync
-    mathField.addEventListener("input", () => {
+    mathField.addEventListener('input', () => {
       syncFromMathField();
       isModified = true;
     });
 
     // LaTeX Source -> Visual Canvas Sync
-    latexSource.addEventListener("input", () => {
-      const newLatex = latexSource.value.trim().replace(/^\$|\$$/g, "");
+    latexSource.addEventListener('input', () => {
+      const newLatex = latexSource.value.trim().replace(/^\$|\$$/g, '');
       if (document.activeElement === latexSource && mathField) {
-        if (typeof mathField.setValue === "function") {
-          mathField.setValue(newLatex, { format: "latex" });
+        if (typeof mathField.setValue === 'function') {
+          mathField.setValue(newLatex, { format: 'latex' });
         } else {
           mathField.value = newLatex;
         }
@@ -132,26 +201,26 @@
   }
 
   // 4. Palette Category Tabs & Button Insertion (Task 3.3)
-  const paletteTabBtns = document.querySelectorAll(".palette-tab-btn");
-  const palettePanels = document.querySelectorAll(".palette-panel");
+  const paletteTabBtns = document.querySelectorAll('.palette-tab-btn');
+  const palettePanels = document.querySelectorAll('.palette-panel');
 
   paletteTabBtns.forEach((tabBtn) => {
-    tabBtn.addEventListener("click", () => {
-      paletteTabBtns.forEach((b) => b.classList.remove("active"));
-      palettePanels.forEach((p) => p.classList.remove("active"));
+    tabBtn.addEventListener('click', () => {
+      paletteTabBtns.forEach((b) => b.classList.remove('active'));
+      palettePanels.forEach((p) => p.classList.remove('active'));
 
-      tabBtn.classList.add("active");
-      const targetId = tabBtn.getAttribute("data-target");
+      tabBtn.classList.add('active');
+      const targetId = tabBtn.getAttribute('data-target');
       const targetPanel = document.getElementById(targetId);
       if (targetPanel) {
-        targetPanel.classList.add("active");
+        targetPanel.classList.add('active');
       }
     });
   });
 
-  document.querySelectorAll(".palette-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const snippet = btn.getAttribute("data-insert");
+  document.querySelectorAll('.palette-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const snippet = btn.getAttribute('data-insert');
       if (!snippet) return;
       insertSnippet(snippet);
     });
@@ -159,12 +228,12 @@
 
   function insertSnippet(snippet) {
     if (mathField) {
-      if (typeof mathField.executeCommand === "function") {
-        mathField.executeCommand(["insert", snippet, { mode: "math", selectionMode: "placeholder" }]);
-      } else if (typeof mathField.insert === "function") {
-        mathField.insert(snippet, { mode: "math", selectionMode: "placeholder" });
+      if (typeof mathField.executeCommand === 'function') {
+        mathField.executeCommand(['insert', snippet, { mode: 'math', selectionMode: 'placeholder' }]);
+      } else if (typeof mathField.insert === 'function') {
+        mathField.insert(snippet, { mode: 'math', selectionMode: 'placeholder' });
       } else {
-        mathField.value = (mathField.value || "") + snippet.replace(/#\?/g, "");
+        mathField.value = (mathField.value || '') + snippet.replace(/#\?/g, '');
       }
       syncFromMathField();
       mathField.focus();
@@ -172,8 +241,18 @@
     isModified = true;
   }
 
-  // 11. MathType Classic Keyboard Shortcuts (Task 3.3)
-  window.addEventListener("keydown", (e) => {
+  // MathType Classic Keyboard Shortcuts (Task 3.3 & 3.4)
+  window.addEventListener('keydown', (e) => {
+    // Handle Escape for close modal or closing window
+    if (e.key === 'Escape') {
+      if (!closeModal.classList.contains('hidden')) {
+        closeModal.classList.add('hidden');
+      } else {
+        handleCloseRequested();
+      }
+      return;
+    }
+
     if (document.activeElement === latexSource) return;
 
     const isCtrl = e.ctrlKey || e.metaKey;
@@ -182,98 +261,98 @@
     const key = e.key.toLowerCase();
 
     // Ctrl+F: Fraction
-    if (key === "f") {
+    if (key === 'f') {
       e.preventDefault();
-      insertSnippet("\\frac{#?}{#?}");
+      insertSnippet('\\frac{#?}{#?}');
       return;
     }
 
     // Ctrl+R: Radical (Square root, or N-th root with Shift)
-    if (key === "r") {
+    if (key === 'r') {
       e.preventDefault();
       if (e.shiftKey) {
-        insertSnippet("\\sqrt[#?]{#?}");
+        insertSnippet('\\sqrt[#?]{#?}');
       } else {
-        insertSnippet("\\sqrt{#?}");
+        insertSnippet('\\sqrt{#?}');
       }
       return;
     }
 
     // Ctrl+H: Superscript (High)
-    if (key === "h") {
+    if (key === 'h') {
       e.preventDefault();
-      insertSnippet("^{#?}");
+      insertSnippet('^{#?}');
       return;
     }
 
     // Ctrl+L: Subscript (Low) or Limit with Shift
-    if (key === "l") {
+    if (key === 'l') {
       e.preventDefault();
       if (e.shiftKey) {
-        insertSnippet("\\lim_{#? \\to #?}");
+        insertSnippet('\\lim_{#? \\to #?}');
       } else {
-        insertSnippet("_{#?}");
+        insertSnippet('_{#?}');
       }
       return;
     }
 
     // Ctrl+J: Joint Super+Subscript
-    if (key === "j") {
+    if (key === 'j') {
       e.preventDefault();
-      insertSnippet("_{#?}^{#?}");
+      insertSnippet('_{#?}^{#?}');
       return;
     }
 
     // Ctrl+I: Integral
-    if (key === "i") {
+    if (key === 'i') {
       e.preventDefault();
       if (e.shiftKey) {
-        insertSnippet("\\int_{#?}^{#?} #? \\, d#?");
+        insertSnippet('\\int_{#?}^{#?} #? \\, d#?');
       } else {
-        insertSnippet("\\int #? \\, d#?");
+        insertSnippet('\\int #? \\, d#?');
       }
       return;
     }
 
     // Ctrl+Shift+S: Summation
-    if (key === "s" && e.shiftKey) {
+    if (key === 's' && e.shiftKey) {
       e.preventDefault();
-      insertSnippet("\\sum_{#?}^{#?} #?");
+      insertSnippet('\\sum_{#?}^{#?} #?');
       return;
     }
 
     // Ctrl+Shift+P: Product
-    if (key === "p" && e.shiftKey) {
+    if (key === 'p' && e.shiftKey) {
       e.preventDefault();
-      insertSnippet("\\prod_{#?}^{#?} #?");
+      insertSnippet('\\prod_{#?}^{#?} #?');
       return;
     }
 
     // Ctrl+9 or Ctrl+(: Parentheses
-    if (e.key === "9" || e.key === "(") {
+    if (e.key === '9' || e.key === '(') {
       e.preventDefault();
-      insertSnippet("\\left( #? \\right)");
+      insertSnippet('\\left( #? \\right)');
       return;
     }
 
     // Ctrl+[ or Ctrl+]: Brackets
-    if (e.key === "[" || e.key === "]") {
+    if (e.key === '[' || e.key === ']') {
       e.preventDefault();
-      insertSnippet("\\left[ #? \\right]");
+      insertSnippet('\\left[ #? \\right]');
       return;
     }
 
     // Ctrl+Shift+M: 2x2 Matrix
-    if (key === "m" && e.shiftKey) {
+    if (key === 'm' && e.shiftKey) {
       e.preventDefault();
-      insertSnippet("\\begin{pmatrix} #? & #? \\\\ #? & #? \\end{pmatrix}");
+      insertSnippet('\\begin{pmatrix} #? & #? \\\\ #? & #? \\end{pmatrix}');
       return;
     }
 
     // Ctrl+Shift+C: Cases
-    if (key === "c" && e.shiftKey) {
+    if (key === 'c' && e.shiftKey) {
       e.preventDefault();
-      insertSnippet("\\begin{cases} #? & #? \\\\ #? & #? \\end{cases}");
+      insertSnippet('\\begin{cases} #? & #? \\\\ #? & #? \\end{cases}');
       return;
     }
   });
@@ -333,19 +412,23 @@
 
   btnCopyFlatOpc.addEventListener('click', async () => {
     const mathml = getStandardMathML();
+    const fontSize = parseFloat(fontSizeInput.value) || 12.0;
+
+    // Tauri invoke if available
     if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
       try {
         const target = activeTargetMode === 'omml' ? 'flat_opc_omml' : 'flat_opc_mathtype';
         const flatOpc = await window.__TAURI__.core.invoke('convert_equation', {
           data: mathml,
           fromFormat: 'mathml',
-          toFormat: target
+          toFormat: target,
+          fontSizePt: fontSize
         });
         await navigator.clipboard.writeText(flatOpc);
         showNotice(btnCopyFlatOpc, 'Flat OPC Copied!');
         return;
       } catch (e) {
-        console.error('Tauri invoke error:', e);
+        console.warn('Tauri invoke convert_equation error, trying bridge:', e);
       }
     }
     // Fallback: request via bridge server
@@ -357,7 +440,8 @@
         body: JSON.stringify({
           data: mathml,
           from: 'mathml',
-          to: target
+          to: target,
+          font_pt: fontSize
         })
       });
       if (res.ok) {
@@ -397,6 +481,7 @@
   async function saveAndResolveSession() {
     const mathml = getStandardMathML();
     const latex = mathField && mathField.getValue ? mathField.getValue('latex') : latexSource.value;
+    const fontSize = parseFloat(fontSizeInput.value) || 12.0;
 
     if (activeSessionId) {
       try {
@@ -406,15 +491,14 @@
           body: JSON.stringify({
             mathml: mathml,
             latex: latex,
-            target_mode: activeTargetMode
+            target_mode: activeTargetMode,
+            font_pt: fontSize
           })
         });
         if (res.ok) {
           showNotice(btnInsertUpdate, 'Saved to Document!');
           isModified = false;
-          if (window.__TAURI__ && window.__TAURI__.window) {
-            window.__TAURI__.window.getCurrentWindow().hide();
-          }
+          await hideAppWindow();
           return;
         }
       } catch (err) {
@@ -426,32 +510,40 @@
     isModified = false;
   }
 
-  // 10. Close Modal Interception
+  // 10. Close Modal Interception (Task 3.4)
   btnCancel.addEventListener('click', () => {
-    if (isModified) {
-      closeModal.classList.remove('hidden');
-    } else {
-      if (window.__TAURI__ && window.__TAURI__.window) {
-        window.__TAURI__.window.getCurrentWindow().hide();
-      }
-    }
+    handleCloseRequested();
   });
 
   modalBtnYes.addEventListener('click', async () => {
     closeModal.classList.add('hidden');
     await saveAndResolveSession();
+    await hideAppWindow();
   });
 
-  modalBtnNo.addEventListener('click', () => {
+  modalBtnNo.addEventListener('click', async () => {
     closeModal.classList.add('hidden');
-    isModified = false;
-    if (window.__TAURI__ && window.__TAURI__.window) {
-      window.__TAURI__.window.getCurrentWindow().hide();
+    if (activeSessionId) {
+      try {
+        await fetch(`${BRIDGE_URL}/session/${activeSessionId}/cancel`, {
+          method: 'POST'
+        });
+      } catch (_) {}
     }
+    isModified = false;
+    await hideAppWindow();
   });
 
   modalBtnCancel.addEventListener('click', () => {
     closeModal.classList.add('hidden');
+    // Stay in editor
+  });
+
+  // Close modal when clicking outside box
+  closeModal.addEventListener('click', (e) => {
+    if (e.target === closeModal) {
+      closeModal.classList.add('hidden');
+    }
   });
 
   // Helpers

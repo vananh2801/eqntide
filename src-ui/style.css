@@ -104,6 +104,41 @@ body {
   cursor: pointer;
 }
 
+.font-size-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background-color: #f8fafc;
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.font-size-group.hidden {
+  display: none !important;
+}
+
+.font-size-group input[type="number"] {
+  width: 52px;
+  padding: 2px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  text-align: right;
+  outline: none;
+  background-color: #ffffff;
+}
+
+.font-size-group input[type="number"]:focus {
+  border-color: var(--border-focus);
+}
+
+.font-size-group .unit {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 .bridge-status-badge {
   display: flex;
   align-items: center;
@@ -508,7 +543,7 @@ math-field:focus-within {
 }
 
 .modal-overlay.hidden {
-  display: none;
+  display: none !important;
 }
 
 .modal-box {

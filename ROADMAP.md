@@ -155,7 +155,7 @@ The goal of this project is to build a modern, open-source, cross-platform equat
     4. **Brackets, Fences & Cases**
     5. **Matrices & Multiline Alignments**
     6. **Greek Letters, Arrows, Relations & Set Symbols**
-- [ ] **Task 3.4: Output Format Selector & Close Confirmation (`[X]`)**
+- [x] **Task 3.4: Output Format Selector & Close Confirmation (`[X]`)**
   - Format selector in toolbar:
     - **Modern OMML (Default for Add-in):** Native `<m:oMath>` (auto-matches surrounding text font size and baseline).
     - **Modern MathType (OLE + EMF with MTEF):** Generates `Equation.DSMT4` `.bin` + vector `.emf` containing `EMR_COMMENT` MTEF 5.0 (plus configurable font size `pt` to match the document).

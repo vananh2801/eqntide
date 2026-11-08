@@ -20,12 +20,18 @@ fn get_server_status() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn convert_equation(data: String, from_format: String, to_format: String) -> Result<String, String> {
+fn convert_equation(
+    data: String,
+    from_format: String,
+    to_format: String,
+    font_size_pt: Option<f32>,
+) -> Result<String, String> {
+    let font_pt = font_size_pt.unwrap_or(12.0);
     match (from_format.as_str(), to_format.as_str()) {
         ("mathml", "flat_opc_omml") => {
             let node = omml_converter::MathNode::parse(&data)
                 .map_err(|e| format!("parse MathML failed: {e}"))?;
-            omml_converter::mathml_to_flat_opc(&node, omml_converter::FlatOpcMode::ModernOmml, 12.0)
+            omml_converter::mathml_to_flat_opc(&node, omml_converter::FlatOpcMode::ModernOmml, font_pt)
                 .map_err(|e| format!("flat opc pack failed: {e}"))
         }
         ("mathml", "flat_opc_mathtype") => {
@@ -34,7 +40,7 @@ fn convert_equation(data: String, from_format: String, to_format: String) -> Res
             omml_converter::mathml_to_flat_opc(
                 &node,
                 omml_converter::FlatOpcMode::ModernMathtypeOleEmf,
-                12.0,
+                font_pt,
             )
             .map_err(|e| format!("flat opc pack failed: {e}"))
         }
@@ -45,6 +51,11 @@ fn convert_equation(data: String, from_format: String, to_format: String) -> Res
         }
         _ => Err(format!("unsupported conversion from '{from_format}' to '{to_format}'")),
     }
+}
+
+#[tauri::command]
+fn hide_window(window: tauri::Window) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())
 }
 
 fn main() {
@@ -146,14 +157,18 @@ fn main() {
         })
         .on_window_event(move |window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // If user did not explicitly select "Quit" from tray, hide window to tray for instant warm popup
+                // If user did not explicitly select "Quit" from tray, prevent close and emit event to frontend
                 if !is_quitting_clone.load(Ordering::SeqCst) {
                     api.prevent_close();
-                    let _ = window.hide();
+                    let _ = window.emit("window-close-requested", ());
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_server_status, convert_equation])
+        .invoke_handler(tauri::generate_handler![
+            get_server_status,
+            convert_equation,
+            hide_window
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -176,6 +191,7 @@ mod tests {
             mathml.to_string(),
             "mathml".to_string(),
             "flat_opc_omml".to_string(),
+            None,
         )
         .expect("convert to flat opc");
 
@@ -186,6 +202,7 @@ mod tests {
             flat_opc,
             "flat_opc".to_string(),
             "mathml".to_string(),
+            None,
         )
         .expect("convert back to mathml");
 
@@ -200,6 +217,7 @@ mod tests {
             mathml.to_string(),
             "mathml".to_string(),
             "flat_opc_mathtype".to_string(),
+            Some(14.0),
         )
         .expect("convert to flat opc mathtype");
 
