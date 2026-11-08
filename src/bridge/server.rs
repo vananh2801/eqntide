@@ -235,6 +235,66 @@ fn parse_query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
+/// Serve static files for Office Word/WPS Add-ins directly from the bridge server.
+fn serve_word_addin_file(
+    rel_path: &str,
+    origin: Option<&str>,
+) -> Option<Response<std::io::Cursor<Vec<u8>>>> {
+    if rel_path.contains("..") || rel_path.starts_with('/') || rel_path.starts_with('\\') {
+        return None;
+    }
+
+    let candidates = [
+        std::path::PathBuf::from("word-addin").join(rel_path),
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("word-addin")
+            .join(rel_path),
+    ];
+
+    let mut found_bytes = None;
+    let mut resolved_path = None;
+
+    for candidate in &candidates {
+        if candidate.is_file() {
+            if let Ok(bytes) = std::fs::read(candidate) {
+                found_bytes = Some(bytes);
+                resolved_path = Some(candidate.clone());
+                break;
+            }
+        }
+    }
+
+    let bytes = found_bytes?;
+    let path_ref = resolved_path?;
+    let ext = path_ref
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let mime = match ext.as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "xml" => "application/xml; charset=utf-8",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "svg" => "image/svg+xml",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    };
+
+    let mut resp = Response::from_data(bytes).with_status_code(StatusCode(200));
+    if let Ok(h) = Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()) {
+        resp.add_header(h);
+    }
+    if let Ok(h) = Header::from_bytes(&b"Cache-Control"[..], &b"no-cache"[..]) {
+        resp.add_header(h);
+    }
+    add_cors_headers(&mut resp, origin);
+    Some(resp)
+}
+
 /// Start the local HTTP bridge server on `addr` (e.g. `"127.0.0.1:17890"`).
 pub fn start_bridge_server(addr: &str) -> crate::error::Result<ServerHandle> {
     let server = Server::http(addr).map_err(|e| {
@@ -341,6 +401,23 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                 origin,
             );
             let _ = req.respond(resp);
+        }
+
+        (Method::Get, "/manifest.xml") => {
+            if let Some(resp) = serve_word_addin_file("manifest.xml", origin) {
+                let _ = req.respond(resp);
+            } else {
+                let _ = req.respond(error_response(404, "file not found", origin));
+            }
+        }
+
+        (Method::Get, p) if p.starts_with("/word-addin/") => {
+            let rel_path = p.strip_prefix("/word-addin/").unwrap_or("");
+            if let Some(resp) = serve_word_addin_file(rel_path, origin) {
+                let _ = req.respond(resp);
+            } else {
+                let _ = req.respond(error_response(404, "file not found", origin));
+            }
         }
 
         (Method::Post, "/session/open") => {
@@ -1017,5 +1094,29 @@ mod tests {
         assert_eq!(snip_res.status, "ok");
         assert!(snip_res.result.contains("pkg:package"));
         assert!(snip_res.result.contains("m:oMath"));
+    }
+
+    #[test]
+    fn test_server_serves_word_addin_files() {
+        let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
+        let addr = server_handle.addr();
+
+        let req = format!("GET /word-addin/manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let resp = send_raw_http(addr, &req);
+        assert_eq!(resp.status, 200);
+        assert!(resp.body.contains("Math Editor"));
+        assert!(resp.body.contains("OfficeApp"));
+        assert_eq!(resp.headers.get("content-type").map(|s| s.as_str()), Some("application/xml; charset=utf-8"));
+
+        let req2 = format!("GET /word-addin/commands.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let resp2 = send_raw_http(addr, &req2);
+        assert_eq!(resp2.status, 200);
+        assert!(resp2.body.contains("insertEquation"));
+        assert_eq!(resp2.headers.get("content-type").map(|s| s.as_str()), Some("application/javascript; charset=utf-8"));
+
+        let req3 = format!("GET /manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let resp3 = send_raw_http(addr, &req3);
+        assert_eq!(resp3.status, 200);
+        assert!(resp3.body.contains("Math Editor"));
     }
 }

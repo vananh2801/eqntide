@@ -166,17 +166,17 @@ The goal of this project is to build a modern, open-source, cross-platform equat
 ### Phase 4: Microsoft Word Add-in (Modern Add-in Architecture)
 **Goal:** Provide a Ribbon Tab and Taskpane/Command workflow in Microsoft Word modeled after the modern MathType Add-in.
 
-- [ ] **Task 4.1: Office Add-in Manifest & Ribbon Design (`manifest.xml`)**
+- [x] **Task 4.1: Office Add-in Manifest & Ribbon Design (`manifest.xml`)**
   - Custom Ribbon Tab `Math Editor` with buttons:
     - **Insert Equation:** Opens editor to insert a new equation at cursor.
     - **Edit Equation:** Reads selected equation (OMML, Legacy MathType OLE/WMF, or Modern EMF) and opens it in the editor.
     - **Toggle LaTeX:** Converts selected `$...$` or `\[...\]` text in Word into an equation (or vice versa).
     - **Upgrade Legacy Equations:** Converts selected equation(s) or iterates through inline shapes/equations in the active document to upgrade Legacy MathType (`Equation.3` / `.wmf` / old OLE) ➔ Modern MathType (OMML or DSMT4 + EMF-MTEF).
     - **Batch Converter (Desktop):** Opens the Tauri Batch Converter window for fast full-file `.docx` processing.
-- [ ] **Task 4.2: Insert & Edit Implementation (`Office.js`)**
+- [x] **Task 4.2: Insert & Edit Implementation (`Office.js`)**
   - **Insert / Replace:** Use `Office.context.document.setSelectedDataAsync(flatOpcXml, { coercionType: Office.CoercionType.Ooxml })`.
   - **Edit Selection:** Call `Word.run(async (context) => { const ooxml = context.document.getSelection().getOoxml(); ... })`, send `ooxml.value` to `POST /session/open` on the local bridge, and replace selection with the returned Flat OPC payload on save.
-- [ ] **Task 4.3: In-Document "Legacy MathType ➔ Modern MathType" Action**
+- [x] **Task 4.3: In-Document "Legacy MathType ➔ Modern MathType" Action**
   - Traverse document paragraphs/inline objects in chunks via `Office.js` (for small/medium documents) or prompt to run via the instant Rust file converter (for large 100+ equation documents).
   - Each legacy OLE/WMF snippet is sent to `POST /convert/snippet` and replaced in-place with Modern OMML or Modern MathType OLE + EMF-MTEF.
 
