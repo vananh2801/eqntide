@@ -197,13 +197,13 @@ The goal of this project is to build a modern, open-source, cross-platform equat
 ### Phase 6: Standalone Batch Converter GUI & Clipboard Tools
 **Goal:** Provide a standalone desktop utility for bulk `.docx` conversion and multi-format copying.
 
-- [ ] **Task 6.1: Drag-and-Drop `.docx` Batch Converter Window**
+- [x] **Task 6.1: Drag-and-Drop `.docx` Batch Converter Window**
   - Visual GUI wrapping the Rust `.docx` pipelines with 3 clear conversion modes:
     1. **Legacy MathType (OLE / WMF / Eq 3.0) ➔ Modern OMML (`<m:oMath>`)**
     2. **Legacy MathType (OLE / WMF / Eq 3.0) ➔ Modern MathType 7 (OLE `DSMT4` + Vector `.emf` with embedded MTEF)**
     3. **Word OMML (`<m:oMath>`) ➔ Modern MathType 7 (OLE `DSMT4` + Vector `.emf` with embedded MTEF)**
   - Real-time progress bar, per-file statistics (`Found`, `Converted`, `Skipped`, `Errors`), and "Open Output Folder".
-- [ ] **Task 6.2: Multi-Format Clipboard Export**
+- [x] **Task 6.2: Multi-Format Clipboard Export**
   - Copy equation from editor as:
     - **MathML** / **LaTeX** (cross-platform text clipboard).
     - **Vector EMF (with embedded MTEF 5.0 comment)** / **High-DPI PNG**.

@@ -28,9 +28,33 @@
   const btnCopyLatex = document.getElementById('btn-copy-latex');
   const btnCopyMathml = document.getElementById('btn-copy-mathml');
   const btnCopyFlatOpc = document.getElementById('btn-copy-flat-opc');
+  const btnCopyEmf = document.getElementById('btn-copy-emf');
+  const btnCopyPng = document.getElementById('btn-copy-png');
   const btnToggleLatex = document.getElementById('btn-toggle-latex');
   const btnInsertUpdate = document.getElementById('btn-insert-update');
   const btnCancel = document.getElementById('btn-cancel');
+
+  // Batch Converter Elements
+  const batchDropzone = document.getElementById('batch-dropzone');
+  const batchFileInput = document.getElementById('batch-file-input');
+  const batchFileListContainer = document.getElementById('batch-file-list-container');
+  const batchFileList = document.getElementById('batch-file-list');
+  const batchFileCountLabel = document.getElementById('batch-file-count-label');
+  const btnClearBatchFiles = document.getElementById('btn-clear-batch-files');
+  const batchDirectionSelect = document.getElementById('batch-direction-select');
+  const batchOutputModeSelect = document.getElementById('batch-output-mode-select');
+  const btnRunBatch = document.getElementById('btn-run-batch');
+  const btnOpenOutputFolder = document.getElementById('btn-open-output-folder');
+  const batchProgressSection = document.getElementById('batch-progress-section');
+  const batchProgressBar = document.getElementById('batch-progress-bar');
+  const batchProgressLabel = document.getElementById('batch-progress-label');
+  const batchProgressPercent = document.getElementById('batch-progress-percent');
+  const batchStatFiles = document.getElementById('batch-stat-files');
+  const batchStatFound = document.getElementById('batch-stat-found');
+  const batchStatConverted = document.getElementById('batch-stat-converted');
+  const batchStatSkipped = document.getElementById('batch-stat-skipped');
+  const batchStatErrors = document.getElementById('batch-stat-errors');
+  const batchLogOutput = document.getElementById('batch-log-output');
 
   const closeModal = document.getElementById('close-modal');
   const modalBtnYes = document.getElementById('modal-btn-yes');
@@ -160,10 +184,15 @@
   // 3. Bidirectional Sync between MathLive Canvas and LaTeX Source
   function syncFromMathField() {
     if (!mathField) return;
-    const latex = (typeof mathField.getValue === 'function')
-      ? mathField.getValue('latex')
-      : (mathField.value || mathField.textContent || '');
-    if (latex && latex.trim().length > 0) {
+    let latex = '';
+    if (typeof mathField.getValue === 'function') {
+      latex = mathField.getValue('latex');
+    } else if (mathField.value) {
+      latex = mathField.value;
+    } else if (mathField.textContent) {
+      latex = mathField.textContent;
+    }
+    if (latex && typeof latex === 'string' && latex.trim().length > 0 && latex.trim() !== 'undefined') {
       latexSource.value = latex.trim();
     }
   }
@@ -458,6 +487,131 @@
     showNotice(btnCopyFlatOpc, 'Flat OPC Copied!');
   });
 
+  // Copy PNG picture (Task 6.2)
+  if (btnCopyPng) {
+    btnCopyPng.addEventListener('click', async () => {
+      const mathml = getStandardMathML();
+      const fontSize = parseFloat(fontSizeInput.value) || 12.0;
+      let base64Data = null;
+
+      if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+        try {
+          base64Data = await window.__TAURI__.core.invoke('convert_equation', {
+            data: mathml,
+            fromFormat: 'mathml',
+            toFormat: 'png',
+            fontSizePt: fontSize
+          });
+        } catch (e) {
+          console.warn('Tauri invoke png failed, trying bridge:', e);
+        }
+      }
+
+      if (!base64Data) {
+        try {
+          const res = await fetch(`${BRIDGE_URL}/convert/snippet`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: mathml,
+              from: 'mathml',
+              to: 'png',
+              font_pt: fontSize
+            })
+          });
+          if (res.ok) {
+            const json = await res.json();
+            base64Data = json.result;
+          }
+        } catch (e) {
+          console.warn('Bridge snippet png failed:', e);
+        }
+      }
+
+      if (!base64Data) {
+        showNotice(btnCopyPng, 'PNG Export Failed');
+        return;
+      }
+
+      try {
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'image/png' });
+        if (navigator.clipboard && navigator.clipboard.write) {
+          await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob })
+          ]);
+          showNotice(btnCopyPng, 'PNG Copied!');
+        } else {
+          await navigator.clipboard.writeText('data:image/png;base64,' + base64Data);
+          showNotice(btnCopyPng, 'PNG Copied!');
+        }
+      } catch (err) {
+        await navigator.clipboard.writeText('data:image/png;base64,' + base64Data);
+        showNotice(btnCopyPng, 'PNG Copied!');
+      }
+    });
+  }
+
+  // Copy EMF Vector (Task 6.2)
+  if (btnCopyEmf) {
+    btnCopyEmf.addEventListener('click', async () => {
+      const mathml = getStandardMathML();
+      const fontSize = parseFloat(fontSizeInput.value) || 12.0;
+      let base64Data = null;
+
+      if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+        try {
+          base64Data = await window.__TAURI__.core.invoke('convert_equation', {
+            data: mathml,
+            fromFormat: 'mathml',
+            toFormat: 'emf',
+            fontSizePt: fontSize
+          });
+        } catch (e) {
+          console.warn('Tauri invoke emf failed, trying bridge:', e);
+        }
+      }
+
+      if (!base64Data) {
+        try {
+          const res = await fetch(`${BRIDGE_URL}/convert/snippet`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              data: mathml,
+              from: 'mathml',
+              to: 'emf',
+              font_pt: fontSize
+            })
+          });
+          if (res.ok) {
+            const json = await res.json();
+            base64Data = json.result;
+          }
+        } catch (e) {
+          console.warn('Bridge snippet emf failed:', e);
+        }
+      }
+
+      if (!base64Data) {
+        showNotice(btnCopyEmf, 'EMF Export Failed');
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(base64Data);
+        showNotice(btnCopyEmf, 'EMF Copied!');
+      } catch (err) {
+        showNotice(btnCopyEmf, 'Clipboard Error');
+      }
+    });
+  }
+
   // 8. Toggle LaTeX
   btnToggleLatex.addEventListener('click', () => {
     let val = latexSource.value.trim();
@@ -545,6 +699,281 @@
       closeModal.classList.add('hidden');
     }
   });
+
+  // ==========================================
+  // Batch Document Converter Logic (Task 6.1)
+  // ==========================================
+  let batchFiles = [];
+  let lastOutputFolder = '';
+
+  function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  function appendBatchLog(msg) {
+    if (!batchLogOutput) return;
+    const time = new Date().toLocaleTimeString();
+    batchLogOutput.textContent += `\n[${time}] ${msg}`;
+    batchLogOutput.scrollTop = batchLogOutput.scrollHeight;
+  }
+
+  function renderBatchFileList() {
+    if (!batchFileList || !batchFileListContainer) return;
+    if (batchFiles.length === 0) {
+      batchFileListContainer.classList.add('hidden');
+      if (btnRunBatch) btnRunBatch.disabled = true;
+      return;
+    }
+
+    batchFileListContainer.classList.remove('hidden');
+    if (btnRunBatch) btnRunBatch.disabled = false;
+    if (batchFileCountLabel) {
+      batchFileCountLabel.textContent = `Selected Files (${batchFiles.length})`;
+    }
+
+    batchFileList.innerHTML = '';
+    batchFiles.forEach((fileItem) => {
+      const row = document.createElement('div');
+      row.className = 'batch-file-item';
+
+      const info = document.createElement('div');
+      info.className = 'file-info';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'file-name';
+      nameEl.textContent = fileItem.name;
+
+      const pathEl = document.createElement('span');
+      pathEl.className = 'file-path';
+      pathEl.textContent = fileItem.path ? `${fileItem.path} (${formatBytes(fileItem.size)})` : formatBytes(fileItem.size);
+
+      info.appendChild(nameEl);
+      info.appendChild(pathEl);
+
+      const badge = document.createElement('span');
+      badge.className = `file-status-badge status-${fileItem.status}`;
+      badge.textContent = fileItem.status.toUpperCase();
+
+      row.appendChild(info);
+      row.appendChild(badge);
+      batchFileList.appendChild(row);
+    });
+  }
+
+  function addFilesToBatch(fileList) {
+    for (const f of fileList) {
+      const name = f.name || '';
+      const path = f.path || f.name || '';
+      if (!name.toLowerCase().endsWith('.docx') && !path.toLowerCase().endsWith('.docx')) {
+        continue;
+      }
+      if (!batchFiles.some(item => item.path === path)) {
+        batchFiles.push({
+          name: name || path.split(/[\/\\]/).pop(),
+          path: path,
+          size: f.size || 0,
+          status: 'pending'
+        });
+      }
+    }
+    renderBatchFileList();
+    appendBatchLog(`Loaded ${batchFiles.length} file(s) for conversion.`);
+  }
+
+  if (batchDropzone) {
+    batchDropzone.addEventListener('click', () => {
+      if (batchFileInput) batchFileInput.click();
+    });
+
+    batchDropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      batchDropzone.style.borderColor = 'var(--primary-color)';
+      batchDropzone.style.backgroundColor = '#e0f2fe';
+    });
+
+    batchDropzone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      batchDropzone.style.borderColor = '#93c5fd';
+      batchDropzone.style.backgroundColor = '#f0f7ff';
+    });
+
+    batchDropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      batchDropzone.style.borderColor = '#93c5fd';
+      batchDropzone.style.backgroundColor = '#f0f7ff';
+      if (e.dataTransfer && e.dataTransfer.files) {
+        addFilesToBatch(e.dataTransfer.files);
+      }
+    });
+  }
+
+  if (batchFileInput) {
+    batchFileInput.addEventListener('change', () => {
+      if (batchFileInput.files) {
+        addFilesToBatch(batchFileInput.files);
+      }
+    });
+  }
+
+  if (btnClearBatchFiles) {
+    btnClearBatchFiles.addEventListener('click', () => {
+      batchFiles = [];
+      renderBatchFileList();
+      if (batchProgressSection) batchProgressSection.classList.add('hidden');
+      if (btnOpenOutputFolder) btnOpenOutputFolder.classList.add('hidden');
+      if (batchLogOutput) batchLogOutput.textContent = 'Cleared file list. Ready for new files.';
+    });
+  }
+
+  if (btnRunBatch) {
+    btnRunBatch.addEventListener('click', async () => {
+      if (batchFiles.length === 0) return;
+
+      btnRunBatch.disabled = true;
+      if (btnClearBatchFiles) btnClearBatchFiles.disabled = true;
+      if (batchProgressSection) batchProgressSection.classList.remove('hidden');
+      if (btnOpenOutputFolder) btnOpenOutputFolder.classList.add('hidden');
+
+      const direction = batchDirectionSelect ? batchDirectionSelect.value : 'upgrade_modern_omml';
+      const outputMode = batchOutputModeSelect ? batchOutputModeSelect.value : 'suffix';
+      const fontSize = parseFloat(fontSizeInput.value) || 12.0;
+
+      let totalFound = 0;
+      let totalConverted = 0;
+      let totalSkipped = 0;
+      let totalErrors = 0;
+
+      batchLogOutput.textContent = `Starting batch conversion of ${batchFiles.length} file(s)...\nDirection: ${direction}\nOutput Mode: ${outputMode}\n---`;
+
+      for (let i = 0; i < batchFiles.length; i++) {
+        const item = batchFiles[i];
+        item.status = 'converting';
+        renderBatchFileList();
+
+        const pct = Math.round(((i) / batchFiles.length) * 100);
+        if (batchProgressBar) batchProgressBar.style.width = `${pct}%`;
+        if (batchProgressPercent) batchProgressPercent.textContent = `${pct}%`;
+        if (batchProgressLabel) batchProgressLabel.textContent = `Converting ${i + 1}/${batchFiles.length}: ${item.name}...`;
+
+        let outPath = null;
+        if (outputMode === 'suffix') {
+          outPath = item.path.replace(/\.docx$/i, '_converted.docx');
+        } else {
+          outPath = item.path;
+        }
+
+        let result = null;
+        let errorMsg = null;
+
+        // Try Tauri command
+        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+          try {
+            result = await window.__TAURI__.core.invoke('convert_document', {
+              inputPath: item.path,
+              outputPath: outPath,
+              direction: direction,
+              fontSizePt: fontSize
+            });
+          } catch (err) {
+            errorMsg = err.toString();
+          }
+        }
+
+        // Bridge HTTP fallback
+        if (!result && !errorMsg) {
+          try {
+            const res = await fetch(`${BRIDGE_URL}/convert/document`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                input_path: item.path,
+                output_path: outPath,
+                target: direction.includes('mathtype') ? 'upgrade_mathtype' : 'upgrade_omml',
+                preview: 'emf',
+                font_pt: fontSize
+              })
+            });
+            if (res.ok) {
+              result = await res.json();
+            } else {
+              errorMsg = `Bridge error ${res.status}: ${await res.text()}`;
+            }
+          } catch (err) {
+            errorMsg = err.toString();
+          }
+        }
+
+        if (result && result.status === 'ok') {
+          item.status = 'done';
+          const found = result.found || 0;
+          const converted = result.converted || 0;
+          const skipped = result.skipped || 0;
+          const errors = result.errors || 0;
+
+          totalFound += found;
+          totalConverted += converted;
+          totalSkipped += skipped;
+          totalErrors += errors;
+
+          lastOutputFolder = outPath;
+          appendBatchLog(`✓ [${i + 1}/${batchFiles.length}] ${item.name}: found ${found}, converted ${converted}, skipped ${skipped}, errors ${errors}`);
+        } else {
+          item.status = 'error';
+          totalErrors += 1;
+          appendBatchLog(`✗ [${i + 1}/${batchFiles.length}] ${item.name}: FAILED - ${errorMsg || 'unknown error'}`);
+        }
+
+        // Update live stats
+        if (batchStatFiles) batchStatFiles.textContent = `${i + 1} / ${batchFiles.length}`;
+        if (batchStatFound) batchStatFound.textContent = totalFound;
+        if (batchStatConverted) batchStatConverted.textContent = totalConverted;
+        if (batchStatSkipped) batchStatSkipped.textContent = totalSkipped;
+        if (batchStatErrors) batchStatErrors.textContent = totalErrors;
+
+        renderBatchFileList();
+      }
+
+      // Finish
+      if (batchProgressBar) batchProgressBar.style.width = '100%';
+      if (batchProgressPercent) batchProgressPercent.textContent = '100%';
+      if (batchProgressLabel) batchProgressLabel.textContent = 'Batch Conversion Complete!';
+      appendBatchLog(`---\nAll ${batchFiles.length} file(s) finished. Total equations converted: ${totalConverted}, errors: ${totalErrors}.`);
+
+      btnRunBatch.disabled = false;
+      if (btnClearBatchFiles) btnClearBatchFiles.disabled = false;
+      if (btnOpenOutputFolder && lastOutputFolder) {
+        btnOpenOutputFolder.classList.remove('hidden');
+      }
+    });
+  }
+
+  if (btnOpenOutputFolder) {
+    btnOpenOutputFolder.addEventListener('click', async () => {
+      if (!lastOutputFolder) return;
+      if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+        try {
+          await window.__TAURI__.core.invoke('open_folder', { path: lastOutputFolder });
+          return;
+        } catch (_) {}
+      }
+      try {
+        await fetch(`${BRIDGE_URL}/open/folder`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: lastOutputFolder })
+        });
+      } catch (e) {
+        console.warn('Failed to open folder:', e);
+      }
+    });
+  }
 
   // Helpers
   function showNotice(buttonEl, text) {

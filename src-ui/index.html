@@ -386,9 +386,11 @@
       <!-- Bottom Action Footer -->
       <footer class="app-footer">
         <div class="footer-left">
-          <button class="secondary-btn" id="btn-copy-mathml">Copy MathML</button>
-          <button class="secondary-btn" id="btn-copy-flat-opc">Copy Flat OPC XML</button>
-          <button class="secondary-btn" id="btn-toggle-latex">Toggle $...$ LaTeX</button>
+          <button class="secondary-btn" id="btn-copy-mathml" title="Copy MathML XML snippet to clipboard">Copy MathML</button>
+          <button class="secondary-btn" id="btn-copy-flat-opc" title="Copy Word Flat OPC XML snippet to clipboard">Copy Flat OPC XML</button>
+          <button class="secondary-btn" id="btn-copy-emf" title="Copy Vector EMF with embedded MTEF 5.0">Copy EMF</button>
+          <button class="secondary-btn" id="btn-copy-png" title="Copy High-DPI transparent PNG picture to clipboard">Copy PNG</button>
+          <button class="secondary-btn" id="btn-toggle-latex" title="Wrap or unwrap $...$ delimiters">Toggle $...$ LaTeX</button>
         </div>
         <div class="footer-right">
           <button class="cancel-btn" id="btn-cancel">Cancel</button>
@@ -406,8 +408,10 @@
     <main class="tab-content hidden" id="tab-batch">
       <section class="batch-container">
         <div class="batch-card">
-          <h2>Batch Document Converter (.docx)</h2>
-          <p class="batch-subtitle">Convert legacy Microsoft Equation 3.0 / WMF to Modern MathType (OMML or DSMT4 + EMF-MTEF) in entire Word documents without losing formatting.</p>
+          <div class="batch-header-group">
+            <h2>Batch Document Converter (.docx)</h2>
+            <p class="batch-subtitle">Convert legacy Microsoft Equation 3.0 / WMF to Modern MathType (OMML or DSMT4 + EMF-MTEF) in entire Word documents without losing formatting.</p>
+          </div>
           
           <div class="batch-dropzone" id="batch-dropzone">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8">
@@ -415,25 +419,80 @@
               <polyline points="17 8 12 3 7 8"/>
               <line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
-            <p>Drag and drop <strong>.docx</strong> files or folders here, or click to browse</p>
+            <p>Drag and drop <strong>.docx</strong> files here, or click to browse</p>
+            <span class="dropzone-hint">Supports multiple Word documents (.docx)</span>
             <input type="file" id="batch-file-input" accept=".docx" multiple style="display: none;">
           </div>
 
-          <div class="batch-options">
+          <!-- Selected Files List -->
+          <div class="batch-file-list-container hidden" id="batch-file-list-container">
+            <div class="file-list-header">
+              <span id="batch-file-count-label">Selected Files (0)</span>
+              <button class="action-btn-small" id="btn-clear-batch-files">Clear All</button>
+            </div>
+            <div class="batch-file-list" id="batch-file-list"></div>
+          </div>
+
+          <div class="batch-options-grid">
             <div class="option-item">
-              <label>Conversion Direction:</label>
+              <label for="batch-direction-select">Conversion Direction:</label>
               <select id="batch-direction-select">
-                <option value="upgrade_modern_omml">Upgrade Legacy MathType &rarr; Modern Native OMML</option>
-                <option value="upgrade_modern_mathtype">Upgrade Legacy MathType &rarr; Modern MathType 7 (DSMT4 + EMF)</option>
-                <option value="omml_to_mathtype">Word OMML &rarr; MathType OLE</option>
-                <option value="mathtype_to_omml">MathType OLE &rarr; Word OMML</option>
+                <option value="upgrade_modern_omml" selected>1. Legacy MathType (OLE/WMF) &rarr; Modern OMML (&lt;m:oMath&gt;)</option>
+                <option value="upgrade_modern_mathtype">2. Legacy MathType (OLE/WMF) &rarr; Modern MathType 7 (DSMT4 + EMF-MTEF)</option>
+                <option value="omml_to_mathtype">3. Word OMML &rarr; Modern MathType 7 (OLE + EMF-MTEF)</option>
+                <option value="mathtype_to_omml">4. Modern MathType 7 &rarr; Modern OMML</option>
               </select>
             </div>
+            <div class="option-item">
+              <label for="batch-output-mode-select">Output Destination:</label>
+              <select id="batch-output-mode-select">
+                <option value="suffix" selected>Save copy with suffix (_converted.docx)</option>
+                <option value="overwrite">Overwrite original file (.docx)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="batch-actions-bar">
             <button class="primary-btn" id="btn-run-batch" disabled>Start Batch Conversion</button>
+            <button class="secondary-btn hidden" id="btn-open-output-folder">Open Output Folder</button>
+          </div>
+
+          <!-- Progress Bar & Live Statistics -->
+          <div class="batch-progress-section hidden" id="batch-progress-section">
+            <div class="progress-info-row">
+              <span id="batch-progress-label">Converting files...</span>
+              <span id="batch-progress-percent">0%</span>
+            </div>
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" id="batch-progress-bar" style="width: 0%;"></div>
+            </div>
+
+            <div class="batch-stats-grid">
+              <div class="stat-card">
+                <span class="stat-value" id="batch-stat-files">0 / 0</span>
+                <span class="stat-title">Files</span>
+              </div>
+              <div class="stat-card stat-found">
+                <span class="stat-value" id="batch-stat-found">0</span>
+                <span class="stat-title">Found</span>
+              </div>
+              <div class="stat-card stat-converted">
+                <span class="stat-value" id="batch-stat-converted">0</span>
+                <span class="stat-title">Converted</span>
+              </div>
+              <div class="stat-card stat-skipped">
+                <span class="stat-value" id="batch-stat-skipped">0</span>
+                <span class="stat-title">Skipped</span>
+              </div>
+              <div class="stat-card stat-errors">
+                <span class="stat-value" id="batch-stat-errors">0</span>
+                <span class="stat-title">Errors</span>
+              </div>
+            </div>
           </div>
 
           <div class="batch-log-panel" id="batch-log-panel">
-            <div class="log-header">Conversion Progress:</div>
+            <div class="log-header">Conversion Log:</div>
             <pre class="log-output" id="batch-log-output">Ready. Select or drop .docx files to start.</pre>
           </div>
         </div>

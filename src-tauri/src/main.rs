@@ -49,6 +49,26 @@ fn convert_equation(
                 .map_err(|e| format!("extract mathml failed: {e}"))?;
             Ok(node.to_xml())
         }
+        ("mathml", "emf") | ("mathml", "emf_base64") => {
+            let node = omml_converter::MathNode::parse(&data)
+                .map_err(|e| format!("parse MathML failed: {e}"))?;
+            let p = omml_converter::render_emf(&node, font_pt)
+                .map_err(|e| format!("render EMF failed: {e}"))?;
+            Ok(omml_converter::base64_encode(&p.emf))
+        }
+        ("mathml", "png") | ("mathml", "png_base64") => {
+            let node = omml_converter::MathNode::parse(&data)
+                .map_err(|e| format!("parse MathML failed: {e}"))?;
+            let prev = omml_converter::render_preview(&node, font_pt)
+                .map_err(|e| format!("render PNG failed: {e}"))?;
+            Ok(omml_converter::base64_encode(&prev.png))
+        }
+        ("mathml", "omml") => {
+            let node = omml_converter::MathNode::parse(&data)
+                .map_err(|e| format!("parse MathML failed: {e}"))?;
+            omml_converter::mathml_to_omml_xml(&node)
+                .map_err(|e| format!("render OMML failed: {e}"))
+        }
         _ => Err(format!("unsupported conversion from '{from_format}' to '{to_format}'")),
     }
 }
@@ -56,6 +76,101 @@ fn convert_equation(
 #[tauri::command]
 fn hide_window(window: tauri::Window) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn convert_document(
+    input_path: String,
+    output_path: Option<String>,
+    direction: String,
+    font_size_pt: Option<f32>,
+) -> Result<serde_json::Value, String> {
+    let in_p = std::path::Path::new(&input_path);
+    if !in_p.exists() {
+        return Err(format!("Input file does not exist: {input_path}"));
+    }
+    let out_p = output_path.as_deref().unwrap_or(&input_path);
+    let font_pt = font_size_pt.unwrap_or(12.0);
+
+    let summary = match direction.as_str() {
+        "legacy_to_omml" | "upgrade_modern_omml" | "upgrade_omml" => {
+            let opts = omml_converter::UpgradeOptions {
+                target: omml_converter::UpgradeTarget::ModernOmml,
+                font_pt,
+                math_font: None,
+            };
+            omml_converter::upgrade_legacy_mathtype_docx_with(in_p, out_p, &opts)
+                .map_err(|e| e.to_string())?
+        }
+        "legacy_to_mathtype" | "upgrade_modern_mathtype" | "upgrade_mathtype" => {
+            let opts = omml_converter::UpgradeOptions {
+                target: omml_converter::UpgradeTarget::ModernMathType,
+                font_pt,
+                math_font: None,
+            };
+            omml_converter::upgrade_legacy_mathtype_docx_with(in_p, out_p, &opts)
+                .map_err(|e| e.to_string())?
+        }
+        "omml_to_mathtype" | "mathtype" => {
+            let opts = omml_converter::Options {
+                font_pt,
+                preview: omml_converter::PreviewFormat::Emf,
+                ..Default::default()
+            };
+            omml_converter::convert_with(in_p, out_p, &opts)
+                .map_err(|e| e.to_string())?
+        }
+        "mathtype_to_omml" | "omml" => {
+            let opts = omml_converter::ToOmmlOptions::default();
+            omml_converter::convert_to_omml_with(in_p, out_p, &opts)
+                .map_err(|e| e.to_string())?
+        }
+        other => return Err(format!("unsupported conversion direction: {other}")),
+    };
+
+    Ok(serde_json::json!({
+        "status": "ok",
+        "input_path": input_path,
+        "output_path": out_p,
+        "found": summary.found,
+        "converted": summary.converted,
+        "skipped": summary.skipped,
+        "errors": summary.errors
+    }))
+}
+
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    let target_dir = if p.is_file() {
+        p.parent().unwrap_or(p)
+    } else {
+        p
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(target_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(target_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(target_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 fn main() {
@@ -167,7 +282,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_server_status,
             convert_equation,
-            hide_window
+            hide_window,
+            convert_document,
+            open_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -224,5 +341,47 @@ mod tests {
         assert!(flat_opc.contains("pkg:package"));
         assert!(flat_opc.contains("oleObject"));
         assert!(flat_opc.contains(".emf"));
+    }
+
+    #[test]
+    fn test_convert_equation_emf_and_png() {
+        let mathml = "<math><mi>x</mi><mo>+</mo><mn>1</mn></math>";
+        let emf_b64 = convert_equation(
+            mathml.to_string(),
+            "mathml".to_string(),
+            "emf".to_string(),
+            Some(12.0),
+        )
+        .expect("convert to emf");
+        assert!(!emf_b64.is_empty());
+
+        let png_b64 = convert_equation(
+            mathml.to_string(),
+            "mathml".to_string(),
+            "png".to_string(),
+            Some(12.0),
+        )
+        .expect("convert to png");
+        assert!(!png_b64.is_empty());
+
+        let omml_xml = convert_equation(
+            mathml.to_string(),
+            "mathml".to_string(),
+            "omml".to_string(),
+            None,
+        )
+        .expect("convert to omml");
+        assert!(omml_xml.contains("m:oMath"));
+    }
+
+    #[test]
+    fn test_convert_document_nonexistent_fails() {
+        let res = convert_document(
+            "/nonexistent/file.docx".into(),
+            None,
+            "upgrade_modern_omml".into(),
+            None,
+        );
+        assert!(res.is_err());
     }
 }

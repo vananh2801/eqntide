@@ -9,10 +9,12 @@ use std::time::Duration;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use crate::docx::{
-    base64_decode, convert_to_omml_with, convert_with, flat_opc_to_mathml, mathml_to_flat_opc,
+    base64_decode, base64_encode, convert_to_omml_with, convert_with, flat_opc_to_mathml, mathml_to_flat_opc,
     upgrade_legacy_mathtype_docx_with, FlatOpcMode, Options, PreviewFormat, ToOmmlOptions,
     UpgradeOptions, UpgradeTarget,
 };
+use crate::render::emf::render_emf;
+use crate::render::render_preview;
 use crate::mathml::MathNode;
 use crate::mtef::decode::{mtef_to_mathml, ole_to_mathml};
 use crate::ole::{extract_mtef_from_emf, extract_mtef_from_wmf};
@@ -694,6 +696,16 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                 }
                 "omml" => mathml_to_omml_xml(&math),
                 "mathml" => Ok(math.to_xml()),
+                "emf" | "emf_base64" => {
+                    render_emf(&math, snip_req.font_pt)
+                        .map(|p| base64_encode(&p.emf))
+                        .map_err(|e| crate::error::Error::Xml(format!("EMF rendering error: {e}")))
+                }
+                "png" | "png_base64" => {
+                    render_preview(&math, snip_req.font_pt)
+                        .map(|prev| base64_encode(&prev.png))
+                        .map_err(|e| crate::error::Error::Xml(format!("PNG rendering error: {e}")))
+                }
                 other => {
                     let _ = req.respond(error_response(
                         400,
@@ -832,6 +844,27 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     ));
                 }
             }
+        }
+
+        (Method::Post, "/open/folder") => {
+            let body = read_body(&mut req);
+            let payload: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+            if let Some(path_str) = payload.get("path").and_then(|v| v.as_str()) {
+                let p = std::path::Path::new(path_str);
+                let target_dir = if p.is_file() {
+                    p.parent().unwrap_or(p)
+                } else {
+                    p
+                };
+                #[cfg(target_os = "windows")]
+                let _ = std::process::Command::new("explorer").arg(target_dir).spawn();
+                #[cfg(target_os = "macos")]
+                let _ = std::process::Command::new("open").arg(target_dir).spawn();
+                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                let _ = std::process::Command::new("xdg-open").arg(target_dir).spawn();
+            }
+            let resp = json_response(200, &serde_json::json!({"status": "ok"}), origin);
+            let _ = req.respond(resp);
         }
 
         _ => {
@@ -1104,6 +1137,32 @@ mod tests {
         assert_eq!(snip_res.status, "ok");
         assert!(snip_res.result.contains("pkg:package"));
         assert!(snip_res.result.contains("m:oMath"));
+
+        // Test EMF snippet export
+        let emf_payload = r#"{"data": "<math><mi>x</mi><mo>+</mo><mn>1</mn></math>", "from": "mathml", "to": "emf"}"#;
+        let emf_req = format!(
+            "POST /convert/snippet HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            emf_payload.len(),
+            emf_payload
+        );
+        let resp_emf = send_raw_http(addr, &emf_req);
+        assert_eq!(resp_emf.status, 200);
+        let emf_res: ConvertSnippetResponse = serde_json::from_str(&resp_emf.body).expect("json parse");
+        assert_eq!(emf_res.status, "ok");
+        assert!(!emf_res.result.is_empty());
+
+        // Test PNG snippet export
+        let png_payload = r#"{"data": "<math><mi>x</mi><mo>+</mo><mn>1</mn></math>", "from": "mathml", "to": "png"}"#;
+        let png_req = format!(
+            "POST /convert/snippet HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            png_payload.len(),
+            png_payload
+        );
+        let resp_png = send_raw_http(addr, &png_req);
+        assert_eq!(resp_png.status, 200);
+        let png_res: ConvertSnippetResponse = serde_json::from_str(&resp_png.body).expect("json parse");
+        assert_eq!(png_res.status, "ok");
+        assert!(!png_res.result.is_empty());
     }
 
     #[test]

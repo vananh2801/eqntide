@@ -61,9 +61,10 @@ pub use bridge::{
     DEFAULT_PORT,
 };
 pub use docx::{
-    convert, convert_bytes, convert_bytes_to_omml, convert_bytes_to_omml_with, convert_bytes_with,
-    convert_to_omml, convert_to_omml_with, convert_with, flat_opc_to_mathml, mathml_to_flat_opc,
-    upgrade_legacy_mathtype_bytes, upgrade_legacy_mathtype_bytes_with, upgrade_legacy_mathtype_docx,
+    base64_decode, base64_encode, convert, convert_bytes, convert_bytes_to_omml,
+    convert_bytes_to_omml_with, convert_bytes_with, convert_to_omml, convert_to_omml_with,
+    convert_with, flat_opc_to_mathml, mathml_to_flat_opc, upgrade_legacy_mathtype_bytes,
+    upgrade_legacy_mathtype_bytes_with, upgrade_legacy_mathtype_docx,
     upgrade_legacy_mathtype_docx_with, ConversionSummary, EmbedMode, FlatOpcMode, Options,
     PreviewFormat, ToOmmlOptions, UpgradeOptions, UpgradeTarget,
 };
@@ -74,6 +75,7 @@ pub use mtef::encode::mathml_to_mtef_bytes;
 pub use mtef::make_equation_native;
 pub use ole::{extract_mtef_from_emf, extract_mtef_from_ole, extract_mtef_from_wmf, make_ole};
 pub use render::emf::{render_emf, render_emf_with_mtef};
+pub use render::{render_preview, Preview};
 pub use omml::decode::omml_to_mathml;
 pub use omml::encode::{apply_math_font, mathml_to_omml, mathml_to_omml_xml};
 
