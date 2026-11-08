@@ -147,7 +147,7 @@ The goal of this project is to build a modern, open-source, cross-platform equat
   - Embed `<math-field>` (`@cortex-js/mathlive`).
   - Handle **LaTeX ⇄ MathML** conversion on the frontend via MathLive APIs before sending standard MathML to the Rust backend.
   - Synchronize live LaTeX source box below the visual canvas (like modern MathType / WIRIS).
-- [ ] **Task 3.3: Classic MathType Palette Toolbar**
+- [x] **Task 3.3: Classic MathType Palette Toolbar**
   - Categorized symbol & template tabs with keyboard shortcuts:
     1. **Fractions & Radicals**
     2. **Subscripts, Superscripts & Limits**

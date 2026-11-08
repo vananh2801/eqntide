@@ -137,28 +137,79 @@ body {
   display: none;
 }
 
-/* Palette Toolbar */
-.palette-toolbar {
+/* Classic MathType Palette Container (Task 3.3) */
+.palette-container {
+  display: flex;
+  flex-direction: column;
+  background-color: #ffffff;
+  border-bottom: 1px solid var(--border-color);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+/* Category Tabs Bar */
+.palette-tabs-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  background-color: #ffffff;
+  gap: 2px;
+  padding: 4px 12px 0 12px;
+  background-color: #f1f5f9;
   border-bottom: 1px solid var(--border-color);
   overflow-x: auto;
 }
 
-.palette-group {
+.palette-tab-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  padding: 6px 12px;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
 }
 
-.palette-divider {
-  width: 1px;
-  height: 28px;
-  background-color: #e2e8f0;
-  margin: 0 4px;
+.palette-tab-btn:hover {
+  background-color: rgba(255, 255, 255, 0.6);
+  color: var(--text-main);
+}
+
+.palette-tab-btn.active {
+  background-color: #ffffff;
+  color: var(--primary-color);
+  font-weight: 600;
+  border-color: var(--border-color);
+  border-bottom: 1px solid #ffffff;
+  margin-bottom: -1px;
+}
+
+.tab-glyph {
+  font-family: KaTeX_Main, KaTeX_Math, "Cambria Math", serif;
+  font-size: 0.95rem;
+  color: #3b82f6;
+}
+
+/* Panels Viewport */
+.palette-panels-viewport {
+  padding: 8px 16px;
+  background-color: #ffffff;
+  min-height: 58px;
+}
+
+.palette-panel {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.palette-panel.active {
+  display: flex;
 }
 
 .palette-btn {
@@ -166,7 +217,7 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-width: 44px;
+  min-width: 52px;
   height: 44px;
   padding: 2px 6px;
   background-color: #f8fafc;
@@ -180,6 +231,8 @@ body {
   background-color: #eff6ff;
   border-color: #93c5fd;
   color: var(--primary-color);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.1);
 }
 
 .palette-preview {
@@ -189,8 +242,19 @@ body {
 }
 
 .palette-label {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Symbol Buttons */
+.palette-btn.sym-btn {
+  min-width: 34px;
+  height: 34px;
+  font-size: 1.15rem;
+  font-weight: 500;
+  padding: 0;
+  font-family: KaTeX_Main, KaTeX_Math, "Cambria Math", serif;
 }
 
 /* Canvas Area */

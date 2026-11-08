@@ -46,80 +46,315 @@
 
     <!-- Main Content Area: Editor Tab -->
     <main class="tab-content" id="tab-editor">
-      <!-- MathType-style Palette Toolbar -->
-      <section class="palette-toolbar" id="palette-toolbar">
-        <div class="palette-group">
-          <button class="palette-btn" data-insert="\frac{#?}{#?}" title="Fraction">
-            <span class="palette-preview">&frac12;</span>
-            <span class="palette-label">Fraction</span>
+      <!-- Classic MathType Categorized Palette Toolbar (Task 3.3) -->
+      <section class="palette-container" id="palette-container">
+        <!-- Category Tab Bar -->
+        <div class="palette-tabs-bar" role="tablist">
+          <button class="palette-tab-btn active" data-target="cat-fractions" role="tab">
+            <span class="tab-glyph">&frac12;&radic;</span>
+            <span>Fractions &amp; Radicals</span>
           </button>
-          <button class="palette-btn" data-insert="\sqrt{#?}" title="Square Root">
-            <span class="palette-preview">&radic;x</span>
-            <span class="palette-label">Radical</span>
+          <button class="palette-tab-btn" data-target="cat-scripts" role="tab">
+            <span class="tab-glyph">x<sup>n</sup></span>
+            <span>Subscripts &amp; Limits</span>
           </button>
-          <button class="palette-btn" data-insert="^{#?}" title="Superscript">
-            <span class="palette-preview">x<sup>2</sup></span>
-            <span class="palette-label">Superscript</span>
+          <button class="palette-tab-btn" data-target="cat-integrals" role="tab">
+            <span class="tab-glyph">&int;&sum;</span>
+            <span>Integrals &amp; Sums</span>
           </button>
-          <button class="palette-btn" data-insert="_{#?}" title="Subscript">
-            <span class="palette-preview">x<sub>2</sub></span>
-            <span class="palette-label">Subscript</span>
+          <button class="palette-tab-btn" data-target="cat-fences" role="tab">
+            <span class="tab-glyph">( &bull; ) {</span>
+            <span>Brackets &amp; Cases</span>
           </button>
-        </div>
-
-        <div class="palette-divider"></div>
-
-        <div class="palette-group">
-          <button class="palette-btn" data-insert="\int_{#?}^{#?} #? \, d#?" title="Definite Integral">
-            <span class="palette-preview">&int;</span>
-            <span class="palette-label">Integral</span>
+          <button class="palette-tab-btn" data-target="cat-matrices" role="tab">
+            <span class="tab-glyph">[::]</span>
+            <span>Matrices &amp; Align</span>
           </button>
-          <button class="palette-btn" data-insert="\sum_{#?}^{#?} #?" title="Summation">
-            <span class="palette-preview">&sum;</span>
-            <span class="palette-label">Sum</span>
-          </button>
-          <button class="palette-btn" data-insert="\prod_{#?}^{#?} #?" title="Product">
-            <span class="palette-preview">&prod;</span>
-            <span class="palette-label">Product</span>
-          </button>
-          <button class="palette-btn" data-insert="\lim_{#? \to #?} #?" title="Limit">
-            <span class="palette-preview">lim</span>
-            <span class="palette-label">Limit</span>
+          <button class="palette-tab-btn" data-target="cat-symbols" role="tab">
+            <span class="tab-glyph">&alpha;&beta;&rarr;</span>
+            <span>Greek &amp; Symbols</span>
           </button>
         </div>
 
-        <div class="palette-divider"></div>
+        <!-- Category Panels Viewport -->
+        <div class="palette-panels-viewport">
+          <!-- 1. Fractions & Radicals -->
+          <div class="palette-panel active" id="cat-fractions">
+            <button class="palette-btn" data-insert="\frac{#?}{#?}" title="Standard Fraction (Ctrl+F or /)">
+              <span class="palette-preview">&frac12;</span>
+              <span class="palette-label">Fraction (Ctrl+F)</span>
+            </button>
+            <button class="palette-btn" data-insert="\tfrac{#?}{#?}" title="Small Inline Fraction">
+              <span class="palette-preview" style="font-size:0.88rem">&frac12;</span>
+              <span class="palette-label">Inline Frac</span>
+            </button>
+            <button class="palette-btn" data-insert="{#?}/{#?}" title="Diagonal / Linear Fraction">
+              <span class="palette-preview" style="font-size:0.95rem">a/b</span>
+              <span class="palette-label">Diagonal</span>
+            </button>
+            <button class="palette-btn" data-insert="\sqrt{#?}" title="Square Root (Ctrl+R)">
+              <span class="palette-preview">&radic;x</span>
+              <span class="palette-label">Square Root (Ctrl+R)</span>
+            </button>
+            <button class="palette-btn" data-insert="\sqrt[#?]{#?}" title="N-th Root (Ctrl+Shift+R)">
+              <span class="palette-preview"><sup>n</sup>&radic;x</span>
+              <span class="palette-label">N-th Root</span>
+            </button>
+            <button class="palette-btn" data-insert="\sqrt{\frac{#?}{#?}}" title="Root with Fraction">
+              <span class="palette-preview">&radic;&frac12;</span>
+              <span class="palette-label">Root Frac</span>
+            </button>
+          </div>
 
-        <div class="palette-group">
-          <button class="palette-btn" data-insert="\left( #? \right)" title="Parentheses">
-            <span class="palette-preview">( &bull; )</span>
-            <span class="palette-label">Fences</span>
-          </button>
-          <button class="palette-btn" data-insert="\left[ #? \right]" title="Brackets">
-            <span class="palette-preview">[ &bull; ]</span>
-            <span class="palette-label">Brackets</span>
-          </button>
-          <button class="palette-btn" data-insert="\begin{cases} #? & #? \\ #? & #? \end{cases}" title="Cases">
-            <span class="palette-preview">{ &bull;</span>
-            <span class="palette-label">Cases</span>
-          </button>
-          <button class="palette-btn" data-insert="\begin{pmatrix} #? & #? \\ #? & #? \end{pmatrix}" title="2x2 Matrix">
-            <span class="palette-preview">[::]</span>
-            <span class="palette-label">Matrix</span>
-          </button>
-        </div>
+          <!-- 2. Subscripts, Superscripts & Limits -->
+          <div class="palette-panel" id="cat-scripts">
+            <button class="palette-btn" data-insert="^{#?}" title="Superscript / Power (Ctrl+H or ^)">
+              <span class="palette-preview">x<sup>2</sup></span>
+              <span class="palette-label">Power (Ctrl+H)</span>
+            </button>
+            <button class="palette-btn" data-insert="_{#?}" title="Subscript (Ctrl+L or _)">
+              <span class="palette-preview">x<sub>2</sub></span>
+              <span class="palette-label">Sub (Ctrl+L)</span>
+            </button>
+            <button class="palette-btn" data-insert="_{#?}^{#?}" title="Super + Subscript (Ctrl+J)">
+              <span class="palette-preview">x<sup>2</sup><sub>1</sub></span>
+              <span class="palette-label">Both (Ctrl+J)</span>
+            </button>
+            <button class="palette-btn" data-insert="{}^{#?}_{#?}#?" title="Prescript (Tensor)">
+              <span class="palette-preview"><sup>2</sup><sub>1</sub>x</span>
+              <span class="palette-label">Prescript</span>
+            </button>
+            <button class="palette-btn" data-insert="\lim_{#? \to #?}" title="Limit with Approach (Ctrl+Shift+L)">
+              <span class="palette-preview">lim<sub>x&rarr;0</sub></span>
+              <span class="palette-label">Limit</span>
+            </button>
+            <button class="palette-btn" data-insert="\max_{#?}" title="Maximum with Subscript">
+              <span class="palette-preview">max</span>
+              <span class="palette-label">Max</span>
+            </button>
+            <button class="palette-btn" data-insert="\min_{#?}" title="Minimum with Subscript">
+              <span class="palette-preview">min</span>
+              <span class="palette-label">Min</span>
+            </button>
+            <button class="palette-btn" data-insert="\vec{#?}" title="Vector Arrow (Ctrl+Alt+V)">
+              <span class="palette-preview">&rarr;<br>v</span>
+              <span class="palette-label">Vector</span>
+            </button>
+            <button class="palette-btn" data-insert="\hat{#?}" title="Hat Accent">
+              <span class="palette-preview">^<br>x</span>
+              <span class="palette-label">Hat</span>
+            </button>
+            <button class="palette-btn" data-insert="\bar{#?}" title="Overline / Bar Accent">
+              <span class="palette-preview">&oline;<br>x</span>
+              <span class="palette-label">Bar</span>
+            </button>
+            <button class="palette-btn" data-insert="\dot{#?}" title="Single Dot (Derivative)">
+              <span class="palette-preview">&bull;<br>x</span>
+              <span class="palette-label">Dot</span>
+            </button>
+            <button class="palette-btn" data-insert="\ddot{#?}" title="Double Dot">
+              <span class="palette-preview">&bull;&bull;<br>x</span>
+              <span class="palette-label">Ddot</span>
+            </button>
+            <button class="palette-btn" data-insert="\underbrace{#?}_{#?}" title="Underbrace">
+              <span class="palette-preview">&#x23DF;</span>
+              <span class="palette-label">Underbrace</span>
+            </button>
+            <button class="palette-btn" data-insert="\overbrace{#?}^{#?}" title="Overbrace">
+              <span class="palette-preview">&#x23DE;</span>
+              <span class="palette-label">Overbrace</span>
+            </button>
+          </div>
 
-        <div class="palette-divider"></div>
+          <!-- 3. Integrals, Summations & Products -->
+          <div class="palette-panel" id="cat-integrals">
+            <button class="palette-btn" data-insert="\int #? \, d#?" title="Indefinite Integral (Ctrl+I)">
+              <span class="palette-preview">&int; dx</span>
+              <span class="palette-label">Integral (Ctrl+I)</span>
+            </button>
+            <button class="palette-btn" data-insert="\int_{#?}^{#?} #? \, d#?" title="Definite Integral (Ctrl+Shift+I)">
+              <span class="palette-preview">&int;<sub>a</sub><sup>b</sup></span>
+              <span class="palette-label">Definite &int;</span>
+            </button>
+            <button class="palette-btn" data-insert="\iint_{#?}^{#?} #? \, d#?" title="Double Integral">
+              <span class="palette-preview">&int;&int;</span>
+              <span class="palette-label">Double &int;</span>
+            </button>
+            <button class="palette-btn" data-insert="\iiint_{#?}^{#?} #? \, d#?" title="Triple Integral">
+              <span class="palette-preview">&int;&int;&int;</span>
+              <span class="palette-label">Triple &int;</span>
+            </button>
+            <button class="palette-btn" data-insert="\oint_{#?}^{#?} #? \, d#?" title="Contour / Closed Integral">
+              <span class="palette-preview">&#x222E;</span>
+              <span class="palette-label">Contour &int;</span>
+            </button>
+            <button class="palette-btn" data-insert="\sum_{#?}^{#?} #?" title="Summation with Limits (Ctrl+Shift+S)">
+              <span class="palette-preview">&sum;<sub>i=1</sub><sup>n</sup></span>
+              <span class="palette-label">Sum (Ctrl+Shift+S)</span>
+            </button>
+            <button class="palette-btn" data-insert="\prod_{#?}^{#?} #?" title="Product with Limits (Ctrl+Shift+P)">
+              <span class="palette-preview">&prod;<sub>i=1</sub><sup>n</sup></span>
+              <span class="palette-label">Prod (Ctrl+Shift+P)</span>
+            </button>
+            <button class="palette-btn" data-insert="\bigcup_{#?}^{#?} #?" title="Union of Sets">
+              <span class="palette-preview">&bigcup;</span>
+              <span class="palette-label">Big Union</span>
+            </button>
+            <button class="palette-btn" data-insert="\bigcap_{#?}^{#?} #?" title="Intersection of Sets">
+              <span class="palette-preview">&bigcap;</span>
+              <span class="palette-label">Big Intersect</span>
+            </button>
+          </div>
 
-        <div class="palette-group">
-          <button class="palette-btn" data-insert="\alpha" title="Alpha">&alpha;</button>
-          <button class="palette-btn" data-insert="\beta" title="Beta">&beta;</button>
-          <button class="palette-btn" data-insert="\theta" title="Theta">&theta;</button>
-          <button class="palette-btn" data-insert="\pi" title="Pi">&pi;</button>
-          <button class="palette-btn" data-insert="\le" title="Less than or equal">&le;</button>
-          <button class="palette-btn" data-insert="\ge" title="Greater than or equal">&ge;</button>
-          <button class="palette-btn" data-insert="\pm" title="Plus-minus">&plusmn;</button>
-          <button class="palette-btn" data-insert="\to" title="Arrow">&rarr;</button>
+          <!-- 4. Brackets, Fences & Cases -->
+          <div class="palette-panel" id="cat-fences">
+            <button class="palette-btn" data-insert="\left( #? \right)" title="Parentheses (Ctrl+9 or Ctrl+()">
+              <span class="palette-preview">( &bull; )</span>
+              <span class="palette-label">( ... )</span>
+            </button>
+            <button class="palette-btn" data-insert="\left[ #? \right]" title="Square Brackets (Ctrl+[)">
+              <span class="palette-preview">[ &bull; ]</span>
+              <span class="palette-label">[ ... ]</span>
+            </button>
+            <button class="palette-btn" data-insert="\left\{ #? \right\}" title="Curly Braces (Ctrl+{)">
+              <span class="palette-preview">{ &bull; }</span>
+              <span class="palette-label">{ ... }</span>
+            </button>
+            <button class="palette-btn" data-insert="\left| #? \right|" title="Absolute Value / Modulus (Ctrl+|)">
+              <span class="palette-preview">| &bull; |</span>
+              <span class="palette-label">| x |</span>
+            </button>
+            <button class="palette-btn" data-insert="\left\| #? \right\|" title="Norm / Magnitude">
+              <span class="palette-preview">&parallel; &bull; &parallel;</span>
+              <span class="palette-label">|| x ||</span>
+            </button>
+            <button class="palette-btn" data-insert="\left\lfloor #? \right\rfloor" title="Floor Function">
+              <span class="palette-preview">&lfloor; &bull; &rfloor;</span>
+              <span class="palette-label">Floor</span>
+            </button>
+            <button class="palette-btn" data-insert="\left\lceil #? \right\rceil" title="Ceiling Function">
+              <span class="palette-preview">&lceil; &bull; &rceil;</span>
+              <span class="palette-label">Ceiling</span>
+            </button>
+            <button class="palette-btn" data-insert="\left\langle #? \right\rangle" title="Angle Brackets (Dirac Bra-Ket)">
+              <span class="palette-preview">&lang; &bull; &rang;</span>
+              <span class="palette-label">Angle &lang;&rang;</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{cases} #? & #? \\ #? & #? \end{cases}" title="2-Piece Cases (Ctrl+Shift+C)">
+              <span class="palette-preview">{ 2 cases</span>
+              <span class="palette-label">Cases (2)</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{cases} #? & #? \\ #? & #? \\ #? & #? \end{cases}" title="3-Piece Cases">
+              <span class="palette-preview">{ 3 cases</span>
+              <span class="palette-label">Cases (3)</span>
+            </button>
+            <button class="palette-btn" data-insert="\left. #? \right|_{#?}^{#?}" title="Evaluation Bar">
+              <span class="palette-preview">&bull; |<sub>a</sub><sup>b</sup></span>
+              <span class="palette-label">Eval Bar</span>
+            </button>
+          </div>
+
+          <!-- 5. Matrices & Multiline Alignments -->
+          <div class="palette-panel" id="cat-matrices">
+            <button class="palette-btn" data-insert="\begin{pmatrix} #? & #? \\ #? & #? \end{pmatrix}" title="2x2 Matrix (Ctrl+Shift+M)">
+              <span class="palette-preview">( 2&times;2 )</span>
+              <span class="palette-label">2&times;2 Mat</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{pmatrix} #? & #? & #? \\ #? & #? & #? \\ #? & #? & #? \end{pmatrix}" title="3x3 Matrix">
+              <span class="palette-preview">( 3&times;3 )</span>
+              <span class="palette-label">3&times;3 Mat</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{bmatrix} #? & #? \\ #? & #? \end{bmatrix}" title="2x2 Bracket Matrix">
+              <span class="palette-preview">[ 2&times;2 ]</span>
+              <span class="palette-label">Bracket Mat</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{vmatrix} #? & #? \\ #? & #? \end{vmatrix}" title="2x2 Determinant">
+              <span class="palette-preview">| 2&times;2 |</span>
+              <span class="palette-label">2&times;2 Det</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{vmatrix} #? & #? & #? \\ #? & #? & #? \\ #? & #? & #? \end{vmatrix}" title="3x3 Determinant">
+              <span class="palette-preview">| 3&times;3 |</span>
+              <span class="palette-label">3&times;3 Det</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{pmatrix} #? \\ #? \end{pmatrix}" title="2x1 Column Vector">
+              <span class="palette-preview">( 2&times;1 )</span>
+              <span class="palette-label">Col Vector</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{pmatrix} #? & #? \end{pmatrix}" title="1x2 Row Vector">
+              <span class="palette-preview">( 1&times;2 )</span>
+              <span class="palette-label">Row Vector</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{aligned} #? &= #? \\ #? &= #? \end{aligned}" title="Aligned Multiline Equations">
+              <span class="palette-preview">&amp;= aligned</span>
+              <span class="palette-label">Aligned</span>
+            </button>
+            <button class="palette-btn" data-insert="\begin{gathered} #? \\ #? \end{gathered}" title="Gathered Centered Multiline">
+              <span class="palette-preview">gathered</span>
+              <span class="palette-label">Gathered</span>
+            </button>
+          </div>
+
+          <!-- 6. Greek Letters, Arrows, Relations & Set Symbols -->
+          <div class="palette-panel" id="cat-symbols">
+            <!-- Greek Lowercase -->
+            <button class="palette-btn sym-btn" data-insert="\alpha" title="Alpha (\alpha)">&alpha;</button>
+            <button class="palette-btn sym-btn" data-insert="\beta" title="Beta (\beta)">&beta;</button>
+            <button class="palette-btn sym-btn" data-insert="\gamma" title="Gamma (\gamma)">&gamma;</button>
+            <button class="palette-btn sym-btn" data-insert="\delta" title="Delta (\delta)">&delta;</button>
+            <button class="palette-btn sym-btn" data-insert="\epsilon" title="Epsilon (\epsilon)">&epsilon;</button>
+            <button class="palette-btn sym-btn" data-insert="\theta" title="Theta (\theta)">&theta;</button>
+            <button class="palette-btn sym-btn" data-insert="\lambda" title="Lambda (\lambda)">&lambda;</button>
+            <button class="palette-btn sym-btn" data-insert="\mu" title="Mu (\mu)">&mu;</button>
+            <button class="palette-btn sym-btn" data-insert="\pi" title="Pi (\pi)">&pi;</button>
+            <button class="palette-btn sym-btn" data-insert="\rho" title="Rho (\rho)">&rho;</button>
+            <button class="palette-btn sym-btn" data-insert="\sigma" title="Sigma (\sigma)">&sigma;</button>
+            <button class="palette-btn sym-btn" data-insert="\tau" title="Tau (\tau)">&tau;</button>
+            <button class="palette-btn sym-btn" data-insert="\phi" title="Phi (\phi)">&phi;</button>
+            <button class="palette-btn sym-btn" data-insert="\omega" title="Omega (\omega)">&omega;</button>
+
+            <!-- Greek Uppercase -->
+            <button class="palette-btn sym-btn" data-insert="\Delta" title="Delta (\Delta)">&Delta;</button>
+            <button class="palette-btn sym-btn" data-insert="\Theta" title="Theta (\Theta)">&Theta;</button>
+            <button class="palette-btn sym-btn" data-insert="\Lambda" title="Lambda (\Lambda)">&Lambda;</button>
+            <button class="palette-btn sym-btn" data-insert="\Sigma" title="Sigma (\Sigma)">&Sigma;</button>
+            <button class="palette-btn sym-btn" data-insert="\Phi" title="Phi (\Phi)">&Phi;</button>
+            <button class="palette-btn sym-btn" data-insert="\Omega" title="Omega (\Omega)">&Omega;</button>
+
+            <!-- Arrows -->
+            <button class="palette-btn sym-btn" data-insert="\to" title="Right Arrow (\to)">&rarr;</button>
+            <button class="palette-btn sym-btn" data-insert="\leftarrow" title="Left Arrow (\leftarrow)">&larr;</button>
+            <button class="palette-btn sym-btn" data-insert="\Rightarrow" title="Implies (\Rightarrow)">&rArr;</button>
+            <button class="palette-btn sym-btn" data-insert="\Leftrightarrow" title="Equivalent (\Leftrightarrow)">&hArr;</button>
+            <button class="palette-btn sym-btn" data-insert="\iff" title="If and only if (\iff)" style="font-size:0.75rem">iff</button>
+
+            <!-- Relations -->
+            <button class="palette-btn sym-btn" data-insert="\le" title="Less than or equal (\le)">&le;</button>
+            <button class="palette-btn sym-btn" data-insert="\ge" title="Greater than or equal (\ge)">&ge;</button>
+            <button class="palette-btn sym-btn" data-insert="\neq" title="Not equal (\neq)">&ne;</button>
+            <button class="palette-btn sym-btn" data-insert="\approx" title="Approximately (\approx)">&approx;</button>
+            <button class="palette-btn sym-btn" data-insert="\equiv" title="Identical (\equiv)">&equiv;</button>
+            <button class="palette-btn sym-btn" data-insert="\ll" title="Much less than (\ll)">&Lt;</button>
+            <button class="palette-btn sym-btn" data-insert="\gg" title="Much greater than (\gg)">&Gt;</button>
+
+            <!-- Sets & Operators -->
+            <button class="palette-btn sym-btn" data-insert="\pm" title="Plus-minus (\pm)">&plusmn;</button>
+            <button class="palette-btn sym-btn" data-insert="\mp" title="Minus-plus (\mp)">&#x2213;</button>
+            <button class="palette-btn sym-btn" data-insert="\times" title="Multiplication cross (\times)">&times;</button>
+            <button class="palette-btn sym-btn" data-insert="\div" title="Division (\div)">&divide;</button>
+            <button class="palette-btn sym-btn" data-insert="\cdot" title="Dot product (\cdot)">&sdot;</button>
+            <button class="palette-btn sym-btn" data-insert="\in" title="Element of (\in)">&isin;</button>
+            <button class="palette-btn sym-btn" data-insert="\notin" title="Not element of (\notin)">&notin;</button>
+            <button class="palette-btn sym-btn" data-insert="\subset" title="Subset (\subset)">&sub;</button>
+            <button class="palette-btn sym-btn" data-insert="\subseteq" title="Subset or equal (\subseteq)">&sube;</button>
+            <button class="palette-btn sym-btn" data-insert="\cup" title="Union (\cup)">&cup;</button>
+            <button class="palette-btn sym-btn" data-insert="\cap" title="Intersection (\cap)">&cap;</button>
+            <button class="palette-btn sym-btn" data-insert="\emptyset" title="Empty set (\emptyset)">&empty;</button>
+            <button class="palette-btn sym-btn" data-insert="\infty" title="Infinity (\infty)">&infin;</button>
+            <button class="palette-btn sym-btn" data-insert="\forall" title="For all (\forall)">&forall;</button>
+            <button class="palette-btn sym-btn" data-insert="\exists" title="There exists (\exists)">&exist;</button>
+            <button class="palette-btn sym-btn" data-insert="\nabla" title="Nabla / Del (\nabla)">&nabla;</button>
+            <button class="palette-btn sym-btn" data-insert="\partial" title="Partial derivative (\partial)">&part;</button>
+          </div>
         </div>
       </section>
 

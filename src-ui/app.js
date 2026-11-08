@@ -131,10 +131,27 @@
     });
   }
 
-  // 4. Palette button insertion into MathLive
-  document.querySelectorAll('.palette-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const snippet = btn.getAttribute('data-insert');
+  // 4. Palette Category Tabs & Button Insertion (Task 3.3)
+  const paletteTabBtns = document.querySelectorAll(".palette-tab-btn");
+  const palettePanels = document.querySelectorAll(".palette-panel");
+
+  paletteTabBtns.forEach((tabBtn) => {
+    tabBtn.addEventListener("click", () => {
+      paletteTabBtns.forEach((b) => b.classList.remove("active"));
+      palettePanels.forEach((p) => p.classList.remove("active"));
+
+      tabBtn.classList.add("active");
+      const targetId = tabBtn.getAttribute("data-target");
+      const targetPanel = document.getElementById(targetId);
+      if (targetPanel) {
+        targetPanel.classList.add("active");
+      }
+    });
+  });
+
+  document.querySelectorAll(".palette-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const snippet = btn.getAttribute("data-insert");
       if (!snippet) return;
       insertSnippet(snippet);
     });
@@ -142,18 +159,124 @@
 
   function insertSnippet(snippet) {
     if (mathField) {
-      if (typeof mathField.executeCommand === 'function') {
-        mathField.executeCommand(['insert', snippet, { mode: 'math', selectionMode: 'placeholder' }]);
-      } else if (typeof mathField.insert === 'function') {
-        mathField.insert(snippet, { mode: 'math', selectionMode: 'placeholder' });
+      if (typeof mathField.executeCommand === "function") {
+        mathField.executeCommand(["insert", snippet, { mode: "math", selectionMode: "placeholder" }]);
+      } else if (typeof mathField.insert === "function") {
+        mathField.insert(snippet, { mode: "math", selectionMode: "placeholder" });
       } else {
-        mathField.value = (mathField.value || '') + snippet.replace(/#\?/g, '');
+        mathField.value = (mathField.value || "") + snippet.replace(/#\?/g, "");
       }
-      latexSource.value = mathField.getValue ? mathField.getValue('latex') : mathField.value;
+      syncFromMathField();
       mathField.focus();
     }
     isModified = true;
   }
+
+  // 11. MathType Classic Keyboard Shortcuts (Task 3.3)
+  window.addEventListener("keydown", (e) => {
+    if (document.activeElement === latexSource) return;
+
+    const isCtrl = e.ctrlKey || e.metaKey;
+    if (!isCtrl) return;
+
+    const key = e.key.toLowerCase();
+
+    // Ctrl+F: Fraction
+    if (key === "f") {
+      e.preventDefault();
+      insertSnippet("\\frac{#?}{#?}");
+      return;
+    }
+
+    // Ctrl+R: Radical (Square root, or N-th root with Shift)
+    if (key === "r") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        insertSnippet("\\sqrt[#?]{#?}");
+      } else {
+        insertSnippet("\\sqrt{#?}");
+      }
+      return;
+    }
+
+    // Ctrl+H: Superscript (High)
+    if (key === "h") {
+      e.preventDefault();
+      insertSnippet("^{#?}");
+      return;
+    }
+
+    // Ctrl+L: Subscript (Low) or Limit with Shift
+    if (key === "l") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        insertSnippet("\\lim_{#? \\to #?}");
+      } else {
+        insertSnippet("_{#?}");
+      }
+      return;
+    }
+
+    // Ctrl+J: Joint Super+Subscript
+    if (key === "j") {
+      e.preventDefault();
+      insertSnippet("_{#?}^{#?}");
+      return;
+    }
+
+    // Ctrl+I: Integral
+    if (key === "i") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        insertSnippet("\\int_{#?}^{#?} #? \\, d#?");
+      } else {
+        insertSnippet("\\int #? \\, d#?");
+      }
+      return;
+    }
+
+    // Ctrl+Shift+S: Summation
+    if (key === "s" && e.shiftKey) {
+      e.preventDefault();
+      insertSnippet("\\sum_{#?}^{#?} #?");
+      return;
+    }
+
+    // Ctrl+Shift+P: Product
+    if (key === "p" && e.shiftKey) {
+      e.preventDefault();
+      insertSnippet("\\prod_{#?}^{#?} #?");
+      return;
+    }
+
+    // Ctrl+9 or Ctrl+(: Parentheses
+    if (e.key === "9" || e.key === "(") {
+      e.preventDefault();
+      insertSnippet("\\left( #? \\right)");
+      return;
+    }
+
+    // Ctrl+[ or Ctrl+]: Brackets
+    if (e.key === "[" || e.key === "]") {
+      e.preventDefault();
+      insertSnippet("\\left[ #? \\right]");
+      return;
+    }
+
+    // Ctrl+Shift+M: 2x2 Matrix
+    if (key === "m" && e.shiftKey) {
+      e.preventDefault();
+      insertSnippet("\\begin{pmatrix} #? & #? \\\\ #? & #? \\end{pmatrix}");
+      return;
+    }
+
+    // Ctrl+Shift+C: Cases
+    if (key === "c" && e.shiftKey) {
+      e.preventDefault();
+      insertSnippet("\\begin{cases} #? & #? \\\\ #? & #? \\end{cases}");
+      return;
+    }
+  });
 
   // 5. MathML Extraction Helper
   function getStandardMathML() {
