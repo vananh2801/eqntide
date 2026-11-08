@@ -1,4 +1,5 @@
 // Math Equation Editor & Converter Client Application
+// Task 3.2: MathLive Canvas & Bidirectional LaTeX/MathML Sync
 
 (function () {
   'use strict';
@@ -19,7 +20,7 @@
   const bridgeBadge = document.getElementById('bridge-badge');
   const statusText = document.getElementById('status-text');
 
-  const equationInput = document.getElementById('equation-input');
+  const mathField = document.getElementById('math-field');
   const latexSource = document.getElementById('latex-source');
 
   const btnCopyLatex = document.getElementById('btn-copy-latex');
@@ -34,7 +35,7 @@
   const modalBtnNo = document.getElementById('modal-btn-no');
   const modalBtnCancel = document.getElementById('modal-btn-cancel');
 
-  // Parse session_id from URL query params (when opened via custom URI or iframe)
+  // Parse session_id from URL query params (when opened via custom URI or bridge)
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.has('session_id')) {
     activeSessionId = urlParams.get('session_id');
@@ -65,6 +66,19 @@
       listen('single-instance-launch', (event) => {
         const argv = event.payload || [];
         console.log('Single instance launched with args:', argv);
+        for (const arg of argv) {
+          if (typeof arg === 'string' && arg.includes('matheditor://open')) {
+            try {
+              const url = new URL(arg);
+              const sid = url.searchParams.get('session_id');
+              if (sid) {
+                activeSessionId = sid;
+              }
+            } catch (e) {
+              console.warn('Failed to parse custom URI:', e);
+            }
+          }
+        }
       });
     }
   }
@@ -75,20 +89,31 @@
     isModified = true;
   });
 
-  // 3. Equation input sync
-  equationInput.value = latexSource.value;
+  // 3. Bidirectional Sync between MathLive Canvas and LaTeX Source
+  if (mathField) {
+    // Initial sync
+    latexSource.value = mathField.getValue ? mathField.getValue('latex') : mathField.value;
 
-  equationInput.addEventListener('input', () => {
-    latexSource.value = equationInput.value;
-    isModified = true;
-  });
+    // Visual Canvas -> LaTeX Source Sync
+    mathField.addEventListener('input', () => {
+      const latex = mathField.getValue ? mathField.getValue('latex') : mathField.value;
+      if (document.activeElement === mathField) {
+        latexSource.value = latex;
+      }
+      isModified = true;
+    });
 
-  latexSource.addEventListener('input', () => {
-    equationInput.value = latexSource.value;
-    isModified = true;
-  });
+    // LaTeX Source -> Visual Canvas Sync
+    latexSource.addEventListener('input', () => {
+      const newLatex = latexSource.value.trim().replace(/^\$|\$$/g, '');
+      if (document.activeElement === latexSource && mathField.setValue) {
+        mathField.setValue(newLatex, { format: 'latex' });
+      }
+      isModified = true;
+    });
+  }
 
-  // 4. Palette button insertion
+  // 4. Palette button insertion into MathLive
   document.querySelectorAll('.palette-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const snippet = btn.getAttribute('data-insert');
@@ -98,22 +123,37 @@
   });
 
   function insertSnippet(snippet) {
-    const start = equationInput.selectionStart;
-    const end = equationInput.selectionEnd;
-    const text = equationInput.value;
-    const before = text.substring(0, start);
-    const after = text.substring(end);
-
-    const replacement = snippet.replace(/#\?/g, '');
-    equationInput.value = before + replacement + after;
-    latexSource.value = equationInput.value;
-    equationInput.focus();
-    equationInput.selectionStart = start + replacement.length;
-    equationInput.selectionEnd = start + replacement.length;
+    if (mathField) {
+      if (typeof mathField.executeCommand === 'function') {
+        mathField.executeCommand(['insert', snippet, { mode: 'math', selectionMode: 'placeholder' }]);
+      } else if (typeof mathField.insert === 'function') {
+        mathField.insert(snippet, { mode: 'math', selectionMode: 'placeholder' });
+      } else {
+        mathField.value = (mathField.value || '') + snippet.replace(/#\?/g, '');
+      }
+      latexSource.value = mathField.getValue ? mathField.getValue('latex') : mathField.value;
+      mathField.focus();
+    }
     isModified = true;
   }
 
-  // 5. Check Local Bridge Server Health
+  // 5. MathML Extraction Helper
+  function getStandardMathML() {
+    if (mathField && typeof mathField.getValue === 'function') {
+      try {
+        const mathml = mathField.getValue('math-ml');
+        if (mathml && mathml.trim().length > 0) {
+          return mathml;
+        }
+      } catch (e) {
+        console.warn('MathLive getValue(math-ml) error:', e);
+      }
+    }
+    const val = (latexSource.value || '').trim();
+    return `<math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><mtext>${escapeXml(val)}</mtext></mrow></math>`;
+  }
+
+  // 6. Check Local Bridge Server Health
   async function checkBridgeHealth() {
     try {
       const res = await fetch(`${BRIDGE_URL}/health`);
@@ -137,25 +177,23 @@
   checkBridgeHealth();
   setInterval(checkBridgeHealth, 10000);
 
-  // 6. Copy Actions
+  // 7. Copy Actions
   btnCopyLatex.addEventListener('click', () => {
-    navigator.clipboard.writeText(latexSource.value);
+    const text = mathField && mathField.getValue ? mathField.getValue('latex') : latexSource.value;
+    navigator.clipboard.writeText(text);
     showNotice(btnCopyLatex, 'Copied!');
   });
 
   btnCopyMathml.addEventListener('click', async () => {
-    // Generate standard MathML from LaTeX or input
-    const val = equationInput.value.trim();
-    const mathml = `<math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><mtext>${escapeXml(val)}</mtext></mrow></math>`;
+    const mathml = getStandardMathML();
     await navigator.clipboard.writeText(mathml);
     showNotice(btnCopyMathml, 'MathML Copied!');
   });
 
   btnCopyFlatOpc.addEventListener('click', async () => {
-    const val = equationInput.value.trim();
+    const mathml = getStandardMathML();
     if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
       try {
-        const mathml = `<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>${escapeXml(val)}</mi></math>`;
         const target = activeTargetMode === 'omml' ? 'flat_opc_omml' : 'flat_opc_mathtype';
         const flatOpc = await window.__TAURI__.core.invoke('convert_equation', {
           data: mathml,
@@ -169,28 +207,55 @@
         console.error('Tauri invoke error:', e);
       }
     }
-    await navigator.clipboard.writeText(`<!-- Flat OPC snippet placeholder for: ${val} -->`);
+    // Fallback: request via bridge server
+    try {
+      const target = activeTargetMode === 'omml' ? 'flat_opc_omml' : 'flat_opc_mathtype';
+      const res = await fetch(`${BRIDGE_URL}/convert/snippet`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: mathml,
+          from: 'mathml',
+          to: target
+        })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        await navigator.clipboard.writeText(json.result);
+        showNotice(btnCopyFlatOpc, 'Flat OPC Copied!');
+        return;
+      }
+    } catch (e) {
+      console.warn('Bridge snippet fallback failed:', e);
+    }
+
+    await navigator.clipboard.writeText(`<!-- Flat OPC snippet placeholder for: ${mathml} -->`);
     showNotice(btnCopyFlatOpc, 'Flat OPC Copied!');
   });
 
+  // 8. Toggle LaTeX
   btnToggleLatex.addEventListener('click', () => {
-    let val = equationInput.value.trim();
+    let val = latexSource.value.trim();
     if (val.startsWith('$') && val.endsWith('$')) {
-      equationInput.value = val.slice(1, -1).trim();
+      val = val.slice(1, -1).trim();
     } else {
-      equationInput.value = `$${val}$`;
+      val = `$${val}$`;
     }
-    latexSource.value = equationInput.value;
+    latexSource.value = val;
+    const cleanLatex = val.replace(/^\$|\$$/g, '').trim();
+    if (mathField && mathField.setValue) {
+      mathField.setValue(cleanLatex, { format: 'latex' });
+    }
   });
 
-  // 7. Insert / Update in Document (Resolve Active Session)
+  // 9. Insert / Update in Document (Resolve Active Session)
   btnInsertUpdate.addEventListener('click', async () => {
     await saveAndResolveSession();
   });
 
   async function saveAndResolveSession() {
-    const val = equationInput.value.trim();
-    const mathml = `<math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><mi>${escapeXml(val)}</mi></mrow></math>`;
+    const mathml = getStandardMathML();
+    const latex = mathField && mathField.getValue ? mathField.getValue('latex') : latexSource.value;
 
     if (activeSessionId) {
       try {
@@ -199,14 +264,13 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             mathml: mathml,
-            latex: val,
+            latex: latex,
             target_mode: activeTargetMode
           })
         });
         if (res.ok) {
           showNotice(btnInsertUpdate, 'Saved to Document!');
           isModified = false;
-          // Hide window under Tauri
           if (window.__TAURI__ && window.__TAURI__.window) {
             window.__TAURI__.window.getCurrentWindow().hide();
           }
@@ -221,7 +285,7 @@
     isModified = false;
   }
 
-  // 8. Close Modal Interception
+  // 10. Close Modal Interception
   btnCancel.addEventListener('click', () => {
     if (isModified) {
       closeModal.classList.remove('hidden');

@@ -143,7 +143,7 @@ The goal of this project is to build a modern, open-source, cross-platform equat
 - [x] **Task 3.1: Tauri v2 Shell & System Tray Lifecycle**
   - Initialize `src-tauri/` and frontend `src-ui/`.
   - Configure `@tauri-apps/plugin-single-instance` and System Tray residency so closing the window hides it to the tray, enabling instant (< 150ms) warm popup when triggered from Word/WPS.
-- [ ] **Task 3.2: MathLive Canvas & Bidirectional LaTeX/MathML Sync**
+- [x] **Task 3.2: MathLive Canvas & Bidirectional LaTeX/MathML Sync**
   - Embed `<math-field>` (`@cortex-js/mathlive`).
   - Handle **LaTeX ⇄ MathML** conversion on the frontend via MathLive APIs before sending standard MathML to the Rust backend.
   - Synchronize live LaTeX source box below the visual canvas (like modern MathType / WIRIS).

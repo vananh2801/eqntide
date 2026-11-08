@@ -5,9 +5,6 @@
   "description": "MathType-style Equation Editor UI for Microsoft Word & WPS Office",
   "license": "MIT",
   "dependencies": {
-    "@tauri-apps/api": "^2.0.0",
-    "@tauri-apps/plugin-single-instance": "^2.0.0",
-    "@cortex-js/mathlive": "^0.100.0",
-    "lucide": "^0.468.0"
+    "mathlive": "^0.111.0"
   }
 }

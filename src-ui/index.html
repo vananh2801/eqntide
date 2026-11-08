@@ -4,7 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Math Equation Editor & Converter</title>
+  <!-- Offline-ready MathLive Fonts & Stylesheets -->
+  <link rel="stylesheet" href="vendor/mathlive/mathlive-fonts.css">
+  <link rel="stylesheet" href="vendor/mathlive/mathlive-static.css">
   <link rel="stylesheet" href="style.css">
+  <!-- MathLive Web Component Library -->
+  <script type="module" src="vendor/mathlive/mathlive.min.mjs"></script>
 </head>
 <body>
   <div class="app-container">
@@ -118,22 +123,21 @@
         </div>
       </section>
 
-      <!-- Equation Canvas -->
+      <!-- MathLive Visual Canvas -->
       <section class="editor-canvas-container">
         <div class="canvas-label-bar">
-          <span class="canvas-label">Interactive Equation Field:</span>
-          <span class="canvas-hint">Supports inline LaTeX typing, copy/paste MathML &amp; shortcuts</span>
+          <span class="canvas-label">Interactive MathLive Canvas (WYSIWYG):</span>
+          <span class="canvas-hint">Supports inline LaTeX typing, keyboard navigation, copy/paste MathML &amp; shortcuts</span>
         </div>
         <div class="canvas-wrapper">
-          <textarea id="equation-input" class="equation-textarea" spellcheck="false" placeholder="Type LaTeX equation or formula here, e.g. \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"></textarea>
-          <div id="equation-preview" class="equation-rendered-preview"></div>
+          <math-field id="math-field" class="math-field-canvas" virtual-keyboard-mode="manual">\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}</math-field>
         </div>
       </section>
 
       <!-- Live LaTeX Source Bar -->
       <section class="latex-sync-section">
         <div class="latex-label-bar">
-          <label for="latex-source">LaTeX Source:</label>
+          <label for="latex-source">Live Synchronized LaTeX Source:</label>
           <button class="action-btn-small" id="btn-copy-latex">Copy LaTeX</button>
         </div>
         <input type="text" id="latex-source" class="latex-input" value="\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}" spellcheck="false">
