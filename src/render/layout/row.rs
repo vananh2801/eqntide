@@ -194,6 +194,9 @@ impl Layout {
                         if is_big_op(c) || is_integral(c) {
                             return Class::Op;
                         }
+                        if arrow::arrow_dir(c).is_some() {
+                            return Class::Rel;
+                        }
                     }
                 }
             }

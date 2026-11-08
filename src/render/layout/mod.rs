@@ -53,7 +53,6 @@ use geom::{quad_bezier, rect, stroke};
 
 pub(crate) const MAX_DEPTH: usize = 256;
 pub(crate) const AXIS: f32 = 0.258;
-pub(crate) const RULE: f32 = 0.068;
 
 /// TeX / OpenType MATH style levels (The TeXbook, Appendix G, Rule 1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
