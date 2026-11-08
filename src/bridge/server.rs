@@ -67,10 +67,102 @@ impl Drop for ServerHandle {
     }
 }
 
+// ── Security Hardening: Host Validation & Origin Whitelist ──────────────────────
+
+/// Validate that the `Host` header resolves strictly to local loopback (anti-DNS Rebinding).
+pub fn is_valid_host(host: &str) -> bool {
+    let host_trimmed = host.trim();
+    let host_part = if host_trimmed.starts_with('[') {
+        if let Some(end) = host_trimmed.find(']') {
+            &host_trimmed[1..end]
+        } else {
+            host_trimmed
+        }
+    } else {
+        host_trimmed.split(':').next().unwrap_or(host_trimmed)
+    };
+
+    matches!(host_part, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// Validate that the `Origin` header matches trusted localhost, Office Add-in, or WPS origins.
+pub fn is_allowed_origin(origin: &str) -> bool {
+    let origin = origin.trim();
+    if origin.is_empty() || origin == "null" {
+        return true;
+    }
+    // File or custom schemes used by desktop WebViews / Add-in iframes
+    if origin.starts_with("file://")
+        || origin.starts_with("wps-addon:")
+        || origin.starts_with("tauri://")
+        || origin.starts_with("vscode-webview://")
+    {
+        return true;
+    }
+
+    let Some((_scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    let host_and_port = rest.split('/').next().unwrap_or("").trim();
+    let host = if host_and_port.starts_with('[') {
+        if let Some(end) = host_and_port.find(']') {
+            &host_and_port[1..end]
+        } else {
+            host_and_port
+        }
+    } else {
+        host_and_port.split(':').next().unwrap_or(host_and_port)
+    };
+
+    // 1. Localhost & Tauri origins
+    if matches!(host, "127.0.0.1" | "localhost" | "::1" | "tauri.localhost") {
+        return true;
+    }
+
+    // 2. Microsoft Office Add-in origins
+    if host.ends_with(".office.com")
+        || host == "office.com"
+        || host.ends_with(".office365.com")
+        || host == "office365.com"
+        || host.ends_with(".microsoft.com")
+        || host == "microsoft.com"
+        || host.ends_with(".live.com")
+        || host == "live.com"
+        || host.ends_with(".officeapps.live.com")
+    {
+        return true;
+    }
+
+    // 3. WPS Office Add-in origins
+    if host.ends_with(".wps.cn")
+        || host == "wps.cn"
+        || host.ends_with(".wps.com")
+        || host == "wps.com"
+        || host.ends_with(".kdocs.cn")
+        || host == "kdocs.cn"
+    {
+        return true;
+    }
+
+    false
+}
+
+fn get_header<'a>(req: &'a Request, name: &str) -> Option<&'a str> {
+    req.headers()
+        .iter()
+        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+        .map(|h| h.value.as_str())
+}
+
 /// Attach standard CORS headers and Private Network Access (PNA) header to a response.
-fn add_cors_headers(response: &mut Response<std::io::Cursor<Vec<u8>>>) {
+fn add_cors_headers(response: &mut Response<std::io::Cursor<Vec<u8>>>, origin: Option<&str>) {
+    let allow_origin = match origin {
+        Some(o) if !o.is_empty() && o != "null" => o,
+        _ => "*",
+    };
+
     let headers = [
-        ("Access-Control-Allow-Origin", "*"),
+        ("Access-Control-Allow-Origin", allow_origin),
         (
             "Access-Control-Allow-Methods",
             "GET, POST, OPTIONS, PUT, DELETE",
@@ -81,6 +173,7 @@ fn add_cors_headers(response: &mut Response<std::io::Cursor<Vec<u8>>>) {
         ),
         ("Access-Control-Allow-Private-Network", "true"),
         ("Access-Control-Max-Age", "86400"),
+        ("Vary", "Origin"),
     ];
     for (name, val) in headers {
         if let Ok(h) = Header::from_bytes(name.as_bytes(), val.as_bytes()) {
@@ -92,6 +185,7 @@ fn add_cors_headers(response: &mut Response<std::io::Cursor<Vec<u8>>>) {
 fn json_response<T: serde::Serialize>(
     status_code: u16,
     data: &T,
+    origin: Option<&str>,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let body = serde_json::to_vec(data).unwrap_or_default();
     let mut resp = Response::from_data(body).with_status_code(StatusCode(status_code));
@@ -99,23 +193,28 @@ fn json_response<T: serde::Serialize>(
     {
         resp.add_header(h);
     }
-    add_cors_headers(&mut resp);
+    add_cors_headers(&mut resp, origin);
     resp
 }
 
-fn error_response(status_code: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+fn error_response(
+    status_code: u16,
+    msg: &str,
+    origin: Option<&str>,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     json_response(
         status_code,
         &ErrorResponse {
             status: "error".into(),
             error: msg.into(),
         },
+        origin,
     )
 }
 
-fn empty_cors_response(status_code: u16) -> Response<std::io::Cursor<Vec<u8>>> {
+fn empty_cors_response(status_code: u16, origin: Option<&str>) -> Response<std::io::Cursor<Vec<u8>>> {
     let mut resp = Response::from_data(Vec::new()).with_status_code(StatusCode(status_code));
-    add_cors_headers(&mut resp);
+    add_cors_headers(&mut resp, origin);
     resp
 }
 
@@ -194,14 +293,42 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
         None => (raw_url.as_str(), None),
     };
 
-    // 1. CORS Preflight
+    // 1. Host Header Validation (anti-DNS Rebinding)
+    if let Some(host) = get_header(&req, "Host") {
+        if !is_valid_host(host) {
+            log::warn!("Rejected request with untrusted Host header: {host}");
+            let _ = req.respond(error_response(
+                403,
+                "forbidden: invalid Host header (DNS rebinding protection)",
+                None,
+            ));
+            return;
+        }
+    }
+
+    // 2. Origin Header Validation (anti-CSRF from untrusted websites)
+    let origin_owned = get_header(&req, "Origin").map(|s| s.to_string());
+    if let Some(ref orig) = origin_owned {
+        if !is_allowed_origin(orig) {
+            log::warn!("Rejected request from untrusted Origin: {orig}");
+            let _ = req.respond(error_response(
+                403,
+                "forbidden: untrusted Origin",
+                None,
+            ));
+            return;
+        }
+    }
+    let origin = origin_owned.as_deref();
+
+    // 3. CORS Preflight
     if method == Method::Options {
-        let resp = empty_cors_response(204);
+        let resp = empty_cors_response(204, origin);
         let _ = req.respond(resp);
         return;
     }
 
-    // 2. Routing
+    // 4. Routing
     match (method, path) {
         (Method::Get, "/health") => {
             let resp = json_response(
@@ -211,6 +338,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     version: env!("CARGO_PKG_VERSION").into(),
                     server: "omml-converter-bridge".into(),
                 },
+                origin,
             );
             let _ = req.respond(resp);
         }
@@ -223,6 +351,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         400,
                         &format!("invalid JSON payload: {e}"),
+                        origin,
                     ));
                     return;
                 }
@@ -237,6 +366,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                         let _ = req.respond(error_response(
                             422,
                             &format!("failed to parse equation data: {e}"),
+                            origin,
                         ));
                         return;
                     }
@@ -258,6 +388,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     mathml,
                     latex,
                 },
+                origin,
             );
             let _ = req.respond(resp);
         }
@@ -269,7 +400,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                 .unwrap_or("");
 
             if session_id.is_empty() {
-                let _ = req.respond(error_response(400, "missing session id in path"));
+                let _ = req.respond(error_response(400, "missing session id in path", origin));
                 return;
             }
 
@@ -294,6 +425,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                             flat_opc: Some(flat_opc),
                             omml: Some(omml),
                         },
+                        origin,
                     );
                     let _ = req.respond(resp);
                 }
@@ -307,6 +439,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                             flat_opc: None,
                             omml: None,
                         },
+                        origin,
                     );
                     let _ = req.respond(resp);
                 }
@@ -320,6 +453,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                             flat_opc: None,
                             omml: None,
                         },
+                        origin,
                     );
                     let _ = req.respond(resp);
                 }
@@ -336,7 +470,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                 .unwrap_or("");
 
             if session_id.is_empty() {
-                let _ = req.respond(error_response(400, "missing session id in path"));
+                let _ = req.respond(error_response(400, "missing session id in path", origin));
                 return;
             }
 
@@ -347,6 +481,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         400,
                         &format!("invalid JSON payload: {e}"),
+                        origin,
                     ));
                     return;
                 }
@@ -358,6 +493,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         422,
                         &format!("failed to parse MathML: {e}"),
+                        origin,
                     ));
                     return;
                 }
@@ -375,6 +511,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         500,
                         &format!("failed to package Flat OPC: {e}"),
+                        origin,
                     ));
                     return;
                 }
@@ -386,6 +523,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         500,
                         &format!("failed to generate OMML: {e}"),
+                        origin,
                     ));
                     return;
                 }
@@ -394,7 +532,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
             if let Err(e) =
                 session_mgr.update_session(session_id, upd_req.mathml, flat_opc, omml)
             {
-                let _ = req.respond(error_response(404, e));
+                let _ = req.respond(error_response(404, e, origin));
                 return;
             }
 
@@ -404,6 +542,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     status: "ok".into(),
                     session_id: session_id.into(),
                 },
+                origin,
             );
             let _ = req.respond(resp);
         }
@@ -418,7 +557,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                 .unwrap_or("");
 
             if let Err(e) = session_mgr.cancel_session(session_id) {
-                let _ = req.respond(error_response(404, e));
+                let _ = req.respond(error_response(404, e, origin));
                 return;
             }
 
@@ -428,6 +567,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     status: "cancelled".into(),
                     session_id: session_id.into(),
                 },
+                origin,
             );
             let _ = req.respond(resp);
         }
@@ -440,6 +580,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         400,
                         &format!("invalid JSON payload: {e}"),
+                        origin,
                     ));
                     return;
                 }
@@ -451,6 +592,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         422,
                         &format!("failed to parse input equation: {e}"),
+                        origin,
                     ));
                     return;
                 }
@@ -469,6 +611,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         400,
                         &format!("unknown target format '{other}'"),
+                        origin,
                     ));
                     return;
                 }
@@ -482,6 +625,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                             status: "ok".into(),
                             result,
                         },
+                        origin,
                     );
                     let _ = req.respond(resp);
                 }
@@ -489,6 +633,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         500,
                         &format!("conversion failed: {e}"),
+                        origin,
                     ));
                 }
             }
@@ -502,6 +647,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         400,
                         &format!("invalid JSON payload: {e}"),
+                        origin,
                     ));
                     return;
                 }
@@ -512,6 +658,19 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                 let _ = req.respond(error_response(
                     404,
                     &format!("input file does not exist: {}", in_path.display()),
+                    origin,
+                ));
+                return;
+            }
+
+            if !in_path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("docx"))
+            {
+                let _ = req.respond(error_response(
+                    400,
+                    "only .docx files are supported for document conversion",
+                    origin,
                 ));
                 return;
             }
@@ -556,6 +715,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         400,
                         &format!("unknown document target '{other}'"),
+                        origin,
                     ));
                     return;
                 }
@@ -573,6 +733,7 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                             errors: summary.errors,
                             output_path: out_path.to_owned(),
                         },
+                        origin,
                     );
                     let _ = req.respond(resp);
                 }
@@ -580,13 +741,14 @@ fn handle_http_request(mut req: Request, session_mgr: SessionManager) {
                     let _ = req.respond(error_response(
                         500,
                         &format!("document conversion error: {e}"),
+                        origin,
                     ));
                 }
             }
         }
 
         _ => {
-            let resp = error_response(404, "not found");
+            let resp = error_response(404, "not found", origin);
             let _ = req.respond(resp);
         }
     }
@@ -708,7 +870,7 @@ mod tests {
 
         // 1. Test OPTIONS preflight (PNA & CORS)
         let opt_req = format!(
-            "OPTIONS /health HTTP/1.1\r\nHost: {addr}\r\nAccess-Control-Request-Private-Network: true\r\nConnection: close\r\n\r\n"
+            "OPTIONS /health HTTP/1.1\r\nHost: {addr}\r\nOrigin: http://localhost:3000\r\nAccess-Control-Request-Private-Network: true\r\nConnection: close\r\n\r\n"
         );
         let resp = send_raw_http(addr, &opt_req);
         assert_eq!(resp.status, 204);
@@ -722,7 +884,7 @@ mod tests {
             resp.headers
                 .get("access-control-allow-origin")
                 .map(|s| s.as_str()),
-            Some("*")
+            Some("http://localhost:3000")
         );
 
         // 2. Test GET /health
@@ -732,6 +894,54 @@ mod tests {
         let health: HealthResponse = serde_json::from_str(&resp.body).expect("json parse");
         assert_eq!(health.status, "ok");
         assert_eq!(health.server, "omml-converter-bridge");
+    }
+
+    #[test]
+    fn test_security_dns_rebinding_rejected() {
+        let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
+        let addr = server_handle.addr();
+
+        // Send a request with spoofed/malicious Host header
+        let rebinding_req = format!(
+            "GET /health HTTP/1.1\r\nHost: evil-attacker.com:{}\r\nConnection: close\r\n\r\n",
+            addr.port()
+        );
+        let resp = send_raw_http(addr, &rebinding_req);
+        assert_eq!(resp.status, 403);
+        assert!(resp.body.contains("DNS rebinding"));
+    }
+
+    #[test]
+    fn test_security_untrusted_origin_rejected() {
+        let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
+        let addr = server_handle.addr();
+
+        // Send request from random malicious web origin
+        let req = format!(
+            "GET /health HTTP/1.1\r\nHost: {addr}\r\nOrigin: https://malicious-website.xyz\r\nConnection: close\r\n\r\n"
+        );
+        let resp = send_raw_http(addr, &req);
+        assert_eq!(resp.status, 403);
+        assert!(resp.body.contains("untrusted Origin"));
+    }
+
+    #[test]
+    fn test_security_office_add_in_origin_allowed() {
+        let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
+        let addr = server_handle.addr();
+
+        // Send request from official Microsoft Office Add-in host
+        let req = format!(
+            "GET /health HTTP/1.1\r\nHost: {addr}\r\nOrigin: https://appsforoffice.microsoft.com\r\nConnection: close\r\n\r\n"
+        );
+        let resp = send_raw_http(addr, &req);
+        assert_eq!(resp.status, 200);
+        assert_eq!(
+            resp.headers
+                .get("access-control-allow-origin")
+                .map(|s| s.as_str()),
+            Some("https://appsforoffice.microsoft.com")
+        );
     }
 
     #[test]
