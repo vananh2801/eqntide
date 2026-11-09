@@ -195,17 +195,26 @@ fn main() {
             let m = mathml.map(|s| s.to_string());
             let l = latex.map(|s| s.to_string());
             let _ = app.run_on_main_thread(move || {
+                let payload = serde_json::json!({
+                    "session_id": sid,
+                    "mathml": m,
+                    "latex": l
+                });
+                let _ = app_clone.emit("open-session", &payload);
+                let _ = app_clone.emit_to(tauri::EventTarget::any(), "open-session", &payload);
+
                 if let Some(window) = app_clone.get_webview_window("main") {
                     let _ = window.unminimize();
                     let _ = window.show();
                     let _ = window.set_always_on_top(true);
                     let _ = window.set_focus();
                     let _ = window.set_always_on_top(false);
-                    let _ = window.emit("open-session", serde_json::json!({
-                        "session_id": sid,
-                        "mathml": m,
-                        "latex": l
-                    }));
+                    let _ = window.emit("open-session", &payload);
+
+                    if let Ok(json_str) = serde_json::to_string(&payload) {
+                        let eval_js = format!("if (window.__loadSession) {{ window.__loadSession({}); }}", json_str);
+                        let _ = window.eval(&eval_js);
+                    }
                 }
             });
         }

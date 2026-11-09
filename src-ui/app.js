@@ -87,6 +87,16 @@
     activeSessionId = urlParams.get('session_id');
   }
 
+  window.__loadSession = function (payload) {
+    if (typeof payload === "string") {
+      try { payload = JSON.parse(payload); } catch (_) {}
+    }
+    if (payload && payload.session_id) {
+      console.log("[MathEditor] Direct loadSession invoked:", payload);
+      loadSessionData(payload.session_id, payload.mathml, payload.latex);
+    }
+  };
+
   async function loadSessionData(sessionId, mathml, latex) {
     if (!sessionId) return;
     activeSessionId = sessionId;
@@ -218,11 +228,33 @@
       } catch (_) {}
       activeSessionId = null;
     }
+    if (mathField) {
+      if (typeof mathField.setValue === "function") {
+        mathField.setValue("", { format: "latex" });
+      }
+      mathField.value = "";
+    }
+    if (latexSource) {
+      latexSource.value = "";
+    }
     isModified = false;
     await hideAppWindow();
   }
 
   // Listen to Tauri single instance, close interception, or batch tab events
+  const onOpenSession = async (event) => {
+    const payload = event ? (event.payload || event) : {};
+    console.log('[MathEditor] Received open-session event:', payload);
+    if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
+      try {
+        await window.__TAURI__.core.invoke('show_window');
+      } catch (_) {}
+    }
+    if (payload.session_id) {
+      loadSessionData(payload.session_id, payload.mathml, payload.latex);
+    }
+  };
+
   if (window.__TAURI__) {
     const { listen } = window.__TAURI__.event || {};
     if (listen) {
@@ -232,18 +264,7 @@
       listen('window-close-requested', () => {
         handleCloseRequested();
       });
-      listen('open-session', async (event) => {
-        const payload = event.payload || {};
-        console.log('Received open-session from Tauri:', payload);
-        if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
-          try {
-            await window.__TAURI__.core.invoke('show_window');
-          } catch (_) {}
-        }
-        if (payload.session_id) {
-          loadSessionData(payload.session_id, payload.mathml, payload.latex);
-        }
-      });
+      listen('open-session', onOpenSession);
       listen('single-instance-launch', async (event) => {
         if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
           try {
@@ -267,7 +288,45 @@
         }
       });
     }
+
+    if (window.__TAURI__.window && typeof window.__TAURI__.window.getCurrentWindow === 'function') {
+      try {
+        window.__TAURI__.window.getCurrentWindow().listen('open-session', onOpenSession);
+      } catch (_) {}
+    }
+    if (window.__TAURI__.webviewWindow && typeof window.__TAURI__.webviewWindow.getCurrentWebviewWindow === 'function') {
+      try {
+        window.__TAURI__.webviewWindow.getCurrentWebviewWindow().listen('open-session', onOpenSession);
+      } catch (_) {}
+    }
   }
+
+  // Active Session Polling & Focus Detection
+  async function checkLatestBridgeSession() {
+    try {
+      const res = await fetch(`${BRIDGE_URL}/session/latest`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.session_id && data.session_id !== activeSessionId) {
+          console.log('[MathEditor] Detected new active bridge session:', data.session_id);
+          await loadSessionData(data.session_id);
+        }
+      }
+    } catch (_) {}
+  }
+
+  window.addEventListener('focus', checkLatestBridgeSession);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      checkLatestBridgeSession();
+    }
+  });
+
+  setInterval(() => {
+    if (document.hasFocus() || !document.hidden) {
+      checkLatestBridgeSession();
+    }
+  }, 600);
 
   // 2. Format Selector & Font Size (Task 3.4)
   function updateFormatSelector() {
@@ -788,6 +847,15 @@
           showNotice(btnInsertUpdate, 'Saved!');
           isModified = false;
           activeSessionId = null;
+          if (mathField) {
+            if (typeof mathField.setValue === 'function') {
+              mathField.setValue('', { format: 'latex' });
+            }
+            mathField.value = '';
+          }
+          if (latexSource) {
+            latexSource.value = '';
+          }
           await hideAppWindow();
           return;
         }

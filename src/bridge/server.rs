@@ -523,6 +523,15 @@ fn handle_http_request(
             let _ = req.respond(resp);
         }
 
+        (Method::Post, "/log") => {
+            let body = read_body(&mut req);
+            let trimmed = body.trim();
+            eprintln!("[WPS Addin] {trimmed}");
+            log::info!("[WPS Addin] {trimmed}");
+            let resp = json_response(200, &serde_json::json!({ "status": "ok" }), origin);
+            let _ = req.respond(resp);
+        }
+
         (Method::Post, "/session/open") => {
             let body = read_body(&mut req);
             let open_req: SessionOpenRequest = match serde_json::from_str(&body) {

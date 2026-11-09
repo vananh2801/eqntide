@@ -33,6 +33,14 @@ function ensureBridgeRunning(callback) {
 
 var BRIDGE_URL = "http://127.0.0.1:17890";
 var g_ribbonUI = null;
+
+function wpsLog(msg) {
+  try {
+    var text = typeof msg === "string" ? msg : JSON.stringify(msg);
+    console.log("[WPS Addin] " + text);
+    ajaxPost(BRIDGE_URL + "/log", text, function () {});
+  } catch (_) {}
+}
 var g_currentSessionId = null;
 var g_currentWaitXhr = null;
 
@@ -140,6 +148,7 @@ function OnAction(control) {
  * Opens a new session in desktop editor and inserts the resulting Flat OPC XML.
  */
 function InsertEquation() {
+  wpsLog("InsertEquation clicked");
   cancelPendingSession();
   ensureBridgeRunning(function () {
     ajaxPost(
@@ -176,9 +185,11 @@ function InsertEquation() {
  */
 function EditEquation() {
   try {
+    wpsLog("EditEquation clicked");
     var app = wps.Application;
     var selection = app ? app.Selection : null;
     if (!selection) {
+      wpsLog("EditEquation: selection is null");
       alert("Không tìm thấy công thức nào được chọn!");
       return;
     }
@@ -331,10 +342,12 @@ function EditEquation() {
 
     // If NO equation was selected, do NOT redirect! Show alert directly!
     if (!selData || selData.trim().length === 0) {
+      wpsLog("EditEquation: No equation found in selection or adjacent text");
       alert("Không tìm thấy công thức nào được chọn!");
       return;
     }
 
+    wpsLog("EditEquation: Found equation, payload len=" + selData.length + ", sending /session/open...");
     cancelPendingSession();
 
     ensureBridgeRunning(function () {
@@ -346,6 +359,7 @@ function EditEquation() {
           target_mode: "mathtype"
         }),
         function (status, responseText) {
+          wpsLog("EditEquation: /session/open response (" + status + "): " + responseText);
           if (status !== 200) {
             console.error("Bridge error (" + status + "): " + responseText);
             alert("Lỗi kết nối tới Math Editor (" + status + ")");
