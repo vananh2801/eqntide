@@ -353,7 +353,17 @@ function EditEquation() {
     g_editTargetRange = targetRange;
     if (targetRange && typeof targetRange.Start === "number" && typeof targetRange.End === "number") {
       g_editRangeStart = targetRange.Start;
-      g_editRangeEnd = targetRange.End;
+      var eEnd = targetRange.End;
+      try {
+        var doc = app.ActiveDocument;
+        if (doc && eEnd < (doc.Content ? doc.Content.End : 999999)) {
+          var nextChar = doc.Range(eEnd, eEnd + 1);
+          if (nextChar && nextChar.Text === "‌") {
+            eEnd = eEnd + 1;
+          }
+        }
+      } catch (_) {}
+      g_editRangeEnd = eEnd;
     } else {
       g_editRangeStart = null;
       g_editRangeEnd = null;
@@ -590,58 +600,86 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       range.Paste();
     }
 
-    // Inspect inserted characters starting from startPos:
-    // In Word/WPS DOM:
-    // startPos .. startPos+1 : the InlineShape OLE equation
-    // startPos+1 .. startPos+2 : the U+200C reset run
-    // startPos+2 .. startPos+3 : the trailing paragraph break (\r) from <w:p>
-    var cursorTarget = startPos + 2;
-
-    if (doc) {
+        if (doc) {
       try {
-        var r1 = doc.Range(startPos, startPos + 1);
-        var r2 = doc.Range(startPos + 1, startPos + 2);
-        var r3 = doc.Range(startPos + 2, startPos + 3);
-        wpsLog("InsertFlatOpcToSelection: r1=" + JSON.stringify(r1 ? r1.Text : null)
-          + ", r2=" + JSON.stringify(r2 ? r2.Text : null)
-          + ", r3=" + JSON.stringify(r3 ? r3.Text : null));
+        var docEnd = doc.Content ? doc.Content.End : (startPos + 200);
+        var fullText = doc.Range(0, Math.min(docEnd, 200)).Text;
+        wpsLog("DOC FULL TEXT START: " + JSON.stringify(fullText));
 
-        if (r3 && (r3.Text === "\r" || r3.Text === "\n")) {
-          r3.Delete();
-          wpsLog("InsertFlatOpcToSelection: deleted trailing break at startPos+2");
-        } else if (r2 && (r2.Text === "\r" || r2.Text === "\n")) {
-          r2.Delete();
-          cursorTarget = startPos + 1;
-          wpsLog("InsertFlatOpcToSelection: deleted trailing break at startPos+1");
+        // Let's inspect all InlineShapes
+        var targetShape = null;
+        if (doc.InlineShapes && doc.InlineShapes.Count > 0) {
+          for (var i = doc.InlineShapes.Count; i >= 1; i--) {
+            var shp = doc.InlineShapes.Item(i);
+            if (shp && shp.Range && shp.Range.Start >= startPos) {
+              targetShape = shp;
+              break;
+            }
+          }
         }
-      } catch (e) {
-        wpsLog("InsertFlatOpcToSelection: error cleaning trailing break: " + e);
-      }
 
-      // Position cursor immediately after U+200C
-      try {
-        var endRange = doc.Range(cursorTarget, cursorTarget);
-        endRange.Select();
+        var shpEnd = targetShape ? targetShape.Range.End : (startPos + 1);
+        wpsLog("targetShape: Start=" + (targetShape ? targetShape.Range.Start : "none") + ", End=" + shpEnd);
+
+        // U+200C is placed immediately after the InlineShape: [shpEnd .. shpEnd + 1]
+        var actualZwnjPos = shpEnd;
+        
+        // Log character at shpEnd
+        try {
+          var zwnjRange = doc.Range(actualZwnjPos, actualZwnjPos + 1);
+          var zText = zwnjRange ? zwnjRange.Text : "";
+          var zCode = zText ? zText.charCodeAt(0) : 0;
+          wpsLog("zwnjRange pos=" + actualZwnjPos + ", code=" + zCode + ", text=" + JSON.stringify(zText)
+                + ", PosBefore=" + (zwnjRange.Font ? zwnjRange.Font.Position : "none"));
+
+          if (zwnjRange && zwnjRange.Font) {
+            zwnjRange.Font.Position = 0;
+            zwnjRange.Font.Subscript = false;
+            zwnjRange.Font.Superscript = false;
+          }
+          wpsLog("zwnjRange PosAfter=" + (zwnjRange.Font ? zwnjRange.Font.Position : "none"));
+        } catch (e) {
+          wpsLog("error resetting zwnjRange: " + e);
+        }
+
+        // Target cursor: immediately after U+200C [shpEnd + 1]
+        var cursorTarget = actualZwnjPos + 1;
+
+        // Check if there is a trailing paragraph break right after U+200C
+        try {
+          var afterRange = doc.Range(cursorTarget, cursorTarget + 1);
+          var aText = afterRange ? afterRange.Text : "";
+          var aCode = aText ? aText.charCodeAt(0) : 0;
+          wpsLog("afterRange pos=" + cursorTarget + ", code=" + aCode + ", text=" + JSON.stringify(aText));
+          if (aCode === 13 || aCode === 10 || aCode === 11 || aText === "\r" || aText === "\n") {
+            afterRange.Delete();
+            wpsLog("deleted trailing break at " + cursorTarget);
+          }
+        } catch (e) {
+          wpsLog("error deleting trailing break: " + e);
+        }
+
+        // Target range is the reset character run itself [actualZwnjPos .. actualZwnjPos + 1]
+        var zwnjSelRange = doc.Range(actualZwnjPos, actualZwnjPos + 1);
+        zwnjSelRange.Select();
         var curSel = app.Selection;
-        if (curSel && curSel.Font) {
-          curSel.Font.Position = 0;
-          curSel.Font.Subscript = false;
-          curSel.Font.Superscript = false;
+        if (curSel) {
+          if (curSel.Font) {
+            curSel.Font.Position = 0;
+            curSel.Font.Subscript = false;
+            curSel.Font.Superscript = false;
+          }
+          // Collapse selection to end (0 = wdCollapseEnd)
+          if (typeof curSel.Collapse === "function") {
+            curSel.Collapse(0);
+          }
         }
-        wpsLog("InsertFlatOpcToSelection: cursor placed at " + cursorTarget);
+        wpsLog("InsertFlatOpcToSelection: selection collapsed to end of U+200C at " + actualZwnjPos);
       } catch (e) {
-        wpsLog("InsertFlatOpcToSelection: error setting cursor: " + e);
+        wpsLog("InsertFlatOpcToSelection: error: " + e);
       }
     }
-
-    // 6. Force screen refresh so equation renders cleanly
-    try {
-      if (app && typeof app.ScreenRefresh === "function") {
-        app.ScreenRefresh();
-      }
-    } catch (_) {}
-
-    wpsLog('InsertFlatOpcToSelection: finished successfully.');
+wpsLog('InsertFlatOpcToSelection: finished successfully.');
   } catch (err) {
     wpsLog('InsertFlatOpcToSelection: unhandled error: ' + err);
     console.error('InsertFlatOpcToSelection error:', err);
