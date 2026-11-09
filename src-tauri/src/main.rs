@@ -79,6 +79,16 @@ fn hide_window(window: tauri::Window) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn show_window(window: tauri::Window) -> Result<(), String> {
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_always_on_top(true);
+    let _ = window.set_focus();
+    let _ = window.set_always_on_top(false);
+    Ok(())
+}
+
+#[tauri::command]
 fn convert_document(
     input_path: String,
     output_path: Option<String>,
@@ -186,9 +196,11 @@ fn main() {
             let l = latex.map(|s| s.to_string());
             let _ = app.run_on_main_thread(move || {
                 if let Some(window) = app_clone.get_webview_window("main") {
-                    let _ = window.show();
                     let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_always_on_top(true);
                     let _ = window.set_focus();
+                    let _ = window.set_always_on_top(false);
                     let _ = window.emit("open-session", serde_json::json!({
                         "session_id": sid,
                         "mathml": m,
@@ -211,9 +223,11 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
                 let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_always_on_top(true);
                 let _ = window.set_focus();
+                let _ = window.set_always_on_top(false);
                 // Pass command line arguments (e.g. custom URI matheditor://open?...)
                 let _ = window.emit("single-instance-launch", argv);
             }
@@ -324,6 +338,7 @@ fn main() {
             get_server_status,
             convert_equation,
             hide_window,
+            show_window,
             convert_document,
             open_folder
         ])

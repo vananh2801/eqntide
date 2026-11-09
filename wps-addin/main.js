@@ -1,13 +1,13 @@
 /**
  * Ensure desktop app & bridge server is running before executing bridge requests.
- * Automatically wakes up the app via custom URI if bridge is offline.
+ * Automatically wakes up the app via cold-start if bridge is offline.
  */
 function ensureBridgeRunning(callback) {
   ajaxGet(BRIDGE_URL + "/health", function (status) {
     if (status === 200) {
       callback();
     } else {
-      LaunchDesktopEditor("");
+      ColdStartDesktopEditor();
       var attempts = 0;
       var poll = setInterval(function () {
         attempts++;
@@ -35,6 +35,36 @@ var BRIDGE_URL = "http://127.0.0.1:17890";
 var g_ribbonUI = null;
 var g_currentSessionId = null;
 var g_currentWaitXhr = null;
+
+/**
+ * Check if a given XML snippet actually contains an OMML or MathType equation.
+ */
+function hasEquationInXml(xmlStr) {
+  if (!xmlStr || typeof xmlStr !== "string") return false;
+  return (
+    xmlStr.indexOf("<m:oMath") !== -1 ||
+    xmlStr.indexOf("<m:oMathPara") !== -1 ||
+    xmlStr.indexOf("w:object") !== -1 ||
+    xmlStr.indexOf("oleObject") !== -1 ||
+    xmlStr.indexOf("AppsMFCC") !== -1 ||
+    xmlStr.indexOf("<v:imagedata") !== -1
+  );
+}
+
+/**
+ * Check if raw text looks like a LaTeX math formula.
+ */
+function isLatexText(text) {
+  if (!text || typeof text !== "string") return false;
+  var t = text.trim();
+  return (
+    (t.startsWith("$") && t.endsWith("$")) ||
+    (t.startsWith("\\[") && t.endsWith("\\]")) ||
+    t.indexOf("\\frac") !== -1 ||
+    t.indexOf("\\sqrt") !== -1 ||
+    t.startsWith("\\begin")
+  );
+}
 
 /**
  * Cancel any ongoing session wait requests to prevent hangs or race conditions.
@@ -120,7 +150,7 @@ function InsertEquation() {
         var sessionId = res.session_id;
         g_currentSessionId = sessionId;
 
-        // Launch desktop popup editor
+        // Bring desktop window to front
         LaunchDesktopEditor(sessionId);
 
         // Long-poll wait for user confirmation
@@ -137,8 +167,8 @@ function InsertEquation() {
 /**
  * 2. Edit Equation:
  * Extracts selected equation from WPS Selection and opens it in editor.
- * If no equation is selected, gracefully opens a clean new equation canvas
- * instead of popping up an error or freezing the ribbon.
+ * If no equation is selected, gracefully delegates to InsertEquation()
+ * to open a clean new equation canvas without freezing WPS or erroring out.
  */
 function EditEquation() {
   try {
@@ -214,10 +244,10 @@ function EditEquation() {
       } catch (_) {}
     }
 
-    // Extract WordOpenXML representation
+    // Extract WordOpenXML representation ONLY if it actually contains an equation
     if (targetRange) {
       try {
-        if (targetRange.WordOpenXML) {
+        if (targetRange.WordOpenXML && hasEquationInXml(targetRange.WordOpenXML)) {
           selData = targetRange.WordOpenXML;
         }
       } catch (_) {}
@@ -225,7 +255,7 @@ function EditEquation() {
 
     if (!selData) {
       try {
-        if (selection.WordOpenXML) {
+        if (selection.WordOpenXML && hasEquationInXml(selection.WordOpenXML)) {
           selData = selection.WordOpenXML;
         }
       } catch (_) {}
@@ -233,23 +263,23 @@ function EditEquation() {
 
     if (!selData) {
       try {
-        if (selection.Range && selection.Range.WordOpenXML) {
+        if (selection.Range && selection.Range.WordOpenXML && hasEquationInXml(selection.Range.WordOpenXML)) {
           selData = selection.Range.WordOpenXML;
         }
       } catch (_) {}
     }
 
-    // Fallback: check raw text (e.g. LaTeX $...$ or textual formula)
+    // Fallback: check raw text if it looks like LaTeX
     if (!selData) {
       try {
         var rawText = (selection.Text || "").trim();
-        if (rawText) {
+        if (isLatexText(rawText)) {
           selData = rawText;
         }
       } catch (_) {}
     }
 
-    // If completely empty, open clean empty canvas via InsertEquation
+    // If NO equation was selected, gracefully open clean new canvas via InsertEquation!
     if (!selData || selData.trim().length === 0) {
       InsertEquation();
       return;
@@ -339,9 +369,9 @@ function ToggleLatex() {
     // Case B: Selection contains an equation, convert to LaTeX string
     var ooxml = "";
     try {
-      if (selection.Range && selection.Range.WordOpenXML) {
+      if (selection.Range && selection.Range.WordOpenXML && hasEquationInXml(selection.Range.WordOpenXML)) {
         ooxml = selection.Range.WordOpenXML;
-      } else if (selection.WordOpenXML) {
+      } else if (selection.WordOpenXML && hasEquationInXml(selection.WordOpenXML)) {
         ooxml = selection.WordOpenXML;
       }
     } catch (_) {}
@@ -466,34 +496,32 @@ function OpenTaskpane() {
 }
 
 /**
- * Helper: Launch desktop editor via custom URI
+ * Helper: Bring running desktop editor window to front via local HTTP bridge.
+ * Instant, non-blocking, and never spawns redundant background processes.
  */
 function LaunchDesktopEditor(param) {
   var sessionId = param === "batch" ? "" : (param || "");
-  var binPath = "/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/omml-editor-desktop";
-  var uri = "matheditor://open?" + (param === "batch" ? "tab=batch" : "session_id=" + sessionId);
-
-  // 1. Direct local bridge HTTP call to immediately show & focus desktop window (if running)
   ajaxPost(
     BRIDGE_URL + "/window/show",
     JSON.stringify({ session_id: sessionId, tab: param === "batch" ? "batch" : "editor" }),
     function () {}
   );
+}
 
-  // 2. Cold-start via OAAssist.ShellExecute on Linux
+/**
+ * Helper: Cold-start desktop editor if bridge daemon is not running.
+ */
+function ColdStartDesktopEditor() {
+  var binPath = "/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/omml-editor-desktop";
+  var uri = "matheditor://open";
+
   if (wps.OAAssist && typeof wps.OAAssist.ShellExecute === "function") {
     try {
-      wps.OAAssist.ShellExecute("xdg-open", uri);
-    } catch (_) {}
-    try {
       wps.OAAssist.ShellExecute(binPath, uri);
-    } catch (_) {}
-    try {
-      wps.OAAssist.ShellExecute(uri);
+      return;
     } catch (_) {}
   }
 
-  // 3. Anchor click protocol dispatch (triggers OS xdg-mime registered handler)
   try {
     var a = document.createElement("a");
     a.href = uri;
@@ -501,21 +529,10 @@ function LaunchDesktopEditor(param) {
     document.body.appendChild(a);
     a.click();
     setTimeout(function () {
-      try { document.body.removeChild(a); } catch (_) {}
-    }, 1000);
-  } catch (_) {}
-
-  // 4. Iframe fallback
-  try {
-    var iframe = document.createElement("iframe");
-    iframe.style.display = "none";
-    iframe.src = uri;
-    document.body.appendChild(iframe);
-    setTimeout(function () {
       try {
-        document.body.removeChild(iframe);
+        document.body.removeChild(a);
       } catch (_) {}
-    }, 2000);
+    }, 1000);
   } catch (_) {}
 }
 

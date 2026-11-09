@@ -209,14 +209,24 @@
       listen('window-close-requested', () => {
         handleCloseRequested();
       });
-      listen('open-session', (event) => {
+      listen('open-session', async (event) => {
         const payload = event.payload || {};
         console.log('Received open-session from Tauri:', payload);
+        if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
+          try {
+            await window.__TAURI__.core.invoke('show_window');
+          } catch (_) {}
+        }
         if (payload.session_id) {
           loadSessionData(payload.session_id, payload.mathml, payload.latex);
         }
       });
-      listen('single-instance-launch', (event) => {
+      listen('single-instance-launch', async (event) => {
+        if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
+          try {
+            await window.__TAURI__.core.invoke('show_window');
+          } catch (_) {}
+        }
         const argv = event.payload || [];
         console.log('Single instance launched with args:', argv);
         for (const arg of argv) {
