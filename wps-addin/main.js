@@ -233,8 +233,8 @@ function EditEquation() {
       } catch (_) {}
     }
 
-    // 4. If caret is collapsed (point selection, selection.Type === 1), check adjacent word
-    if (!targetRange && selection.Type === 1) {
+    // 4. Check adjacent word
+    if (!targetRange) {
       try {
         if (selection.Words && selection.Words.Count > 0) {
           var word = selection.Words.Item(1);
@@ -249,8 +249,37 @@ function EditEquation() {
       } catch (_) {}
     }
 
-    // Only expand selection if caret was collapsed point selection (preserve shape click!)
-    if (selection.Type === 1 && targetRange && typeof targetRange.Select === "function") {
+    // 5. Check adjacent characters (left and right of cursor)
+    if (!targetRange) {
+      try {
+        var doc = app.ActiveDocument;
+        var start = selection.Start;
+        var end = selection.End;
+        if (doc && start > 0) {
+          var prevChar = doc.Range(start - 1, start);
+          if (prevChar.InlineShapes && prevChar.InlineShapes.Count > 0) {
+            targetRange = prevChar.InlineShapes.Item(1).Range;
+            isEquationFound = true;
+          } else if (prevChar.OMaths && prevChar.OMaths.Count > 0) {
+            targetRange = prevChar.OMaths.Item(1).Range;
+            isEquationFound = true;
+          }
+        }
+        if (!targetRange && doc && end < (doc.Content ? doc.Content.End : 999999)) {
+          var nextChar = doc.Range(end, end + 1);
+          if (nextChar.InlineShapes && nextChar.InlineShapes.Count > 0) {
+            targetRange = nextChar.InlineShapes.Item(1).Range;
+            isEquationFound = true;
+          } else if (nextChar.OMaths && nextChar.OMaths.Count > 0) {
+            targetRange = nextChar.OMaths.Item(1).Range;
+            isEquationFound = true;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Focus selection on the target equation range if found
+    if (targetRange && typeof targetRange.Select === "function") {
       try {
         targetRange.Select();
       } catch (_) {}

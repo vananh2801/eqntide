@@ -33,7 +33,8 @@ use super::to_omml::{
 };
 
 /// Open Packaging Conventions (Flat OPC) XML namespace.
-pub const NS_PKG: &str = "http://schemas.microsoft.com/office/2006/xml/packaging";
+pub const NS_PKG: &str = "http://schemas.microsoft.com/office/2006/xmlPackage";
+pub const NS_PKG_LEGACY: &str = "http://schemas.microsoft.com/office/2006/xml/packaging";
 
 /// Content type for package relationships XML.
 pub const CT_RELATIONSHIPS: &str =
@@ -333,17 +334,27 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
     let mut parts: HashMap<String, PartData> = HashMap::new();
 
     for child in pkg_el.elements() {
-        if !child.is(NS_PKG, "part") && child.local != "part" {
+        if !child.is(NS_PKG, "part") && !child.is(NS_PKG_LEGACY, "part") && child.local != "part" {
             continue;
         }
         let Some(name) = child
-            .attr(Some(NS_PKG), "name")
+            .attrs
+            .iter()
+            .find(|a| a.local == "name")
+            .map(|a| a.value.as_str())
+            .or_else(|| child.attr(Some(NS_PKG), "name"))
+            .or_else(|| child.attr(Some(NS_PKG_LEGACY), "name"))
             .or_else(|| child.attr(None, "name"))
         else {
             continue;
         };
         let content_type = child
-            .attr(Some(NS_PKG), "contentType")
+            .attrs
+            .iter()
+            .find(|a| a.local.eq_ignore_ascii_case("contenttype"))
+            .map(|a| a.value.as_str())
+            .or_else(|| child.attr(Some(NS_PKG), "contentType"))
+            .or_else(|| child.attr(Some(NS_PKG_LEGACY), "contentType"))
             .or_else(|| child.attr(None, "contentType"))
             .unwrap_or("")
             .to_owned();
@@ -352,11 +363,11 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
         let mut binary_data: Option<Vec<u8>> = None;
 
         for sub in child.elements() {
-            if sub.is(NS_PKG, "xmlData") || sub.local == "xmlData" {
+            if sub.local.eq_ignore_ascii_case("xmldata") {
                 if let Some(first_el) = sub.elements().next() {
                     xml_data = Some(first_el.clone());
                 }
-            } else if sub.is(NS_PKG, "binaryData") || sub.local == "binaryData" {
+            } else if sub.local.eq_ignore_ascii_case("binarydata") {
                 let text = all_text(sub);
                 if let Some(decoded) = base64_decode(&text) {
                     binary_data = Some(decoded);
@@ -377,7 +388,7 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
 
     // Attempt 1: Document XML traversal (completely case-insensitive)
     let doc_part = parts.get("word/document.xml").or_else(|| {
-        parts.iter().find(|(k, _)| k.ends_with("word/document.xml") || k.ends_with("/document.xml")).map(|(_, v)| v)
+        parts.iter().find(|(k, _)| k.ends_with("word/document.xml") || k.ends_with("/document.xml") || k.ends_with("document.xml")).map(|(_, v)| v)
     });
     if let Some(doc_part) = doc_part {
         if let Some(ref doc_el) = doc_part.xml_data {
@@ -399,6 +410,7 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
                 if is_candidate {
                     let rid = el
                         .attr(Some(NS_R), "id")
+                        .or_else(|| el.attrs.iter().find(|a| a.local == "id").map(|a| a.value.as_str()))
                         .or_else(|| el.attr(None, "id"));
                     if let Some(rid) = rid {
                         if let Some(target) = rel_map.get(rid) {
@@ -564,7 +576,7 @@ fn extract_from_raw_snippet(root: &Element) -> Result<MathNode> {
 pub fn flat_opc_to_mathml(xml_str: &str) -> Result<MathNode> {
     let root = xml::parse(xml_str.as_bytes())?;
 
-    if root.is(NS_PKG, "package") || root.local == "package" {
+    if root.is(NS_PKG, "package") || root.is(NS_PKG_LEGACY, "package") || root.local == "package" {
         extract_from_package(&root)
     } else {
         extract_from_raw_snippet(&root)
@@ -661,4 +673,43 @@ mod tests {
         let text_found = recovered.iter().into_iter().any(|n| n.text.contains("E=mc"));
         assert!(text_found);
     }
+    #[test]
+    fn test_wps_xmlpackage_namespace() {
+        let math = MathNode::parse("<math><mi>x</mi><mo>+</mo><mn>1</mn></math>").unwrap();
+        let opc_xml = mathml_to_flat_opc(&math, FlatOpcMode::ModernOmml, 12.0).unwrap();
+        let wps_opc = opc_xml.replace("http://schemas.microsoft.com/office/2006/xml/packaging", "http://schemas.microsoft.com/office/2006/xmlPackage");
+        let recovered = flat_opc_to_mathml(&wps_opc).expect("should parse WPS xmlPackage");
+        assert_eq!(recovered.find_all("mi")[0].text, "x");
+    }
+    #[test]
+    fn test_wps_xmlpackage_mathtype_ole() {
+        let math = MathNode::parse("<math><mi>y</mi><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
+        let opc_xml = mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0).unwrap();
+        let wps_opc = opc_xml.replace("http://schemas.microsoft.com/office/2006/xml/packaging", "http://schemas.microsoft.com/office/2006/xmlPackage");
+        let recovered = flat_opc_to_mathml(&wps_opc).expect("should parse WPS MathType xmlPackage");
+        assert!(recovered.find_all("mi").iter().any(|n| n.text == "y"));
+        assert!(recovered.find_all("mi").iter().any(|n| n.text == "x"));
+        assert!(recovered.find_all("mn").iter().any(|n| n.text == "2"));
+    }
+
+#[test]
+fn test_bridge_decode_xmlpackage_omml() {
+    let xml = r#"<?xml version="1.0" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">
+  <pkg:part pkg:name="/word/document.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml">
+    <pkg:xmlData>
+      <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+        <w:body>
+          <w:p>
+            <m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath>
+          </w:p>
+        </w:body>
+      </w:document>
+    </pkg:xmlData>
+  </pkg:part>
+</pkg:package>"#;
+    let m = crate::docx::flat_opc_to_mathml(xml).expect("decode xmlpackage");
+    assert_eq!(m.to_latex(), "x+1");
+}
 }

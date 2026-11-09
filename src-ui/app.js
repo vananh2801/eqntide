@@ -92,19 +92,32 @@
     activeSessionId = sessionId;
     console.log("Loaded active session:", activeSessionId);
 
+    if (tabEditorBtn) {
+      try { tabEditorBtn.click(); } catch (_) {}
+    }
+
     if (latex && typeof latex === "string" && latex.trim().length > 0) {
       latexSource.value = latex.trim();
-      if (mathField && typeof mathField.setValue === "function") {
-        mathField.setValue(latex.trim(), { format: "latex" });
+      if (mathField) {
+        if (typeof mathField.setValue === "function") {
+          mathField.setValue(latex.trim(), { format: "latex" });
+        }
+        mathField.value = latex.trim();
       }
       isModified = false;
       return;
     }
 
     if (mathml && typeof mathml === "string" && mathml.trim().length > 0) {
-      if (mathField && typeof mathField.setValue === "function") {
+      if (mathField) {
         try {
-          mathField.setValue(mathml.trim(), { format: "mathml" });
+          if (typeof mathField.setValue === "function") {
+            try {
+              mathField.setValue(mathml.trim(), { format: "math-ml" });
+            } catch (_) {
+              mathField.setValue(mathml.trim(), { format: "mathml" });
+            }
+          }
           if (typeof mathField.getValue === "function") {
             latexSource.value = mathField.getValue("latex");
           }
@@ -122,24 +135,34 @@
         const data = await res.json();
         if (data.latex && data.latex.trim().length > 0) {
           latexSource.value = data.latex.trim();
-          if (mathField && typeof mathField.setValue === "function") {
-            mathField.setValue(data.latex.trim(), { format: "latex" });
+          if (mathField) {
+            if (typeof mathField.setValue === "function") {
+              mathField.setValue(data.latex.trim(), { format: "latex" });
+            }
+            mathField.value = data.latex.trim();
           }
         } else if (data.mathml && data.mathml.trim().length > 0) {
-          if (mathField && typeof mathField.setValue === "function") {
+          if (mathField) {
             try {
-              mathField.setValue(data.mathml.trim(), { format: "math-ml" });
-            } catch (_) {
-              mathField.setValue(data.mathml.trim(), { format: "mathml" });
-            }
-            if (typeof mathField.getValue === "function") {
-              latexSource.value = mathField.getValue("latex");
-            }
+              if (typeof mathField.setValue === "function") {
+                try {
+                  mathField.setValue(data.mathml.trim(), { format: "math-ml" });
+                } catch (_) {
+                  mathField.setValue(data.mathml.trim(), { format: "mathml" });
+                }
+              }
+              if (typeof mathField.getValue === "function") {
+                latexSource.value = mathField.getValue("latex");
+              }
+            } catch (_) {}
           }
         } else {
           // Fresh/empty session: clear canvas so no stale formula is displayed
-          if (mathField && typeof mathField.setValue === "function") {
-            mathField.setValue("", { format: "latex" });
+          if (mathField) {
+            if (typeof mathField.setValue === "function") {
+              mathField.setValue("", { format: "latex" });
+            }
+            mathField.value = "";
           }
           if (latexSource) {
             latexSource.value = "";
