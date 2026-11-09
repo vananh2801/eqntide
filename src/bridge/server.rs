@@ -551,7 +551,10 @@ fn handle_http_request(
                 (String::new(), None)
             } else {
                 match decode_input_to_mathml(trimmed_data, &open_req.format) {
-                    Ok(m) => (m.to_xml(), None),
+                    Ok(m) => {
+                        let latex = m.to_latex();
+                        (m.to_xml(), Some(latex))
+                    },
                     Err(e) => {
                         log::warn!("Could not parse equation data in /session/open ({e}), opening session as empty canvas");
                         (String::new(), None)
@@ -790,6 +793,7 @@ fn handle_http_request(
                 }
                 "omml" => mathml_to_omml_xml(&math),
                 "mathml" => Ok(math.to_xml()),
+                "latex" => Ok(math.to_latex()),
                 "emf" | "emf_base64" => {
                     render_emf(&math, snip_req.font_pt)
                         .map(|p| base64_encode(&p.emf))
@@ -1262,6 +1266,24 @@ mod tests {
         let png_res: ConvertSnippetResponse = serde_json::from_str(&resp_png.body).expect("json parse");
         assert_eq!(png_res.status, "ok");
         assert!(!png_res.result.is_empty());
+    }
+
+    #[test]
+    fn test_session_open_with_mathml_generates_latex() {
+        let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
+        let addr = server_handle.addr();
+
+        let open_payload = r#"{"data": "<math><mi>x</mi><mo>=</mo><mfrac><mi>a</mi><mi>b</mi></mfrac></math>", "format": "mathml", "target_mode": "mathtype"}"#;
+        let open_req = format!(
+            "POST /session/open HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            open_payload.len(),
+            open_payload
+        );
+        let resp = send_raw_http(addr, &open_req);
+        assert_eq!(resp.status, 200);
+        let open_res: SessionOpenResponse = serde_json::from_str(&resp.body).expect("json parse");
+        assert_eq!(open_res.status, "opened");
+        assert_eq!(open_res.latex, Some("x=\\frac{a}{b}".into()));
     }
 
     #[test]

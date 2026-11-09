@@ -493,19 +493,25 @@
         bridgeBadge.style.borderColor = '#a7f3d0';
         bridgeBadge.style.color = '#065f46';
         statusText.textContent = `Bridge: Active (${data.version})`;
-      } else {
-        throw new Error('status ' + res.status);
+        return true;
       }
-    } catch (err) {
-      bridgeBadge.style.backgroundColor = '#fef2f2';
-      bridgeBadge.style.borderColor = '#fecaca';
-      bridgeBadge.style.color = '#991b1b';
-      statusText.textContent = 'Bridge: Offline (Connecting...)';
-    }
+    } catch (_) {}
+    bridgeBadge.style.backgroundColor = '#fef2f2';
+    bridgeBadge.style.borderColor = '#fecaca';
+    bridgeBadge.style.color = '#991b1b';
+    statusText.textContent = 'Bridge: Offline (Connecting...)';
+    return false;
   }
 
-  checkBridgeHealth();
-  setInterval(checkBridgeHealth, 10000);
+  // Quick initial retry sequence (0ms, 300ms, 800ms, 1500ms) then 5s steady interval
+  (async function initBridgeMonitoring() {
+    for (const delay of [0, 300, 800, 1500]) {
+      if (delay > 0) await new Promise(r => setTimeout(r, delay));
+      const ok = await checkBridgeHealth();
+      if (ok) break;
+    }
+    setInterval(checkBridgeHealth, 5000);
+  })();
 
   // 7. Copy Actions
   btnCopyLatex.addEventListener('click', () => {

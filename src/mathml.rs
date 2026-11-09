@@ -124,4 +124,9 @@ impl MathNode {
     pub fn to_xml(&self) -> String {
         xml::to_string(&self.to_xml_element())
     }
+
+    /// Serialise this [`MathNode`] tree to a LaTeX mathematical formula.
+    pub fn to_latex(&self) -> String {
+        crate::mathml_to_latex::mathml_to_latex(self)
+    }
 }

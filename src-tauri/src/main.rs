@@ -199,22 +199,7 @@ fn main() {
         }
     });
 
-    // 1. Start background local loopback bridge server (127.0.0.1:17890)
-    let bind_addr = format!(
-        "{}:{}",
-        omml_converter::DEFAULT_HOST,
-        omml_converter::DEFAULT_PORT
-    );
-    let _bridge_server = match omml_converter::start_bridge_server_with_callback(&bind_addr, Some(window_cb)) {
-        Ok(handle) => {
-            log::info!("Local bridge HTTP server active on {}", handle.addr());
-            Some(handle)
-        }
-        Err(e) => {
-            log::warn!("Could not start bridge server (possibly already running on port {bind_addr}): {e}");
-            None
-        }
-    };
+    let window_cb_setup = Arc::clone(&window_cb);
 
     let is_quitting = Arc::new(AtomicBool::new(false));
     let is_quitting_clone = Arc::clone(&is_quitting);
@@ -235,6 +220,32 @@ fn main() {
         }))
         .setup(move |app| {
             *app_handle_setup.lock().unwrap() = Some(app.handle().clone());
+
+            // Start background local loopback bridge server (127.0.0.1:17890) on primary instance
+            let bind_addr = format!(
+                "{}:{}",
+                omml_converter::DEFAULT_HOST,
+                omml_converter::DEFAULT_PORT
+            );
+            let mut server_handle = None;
+            for attempt in 1..=10 {
+                match omml_converter::start_bridge_server_with_callback(&bind_addr, Some(Arc::clone(&window_cb_setup))) {
+                    Ok(handle) => {
+                        log::info!("Local bridge HTTP server active on {}", handle.addr());
+                        server_handle = Some(handle);
+                        break;
+                    }
+                    Err(e) => {
+                        log::warn!("Bridge server bind attempt {attempt}/10 on {bind_addr}: {e}");
+                        if attempt < 10 {
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                        }
+                    }
+                }
+            }
+            if let Some(h) = server_handle {
+                app.manage(h);
+            }
             // Build Tray Menu
             let show_item = MenuItem::with_id(app, "show", "Show Equation Editor", true, None::<&str>)?;
             let batch_item = MenuItem::with_id(app, "batch", "Batch Document Converter", true, None::<&str>)?;

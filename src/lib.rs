@@ -49,6 +49,7 @@ pub mod cli;
 pub mod docx;
 pub mod error;
 pub mod mathml;
+pub mod mathml_to_latex;
 pub mod mtef;
 pub mod ole;
 pub mod omml;
@@ -70,6 +71,7 @@ pub use docx::{
 };
 pub use error::{Error, Result};
 pub use mathml::MathNode;
+pub use mathml_to_latex::mathml_to_latex;
 pub use mtef::decode::{mtef_to_mathml, ole_to_mathml};
 pub use mtef::encode::mathml_to_mtef_bytes;
 pub use mtef::make_equation_native;

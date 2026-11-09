@@ -150,119 +150,106 @@ function EditEquation() {
     }
 
     var selData = "";
-    var hasEquation = false;
     var targetRange = null;
 
     // 1. Check for OMML equation under cursor or in selection
     try {
       if (selection.OMaths && selection.OMaths.Count > 0) {
         targetRange = selection.OMaths.Item(1).Range;
-        hasEquation = true;
       }
     } catch (_) {}
 
-    if (!hasEquation) {
+    if (!targetRange) {
       try {
         if (selection.Range && selection.Range.OMaths && selection.Range.OMaths.Count > 0) {
           targetRange = selection.Range.OMaths.Item(1).Range;
-          hasEquation = true;
         }
       } catch (_) {}
     }
 
     // 2. Check for MathType OLE / EMF inline shape
-    if (!hasEquation) {
+    if (!targetRange) {
       try {
         if (selection.InlineShapes && selection.InlineShapes.Count > 0) {
           targetRange = selection.InlineShapes.Item(1).Range;
-          hasEquation = true;
         }
       } catch (_) {}
     }
 
-    if (!hasEquation) {
+    if (!targetRange) {
       try {
         if (selection.Range && selection.Range.InlineShapes && selection.Range.InlineShapes.Count > 0) {
           targetRange = selection.Range.InlineShapes.Item(1).Range;
-          hasEquation = true;
         }
       } catch (_) {}
     }
 
     // 3. Check for floating ShapeRange
-    if (!hasEquation) {
+    if (!targetRange) {
       try {
         if (selection.ShapeRange && selection.ShapeRange.Count > 0) {
           targetRange = selection.ShapeRange.Item(1).Anchor;
-          hasEquation = true;
         }
       } catch (_) {}
     }
 
-    // 4. Check if selection text is LaTeX formula ($...$, \[...\], \begin{...}, \frac, etc.)
-    if (!hasEquation) {
+    // 4. If caret is collapsed (point selection), check if adjacent word/range has an inline shape
+    if (!targetRange) {
       try {
-        var rawText = (selection.Text || "").trim();
-        if (
-          (rawText.startsWith("$") && rawText.endsWith("$")) ||
-          (rawText.startsWith("\\[") && rawText.endsWith("\\]")) ||
-          rawText.includes("\\frac") ||
-          rawText.includes("\\sqrt") ||
-          rawText.startsWith("\\begin")
-        ) {
-          selData = rawText;
-          hasEquation = true;
+        if (selection.Words && selection.Words.Count > 0) {
+          var word = selection.Words.Item(1);
+          if (word.InlineShapes && word.InlineShapes.Count > 0) {
+            targetRange = word.InlineShapes.Item(1).Range;
+          } else if (word.OMaths && word.OMaths.Count > 0) {
+            targetRange = word.OMaths.Item(1).Range;
+          }
         }
       } catch (_) {}
     }
 
-    // If no equation was detected at selection:
-    // Graceful fallback: Open editor as a new equation canvas instead of failing with an alert!
-    if (!hasEquation) {
-      InsertEquation();
-      return;
-    }
-
-    // Expand selection to fully encapsulate the equation if found
+    // Expand selection to targetRange if an equation container was identified
     if (targetRange && typeof targetRange.Select === "function") {
       try {
         targetRange.Select();
       } catch (_) {}
     }
 
-    // Extract WordOpenXML if not already LaTeX
+    // Extract WordOpenXML representation
+    if (targetRange) {
+      try {
+        if (targetRange.WordOpenXML) {
+          selData = targetRange.WordOpenXML;
+        }
+      } catch (_) {}
+    }
+
     if (!selData) {
       try {
         if (selection.WordOpenXML) {
           selData = selection.WordOpenXML;
         }
       } catch (_) {}
-      if (!selData) {
-        try {
-          if (targetRange && targetRange.WordOpenXML) {
-            selData = targetRange.WordOpenXML;
-          }
-        } catch (_) {}
-      }
-      if (!selData) {
-        try {
-          if (selection.Range && selection.Range.WordOpenXML) {
-            selData = selection.Range.WordOpenXML;
-          }
-        } catch (_) {}
-      }
     }
 
     if (!selData) {
       try {
-        if (targetRange && targetRange.Text) {
-          selData = targetRange.Text;
-        } else if (selection.Text) {
-          selData = selection.Text;
+        if (selection.Range && selection.Range.WordOpenXML) {
+          selData = selection.Range.WordOpenXML;
         }
       } catch (_) {}
     }
 
+    // Fallback: check raw text (e.g. LaTeX $...$ or textual formula)
+    if (!selData) {
+      try {
+        var rawText = (selection.Text || "").trim();
+        if (rawText) {
+          selData = rawText;
+        }
+      } catch (_) {}
+    }
+
+    // If completely empty, open clean empty canvas via InsertEquation
     if (!selData || selData.trim().length === 0) {
       InsertEquation();
       return;
@@ -350,18 +337,32 @@ function ToggleLatex() {
     }
 
     // Case B: Selection contains an equation, convert to LaTeX string
-    var ooxml = selection.Range.WordOpenXML || "";
+    var ooxml = "";
+    try {
+      if (selection.Range && selection.Range.WordOpenXML) {
+        ooxml = selection.Range.WordOpenXML;
+      } else if (selection.WordOpenXML) {
+        ooxml = selection.WordOpenXML;
+      }
+    } catch (_) {}
+
+    if (!ooxml) {
+      return;
+    }
+
     ajaxPost(
       BRIDGE_URL + "/convert/snippet",
       JSON.stringify({
         data: ooxml,
         from: "flat_opc",
-        to: "mathml"
+        to: "latex"
       }),
       function (status, responseText) {
         if (status === 200) {
           var snip = JSON.parse(responseText);
-          selection.Text = "$" + snip.result + "$";
+          if (snip && snip.result) {
+            selection.Text = "$" + snip.result + "$";
+          }
         }
       }
     );

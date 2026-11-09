@@ -29,7 +29,7 @@ use crate::xml::{self, Element, Node};
 use super::consts::*;
 use super::ole_xml::make_object_run;
 use super::to_omml::{
-    build_rel_map, collect_imagedata_rids, find_mathtype_ole_in_subtree,
+    build_rel_map, collect_imagedata_rids,
 };
 
 /// Open Packaging Conventions (Flat OPC) XML namespace.
