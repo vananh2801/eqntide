@@ -457,6 +457,7 @@ fn handle_http_request(
                 .filter(|s| !s.is_empty())
                 // do not revive stale session
                 .unwrap_or_default();
+            eprintln!("POST /window/show for session_id='{}'", sid);
 
             let (m, l) = if !sid.is_empty() {
                 session_mgr
@@ -537,6 +538,7 @@ fn handle_http_request(
             };
 
             let trimmed_data = open_req.data.trim();
+            eprintln!("POST /session/open received payload len={}", trimmed_data.len());
             log::info!("POST /session/open received payload len={}", trimmed_data.len());
             let is_latex = open_req.format == "latex"
                 || trimmed_data.starts_with('$')
@@ -553,9 +555,11 @@ fn handle_http_request(
                 match decode_input_to_mathml(trimmed_data, &open_req.format) {
                     Ok(m) => {
                         let latex = m.to_latex();
+                        eprintln!("POST /session/open successfully parsed equation to latex: '{}'", latex);
                         (m.to_xml(), Some(latex))
                     },
                     Err(e) => {
+                        eprintln!("POST /session/open could not parse equation data: {e}");
                         log::warn!("Could not parse equation data in /session/open ({e}), opening session as empty canvas");
                         (String::new(), None)
                     }

@@ -198,6 +198,22 @@ fn normalize_newlines(s: &str) -> String {
     s.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+fn default_known_ns(prefix: &str) -> Option<&'static str> {
+    match prefix {
+        "w" => Some("http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        "m" => Some("http://schemas.openxmlformats.org/officeDocument/2006/math"),
+        "r" => Some("http://schemas.openxmlformats.org/officeDocument/2006/relationships"),
+        "v" => Some("urn:schemas-microsoft-com:vml"),
+        "o" => Some("urn:schemas-microsoft-com:office:office"),
+        "pkg" => Some("http://schemas.microsoft.com/office/2006/xmlPackage"),
+        "a" => Some("http://schemas.openxmlformats.org/drawingml/2006/main"),
+        "pic" => Some("http://schemas.openxmlformats.org/drawingml/2006/picture"),
+        "wp" => Some("http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"),
+        "w14" => Some("http://schemas.microsoft.com/office/word/2010/wordml"),
+        _ => None,
+    }
+}
+
 fn lookup<'a>(scope: &'a [NsDecl], prefix: Option<&str>) -> Option<&'a str> {
     if prefix == Some("xml") {
         return Some(XML_NS);
@@ -206,6 +222,9 @@ fn lookup<'a>(scope: &'a [NsDecl], prefix: Option<&str>) -> Option<&'a str> {
         if p.as_deref() == prefix {
             return if u.is_empty() { None } else { Some(u.as_str()) };
         }
+    }
+    if let Some(p) = prefix {
+        return default_known_ns(p);
     }
     None
 }

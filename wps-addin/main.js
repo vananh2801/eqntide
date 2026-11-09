@@ -41,13 +41,18 @@ var g_currentWaitXhr = null;
  */
 function hasEquationInXml(xmlStr) {
   if (!xmlStr || typeof xmlStr !== "string") return false;
+  var lower = xmlStr.toLowerCase();
   return (
-    xmlStr.indexOf("<m:oMath") !== -1 ||
-    xmlStr.indexOf("<m:oMathPara") !== -1 ||
-    xmlStr.indexOf("w:object") !== -1 ||
-    xmlStr.indexOf("oleObject") !== -1 ||
-    xmlStr.indexOf("AppsMFCC") !== -1 ||
-    xmlStr.indexOf("<v:imagedata") !== -1
+    lower.indexOf("omath") !== -1 ||
+    lower.indexOf("oleobject") !== -1 ||
+    lower.indexOf("equation.") !== -1 ||
+    lower.indexOf("mathtype") !== -1 ||
+    lower.indexOf("w:object") !== -1 ||
+    lower.indexOf("w:pict") !== -1 ||
+    lower.indexOf("w:drawing") !== -1 ||
+    lower.indexOf("imagedata") !== -1 ||
+    lower.indexOf("bindata") !== -1 ||
+    lower.indexOf("appsmfcc") !== -1
   );
 }
 
@@ -167,25 +172,26 @@ function InsertEquation() {
 /**
  * 2. Edit Equation:
  * Extracts selected equation from WPS Selection and opens it in editor.
- * If no equation is selected, gracefully delegates to InsertEquation()
- * to open a clean new equation canvas without freezing WPS or erroring out.
+ * If no equation is selected, alerts the user directly without redirecting or freezing WPS.
  */
 function EditEquation() {
   try {
     var app = wps.Application;
     var selection = app ? app.Selection : null;
     if (!selection) {
-      InsertEquation();
+      alert("Không tìm thấy công thức nào được chọn!");
       return;
     }
 
     var selData = "";
     var targetRange = null;
+    var isEquationFound = false;
 
     // 1. Check for OMML equation under cursor or in selection
     try {
       if (selection.OMaths && selection.OMaths.Count > 0) {
         targetRange = selection.OMaths.Item(1).Range;
+        isEquationFound = true;
       }
     } catch (_) {}
 
@@ -193,6 +199,7 @@ function EditEquation() {
       try {
         if (selection.Range && selection.Range.OMaths && selection.Range.OMaths.Count > 0) {
           targetRange = selection.Range.OMaths.Item(1).Range;
+          isEquationFound = true;
         }
       } catch (_) {}
     }
@@ -202,6 +209,7 @@ function EditEquation() {
       try {
         if (selection.InlineShapes && selection.InlineShapes.Count > 0) {
           targetRange = selection.InlineShapes.Item(1).Range;
+          isEquationFound = true;
         }
       } catch (_) {}
     }
@@ -210,6 +218,7 @@ function EditEquation() {
       try {
         if (selection.Range && selection.Range.InlineShapes && selection.Range.InlineShapes.Count > 0) {
           targetRange = selection.Range.InlineShapes.Item(1).Range;
+          isEquationFound = true;
         }
       } catch (_) {}
     }
@@ -219,52 +228,64 @@ function EditEquation() {
       try {
         if (selection.ShapeRange && selection.ShapeRange.Count > 0) {
           targetRange = selection.ShapeRange.Item(1).Anchor;
+          isEquationFound = true;
         }
       } catch (_) {}
     }
 
-    // 4. If caret is collapsed (point selection), check if adjacent word/range has an inline shape
-    if (!targetRange) {
+    // 4. If caret is collapsed (point selection, selection.Type === 1), check adjacent word
+    if (!targetRange && selection.Type === 1) {
       try {
         if (selection.Words && selection.Words.Count > 0) {
           var word = selection.Words.Item(1);
           if (word.InlineShapes && word.InlineShapes.Count > 0) {
             targetRange = word.InlineShapes.Item(1).Range;
+            isEquationFound = true;
           } else if (word.OMaths && word.OMaths.Count > 0) {
             targetRange = word.OMaths.Item(1).Range;
+            isEquationFound = true;
           }
         }
       } catch (_) {}
     }
 
-    // Expand selection to targetRange if an equation container was identified
-    if (targetRange && typeof targetRange.Select === "function") {
+    // Only expand selection if caret was collapsed point selection (preserve shape click!)
+    if (selection.Type === 1 && targetRange && typeof targetRange.Select === "function") {
       try {
         targetRange.Select();
       } catch (_) {}
     }
 
-    // Extract WordOpenXML representation ONLY if it actually contains an equation
+    // Extract WordOpenXML representation
     if (targetRange) {
       try {
-        if (targetRange.WordOpenXML && hasEquationInXml(targetRange.WordOpenXML)) {
-          selData = targetRange.WordOpenXML;
+        if (targetRange.WordOpenXML) {
+          var xml1 = targetRange.WordOpenXML;
+          if (hasEquationInXml(xml1) || isEquationFound) {
+            selData = xml1;
+          }
         }
       } catch (_) {}
     }
 
     if (!selData) {
       try {
-        if (selection.WordOpenXML && hasEquationInXml(selection.WordOpenXML)) {
-          selData = selection.WordOpenXML;
+        if (selection.WordOpenXML) {
+          var xml2 = selection.WordOpenXML;
+          if (hasEquationInXml(xml2) || isEquationFound) {
+            selData = xml2;
+          }
         }
       } catch (_) {}
     }
 
     if (!selData) {
       try {
-        if (selection.Range && selection.Range.WordOpenXML && hasEquationInXml(selection.Range.WordOpenXML)) {
-          selData = selection.Range.WordOpenXML;
+        if (selection.Range && selection.Range.WordOpenXML) {
+          var xml3 = selection.Range.WordOpenXML;
+          if (hasEquationInXml(xml3) || isEquationFound) {
+            selData = xml3;
+          }
         }
       } catch (_) {}
     }
@@ -279,9 +300,9 @@ function EditEquation() {
       } catch (_) {}
     }
 
-    // If NO equation was selected, gracefully open clean new canvas via InsertEquation!
+    // If NO equation was selected, do NOT redirect! Show alert directly!
     if (!selData || selData.trim().length === 0) {
-      InsertEquation();
+      alert("Không tìm thấy công thức nào được chọn!");
       return;
     }
 
@@ -298,6 +319,7 @@ function EditEquation() {
         function (status, responseText) {
           if (status !== 200) {
             console.error("Bridge error (" + status + "): " + responseText);
+            alert("Lỗi kết nối tới Math Editor (" + status + ")");
             return;
           }
 
@@ -317,7 +339,7 @@ function EditEquation() {
     });
   } catch (err) {
     console.error("Error reading equation from selection:", err);
-    InsertEquation();
+    alert("Không tìm thấy công thức nào được chọn!");
   }
 }
 
