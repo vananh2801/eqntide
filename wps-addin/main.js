@@ -616,17 +616,37 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       }
     } catch (_) {}
 
-    // 6. Force WPS screen repaint & recalculation so that all adjacent/subsequent equations are immediately repainted
+    // 6. Force WPS canvas layout refresh for all inline shapes in the document
+    // This marks every shape dirty and forces WPS to recalculate and repaint subsequent equations!
+    try {
+      if (doc && doc.InlineShapes) {
+        var shpCount = doc.InlineShapes.Count;
+        for (var sIdx = 1; sIdx <= shpCount; sIdx++) {
+          try {
+            var shp = doc.InlineShapes.Item(sIdx);
+            var curW = shp.Width;
+            shp.Width = curW;
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
     try {
       if (doc && typeof doc.Repaginate === 'function') {
         doc.Repaginate();
       }
       var win = app.ActiveWindow;
+      if (win && win.View) {
+        var curViewType = win.View.Type;
+        win.View.Type = (curViewType === 3 ? 1 : 3);
+        win.View.Type = curViewType;
+      }
       if (win && win.ActivePane && win.ActivePane.View && win.ActivePane.View.Zoom) {
         var curZoom = win.ActivePane.View.Zoom.Percentage;
         win.ActivePane.View.Zoom.Percentage = curZoom + 1;
         win.ActivePane.View.Zoom.Percentage = curZoom;
-      } else if (app && typeof app.ScreenRefresh === 'function') {
+      }
+      if (app && typeof app.ScreenRefresh === 'function') {
         app.ScreenRefresh();
       }
     } catch (_) {}
