@@ -1627,7 +1627,7 @@ mod tests {
         use crate::mtef::{build_mtef, EMB_1PRIME, EMB_2PRIME, EMB_3PRIME};
 
         // 1. msup with prime (1st, 2nd, 3rd) encodes directly to OMML without m:sSup
-        let primes = [("'", "'"), ("''", "''"), ("'''", "'''"), ("\u{2032}", "'"), (",", "'"), (",,", "''")];
+        let primes = [("'", "'"), ("''", "''"), ("'''", "'''"), ("\u{2032}", "'")];
         for (sup_char, expected_prime) in primes {
             let mml = MathNode::parse(&format!(
                 "<math><msup><mi>y</mi><mo>{}</mo></msup></math>",
@@ -1681,5 +1681,17 @@ mod tests {
                 .collect();
             assert_eq!(runs, vec!["y".to_string(), prime_str.to_string()]);
         }
+    }
+    #[test]
+    fn test_tuple_with_comma_does_not_become_prime() {
+        use crate::mtef::decode::mtef_to_mathml;
+        use crate::mtef::encode::mathml_to_mtef_bytes;
+        use crate::mtef::{build_mtef, EMB_1PRIME};
+        let mml = MathNode::parse("<math><mrow><mo>(</mo><mi>O</mi><mi>u</mi><mo>,</mo><mi>O</mi><mi>v</mi><mo>)</mo></mrow></math>").unwrap();
+        let mtef = mathml_to_mtef_bytes(&mml).unwrap();
+        assert!(!mtef.windows(3).any(|w| w[0] == 0x06 && w[2] == EMB_1PRIME), "Comma must not be converted to prime embellishment");
+        let decoded = mtef_to_mathml(&build_mtef(&mtef)).unwrap();
+        let latex = decoded.to_latex();
+        assert_eq!(latex, "(Ou,Ov)");
     }
 }

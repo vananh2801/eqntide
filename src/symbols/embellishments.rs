@@ -22,9 +22,9 @@ pub fn prime_order(text: &str) -> Option<u8> {
         return None;
     }
     match t {
-        "'" | "\u{2032}" | "\u{00B4}" | "`" | "\u{2035}" | "," => Some(1),
-        "''" | "\u{2033}" | ",," => Some(2),
-        "'''" | "\u{2034}" | ",,," => Some(3),
+        "'" | "\u{2032}" | "\u{00B4}" | "`" | "\u{2035}" => Some(1),
+        "''" | "\u{2033}" => Some(2),
+        "'''" | "\u{2034}" => Some(3),
         _ => {
             let chars: Vec<char> = t.chars().collect();
             if !chars.is_empty()
@@ -34,7 +34,6 @@ pub fn prime_order(text: &str) -> Option<u8> {
                         || c == '\u{2033}'
                         || c == '\u{2034}'
                         || c == '\u{00B4}'
-                        || c == ','
                         || c == '`'
                         || c == '\u{2035}'
                 })
@@ -42,7 +41,7 @@ pub fn prime_order(text: &str) -> Option<u8> {
                 let mut count = 0u8;
                 for c in chars {
                     match c {
-                        '\'' | '\u{2032}' | '\u{00B4}' | ',' | '`' | '\u{2035}' => count = count.saturating_add(1),
+                        '\'' | '\u{2032}' | '\u{00B4}' | '`' | '\u{2035}' => count = count.saturating_add(1),
                         '\u{2033}' => count = count.saturating_add(2),
                         '\u{2034}' => count = count.saturating_add(3),
                         _ => {}

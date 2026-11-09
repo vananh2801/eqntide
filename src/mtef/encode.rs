@@ -1198,7 +1198,7 @@ fn emit_char_with_combining_marks(
     let mut prime_count = 0u8;
     while *idx < chars.len() && is_prime_char(chars[*idx]) {
         match chars[*idx] {
-            '\'' | '\u{2032}' | '\u{00B4}' | ',' => prime_count = prime_count.saturating_add(1),
+            '\'' | '\u{2032}' | '\u{00B4}' => prime_count = prime_count.saturating_add(1),
             '\u{2033}' => prime_count = prime_count.saturating_add(2),
             '\u{2034}' => prime_count = prime_count.saturating_add(3),
             '`' | '\u{2035}' => embells.push(EMB_BPRIME),
