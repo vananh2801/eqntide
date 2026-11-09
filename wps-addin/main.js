@@ -609,10 +609,15 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       range.Collapse(0); // 0 = wdCollapseEnd
       range.Select();
       var curSel = app.Selection;
-      if (curSel && curSel.Font) {
-        curSel.Font.Position = 0;
-        curSel.Font.Subscript = false;
-        curSel.Font.Superscript = false;
+      if (curSel) {
+        if (curSel.Font) {
+          if (typeof curSel.Font.Reset === 'function') {
+            try { curSel.Font.Reset(); } catch (_) {}
+          }
+          curSel.Font.Position = 0;
+          curSel.Font.Subscript = false;
+          curSel.Font.Superscript = false;
+        }
       }
     } catch (_) {}
 
