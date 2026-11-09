@@ -470,6 +470,8 @@ fn handle_http_request(
 
             if let Some(ref cb) = window_cb {
                 cb(&sid, m.as_deref(), l.as_deref());
+            } else {
+                spawn_desktop_editor(&sid);
             }
 
             let resp = json_response(
@@ -578,6 +580,8 @@ fn handle_http_request(
             let session_id = session_mgr.create_session(mathml.clone(), latex.clone());
             if let Some(ref cb) = window_cb {
                 cb(&session_id, Some(&mathml), latex.as_deref());
+            } else {
+                spawn_desktop_editor(&session_id);
             }
             let resp = json_response(
                 200,
@@ -1052,6 +1056,43 @@ fn decode_input_to_mathml(data: &str, format: &str) -> crate::error::Result<Math
     Err(crate::error::Error::Xml(format!(
         "unrecognized equation input format: '{format}'"
     )))
+}
+
+pub(crate) fn spawn_desktop_editor(session_id: &str) {
+    let mut candidates = Vec::new();
+    if let Ok(env_path) = std::env::var("MATH_EDITOR_UI_BIN") {
+        candidates.push(std::path::PathBuf::from(env_path));
+    }
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            candidates.push(dir.join("omml-editor-desktop"));
+        }
+    }
+    candidates.push(std::path::PathBuf::from(
+        "/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/omml-editor-desktop",
+    ));
+    candidates.push(std::path::PathBuf::from("omml-editor-desktop"));
+
+    for path in &candidates {
+        if path.is_absolute() && !path.exists() {
+            continue;
+        }
+        let mut cmd = std::process::Command::new(path);
+        if !session_id.is_empty() {
+            cmd.arg(format!("matheditor://open?session_id={session_id}"));
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                log::info!("Spawned desktop editor UI (PID {}) via {}", child.id(), path.display());
+                eprintln!("Spawned desktop editor UI (PID {}) via {}", child.id(), path.display());
+                return;
+            }
+            Err(e) => {
+                log::debug!("Failed to spawn {}: {e}", path.display());
+            }
+        }
+    }
+    log::warn!("Could not find or launch omml-editor-desktop UI binary");
 }
 
 #[cfg(test)]

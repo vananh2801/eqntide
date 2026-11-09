@@ -18,14 +18,9 @@
         "minHeight": 450,
         "resizable": true,
         "center": true,
-        "visible": false
+        "visible": true
       }
     ],
-    "trayIcon": {
-      "id": "main-tray",
-      "tooltip": "Math Equation Editor & Converter",
-      "iconPath": "icons/32x32.png"
-    },
     "security": {
       "csp": null
     }

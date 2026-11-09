@@ -4,8 +4,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WindowEvent,
 };
 
@@ -74,8 +72,9 @@ fn convert_equation(
 }
 
 #[tauri::command]
-fn hide_window(window: tauri::Window) -> Result<(), String> {
-    window.hide().map_err(|e| e.to_string())
+fn hide_window(app: tauri::AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
 }
 
 #[tauri::command]
@@ -244,103 +243,31 @@ fn main() {
         .setup(move |app| {
             *app_handle_setup.lock().unwrap() = Some(app.handle().clone());
 
-            // Start background local loopback bridge server (127.0.0.1:17890) on primary instance
+            // Check if daemon is already running on 127.0.0.1:17890
             let bind_addr = format!(
                 "{}:{}",
                 omml_converter::DEFAULT_HOST,
                 omml_converter::DEFAULT_PORT
             );
-            let mut server_handle = None;
-            for attempt in 1..=10 {
+            if std::net::TcpStream::connect(&bind_addr).is_ok() {
+                log::info!("Daemon bridge server already active on {bind_addr}, using existing daemon.");
+            } else {
                 match omml_converter::start_bridge_server_with_callback(&bind_addr, Some(Arc::clone(&window_cb_setup))) {
                     Ok(handle) => {
                         log::info!("Local bridge HTTP server active on {}", handle.addr());
-                        server_handle = Some(handle);
-                        break;
+                        app.manage(handle);
                     }
                     Err(e) => {
-                        log::warn!("Bridge server bind attempt {attempt}/10 on {bind_addr}: {e}");
-                        if attempt < 10 {
-                            std::thread::sleep(std::time::Duration::from_millis(300));
-                        }
+                        log::warn!("Could not bind bridge server on {bind_addr}: {e}");
                     }
                 }
-            }
-            if let Some(h) = server_handle {
-                app.manage(h);
-            }
-            // Build Tray Menu
-            let show_item = MenuItem::with_id(app, "show", "Show Equation Editor", true, None::<&str>)?;
-            let batch_item = MenuItem::with_id(app, "batch", "Batch Document Converter", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_item, &batch_item, &quit_item])?;
-
-            let tray_builder = TrayIconBuilder::new()
-                .menu(&tray_menu)
-                .tooltip("Math Equation Editor & Converter (Word/WPS)")
-                .show_menu_on_left_click(false)
-                .on_menu_event({
-                    let is_quitting_menu = Arc::clone(&is_quitting_setup);
-                    move |app, event| match event.id.as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
-                            }
-                        }
-                        "batch" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
-                                let _ = window.emit("open-batch-tab", ());
-                            }
-                        }
-                        "quit" => {
-                            is_quitting_menu.store(true, Ordering::SeqCst);
-                            app.exit(0);
-                        }
-                        _ => {}
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let is_visible = window.is_visible().unwrap_or(false);
-                            if is_visible {
-                                let _ = window.hide();
-                            } else {
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
-                            }
-                        }
-                    }
-                });
-
-            // Set tray icon if default window icon exists
-            if let Some(icon) = app.default_window_icon() {
-                let _ = tray_builder.icon(icon.clone()).build(app)?;
-            } else {
-                let _ = tray_builder.build(app)?;
             }
 
             Ok(())
         })
-        .on_window_event(move |window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if !is_quitting_clone.load(Ordering::SeqCst) {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    let _ = window.emit("window-close-requested", ());
-                }
+        .on_window_event(move |_window, event| {
+            if let WindowEvent::CloseRequested { .. } = event {
+                std::process::exit(0);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -356,11 +283,6 @@ fn main() {
 
     app.run(move |_app_handle, event| {
         println!("Tauri RunEvent: {:?}", event);
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
-            if !is_quitting_exit.load(Ordering::SeqCst) {
-                api.prevent_exit();
-            }
-        }
     });
 }
 
