@@ -70,6 +70,14 @@ pub struct SessionWaitResponse {
     pub flat_opc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub omml: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emf_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_pt: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_pt: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth_pt: Option<f32>,
 }
 
 /// Request payload for `POST /session/:id/update`.

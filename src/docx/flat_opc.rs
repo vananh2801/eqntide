@@ -285,9 +285,9 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             let shape_id = format!("_x0000_i{}", 1025 + (uid_num % 100_000));
             let obj_id = format!("_{}", 1_000_000_000u64 + (uid_num % 9_000_000_000u64));
 
-            // Unique relationship IDs prevent WPS from overwriting or disconnecting other equations in document.xml.rels
-            let ole_rid = format!("rId{}", 1000 + (uid_num % 40_000) * 2);
-            let img_rid = format!("rId{}", 1000 + (uid_num % 40_000) * 2 + 1);
+            // Local relationship IDs inside Flat OPC snippet (Word/WPS remaps them into document.xml.rels)
+            let ole_rid = "rId1".to_string();
+            let img_rid = "rId2".to_string();
 
             let ole_target = format!("embeddings/oleObject{uid_num}.bin");
             let img_target = format!("media/equation{uid_num}.emf");

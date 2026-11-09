@@ -14,6 +14,10 @@ pub enum SessionState {
         mathml: String,
         flat_opc: String,
         omml: String,
+        emf_path: Option<String>,
+        width_pt: Option<f32>,
+        height_pt: Option<f32>,
+        depth_pt: Option<f32>,
     },
     /// Session was closed or cancelled by user without saving.
     Cancelled,
@@ -106,6 +110,10 @@ impl SessionManager {
         mathml: String,
         flat_opc: String,
         omml: String,
+        emf_path: Option<String>,
+        width_pt: Option<f32>,
+        height_pt: Option<f32>,
+        depth_pt: Option<f32>,
     ) -> Result<(), &'static str> {
         let entry = {
             let lock = self.sessions.lock().unwrap();
@@ -118,6 +126,10 @@ impl SessionManager {
                 mathml,
                 flat_opc,
                 omml,
+                emf_path,
+                width_pt,
+                height_pt,
+                depth_pt,
             };
         }
         entry.cond.notify_all();

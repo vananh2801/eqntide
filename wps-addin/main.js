@@ -172,9 +172,7 @@ function InsertEquation() {
 
         // Long-poll wait for user confirmation
         WaitSession(sessionId, function (waitData) {
-          if (waitData && waitData.status === "ready" && waitData.flat_opc) {
-            InsertFlatOpcToSelection(waitData.flat_opc);
-          }
+          HandleSessionResult(waitData);
         });
       }
     );
@@ -352,18 +350,27 @@ function EditEquation() {
 
     g_editTargetRange = targetRange;
     if (targetRange && typeof targetRange.Start === "number" && typeof targetRange.End === "number") {
-      g_editRangeStart = targetRange.Start;
-      var eEnd = targetRange.End;
+      var tStart = targetRange.Start;
+      var tEnd = targetRange.End;
+      // If targetRange contains an InlineShape, pin range strictly to 1 character (do NOT delete adjacent text)
+      if (isEquationFound && (tEnd - tStart > 1)) {
+        wpsLog("EditEquation: clamped range from [" + tStart + ".." + tEnd + "] to [" + tStart + ".." + (tStart + 1) + "]");
+        tEnd = tStart + 1;
+      }
+      // Check if immediate next character is U+200C (reset anchor), include it in deletion
       try {
         var doc = app.ActiveDocument;
-        if (doc && eEnd < (doc.Content ? doc.Content.End : 999999)) {
-          var nextChar = doc.Range(eEnd, eEnd + 1);
+        if (doc && tEnd < (doc.Content ? doc.Content.End : 999999)) {
+          var nextChar = doc.Range(tEnd, tEnd + 1);
           if (nextChar && nextChar.Text === "‌") {
-            eEnd = eEnd + 1;
+            tEnd = tEnd + 1;
+            wpsLog("EditEquation: included adjacent U+200C in editRange");
           }
         }
       } catch (_) {}
-      g_editRangeEnd = eEnd;
+      g_editRangeStart = tStart;
+      g_editRangeEnd = tEnd;
+      wpsLog("EditEquation: pinned editRange [" + g_editRangeStart + ".." + g_editRangeEnd + "]");
     } else {
       g_editRangeStart = null;
       g_editRangeEnd = null;
@@ -394,9 +401,7 @@ function EditEquation() {
           LaunchDesktopEditor(sessionId);
 
           WaitSession(sessionId, function (waitData) {
-            if (waitData && waitData.status === "ready" && waitData.flat_opc) {
-              InsertFlatOpcToSelection(waitData.flat_opc);
-            }
+            HandleSessionResult(waitData);
           });
         }
       );
@@ -542,6 +547,124 @@ function OpenBatchConverter() {
 }
 
 /**
+ * Handle session completion: prefers native EMF AddPicture (prevents lazy-load cache drop in WPS Linux)
+ * and falls back to Flat OPC InsertXML if needed.
+ */
+function HandleSessionResult(waitData) {
+  if (!waitData || waitData.status !== "ready") return;
+
+  // Try inserting EMF picture via AddPicture (Claude Test 2 / Clean Media Insertion)
+  if (waitData.emf_path) {
+    var success = InsertEmfPicture(waitData);
+    if (success) {
+      wpsLog("HandleSessionResult: completed successfully via InsertEmfPicture");
+      return;
+    }
+    wpsLog("HandleSessionResult: InsertEmfPicture returned false, falling back to InsertFlatOpcToSelection");
+  }
+
+  // Fallback to InsertFlatOpcToSelection
+  if (waitData.flat_opc) {
+    InsertFlatOpcToSelection(waitData.flat_opc);
+  }
+}
+
+/**
+ * Insert vector EMF picture with embedded MTEF using InlineShapes.AddPicture.
+ * Does not import Flat OPC packages, completely bypassing WPS Linux relationship cache corruption.
+ */
+function InsertEmfPicture(waitData) {
+  try {
+    var app = wps.Application;
+    var doc = app ? app.ActiveDocument : null;
+    var sel = app ? app.Selection : null;
+    var range = null;
+
+    wpsLog("InsertEmfPicture: start. editRangeStart=" + g_editRangeStart + ", editRangeEnd=" + g_editRangeEnd);
+
+    var isEdit = (doc && g_editRangeStart !== null && g_editRangeEnd !== null);
+    var insertPos = isEdit ? g_editRangeStart : (sel ? sel.Range.Start : 0);
+
+    if (isEdit) {
+      try {
+        var oldRange = doc.Range(g_editRangeStart, g_editRangeEnd);
+        wpsLog("InsertEmfPicture: deleting old equation at range [" + g_editRangeStart + ".." + g_editRangeEnd + "]");
+        oldRange.Delete();
+        range = doc.Range(insertPos, insertPos);
+      } catch (e) {
+        wpsLog("InsertEmfPicture: error deleting old equation: " + e);
+      }
+    }
+    g_editRangeStart = null;
+    g_editRangeEnd = null;
+    g_editTargetRange = null;
+
+    if (!range) {
+      range = sel ? sel.Range : null;
+    }
+    if (!range) return false;
+
+    var emfPath = waitData.emf_path;
+    if (!emfPath) return false;
+
+    wpsLog("InsertEmfPicture: calling AddPicture(" + emfPath + ") at pos " + insertPos);
+    var pic = null;
+    try {
+      pic = range.InlineShapes.AddPicture(emfPath, false, true, range);
+    } catch (e) {
+      wpsLog("InsertEmfPicture: AddPicture exception: " + e);
+      return false;
+    }
+
+    if (!pic) {
+      wpsLog("InsertEmfPicture: AddPicture returned null");
+      return false;
+    }
+
+    try {
+      if (typeof waitData.width_pt === "number" && waitData.width_pt > 0) {
+        pic.Width = waitData.width_pt;
+      }
+      if (typeof waitData.height_pt === "number" && waitData.height_pt > 0) {
+        pic.Height = waitData.height_pt;
+      }
+
+      var depthPt = (typeof waitData.depth_pt === "number") ? waitData.depth_pt : 0;
+      // In Word/WPS JS API, Font.Position is in points (NOT half-points like OpenXML w:val)
+      var pos = -Number(depthPt.toFixed(1));
+      if (pic.Range && pic.Range.Font) {
+        pic.Range.Font.Position = pos;
+        wpsLog("InsertEmfPicture: set baseline Font.Position=" + pos + " (depthPt=" + depthPt + ")");
+      }
+
+      // Add U+200C reset run with position 0 immediately after picture
+      var picEnd = pic.Range ? pic.Range.End : range.End;
+      var resetRange = doc.Range(picEnd, picEnd);
+      resetRange.InsertAfter("‌"); // U+200C
+      var zwnjRange = doc.Range(picEnd, picEnd + 1);
+      if (zwnjRange && zwnjRange.Font) {
+        zwnjRange.Font.Position = 0;
+        zwnjRange.Font.Subscript = false;
+        zwnjRange.Font.Superscript = false;
+      }
+      zwnjRange.Select();
+      var curSel = app.Selection;
+      if (curSel && typeof curSel.Collapse === "function") {
+        curSel.Collapse(0); // wdCollapseEnd
+      }
+    } catch (e) {
+      wpsLog("InsertEmfPicture: formatting error: " + e);
+    }
+
+    wpsLog("InsertEmfPicture: finished successfully.");
+    return true;
+  } catch (err) {
+    wpsLog("InsertEmfPicture: unhandled error: " + err);
+    return false;
+  }
+}
+
+/**
  * Helper: Insert Flat OPC XML into active WPS selection
  */
 function InsertFlatOpcToSelection(flatOpcXml) {
@@ -555,26 +678,10 @@ function InsertFlatOpcToSelection(flatOpcXml) {
 
     if (doc && g_editRangeStart !== null && g_editRangeEnd !== null) {
       try {
-        var oldRange = doc.Range(g_editRangeStart, g_editRangeEnd);
-        var insertPos = oldRange.Start;
-
-        // 1. Delete old InlineShapes cleanly from WPS shape table to avoid orphaned handles
-        if (oldRange.InlineShapes && oldRange.InlineShapes.Count > 0) {
-          for (var i = oldRange.InlineShapes.Count; i >= 1; i--) {
-            try {
-              oldRange.InlineShapes.Item(i).Delete();
-            } catch (_) {}
-          }
-        }
-
-        // 2. Delete old range text
-        oldRange.Delete();
-
-        // 3. Create a clean insertion point at insertPos
-        range = doc.Range(insertPos, insertPos);
-        wpsLog('InsertFlatOpcToSelection: deleted old equation at pos ' + insertPos);
+        range = doc.Range(g_editRangeStart, g_editRangeEnd);
+        wpsLog('InsertFlatOpcToSelection: target replace range [' + g_editRangeStart + '..' + g_editRangeEnd + ']');
       } catch (e) {
-        wpsLog('InsertFlatOpcToSelection: error cleaning old equation: ' + e);
+        wpsLog('InsertFlatOpcToSelection: error obtaining edit range: ' + e);
       }
     }
     g_editRangeStart = null;
@@ -590,14 +697,6 @@ function InsertFlatOpcToSelection(flatOpcXml) {
 
     if (typeof range.InsertXML === "function") {
       range.InsertXML(flatOpcXml);
-    } else {
-      var textarea = document.createElement("textarea");
-      textarea.value = flatOpcXml;
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-      range.Paste();
     }
 
         if (doc) {
@@ -606,14 +705,19 @@ function InsertFlatOpcToSelection(flatOpcXml) {
         var fullText = doc.Range(0, Math.min(docEnd, 200)).Text;
         wpsLog("DOC FULL TEXT START: " + JSON.stringify(fullText));
 
-        // Let's inspect all InlineShapes
+        // Find the newly inserted InlineShape closest to startPos
         var targetShape = null;
         if (doc.InlineShapes && doc.InlineShapes.Count > 0) {
-          for (var i = doc.InlineShapes.Count; i >= 1; i--) {
+          var minDiff = 999999;
+          for (var i = 1; i <= doc.InlineShapes.Count; i++) {
             var shp = doc.InlineShapes.Item(i);
             if (shp && shp.Range && shp.Range.Start >= startPos) {
-              targetShape = shp;
-              break;
+              var diff = Math.abs(shp.Range.Start - startPos);
+              if (diff < minDiff) {
+                minDiff = diff;
+                targetShape = shp;
+                if (diff <= 5) break; // Exact match found
+              }
             }
           }
         }
@@ -679,7 +783,27 @@ function InsertFlatOpcToSelection(flatOpcXml) {
         wpsLog("InsertFlatOpcToSelection: error: " + e);
       }
     }
-wpsLog('InsertFlatOpcToSelection: finished successfully.');
+
+    // Claude workaround 2.4: Trigger document recalculation & refresh so subsequent shapes reload correctly
+    try {
+      if (app) {
+        app.ScreenUpdating = true;
+        if (typeof app.ScreenRefresh === "function") {
+          app.ScreenRefresh();
+        }
+        if (doc && typeof doc.Repaginate === "function") {
+          doc.Repaginate();
+        }
+        var win = app.ActiveWindow;
+        if (win && win.ActivePane && win.ActivePane.View && win.ActivePane.View.Zoom) {
+          var curZoom = win.ActivePane.View.Zoom.Percentage;
+          win.ActivePane.View.Zoom.Percentage = curZoom + 1;
+          win.ActivePane.View.Zoom.Percentage = curZoom;
+        }
+      }
+    } catch (_) {}
+
+    wpsLog('InsertFlatOpcToSelection: finished successfully.');
   } catch (err) {
     wpsLog('InsertFlatOpcToSelection: unhandled error: ' + err);
     console.error('InsertFlatOpcToSelection error:', err);

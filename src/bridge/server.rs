@@ -13,7 +13,8 @@ use crate::docx::{
     upgrade_legacy_mathtype_docx_with, FlatOpcMode, Options, PreviewFormat, ToOmmlOptions,
     UpgradeOptions, UpgradeTarget,
 };
-use crate::render::emf::render_emf;
+use crate::render::emf::{render_emf, render_emf_with_mtef};
+use crate::mtef::encode::mathml_to_mtef_bytes;
 use crate::render::render_preview;
 use crate::mathml::MathNode;
 use crate::mtef::decode::{mtef_to_mathml, ole_to_mathml};
@@ -549,6 +550,7 @@ fn handle_http_request(
             };
 
             let trimmed_data = open_req.data.trim();
+            let _ = std::fs::write("/tmp/last_open_req.xml", trimmed_data.as_bytes());
             eprintln!("POST /session/open received payload len={}", trimmed_data.len());
             log::info!("POST /session/open received payload len={}", trimmed_data.len());
             let is_latex = open_req.format == "latex"
@@ -618,6 +620,10 @@ fn handle_http_request(
                     mathml,
                     flat_opc,
                     omml,
+                    emf_path,
+                    width_pt,
+                    height_pt,
+                    depth_pt,
                 }) => {
                     let resp = json_response(
                         200,
@@ -627,6 +633,10 @@ fn handle_http_request(
                             mathml: Some(mathml),
                             flat_opc: Some(flat_opc),
                             omml: Some(omml),
+                            emf_path,
+                            width_pt,
+                            height_pt,
+                            depth_pt,
                         },
                         origin,
                     );
@@ -641,6 +651,10 @@ fn handle_http_request(
                             mathml: None,
                             flat_opc: None,
                             omml: None,
+                            emf_path: None,
+                            width_pt: None,
+                            height_pt: None,
+                            depth_pt: None,
                         },
                         origin,
                     );
@@ -655,6 +669,10 @@ fn handle_http_request(
                             mathml: None,
                             flat_opc: None,
                             omml: None,
+                            emf_path: None,
+                            width_pt: None,
+                            height_pt: None,
+                            depth_pt: None,
                         },
                         origin,
                     );
@@ -732,9 +750,26 @@ fn handle_http_request(
                 }
             };
 
-            if let Err(e) =
-                session_mgr.update_session(session_id, upd_req.mathml, flat_opc, omml)
-            {
+            let mtef_bytes = mathml_to_mtef_bytes(&math_node).ok();
+            let emf_pic = render_emf_with_mtef(&math_node, upd_req.font_pt, mtef_bytes.as_deref()).ok();
+            let (emf_path, width_pt, height_pt, depth_pt) = if let Some(ref pic) = emf_pic {
+                let path = format!("/tmp/matheditor_{}.emf", session_id);
+                let _ = std::fs::write(&path, &pic.emf);
+                (Some(path), Some(pic.width_pt), Some(pic.height_pt), Some(pic.depth_pt))
+            } else {
+                (None, None, None, None)
+            };
+
+            if let Err(e) = session_mgr.update_session(
+                session_id,
+                upd_req.mathml,
+                flat_opc,
+                omml,
+                emf_path,
+                width_pt,
+                height_pt,
+                depth_pt,
+            ) {
                 let _ = req.respond(error_response(404, e, origin));
                 return;
             }
