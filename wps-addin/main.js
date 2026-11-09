@@ -577,7 +577,6 @@ function InsertFlatOpcToSelection(flatOpcXml) {
     if (!range) return;
 
     var startPos = (range && typeof range.Start === "number") ? range.Start : 0;
-    var origDocEnd = (doc && typeof doc.Range === "function") ? doc.Range().End : 0;
 
     if (typeof range.InsertXML === "function") {
       range.InsertXML(flatOpcXml);
@@ -591,32 +590,37 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       range.Paste();
     }
 
-    var newDocEnd = (doc && typeof doc.Range === "function") ? doc.Range().End : 0;
-    var charsInserted = newDocEnd - origDocEnd;
-    var insertedEnd = startPos + charsInserted;
-    wpsLog("InsertFlatOpcToSelection: startPos=" + startPos + ", charsInserted=" + charsInserted + ", insertedEnd=" + insertedEnd);
+    // Inspect inserted characters starting from startPos:
+    // In Word/WPS DOM:
+    // startPos .. startPos+1 : the InlineShape OLE equation
+    // startPos+1 .. startPos+2 : the U+200C reset run
+    // startPos+2 .. startPos+3 : the trailing paragraph break (\r) from <w:p>
+    var cursorTarget = startPos + 2;
 
-    // 4. Clean up trailing paragraph break (cr or lf) created by <w:p> wrapper in Flat OPC
-    // This maintains 100% inline equation placement and eliminates the newline jump!
-    if (doc && insertedEnd > startPos) {
+    if (doc) {
       try {
-        var endCharRange = doc.Range(insertedEnd - 1, insertedEnd);
-        wpsLog("InsertFlatOpcToSelection: char at insertedEnd-1 is " + JSON.stringify(endCharRange.Text));
-        if (endCharRange && (endCharRange.Text === "\r" || endCharRange.Text === "\n")) {
-          endCharRange.Delete();
-          insertedEnd--;
-          wpsLog("InsertFlatOpcToSelection: removed trailing paragraph break from <w:p>, new insertedEnd=" + insertedEnd);
+        var r1 = doc.Range(startPos, startPos + 1);
+        var r2 = doc.Range(startPos + 1, startPos + 2);
+        var r3 = doc.Range(startPos + 2, startPos + 3);
+        wpsLog("InsertFlatOpcToSelection: r1=" + JSON.stringify(r1 ? r1.Text : null)
+          + ", r2=" + JSON.stringify(r2 ? r2.Text : null)
+          + ", r3=" + JSON.stringify(r3 ? r3.Text : null));
+
+        if (r3 && (r3.Text === "\r" || r3.Text === "\n")) {
+          r3.Delete();
+          wpsLog("InsertFlatOpcToSelection: deleted trailing break at startPos+2");
+        } else if (r2 && (r2.Text === "\r" || r2.Text === "\n")) {
+          r2.Delete();
+          cursorTarget = startPos + 1;
+          wpsLog("InsertFlatOpcToSelection: deleted trailing break at startPos+1");
         }
       } catch (e) {
-        wpsLog("InsertFlatOpcToSelection: error checking trailing break: " + e);
+        wpsLog("InsertFlatOpcToSelection: error cleaning trailing break: " + e);
       }
-    }
 
-    // 5. Collapse cursor to end of equation and reset font baseline formatting
-    // so subsequent typing never inherits negative position or subscript drop
-    if (doc && typeof insertedEnd === "number" && insertedEnd >= 0) {
+      // Position cursor immediately after U+200C
       try {
-        var endRange = doc.Range(insertedEnd, insertedEnd);
+        var endRange = doc.Range(cursorTarget, cursorTarget);
         endRange.Select();
         var curSel = app.Selection;
         if (curSel && curSel.Font) {
@@ -624,7 +628,7 @@ function InsertFlatOpcToSelection(flatOpcXml) {
           curSel.Font.Subscript = false;
           curSel.Font.Superscript = false;
         }
-        wpsLog("InsertFlatOpcToSelection: cursor successfully placed at " + insertedEnd);
+        wpsLog("InsertFlatOpcToSelection: cursor placed at " + cursorTarget);
       } catch (e) {
         wpsLog("InsertFlatOpcToSelection: error setting cursor: " + e);
       }
