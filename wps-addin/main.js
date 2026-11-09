@@ -578,6 +578,7 @@ function InsertFlatOpcToSelection(flatOpcXml) {
 
     if (typeof range.InsertXML === 'function') {
       range.InsertXML(flatOpcXml);
+      wpsLog('after InsertXML: range=' + range.Start + '..' + range.End + ', sel=' + (sel ? (sel.Start + '..' + sel.End) : 'null'));
     } else {
       // Fallback: clipboard paste
       var textarea = document.createElement('textarea');
@@ -589,70 +590,39 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       range.Paste();
     }
 
-    // 4. Clean up trailing paragraph break (\r or \n) created by <w:p> wrapper in Flat OPC
+    // 4. Clean up trailing paragraph break (cr or lf) created by <w:p> wrapper in Flat OPC
     // This maintains 100% inline equation placement and eliminates the newline jump!
     try {
-      if (doc && range && typeof range.End === 'number' && range.End > 0) {
+      if (doc && range && typeof range.End === "number" && range.End > 0) {
         var endCharRange = doc.Range(range.End - 1, range.End);
         if (endCharRange && (endCharRange.Text === "\r" || endCharRange.Text === "\n")) {
           endCharRange.Delete();
-          wpsLog('InsertFlatOpcToSelection: removed trailing paragraph break from <w:p>');
+          wpsLog("InsertFlatOpcToSelection: removed trailing paragraph break from <w:p>");
         }
       }
     } catch (e) {
-      wpsLog('InsertFlatOpcToSelection: error checking trailing break: ' + e);
+      wpsLog("InsertFlatOpcToSelection: error checking trailing break: " + e);
     }
 
-    // 5. Force WPS canvas layout refresh for all inline shapes in the document
-    // This marks every shape dirty and forces WPS to recalculate and repaint subsequent equations!
-    try {
-      if (doc && doc.InlineShapes) {
-        var shpCount = doc.InlineShapes.Count;
-        for (var sIdx = 1; sIdx <= shpCount; sIdx++) {
-          try {
-            var shp = doc.InlineShapes.Item(sIdx);
-            var curW = shp.Width;
-            shp.Width = curW;
-          } catch (_) {}
-        }
-      }
-    } catch (_) {}
-
-    try {
-      if (doc && typeof doc.Repaginate === 'function') {
-        doc.Repaginate();
-      }
-      var win = app.ActiveWindow;
-      if (win && win.View) {
-        var curViewType = win.View.Type;
-        win.View.Type = (curViewType === 3 ? 1 : 3);
-        win.View.Type = curViewType;
-      }
-      if (win && win.ActivePane && win.ActivePane.View && win.ActivePane.View.Zoom) {
-        var curZoom = win.ActivePane.View.Zoom.Percentage;
-        win.ActivePane.View.Zoom.Percentage = curZoom + 1;
-        win.ActivePane.View.Zoom.Percentage = curZoom;
-      }
-      if (app && typeof app.ScreenRefresh === 'function') {
-        app.ScreenRefresh();
-      }
-    } catch (_) {}
-
-    // 6. Finally, collapse cursor to end of equation and reset font baseline formatting
+    // 5. Collapse cursor to end of equation and reset font baseline formatting
     // so subsequent typing never inherits negative position or subscript drop
     try {
       range.Collapse(0); // 0 = wdCollapseEnd
       range.Select();
       var curSel = app.Selection;
-      if (curSel) {
-        if (curSel.Font) {
-          if (typeof curSel.Font.Reset === 'function') {
-            try { curSel.Font.Reset(); } catch (_) {}
-          }
-          curSel.Font.Position = 0;
-          curSel.Font.Subscript = false;
-          curSel.Font.Superscript = false;
-        }
+      if (curSel && curSel.Font) {
+        curSel.Font.Position = 0;
+        curSel.Font.Subscript = false;
+        curSel.Font.Superscript = false;
+      }
+    } catch (e) {
+      wpsLog("InsertFlatOpcToSelection: error resetting font: " + e);
+    }
+
+    // 6. Force screen refresh so equation renders cleanly
+    try {
+      if (app && typeof app.ScreenRefresh === "function") {
+        app.ScreenRefresh();
       }
     } catch (_) {}
 
