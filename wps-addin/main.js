@@ -33,6 +33,7 @@ function ensureBridgeRunning(callback) {
 
 var BRIDGE_URL = "http://127.0.0.1:17890";
 var g_ribbonUI = null;
+var g_editTargetRange = null;
 
 function wpsLog(msg) {
   try {
@@ -347,6 +348,7 @@ function EditEquation() {
       return;
     }
 
+    g_editTargetRange = targetRange;
     wpsLog("EditEquation: Found equation, payload len=" + selData.length + ", sending /session/open...");
     cancelPendingSession();
 
@@ -525,7 +527,15 @@ function OpenBatchConverter() {
  */
 function InsertFlatOpcToSelection(flatOpcXml) {
   try {
-    var range = wps.Application.Selection.Range;
+    var app = wps.Application;
+    var sel = app ? app.Selection : null;
+    var range = (g_editTargetRange && typeof g_editTargetRange.InsertXML === "function")
+      ? g_editTargetRange
+      : (sel ? sel.Range : null);
+    g_editTargetRange = null;
+
+    if (!range) return;
+
     if (typeof range.InsertXML === "function") {
       range.InsertXML(flatOpcXml);
     } else {
@@ -538,6 +548,19 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       document.body.removeChild(textarea);
       range.Paste();
     }
+
+    // Collapse selection to end and reset font baseline/subscript formatting
+    // so any subsequent typing by the user does not drop below the baseline!
+    try {
+      if (sel) {
+        sel.Collapse(0); // 0 = wdCollapseEnd
+        if (sel.Font) {
+          sel.Font.Position = 0;
+          sel.Font.Subscript = false;
+          sel.Font.Superscript = false;
+        }
+      }
+    } catch (_) {}
   } catch (err) {
     console.error("InsertFlatOpcToSelection error:", err);
   }

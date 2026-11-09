@@ -187,20 +187,20 @@ fn build_root_rels() -> Element {
     rels
 }
 
-fn build_document_rels(mode: FlatOpcMode) -> Element {
+fn build_document_rels(mode: FlatOpcMode, ole_target: &str, img_target: &str) -> Element {
     let mut rels = Element::new(Some(NS_PKG_REL), None, "Relationships")
         .with_nsdecl(None, NS_PKG_REL);
     if mode == FlatOpcMode::ModernMathtypeOleEmf {
         let mut rel1 = Element::new(Some(NS_PKG_REL), None, "Relationship");
         rel1.set_attr(None, None, "Id", "rId1");
         rel1.set_attr(None, None, "Type", REL_OLEOBJECT);
-        rel1.set_attr(None, None, "Target", "embeddings/oleObject1.bin");
+        rel1.set_attr(None, None, "Target", ole_target);
         rels.push(rel1);
 
         let mut rel2 = Element::new(Some(NS_PKG_REL), None, "Relationship");
         rel2.set_attr(None, None, "Id", "rId2");
         rel2.set_attr(None, None, "Type", REL_IMAGE);
-        rel2.set_attr(None, None, "Target", "media/equation1.emf");
+        rel2.set_attr(None, None, "Target", img_target);
         rels.push(rel2);
     }
     rels
@@ -224,6 +224,14 @@ fn build_document_xml(mode: FlatOpcMode, content_element: Element) -> Element {
         p.push(omath_para);
     } else {
         p.push(content_element);
+        // Reset run with position 0 so any subsequent text typed by the user does not inherit negative position (baseline drop)
+        let mut reset_run = Element::new(Some(NS_W), Some("w"), "r");
+        let mut rpr = Element::new(Some(NS_W), Some("w"), "rPr");
+        let mut pos = Element::new(Some(NS_W), Some("w"), "position");
+        pos.set_attr(Some(NS_W), Some("w"), "val", "0");
+        rpr.push(pos);
+        reset_run.push(rpr);
+        p.push(reset_run);
     }
     body.push(p);
     doc.push(body);
@@ -246,21 +254,38 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
         build_root_rels(),
     ));
 
-    // 2. /word/_rels/document.xml.rels
-    pkg.push(make_xml_part(
-        "/word/_rels/document.xml.rels",
-        CT_RELATIONSHIPS,
-        build_document_rels(mode),
-    ));
-
-    // 3. /word/document.xml & binary parts
+    // 2. /word/_rels/document.xml.rels & 3. /word/document.xml + binary parts
     match mode {
         FlatOpcMode::ModernOmml => {
+            pkg.push(make_xml_part(
+                "/word/_rels/document.xml.rels",
+                CT_RELATIONSHIPS,
+                build_document_rels(mode, "", ""),
+            ));
             let omml_el = mathml_to_omml(math)?;
             let doc_el = build_document_xml(mode, omml_el);
             pkg.push(make_xml_part("/word/document.xml", CT_DOCUMENT, doc_el));
         }
         FlatOpcMode::ModernMathtypeOleEmf => {
+            let uid = uuid::Uuid::new_v4();
+            let uid_hex = uid.as_simple().to_string();
+            let uid_num = uid.as_u128();
+
+            let shape_id = format!("_x0000_i{}", 1025 + (uid_num % 100_000));
+            let obj_id = format!("_{}", 1_000_000_000u128 + (uid_num % 9_000_000_000u128));
+
+            let ole_target = format!("embeddings/oleObject_{uid_hex}.bin");
+            let img_target = format!("media/equation_{uid_hex}.emf");
+
+            let bin_part_name = format!("/word/{ole_target}");
+            let img_part_name = format!("/word/{img_target}");
+
+            pkg.push(make_xml_part(
+                "/word/_rels/document.xml.rels",
+                CT_RELATIONSHIPS,
+                build_document_rels(mode, &ole_target, &img_target),
+            ));
+
             let mtef_bytes = mathml_to_mtef_bytes(math)?;
             if mtef_bytes.is_empty() {
                 return Err(Error::InvalidMtef("empty MTEF stream generated".into()));
@@ -272,8 +297,8 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             let obj_run = make_object_run(
                 "rId1",
                 "rId2",
-                "_x0000_i1025",
-                "1",
+                &shape_id,
+                &obj_id,
                 emf_pic.width_pt,
                 emf_pic.height_pt,
                 emf_pic.depth_pt,
@@ -282,12 +307,12 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             pkg.push(make_xml_part("/word/document.xml", CT_DOCUMENT, doc_el));
 
             pkg.push(make_binary_part(
-                "/word/embeddings/oleObject1.bin",
+                &bin_part_name,
                 CT_OLEOBJECT,
                 &ole_bin,
             ));
             pkg.push(make_binary_part(
-                "/word/media/equation1.emf",
+                &img_part_name,
                 CT_EMF,
                 &emf_pic.emf,
             ));
@@ -635,8 +660,8 @@ mod tests {
         let opc_xml = mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0)
             .expect("package MathType flat OPC");
         assert!(opc_xml.contains("pkg:package"));
-        assert!(opc_xml.contains("/word/embeddings/oleObject1.bin"));
-        assert!(opc_xml.contains("/word/media/equation1.emf"));
+        assert!(opc_xml.contains("/word/embeddings/oleObject_"));
+        assert!(opc_xml.contains("/word/media/equation_"));
         assert!(opc_xml.contains("Equation.DSMT4"));
 
         let recovered = flat_opc_to_mathml(&opc_xml).expect("parse MathType flat OPC");
@@ -656,7 +681,7 @@ mod tests {
 
         // Simulate a document where the OLE bin part was stripped or corrupted,
         // leaving only the vector EMF with EMR_COMMENT MTEF.
-        let stripped_xml = opc_xml.replace("/word/embeddings/oleObject1.bin", "/word/embeddings/dummy.bin");
+        let stripped_xml = opc_xml.replace("/word/embeddings/oleObject_", "/word/embeddings/dummy_");
         // Also remove the OLEObject node from document.xml to simulate standalone picture
         let stripped_xml = stripped_xml.replace("ProgID=\"Equation.DSMT4\"", "ProgID=\"Unknown\"");
 
