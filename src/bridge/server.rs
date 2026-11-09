@@ -1066,11 +1066,14 @@ pub(crate) fn spawn_desktop_editor(session_id: &str) {
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(dir) = current_exe.parent() {
             candidates.push(dir.join("omml-editor-desktop"));
+            candidates.push(dir.join("omml-editor-desktop.exe"));
+            candidates.push(dir.join("Math Equation Editor.app/Contents/MacOS/omml-editor-desktop"));
         }
     }
-    candidates.push(std::path::PathBuf::from(
-        "/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/omml-editor-desktop",
-    ));
+    #[cfg(target_os = "windows")]
+    candidates.push(std::path::PathBuf::from("omml-editor-desktop.exe"));
+    #[cfg(not(target_os = "windows"))]
+    candidates.push(std::path::PathBuf::from("/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/omml-editor-desktop"));
     candidates.push(std::path::PathBuf::from("omml-editor-desktop"));
 
     for path in &candidates {
