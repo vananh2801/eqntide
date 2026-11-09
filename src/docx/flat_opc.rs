@@ -187,18 +187,24 @@ fn build_root_rels() -> Element {
     rels
 }
 
-fn build_document_rels(mode: FlatOpcMode, ole_target: &str, img_target: &str) -> Element {
+fn build_document_rels(
+    mode: FlatOpcMode,
+    ole_rid: &str,
+    img_rid: &str,
+    ole_target: &str,
+    img_target: &str,
+) -> Element {
     let mut rels = Element::new(Some(NS_PKG_REL), None, "Relationships")
         .with_nsdecl(None, NS_PKG_REL);
     if mode == FlatOpcMode::ModernMathtypeOleEmf {
         let mut rel1 = Element::new(Some(NS_PKG_REL), None, "Relationship");
-        rel1.set_attr(None, None, "Id", "rId1");
+        rel1.set_attr(None, None, "Id", ole_rid);
         rel1.set_attr(None, None, "Type", REL_OLEOBJECT);
         rel1.set_attr(None, None, "Target", ole_target);
         rels.push(rel1);
 
         let mut rel2 = Element::new(Some(NS_PKG_REL), None, "Relationship");
-        rel2.set_attr(None, None, "Id", "rId2");
+        rel2.set_attr(None, None, "Id", img_rid);
         rel2.set_attr(None, None, "Type", REL_IMAGE);
         rel2.set_attr(None, None, "Target", img_target);
         rels.push(rel2);
@@ -224,13 +230,17 @@ fn build_document_xml(mode: FlatOpcMode, content_element: Element) -> Element {
         p.push(omath_para);
     } else {
         p.push(content_element);
-        // Reset run with position 0 so any subsequent text typed by the user does not inherit negative position (baseline drop)
+        // Reset run with position 0 so any subsequent text typed by the user does not inherit negative position (baseline drop).
+        // A zero-width space (\u{200B}) ensures Word/WPS XML parsers do not strip the run as empty text.
         let mut reset_run = Element::new(Some(NS_W), Some("w"), "r");
         let mut rpr = Element::new(Some(NS_W), Some("w"), "rPr");
         let mut pos = Element::new(Some(NS_W), Some("w"), "position");
         pos.set_attr(Some(NS_W), Some("w"), "val", "0");
         rpr.push(pos);
         reset_run.push(rpr);
+        let mut t = Element::new(Some(NS_W), Some("w"), "t");
+        t.children.push(Node::Text("\u{200B}".to_string()));
+        reset_run.push(t);
         p.push(reset_run);
     }
     body.push(p);
@@ -260,7 +270,7 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             pkg.push(make_xml_part(
                 "/word/_rels/document.xml.rels",
                 CT_RELATIONSHIPS,
-                build_document_rels(mode, "", ""),
+                build_document_rels(mode, "", "", "", ""),
             ));
             let omml_el = mathml_to_omml(math)?;
             let doc_el = build_document_xml(mode, omml_el);
@@ -277,6 +287,10 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             let shape_id = format!("_x0000_i{}", 1025 + (uid_num % 100_000));
             let obj_id = format!("_{}", 1_000_000_000u64 + (uid_num % 9_000_000_000u64));
 
+            // Unique relationship IDs prevent WPS from overwriting or disconnecting other equations in document.xml.rels
+            let ole_rid = format!("rId{}", 1000 + (uid_num % 40_000) * 2);
+            let img_rid = format!("rId{}", 1000 + (uid_num % 40_000) * 2 + 1);
+
             let ole_target = format!("embeddings/oleObject{uid_num}.bin");
             let img_target = format!("media/equation{uid_num}.emf");
 
@@ -286,7 +300,7 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             pkg.push(make_xml_part(
                 "/word/_rels/document.xml.rels",
                 CT_RELATIONSHIPS,
-                build_document_rels(mode, &ole_target, &img_target),
+                build_document_rels(mode, &ole_rid, &img_rid, &ole_target, &img_target),
             ));
 
             let mtef_bytes = mathml_to_mtef_bytes(math)?;
@@ -298,8 +312,8 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             let emf_pic = render_emf_with_mtef(math, font_pt, Some(&mtef_bytes))?;
 
             let obj_run = make_object_run(
-                "rId1",
-                "rId2",
+                &ole_rid,
+                &img_rid,
                 &shape_id,
                 &obj_id,
                 emf_pic.width_pt,
