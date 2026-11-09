@@ -267,15 +267,18 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             pkg.push(make_xml_part("/word/document.xml", CT_DOCUMENT, doc_el));
         }
         FlatOpcMode::ModernMathtypeOleEmf => {
-            let uid = uuid::Uuid::new_v4();
-            let uid_hex = uid.as_simple().to_string();
-            let uid_num = uid.as_u128();
+            // Generate unique numeric identifiers compatible with both MathType and naive regex tools
+            let now_millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or_else(|_| uuid::Uuid::new_v4().as_u128());
+            let uid_num = (now_millis % 1_000_000_000_000) as u64;
 
             let shape_id = format!("_x0000_i{}", 1025 + (uid_num % 100_000));
-            let obj_id = format!("_{}", 1_000_000_000u128 + (uid_num % 9_000_000_000u128));
+            let obj_id = format!("_{}", 1_000_000_000u64 + (uid_num % 9_000_000_000u64));
 
-            let ole_target = format!("embeddings/oleObject_{uid_hex}.bin");
-            let img_target = format!("media/equation_{uid_hex}.emf");
+            let ole_target = format!("embeddings/oleObject{uid_num}.bin");
+            let img_target = format!("media/equation{uid_num}.emf");
 
             let bin_part_name = format!("/word/{ole_target}");
             let img_part_name = format!("/word/{img_target}");
@@ -660,8 +663,8 @@ mod tests {
         let opc_xml = mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0)
             .expect("package MathType flat OPC");
         assert!(opc_xml.contains("pkg:package"));
-        assert!(opc_xml.contains("/word/embeddings/oleObject_"));
-        assert!(opc_xml.contains("/word/media/equation_"));
+        assert!(opc_xml.contains("/word/embeddings/oleObject"));
+        assert!(opc_xml.contains("/word/media/equation"));
         assert!(opc_xml.contains("Equation.DSMT4"));
 
         let recovered = flat_opc_to_mathml(&opc_xml).expect("parse MathType flat OPC");
@@ -681,7 +684,7 @@ mod tests {
 
         // Simulate a document where the OLE bin part was stripped or corrupted,
         // leaving only the vector EMF with EMR_COMMENT MTEF.
-        let stripped_xml = opc_xml.replace("/word/embeddings/oleObject_", "/word/embeddings/dummy_");
+        let stripped_xml = opc_xml.replace("/word/embeddings/oleObject", "/word/embeddings/dummy");
         // Also remove the OLEObject node from document.xml to simulate standalone picture
         let stripped_xml = stripped_xml.replace("ProgID=\"Equation.DSMT4\"", "ProgID=\"Unknown\"");
 
