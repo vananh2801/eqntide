@@ -226,6 +226,20 @@ fn build_document_xml(mode: FlatOpcMode, content_element: Element) -> Element {
     let mut p = Element::new(Some(NS_W), Some("w"), "p");
     // Place inline equation directly inside <w:p>
     p.push(content_element);
+    if mode == FlatOpcMode::ModernMathtypeOleEmf {
+        // Reset run with position 0 so any subsequent text typed by the user does not inherit negative position (baseline drop).
+        // Using U+200C (Zero-Width Non-Joiner) provides a stable run anchor without triggering CJK punctuation auto-spacing.
+        let mut reset_run = Element::new(Some(NS_W), Some("w"), "r");
+        let mut rpr = Element::new(Some(NS_W), Some("w"), "rPr");
+        let mut pos = Element::new(Some(NS_W), Some("w"), "position");
+        pos.set_attr(Some(NS_W), Some("w"), "val", "0");
+        rpr.push(pos);
+        reset_run.push(rpr);
+        let mut t = Element::new(Some(NS_W), Some("w"), "t");
+        t.children.push(Node::Text("‌".to_string()));
+        reset_run.push(t);
+        p.push(reset_run);
+    }
 
     body.push(p);
     doc.push(body);

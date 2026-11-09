@@ -603,25 +603,7 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       wpsLog('InsertFlatOpcToSelection: error checking trailing break: ' + e);
     }
 
-    // 5. Collapse cursor to end of equation and reset font baseline formatting
-    // so subsequent typing never inherits negative position or subscript drop
-    try {
-      range.Collapse(0); // 0 = wdCollapseEnd
-      range.Select();
-      var curSel = app.Selection;
-      if (curSel) {
-        if (curSel.Font) {
-          if (typeof curSel.Font.Reset === 'function') {
-            try { curSel.Font.Reset(); } catch (_) {}
-          }
-          curSel.Font.Position = 0;
-          curSel.Font.Subscript = false;
-          curSel.Font.Superscript = false;
-        }
-      }
-    } catch (_) {}
-
-    // 6. Force WPS canvas layout refresh for all inline shapes in the document
+    // 5. Force WPS canvas layout refresh for all inline shapes in the document
     // This marks every shape dirty and forces WPS to recalculate and repaint subsequent equations!
     try {
       if (doc && doc.InlineShapes) {
@@ -653,6 +635,24 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       }
       if (app && typeof app.ScreenRefresh === 'function') {
         app.ScreenRefresh();
+      }
+    } catch (_) {}
+
+    // 6. Finally, collapse cursor to end of equation and reset font baseline formatting
+    // so subsequent typing never inherits negative position or subscript drop
+    try {
+      range.Collapse(0); // 0 = wdCollapseEnd
+      range.Select();
+      var curSel = app.Selection;
+      if (curSel) {
+        if (curSel.Font) {
+          if (typeof curSel.Font.Reset === 'function') {
+            try { curSel.Font.Reset(); } catch (_) {}
+          }
+          curSel.Font.Position = 0;
+          curSel.Font.Subscript = false;
+          curSel.Font.Superscript = false;
+        }
       }
     } catch (_) {}
 
