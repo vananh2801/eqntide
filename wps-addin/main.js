@@ -576,47 +576,58 @@ function InsertFlatOpcToSelection(flatOpcXml) {
     }
     if (!range) return;
 
-    if (typeof range.InsertXML === 'function') {
+    var startPos = (range && typeof range.Start === "number") ? range.Start : 0;
+    var origDocEnd = (doc && typeof doc.Range === "function") ? doc.Range().End : 0;
+
+    if (typeof range.InsertXML === "function") {
       range.InsertXML(flatOpcXml);
-      wpsLog('after InsertXML: range=' + range.Start + '..' + range.End + ', sel=' + (sel ? (sel.Start + '..' + sel.End) : 'null'));
     } else {
-      // Fallback: clipboard paste
-      var textarea = document.createElement('textarea');
+      var textarea = document.createElement("textarea");
       textarea.value = flatOpcXml;
       document.body.appendChild(textarea);
       textarea.select();
-      document.execCommand('copy');
+      document.execCommand("copy");
       document.body.removeChild(textarea);
       range.Paste();
     }
 
+    var newDocEnd = (doc && typeof doc.Range === "function") ? doc.Range().End : 0;
+    var charsInserted = newDocEnd - origDocEnd;
+    var insertedEnd = startPos + charsInserted;
+    wpsLog("InsertFlatOpcToSelection: startPos=" + startPos + ", charsInserted=" + charsInserted + ", insertedEnd=" + insertedEnd);
+
     // 4. Clean up trailing paragraph break (cr or lf) created by <w:p> wrapper in Flat OPC
     // This maintains 100% inline equation placement and eliminates the newline jump!
-    try {
-      if (doc && range && typeof range.End === "number" && range.End > 0) {
-        var endCharRange = doc.Range(range.End - 1, range.End);
+    if (doc && insertedEnd > startPos) {
+      try {
+        var endCharRange = doc.Range(insertedEnd - 1, insertedEnd);
+        wpsLog("InsertFlatOpcToSelection: char at insertedEnd-1 is " + JSON.stringify(endCharRange.Text));
         if (endCharRange && (endCharRange.Text === "\r" || endCharRange.Text === "\n")) {
           endCharRange.Delete();
-          wpsLog("InsertFlatOpcToSelection: removed trailing paragraph break from <w:p>");
+          insertedEnd--;
+          wpsLog("InsertFlatOpcToSelection: removed trailing paragraph break from <w:p>, new insertedEnd=" + insertedEnd);
         }
+      } catch (e) {
+        wpsLog("InsertFlatOpcToSelection: error checking trailing break: " + e);
       }
-    } catch (e) {
-      wpsLog("InsertFlatOpcToSelection: error checking trailing break: " + e);
     }
 
     // 5. Collapse cursor to end of equation and reset font baseline formatting
     // so subsequent typing never inherits negative position or subscript drop
-    try {
-      range.Collapse(0); // 0 = wdCollapseEnd
-      range.Select();
-      var curSel = app.Selection;
-      if (curSel && curSel.Font) {
-        curSel.Font.Position = 0;
-        curSel.Font.Subscript = false;
-        curSel.Font.Superscript = false;
+    if (doc && typeof insertedEnd === "number" && insertedEnd >= 0) {
+      try {
+        var endRange = doc.Range(insertedEnd, insertedEnd);
+        endRange.Select();
+        var curSel = app.Selection;
+        if (curSel && curSel.Font) {
+          curSel.Font.Position = 0;
+          curSel.Font.Subscript = false;
+          curSel.Font.Superscript = false;
+        }
+        wpsLog("InsertFlatOpcToSelection: cursor successfully placed at " + insertedEnd);
+      } catch (e) {
+        wpsLog("InsertFlatOpcToSelection: error setting cursor: " + e);
       }
-    } catch (e) {
-      wpsLog("InsertFlatOpcToSelection: error resetting font: " + e);
     }
 
     // 6. Force screen refresh so equation renders cleanly
