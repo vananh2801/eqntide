@@ -44,4 +44,39 @@ impl LBox {
         self.desc = self.desc.max(o.desc + dy);
         self.w = self.w.max(dx + o.w);
     }
+
+    /// Returns the ink bounding box `(min_x, max_x, min_y, max_y)` of the box in layout
+    /// coordinates (where baseline is at y = 0, y positive downwards).
+    pub(crate) fn ink_bounds(&self, f: &crate::render::font::Fonts) -> (f32, f32, f32, f32) {
+        let mut min_x: f32 = 0.0;
+        let mut max_x: f32 = self.w;
+        let mut min_y: f32 = -self.asc;
+        let mut max_y: f32 = self.desc;
+
+        for it in &self.items {
+            match it {
+                Item::Glyph { ch, face, em, x, y, ssty } => {
+                    let (gx0, gx1) = f.ink_x_styled(*face, *ch, *em, *ssty);
+                    if gx0 != 0.0 || gx1 != 0.0 {
+                        min_x = min_x.min(x + gx0);
+                        max_x = max_x.max(x + gx1);
+                    }
+                    let (ga, gd) = f.ink_styled(*face, *ch, *em, *ssty);
+                    if ga != 0.0 || gd != 0.0 {
+                        min_y = min_y.min(y - ga);
+                        max_y = max_y.max(y + gd);
+                    }
+                }
+                Item::Poly(pts) => {
+                    for (px, py) in pts {
+                        min_x = min_x.min(*px);
+                        max_x = max_x.max(*px);
+                        min_y = min_y.min(*py);
+                        max_y = max_y.max(*py);
+                    }
+                }
+            }
+        }
+        (min_x, max_x, min_y, max_y)
+    }
 }

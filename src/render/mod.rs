@@ -45,7 +45,6 @@ pub struct Preview {
     pub depth_pt: f32,
 }
 
-
 /// Size of the picture [`render_preview`] would produce, in points:
 /// `(width, ascent, descent)` of the equation box (without padding).
 pub fn measure(math: &MathNode, font_pt: f32) -> Result<(f32, f32, f32)> {
@@ -56,19 +55,22 @@ pub fn measure(math: &MathNode, font_pt: f32) -> Result<(f32, f32, f32)> {
 /// Draw `math` (a `<math>` tree) at `font_pt` points per em.
 pub fn render_preview(math: &MathNode, font_pt: f32) -> Result<Preview> {
     let (b, em) = layout::layout_math(math, font_pt)?;
-    let asc = b.asc.max(0.70 * em);
-    let desc = b.desc.max(0.22 * em);
+    let f = fonts();
+    let (min_x, max_x, min_y, max_y) = b.ink_bounds(f);
+    let asc = (-min_y).max(0.70 * em);
+    let desc = max_y.max(0.22 * em);
+    let left_extra = (-min_x).max(0.0);
+    let right_extra = (max_x - b.w).max(0.0);
     let (pad_x, pad_y) = (2.0f32, 2.0f32);
-    let w_px = (b.w + 2.0 * pad_x).ceil().max(1.0) as usize;
+    let w_px = (b.w + left_extra + right_extra + 2.0 * pad_x).ceil().max(1.0) as usize;
     let h_px = (asc + desc + 2.0 * pad_y).ceil().max(1.0) as usize;
     if w_px > MAX_WIDTH_PX || w_px * h_px > MAX_PIXELS {
         return Err(Error::PreviewTooLarge { width: w_px, height: h_px });
     }
 
-    let (ox, oy) = (pad_x, pad_y + asc);
+    let (ox, oy) = (pad_x + left_extra, pad_y + asc);
     let mut canvas = Canvas::new(w_px, h_px);
     let mut ras = Rasterizer::new(w_px, h_px);
-    let f = fonts();
     for it in &b.items {
         match it {
             Item::Glyph { ch, face, em, x, y, ssty } => f.draw_styled(*face, *ch, *em, ox + x, oy + y, &mut canvas, *ssty),

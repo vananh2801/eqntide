@@ -629,12 +629,24 @@ function InsertEmfPicture(waitData) {
         pic.Height = waitData.height_pt;
       }
 
+      var docFontSize = 12.0;
+      try {
+        if (range && range.Font && range.Font.Size > 0) {
+          docFontSize = range.Font.Size;
+        } else if (pic.Range && pic.Range.Font && pic.Range.Font.Size > 0) {
+          docFontSize = pic.Range.Font.Size;
+        }
+      } catch (_) {}
+
       var depthPt = (typeof waitData.depth_pt === "number") ? waitData.depth_pt : 0;
-      // In Word/WPS JS API, Font.Position is in points (NOT half-points like OpenXML w:val)
-      var pos = -Number(depthPt.toFixed(1));
+      // In Word/WPS JS API, Font.Position is in points (NOT half-points like OpenXML w:val).
+      // WPS aligns the bottom of an InlineShape with the font descent/line box bottom.
+      // To align the formula baseline with adjacent text, add font baseline offset (~11-12% of font size).
+      var fontBaselineOffset = docFontSize * 0.115; // ~1.38 pt for 12pt font
+      var pos = -Number((depthPt + fontBaselineOffset).toFixed(1));
       if (pic.Range && pic.Range.Font) {
         pic.Range.Font.Position = pos;
-        wpsLog("InsertEmfPicture: set baseline Font.Position=" + pos + " (depthPt=" + depthPt + ")");
+        wpsLog("InsertEmfPicture: set baseline Font.Position=" + pos + " (depthPt=" + depthPt + ", offset=" + fontBaselineOffset.toFixed(2) + ", docFontSize=" + docFontSize + ")");
       }
 
       // Add U+200C reset run with position 0 immediately after picture

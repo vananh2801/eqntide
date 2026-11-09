@@ -106,11 +106,15 @@ pub fn render_emf_with_mtef(
     mtef: Option<&[u8]>,
 ) -> Result<EmfPreview> {
     let (b, em) = layout::layout_math(math, font_pt)?;
-    let asc = b.asc.max(0.70 * em);
-    let desc = b.desc.max(0.22 * em);
+    let f = fonts();
+    let (min_x, max_x, min_y, max_y) = b.ink_bounds(f);
+    let asc = (-min_y).max(0.70 * em);
+    let desc = max_y.max(0.22 * em);
+    let left_extra = (-min_x).max(0.0);
+    let right_extra = (max_x - b.w).max(0.0);
     let (pad_x, pad_y) = (2.0f32, 2.0f32);
-    let (w, h) = (b.w + 2.0 * pad_x, asc + desc + 2.0 * pad_y);
-    let (ox, oy) = (pad_x, pad_y + asc);
+    let (w, h) = (b.w + left_extra + right_extra + 2.0 * pad_x, asc + desc + 2.0 * pad_y);
+    let (ox, oy) = (pad_x + left_extra, pad_y + asc);
 
     let (wpt, hpt) = (w / PX_PER_PT, h / PX_PER_PT);
     let l = |v: f32| (v * LOGICAL_PER_PX).round() as i32; // layout px -> logical units
@@ -168,7 +172,6 @@ pub fn render_emf_with_mtef(
         out.record(EMR_FILLPATH, &bounds);
     };
 
-    let f = fonts();
     for it in &b.items {
         match it {
             Item::Glyph { ch, face, em, x, y, ssty } => {
@@ -286,5 +289,18 @@ mod tests {
         let preview = render_emf_with_mtef(&node, 12.0, None).expect("renders emf");
         let extracted = crate::ole::extract_mtef_from_emf(&preview.emf);
         assert!(extracted.is_none());
+    }
+
+    #[test]
+    fn test_render_emf_italic_f_not_cropped() {
+        let node = MathNode::with_children("math", vec![MathNode::leaf("mi", "f")]);
+        let preview = render_emf(&node, 12.0).expect("renders emf");
+        // Adv is ~3.49pt, ink span is from -1.5pt to +5.25pt (total 6.75pt).
+        // With padding and left/right extra, width_pt must be at least 7.0pt.
+        assert!(
+            preview.width_pt >= 7.0,
+            "f glyph width_pt ({}) must accommodate overhang and padding (>= 7.0)",
+            preview.width_pt
+        );
     }
 }
