@@ -541,10 +541,31 @@ function InsertFlatOpcToSelection(flatOpcXml) {
     var sel = app ? app.Selection : null;
     var range = null;
 
+    wpsLog('InsertFlatOpcToSelection: start. editRangeStart=' + g_editRangeStart + ', editRangeEnd=' + g_editRangeEnd);
+
     if (doc && g_editRangeStart !== null && g_editRangeEnd !== null) {
       try {
-        range = doc.Range(g_editRangeStart, g_editRangeEnd);
-      } catch (_) {}
+        var oldRange = doc.Range(g_editRangeStart, g_editRangeEnd);
+        var insertPos = oldRange.Start;
+
+        // 1. Delete old InlineShapes cleanly from WPS shape table to avoid orphaned handles
+        if (oldRange.InlineShapes && oldRange.InlineShapes.Count > 0) {
+          for (var i = oldRange.InlineShapes.Count; i >= 1; i--) {
+            try {
+              oldRange.InlineShapes.Item(i).Delete();
+            } catch (_) {}
+          }
+        }
+
+        // 2. Delete old range text
+        oldRange.Delete();
+
+        // 3. Create a clean insertion point at insertPos
+        range = doc.Range(insertPos, insertPos);
+        wpsLog('InsertFlatOpcToSelection: deleted old equation at pos ' + insertPos);
+      } catch (e) {
+        wpsLog('InsertFlatOpcToSelection: error cleaning old equation: ' + e);
+      }
     }
     g_editRangeStart = null;
     g_editRangeEnd = null;
@@ -555,21 +576,35 @@ function InsertFlatOpcToSelection(flatOpcXml) {
     }
     if (!range) return;
 
-    if (typeof range.InsertXML === "function") {
+    if (typeof range.InsertXML === 'function') {
       range.InsertXML(flatOpcXml);
     } else {
       // Fallback: clipboard paste
-      var textarea = document.createElement("textarea");
+      var textarea = document.createElement('textarea');
       textarea.value = flatOpcXml;
       document.body.appendChild(textarea);
       textarea.select();
-      document.execCommand("copy");
+      document.execCommand('copy');
       document.body.removeChild(textarea);
       range.Paste();
     }
 
-    // Collapse range to end, select it, and reset font baseline formatting
-    // so any subsequent typing by the user never inherits negative position (baseline drop)
+    // 4. Clean up trailing paragraph break (\r or \n) created by <w:p> wrapper in Flat OPC
+    // This maintains 100% inline equation placement and eliminates the newline jump!
+    try {
+      if (doc && range && typeof range.End === 'number' && range.End > 0) {
+        var endCharRange = doc.Range(range.End - 1, range.End);
+        if (endCharRange && (endCharRange.Text === "\r" || endCharRange.Text === "\n")) {
+          endCharRange.Delete();
+          wpsLog('InsertFlatOpcToSelection: removed trailing paragraph break from <w:p>');
+        }
+      }
+    } catch (e) {
+      wpsLog('InsertFlatOpcToSelection: error checking trailing break: ' + e);
+    }
+
+    // 5. Collapse cursor to end of equation and reset font baseline formatting
+    // so subsequent typing never inherits negative position or subscript drop
     try {
       range.Collapse(0); // 0 = wdCollapseEnd
       range.Select();
@@ -581,9 +616,9 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       }
     } catch (_) {}
 
-    // Force WPS screen repaint & recalculation so that all adjacent/subsequent equations are immediately repainted
+    // 6. Force WPS screen repaint & recalculation so that all adjacent/subsequent equations are immediately repainted
     try {
-      if (doc && typeof doc.Repaginate === "function") {
+      if (doc && typeof doc.Repaginate === 'function') {
         doc.Repaginate();
       }
       var win = app.ActiveWindow;
@@ -591,12 +626,15 @@ function InsertFlatOpcToSelection(flatOpcXml) {
         var curZoom = win.ActivePane.View.Zoom.Percentage;
         win.ActivePane.View.Zoom.Percentage = curZoom + 1;
         win.ActivePane.View.Zoom.Percentage = curZoom;
-      } else if (app && typeof app.ScreenRefresh === "function") {
+      } else if (app && typeof app.ScreenRefresh === 'function') {
         app.ScreenRefresh();
       }
     } catch (_) {}
+
+    wpsLog('InsertFlatOpcToSelection: finished successfully.');
   } catch (err) {
-    console.error("InsertFlatOpcToSelection error:", err);
+    wpsLog('InsertFlatOpcToSelection: unhandled error: ' + err);
+    console.error('InsertFlatOpcToSelection error:', err);
   }
 }
 
