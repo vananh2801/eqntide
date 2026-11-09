@@ -130,21 +130,14 @@ pub fn make_object_run(
     obj_id: &str,
     width_pt: f32,
     height_pt: f32,
-    depth_pt: f32,
+    _depth_pt: f32,
 ) -> Element {
     let dxa_w = ((width_pt * 20.0).round() as i64).max(1);
     let dxa_h = ((height_pt * 20.0).round() as i64).max(1);
-    // Half-points; negative lowers the picture so its baseline meets the text's.
-    let position = -((depth_pt * 2.0).round() as i64);
-
+    // For inline equations in Word/WPS, do not set negative run position.
+    // Setting negative w:position on the run causes subsequent typing in WPS/Word
+    // to inherit the negative position (subscript drop / "line jump").
     let mut run = Element::new(Some(NS_W), Some("w"), "r");
-    if position != 0 {
-        let mut rpr = Element::new(Some(NS_W), Some("w"), "rPr");
-        let mut pos = Element::new(Some(NS_W), Some("w"), "position");
-        pos.set_attr(Some(NS_W), Some("w"), "val", &position.to_string());
-        rpr.push(pos);
-        run.push(rpr);
-    }
 
     let mut obj = Element::new(Some(NS_W), Some("w"), "object");
     obj.set_attr(Some(NS_W), Some("w"), "dxaOrig", &dxa_w.to_string());

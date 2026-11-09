@@ -581,9 +581,17 @@ function InsertFlatOpcToSelection(flatOpcXml) {
       }
     } catch (_) {}
 
-    // Force WPS screen refresh so that all existing equations in the document are immediately repainted
+    // Force WPS screen repaint & recalculation so that all adjacent/subsequent equations are immediately repainted
     try {
-      if (app && typeof app.ScreenRefresh === "function") {
+      if (doc && typeof doc.Repaginate === "function") {
+        doc.Repaginate();
+      }
+      var win = app.ActiveWindow;
+      if (win && win.ActivePane && win.ActivePane.View && win.ActivePane.View.Zoom) {
+        var curZoom = win.ActivePane.View.Zoom.Percentage;
+        win.ActivePane.View.Zoom.Percentage = curZoom + 1;
+        win.ActivePane.View.Zoom.Percentage = curZoom;
+      } else if (app && typeof app.ScreenRefresh === "function") {
         app.ScreenRefresh();
       }
     } catch (_) {}

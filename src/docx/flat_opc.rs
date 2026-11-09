@@ -224,25 +224,9 @@ fn build_document_xml(mode: FlatOpcMode, content_element: Element) -> Element {
     }
     let mut body = Element::new(Some(NS_W), Some("w"), "body");
     let mut p = Element::new(Some(NS_W), Some("w"), "p");
-    if mode == FlatOpcMode::ModernOmml {
-        let mut omath_para = Element::new(Some(NS_M), Some("m"), "oMathPara");
-        omath_para.push(content_element);
-        p.push(omath_para);
-    } else {
-        p.push(content_element);
-        // Reset run with position 0 so any subsequent text typed by the user does not inherit negative position (baseline drop).
-        // A zero-width space (\u{200B}) ensures Word/WPS XML parsers do not strip the run as empty text.
-        let mut reset_run = Element::new(Some(NS_W), Some("w"), "r");
-        let mut rpr = Element::new(Some(NS_W), Some("w"), "rPr");
-        let mut pos = Element::new(Some(NS_W), Some("w"), "position");
-        pos.set_attr(Some(NS_W), Some("w"), "val", "0");
-        rpr.push(pos);
-        reset_run.push(rpr);
-        let mut t = Element::new(Some(NS_W), Some("w"), "t");
-        t.children.push(Node::Text("\u{200B}".to_string()));
-        reset_run.push(t);
-        p.push(reset_run);
-    }
+    // Place inline equation directly inside <w:p> without paragraph-level wrappers
+    // or negative run positions so it flows naturally with surrounding text.
+    p.push(content_element);
     body.push(p);
     doc.push(body);
     doc
