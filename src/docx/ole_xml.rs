@@ -169,9 +169,6 @@ pub fn make_object_run(
 }
 
 /// Build a zero-width reset run with `w:position w:val="0"` and text U+200C (ZWNJ).
-/// When placed immediately after an inline equation, it acts as a baseline anchor so
-/// any text subsequently typed by the user does not inherit the negative position (drop)
-/// of the preceding equation run.
 pub fn make_reset_run() -> Element {
     let mut reset_run = Element::new(Some(NS_W), Some("w"), "r");
     let mut rpr = Element::new(Some(NS_W), Some("w"), "rPr");
@@ -185,11 +182,13 @@ pub fn make_reset_run() -> Element {
     reset_run
 }
 
-/// Recursively sanitize corrupted baselines across the document XML:
+/// Recursively sanitize corrupted baselines and cleanup legacy artifacts across the document XML:
 /// 1. Removes any `<w:position>` from paragraph properties `<w:pPr><w:rPr>` to prevent
 ///    paragraph-wide baseline leakage to newly typed text or new lines.
-/// 2. Removes any negative `<w:position>` from plain text runs (`<w:r>` with `<w:t>` but no equation/drawing/shape)
+/// 2. Removes any negative `<w:position>` from plain text runs (`<w:r>` without math/drawing/shape/pict)
 ///    that may have leaked from previously adjacent equations.
+/// 3. Cleans up any stray zero-width non-joiner (`\u{200c}`) reset characters from text runs.
+/// 4. Removes empty runs that only contained `\u{200c}` so no ghost runs remain.
 pub fn sanitize_document_baselines(el: &mut Element) {
     if el.is(NS_W, "pPr") || el.local == "pPr" {
         for child in &mut el.children {
@@ -204,7 +203,37 @@ pub fn sanitize_document_baselines(el: &mut Element) {
     }
     if el.is(NS_W, "r") || el.local == "r" {
         let has_text = el.children.iter().any(|n| matches!(n, Node::Element(e) if e.is(NS_W, "t") || e.local == "t"));
-        let has_math_or_shape = el.children.iter().any(|n| matches!(n, Node::Element(e) if e.local == "object" || e.local == "drawing" || e.local == "oMath" || e.local == "shape"));
+        let has_math_or_shape = el.children.iter().any(|n| {
+            matches!(
+                n,
+                Node::Element(e)
+                    if e.local == "object"
+                        || e.local == "drawing"
+                        || e.local == "oMath"
+                        || e.local == "shape"
+                        || e.local == "pict"
+                        || e.local == "AlternateContent"
+            )
+        });
+
+        // 1. Clean up stray U+200C (ZWNJ) from text runs
+        if has_text {
+            for child in &mut el.children {
+                if let Node::Element(t) = child {
+                    if t.is(NS_W, "t") || t.local == "t" {
+                        for t_child in &mut t.children {
+                            if let Node::Text(s) = t_child {
+                                if s.contains('\u{200c}') {
+                                    *s = s.replace('\u{200c}', "");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Remove negative leaked positions from non-math text runs
         if has_text && !has_math_or_shape {
             for child in &mut el.children {
                 if let Node::Element(rpr) = child {
@@ -228,9 +257,46 @@ pub fn sanitize_document_baselines(el: &mut Element) {
             }
         }
     }
+
+    // Recurse into children
     for child in &mut el.children {
         if let Node::Element(c) = child {
             sanitize_document_baselines(c);
         }
+    }
+
+    // Clean up any empty runs that only contained U+200C
+    if el.is(NS_W, "p") || el.local == "p" {
+        el.children.retain(|child| {
+            if let Node::Element(r) = child {
+                if r.is(NS_W, "r") || r.local == "r" {
+                    let has_other_content = r.children.iter().any(|c| match c {
+                        Node::Element(e) => e.local != "rPr" && e.local != "t",
+                        _ => true,
+                    });
+                    if has_other_content {
+                        return true;
+                    }
+                    let total_text_len: usize = r
+                        .children
+                        .iter()
+                        .filter_map(|c| match c {
+                            Node::Element(e) if e.local == "t" => {
+                                Some(e.children.iter().map(|n| match n {
+                                    Node::Text(s) => s.len(),
+                                    _ => 0,
+                                }).sum::<usize>())
+                            }
+                            _ => None,
+                        })
+                        .sum();
+                    let has_t_element = r.children.iter().any(|c| matches!(c, Node::Element(e) if e.local == "t"));
+                    if has_t_element && total_text_len == 0 {
+                        return false;
+                    }
+                }
+            }
+            true
+        });
     }
 }

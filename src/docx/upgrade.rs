@@ -27,7 +27,7 @@ use crate::render::emf::render_emf_with_mtef;
 use crate::xml::{self, Element, Node};
 
 use super::consts::*;
-use super::ole_xml::{make_object_run, make_reset_run, sanitize_document_baselines};
+use super::ole_xml::{make_object_run, sanitize_document_baselines};
 use super::options::{ConversionSummary, ToOmmlOptions, UpgradeOptions, UpgradeTarget};
 use super::package::{add_relationship, ensure_content_type, ensure_default_extension, Package};
 use super::to_omml::{
@@ -350,7 +350,6 @@ fn upgrade_element(
                         summary.converted += 1;
                         log::info!("Equation {eq_num}: upgraded AlternateContent → Equation.DSMT4 OLE");
                         new_children.push(Node::Element(modern_run));
-                        new_children.push(Node::Element(make_reset_run()));
                         continue;
                     }
                     Err(e) => {
@@ -401,7 +400,6 @@ fn upgrade_element(
                 converted_rids,
             ) {
                 new_children.push(Node::Element(modern_run));
-                new_children.push(Node::Element(make_reset_run()));
                 continue;
             }
         }
@@ -472,7 +470,7 @@ fn upgrade_ole_run(
             converted_rids.extend(img_rids);
             summary.converted += 1;
             log::info!("Equation {eq_num}: upgraded OLE → Equation.DSMT4");
-            vec![modern_run, make_reset_run()]
+            vec![modern_run]
         }
         Err(e) => {
             summary.errors += 1;

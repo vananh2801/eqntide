@@ -101,13 +101,95 @@ function cancelPendingSession() {
   }
 }
 
+var g_eventListenerRegistered = false;
+
+function onWindowSelectionChange(Sel) {
+  try {
+    if (!Sel) {
+      Sel = (wps.Application && wps.Application.Selection) ? wps.Application.Selection : null;
+    }
+    if (!Sel) return;
+
+    var isCollapsed = false;
+    try {
+      if (typeof Sel.Type === "number") {
+        isCollapsed = (Sel.Type === 1); // wdSelectionIP
+      } else {
+        isCollapsed = (Sel.Start === Sel.End);
+      }
+    } catch (_) {
+      isCollapsed = (Sel.Start === Sel.End);
+    }
+
+    if (isCollapsed && Sel.Font) {
+      if (typeof Sel.Font.Position === "number" && Sel.Font.Position !== 0) {
+        Sel.Font.Position = 0;
+        Sel.Font.Subscript = false;
+        Sel.Font.Superscript = false;
+      }
+      try {
+        var para = Sel.Paragraphs.Item(1);
+        if (para && para.Range) {
+          var pEnd = para.Range.End;
+          if (pEnd > 0) {
+            var activeDoc = wps.Application ? wps.Application.ActiveDocument : null;
+            if (activeDoc) {
+              var pMark = activeDoc.Range(pEnd - 1, pEnd);
+              if (pMark && pMark.Font && pMark.Font.Position !== 0) {
+                pMark.Font.Position = 0;
+                pMark.Font.Subscript = false;
+                pMark.Font.Superscript = false;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+function onDocumentChange() {
+  try {
+    var app = wps.Application;
+    if (app && app.Selection && app.Selection.Font) {
+      var sel = app.Selection;
+      if (sel.Start === sel.End && sel.Font.Position !== 0) {
+        sel.Font.Position = 0;
+        sel.Font.Subscript = false;
+        sel.Font.Superscript = false;
+      }
+    }
+  } catch (_) {}
+}
+
+function initAppEventListeners() {
+  if (g_eventListenerRegistered) return;
+  try {
+    var eventApi = wps.ApiEvent || (wps.Application && wps.Application.ApiEvent);
+    if (eventApi && typeof eventApi.AddApiEventListener === "function") {
+      eventApi.AddApiEventListener("WindowSelectionChange", onWindowSelectionChange);
+      eventApi.AddApiEventListener("DocumentChange", onDocumentChange);
+      g_eventListenerRegistered = true;
+      wpsLog("Attached WindowSelectionChange and DocumentChange event listeners");
+    }
+  } catch (e) {
+    wpsLog("initAppEventListeners error: " + e);
+  }
+}
+
 /**
  * Called when WPS loads the add-in
  */
 function OnAddinLoad(ribbonUI) {
   g_ribbonUI = ribbonUI;
   console.log("Math Editor WPS JS Add-in loaded successfully.");
+  initAppEventListeners();
 }
+
+try {
+  setTimeout(initAppEventListeners, 200);
+} catch (_) {}
+
 
 /**
  * Provide icon images for Ribbon buttons
@@ -122,6 +204,7 @@ function GetImage(control) {
  * preventing ribbon dispatcher deadlocks or freezes on Linux.
  */
 function OnAction(control) {
+  initAppEventListeners();
   var controlId = control.Id;
   setTimeout(function () {
     switch (controlId) {
@@ -686,43 +769,14 @@ function InsertEmfPicture(waitData) {
       var actualStart = (pic.Range && typeof pic.Range.Start === "number") ? pic.Range.Start : insertPos;
       var shapeEnd = actualStart + 1;
 
-      // 1. Insert U+200C reset run immediately after the picture BEFORE setting baseline position.
-      // This ensures the shape is NOT the last character touching the paragraph mark when styled,
-      // preventing WPS from propagating negative Font.Position to the paragraph default (w:pPr).
-      var zwnjPos = shapeEnd;
-      try {
-        var resetRange = doc.Range(zwnjPos, zwnjPos);
-        resetRange.InsertAfter("‌"); // U+200C
-      } catch (e) {
-        wpsLog("InsertEmfPicture: InsertAfter error: " + e);
-      }
-      try {
-        var checkRange = doc.Range(zwnjPos, zwnjPos + 1);
-        if (!checkRange || checkRange.Text !== "‌") {
-          var fallbackRange = doc.Range(zwnjPos, zwnjPos);
-          fallbackRange.Text = "‌";
-          wpsLog("InsertEmfPicture: inserted ZWNJ via fallback Text");
-        }
-      } catch (e) {
-        wpsLog("InsertEmfPicture: fallback Text error: " + e);
-      }
-
-      // 2. Set Font.Position = 0 on the newly inserted U+200C
-      var zwnjRange = doc.Range(zwnjPos, zwnjPos + 1);
-      if (zwnjRange && zwnjRange.Font) {
-        zwnjRange.Font.Position = 0;
-        zwnjRange.Font.Subscript = false;
-        zwnjRange.Font.Superscript = false;
-      }
-
-      // 3. Set baseline position strictly on the 1-character shape range [actualStart .. shapeEnd]
+      // 1. Set baseline position strictly on the 1-character shape range [actualStart .. shapeEnd]
       var shapeRange = doc.Range(actualStart, shapeEnd);
       if (shapeRange && shapeRange.Font) {
         shapeRange.Font.Position = pos;
         wpsLog("InsertEmfPicture: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ", offset=" + fontBaselineOffset.toFixed(2) + ", docFontSize=" + docFontSize + ")");
       }
 
-      // 4. Sanitize paragraph mark: ensure paragraph default run properties (w:pPr) are never corrupted
+      // 2. Sanitize paragraph mark: ensure paragraph default run properties (w:pPr) are never corrupted
       try {
         var para = shapeRange.Paragraphs.Item(1);
         if (para && para.Range) {
@@ -737,8 +791,8 @@ function InsertEmfPicture(waitData) {
           }
           // If editing an equation inside existing text that previously leaked negative position,
           // restore trailing text up to the paragraph mark if it contains no other equations
-          if (pEnd - 1 > zwnjPos + 1) {
-            var afterTextRange = doc.Range(zwnjPos + 1, pEnd - 1);
+          if (pEnd - 1 > shapeEnd) {
+            var afterTextRange = doc.Range(shapeEnd, pEnd - 1);
             if (afterTextRange) {
               var hasOtherShapes = (afterTextRange.InlineShapes && afterTextRange.InlineShapes.Count > 0);
               var hasOtherMath = (afterTextRange.OMaths && afterTextRange.OMaths.Count > 0);
@@ -753,9 +807,9 @@ function InsertEmfPicture(waitData) {
         wpsLog("InsertEmfPicture: paragraph mark sanitization error: " + e);
       }
 
-      // 5. Position cursor immediately after U+200C with Position = 0 for subsequent typing
+      // 3. Position cursor immediately after shape with Position = 0 for subsequent typing
       try {
-        var cursorTarget = zwnjPos + 1;
+        var cursorTarget = shapeEnd;
         var endRange = doc.Range(cursorTarget, cursorTarget);
         endRange.Select();
         var curSel = app.Selection;
@@ -847,82 +901,46 @@ function InsertFlatOpcToSelection(flatOpcXml) {
         }
 
         var shpEnd = targetShape ? targetShape.Range.End : (startPos + 1);
-        wpsLog("targetShape: Start=" + (targetShape ? targetShape.Range.Start : "none") + ", End=" + shpEnd);
-
-        // U+200C is placed immediately after the InlineShape: [shpEnd .. shpEnd + 1]
-        var actualZwnjPos = shpEnd;
-        
-        // Log character at shpEnd
+        wpsLog("targetShape: Start=" + (targetShape ? targetShape.Range.Start : "none") + ", End=" + shpEnd);        // Target cursor: immediately after shape
+        var cursorTarget = shpEnd;
         try {
-          var zwnjRange = doc.Range(actualZwnjPos, actualZwnjPos + 1);
-          var zText = zwnjRange ? zwnjRange.Text : "";
-          var zCode = zText ? zText.charCodeAt(0) : 0;
-          wpsLog("zwnjRange pos=" + actualZwnjPos + ", code=" + zCode + ", text=" + JSON.stringify(zText)
-                + ", PosBefore=" + (zwnjRange.Font ? zwnjRange.Font.Position : "none"));
-
-          if (zwnjRange && zwnjRange.Font) {
-            zwnjRange.Font.Position = 0;
-            zwnjRange.Font.Subscript = false;
-            zwnjRange.Font.Superscript = false;
-          }
-          wpsLog("zwnjRange PosAfter=" + (zwnjRange.Font ? zwnjRange.Font.Position : "none"));
-        } catch (e) {
-          wpsLog("error resetting zwnjRange: " + e);
-        }
-
-        // Target cursor: immediately after U+200C [shpEnd + 1]
-        var cursorTarget = actualZwnjPos + 1;
-
-        // Check if there is a trailing paragraph break right after U+200C
-        try {
-          var afterRange = doc.Range(cursorTarget, cursorTarget + 1);
-          var aText = afterRange ? afterRange.Text : "";
-          var aCode = aText ? aText.charCodeAt(0) : 0;
-          wpsLog("afterRange pos=" + cursorTarget + ", code=" + aCode + ", text=" + JSON.stringify(aText));
-          if (aCode === 13 || aCode === 10 || aCode === 11 || aText === "\r" || aText === "\n") {
-            afterRange.Delete();
-            wpsLog("deleted trailing break at " + cursorTarget);
-          }
-        } catch (e) {
-          wpsLog("error deleting trailing break: " + e);
-        }
-
-        // Target range is the reset character run itself [actualZwnjPos .. actualZwnjPos + 1]
-        var zwnjSelRange = doc.Range(actualZwnjPos, actualZwnjPos + 1);
-        zwnjSelRange.Select();
-        var curSel = app.Selection;
-        if (curSel) {
-          if (curSel.Font) {
-            curSel.Font.Position = 0;
-            curSel.Font.Subscript = false;
-            curSel.Font.Superscript = false;
-          }
-          // Collapse selection to end (0 = wdCollapseEnd)
-          if (typeof curSel.Collapse === "function") {
-            curSel.Collapse(0);
-          }
-          if (curSel.Font) {
-            curSel.Font.Position = 0;
-            curSel.Font.Subscript = false;
-            curSel.Font.Superscript = false;
-          }
-        }
-        // Sanitize paragraph mark
-        try {
-          var para = zwnjSelRange.Paragraphs.Item(1);
-          if (para && para.Range) {
-            var pEnd = para.Range.End;
-            if (pEnd > 0) {
-              var pMark = doc.Range(pEnd - 1, pEnd);
-              if (pMark && pMark.Font) {
-                pMark.Font.Position = 0;
-                pMark.Font.Subscript = false;
-                pMark.Font.Superscript = false;
-              }
+          var endSelRange = doc.Range(cursorTarget, cursorTarget);
+          endSelRange.Select();
+          var curSel = app.Selection;
+          if (curSel) {
+            if (curSel.Font) {
+              curSel.Font.Position = 0;
+              curSel.Font.Subscript = false;
+              curSel.Font.Superscript = false;
+            }
+            if (typeof curSel.Collapse === "function") {
+              curSel.Collapse(0);
+            }
+            if (curSel.Font) {
+              curSel.Font.Position = 0;
+              curSel.Font.Subscript = false;
+              curSel.Font.Superscript = false;
             }
           }
-        } catch (_) {}
-        wpsLog("InsertFlatOpcToSelection: selection collapsed to end of U+200C at " + actualZwnjPos);
+          // Sanitize paragraph mark
+          try {
+            var para = endSelRange.Paragraphs.Item(1);
+            if (para && para.Range) {
+              var pEnd = para.Range.End;
+              if (pEnd > 0) {
+                var pMark = doc.Range(pEnd - 1, pEnd);
+                if (pMark && pMark.Font) {
+                  pMark.Font.Position = 0;
+                  pMark.Font.Subscript = false;
+                  pMark.Font.Superscript = false;
+                }
+              }
+            }
+          } catch (_) {}
+          wpsLog("InsertFlatOpcToSelection: selection collapsed to end of shape at " + cursorTarget);
+        } catch (e) {
+          wpsLog("InsertFlatOpcToSelection: cursor error: " + e);
+        }
       } catch (e) {
         wpsLog("InsertFlatOpcToSelection: error: " + e);
       }

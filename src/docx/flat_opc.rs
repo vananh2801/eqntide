@@ -27,7 +27,7 @@ use crate::render::emf::render_emf_with_mtef;
 use crate::xml::{self, Element, Node};
 
 use super::consts::*;
-use super::ole_xml::{make_object_run, make_reset_run};
+use super::ole_xml::make_object_run;
 use super::to_omml::{
     build_rel_map, collect_imagedata_rids,
 };
@@ -226,9 +226,7 @@ fn build_document_xml(mode: FlatOpcMode, content_element: Element) -> Element {
     let mut p = Element::new(Some(NS_W), Some("w"), "p");
     // Place inline equation directly inside <w:p>
     p.push(content_element);
-    if mode == FlatOpcMode::ModernMathtypeOleEmf {
-        p.push(make_reset_run());
-    }
+
 
     body.push(p);
     doc.push(body);
