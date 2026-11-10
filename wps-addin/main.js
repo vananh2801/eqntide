@@ -127,14 +127,34 @@ function onWindowSelectionChange(Sel) {
         Sel.Font.Subscript = false;
         Sel.Font.Superscript = false;
       }
+
+      // Fix a plain-text character immediately before the cursor that leaked a
+      // negative baseline from an adjacent equation run (e.g. after typing,
+      // clicking, or moving with arrow keys). Skip actual equations/shapes.
+      try {
+        var activeDoc = wps.Application ? wps.Application.ActiveDocument : null;
+        var curPos = (typeof Sel.Start === "number") ? Sel.Start : null;
+        if (activeDoc && curPos !== null && curPos > 0) {
+          var prevChar = activeDoc.Range(curPos - 1, curPos);
+          var isEquationOrShape =
+            (prevChar.InlineShapes && prevChar.InlineShapes.Count > 0) ||
+            (prevChar.OMaths && prevChar.OMaths.Count > 0);
+          if (!isEquationOrShape && prevChar.Font && prevChar.Font.Position !== 0) {
+            prevChar.Font.Position = 0;
+            prevChar.Font.Subscript = false;
+            prevChar.Font.Superscript = false;
+          }
+        }
+      } catch (_) {}
+
       try {
         var para = Sel.Paragraphs.Item(1);
         if (para && para.Range) {
           var pEnd = para.Range.End;
           if (pEnd > 0) {
-            var activeDoc = wps.Application ? wps.Application.ActiveDocument : null;
-            if (activeDoc) {
-              var pMark = activeDoc.Range(pEnd - 1, pEnd);
+            var activeDoc2 = wps.Application ? wps.Application.ActiveDocument : null;
+            if (activeDoc2) {
+              var pMark = activeDoc2.Range(pEnd - 1, pEnd);
               if (pMark && pMark.Font && pMark.Font.Position !== 0) {
                 pMark.Font.Position = 0;
                 pMark.Font.Subscript = false;
@@ -151,13 +171,38 @@ function onWindowSelectionChange(Sel) {
 function onDocumentChange() {
   try {
     var app = wps.Application;
-    if (app && app.Selection && app.Selection.Font) {
-      var sel = app.Selection;
-      if (sel.Start === sel.End && sel.Font.Position !== 0) {
-        sel.Font.Position = 0;
-        sel.Font.Subscript = false;
-        sel.Font.Superscript = false;
-      }
+    if (!app || !app.Selection) return;
+    var sel = app.Selection;
+    if (sel.Start !== sel.End) return;
+
+    // 1. Reset the pending (not-yet-typed) character format at the cursor,
+    // so the NEXT character typed does not inherit a leaked baseline.
+    if (sel.Font && sel.Font.Position !== 0) {
+      sel.Font.Position = 0;
+      sel.Font.Subscript = false;
+      sel.Font.Superscript = false;
+    }
+
+    // 2. Fix the character ALREADY typed immediately before the cursor.
+    // DocumentChange fires AFTER the new character has been inserted, so by the
+    // time we get here that character may have already inherited a negative
+    // w:position from an adjacent equation run. Setting Selection.Font above only
+    // affects future typing, not text that already exists, so we must patch it
+    // directly here. Skip if it is part of an equation/shape (legitimate use).
+    var doc = app.ActiveDocument;
+    var pos = sel.Start;
+    if (doc && pos > 0) {
+      try {
+        var prevChar = doc.Range(pos - 1, pos);
+        var isEquationOrShape =
+          (prevChar.InlineShapes && prevChar.InlineShapes.Count > 0) ||
+          (prevChar.OMaths && prevChar.OMaths.Count > 0);
+        if (!isEquationOrShape && prevChar.Font && prevChar.Font.Position !== 0) {
+          prevChar.Font.Position = 0;
+          prevChar.Font.Subscript = false;
+          prevChar.Font.Superscript = false;
+        }
+      } catch (_) {}
     }
   } catch (_) {}
 }
