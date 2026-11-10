@@ -687,7 +687,7 @@ function InsertEmfPicture(waitData) {
       var shapeEnd = actualStart + 1;
 
       // 1. Insert U+200C reset run immediately after the picture BEFORE setting baseline position.
-      // This ensures the shape is NOT the last character touching the paragraph mark () when styled,
+      // This ensures the shape is NOT the last character touching the paragraph mark when styled,
       // preventing WPS from propagating negative Font.Position to the paragraph default (w:pPr).
       var zwnjPos = shapeEnd;
       var resetRange = doc.Range(zwnjPos, zwnjPos);
@@ -708,7 +708,7 @@ function InsertEmfPicture(waitData) {
         wpsLog("InsertEmfPicture: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ", offset=" + fontBaselineOffset.toFixed(2) + ", docFontSize=" + docFontSize + ")");
       }
 
-      // 4. Sanitize paragraph mark (): ensure paragraph default run properties (w:pPr) are never corrupted
+      // 4. Sanitize paragraph mark: ensure paragraph default run properties (w:pPr) are never corrupted
       try {
         var para = shapeRange.Paragraphs.Item(1);
         if (para && para.Range) {
