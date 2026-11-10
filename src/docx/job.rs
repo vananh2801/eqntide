@@ -249,6 +249,9 @@ impl Job {
         let holder = element_at_mut(&mut self.doc_root, holder_path)
             .ok_or_else(|| Error::Xml("equation has no parent".into()))?;
         holder.children[slot] = Node::Element(alt);
+        if preview.is_some() {
+            holder.children.insert(slot + 1, Node::Element(super::ole_xml::make_reset_run()));
+        }
 
         self.summary.converted += 1;
         log::info!("Equation {eq_num}: converted → {bin_name}");

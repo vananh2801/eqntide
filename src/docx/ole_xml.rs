@@ -1,7 +1,7 @@
 //! Builders for the XML that embeds a MathType OLE object in `document.xml`.
 
 use crate::ole::PROG_ID;
-use crate::xml::{self, Element};
+use crate::xml::{self, Element, Node};
 
 use super::consts::*;
 
@@ -166,4 +166,71 @@ pub fn make_object_run(
 
     run.push(obj);
     run
+}
+
+/// Build a zero-width reset run with `w:position w:val="0"` and text U+200C (ZWNJ).
+/// When placed immediately after an inline equation, it acts as a baseline anchor so
+/// any text subsequently typed by the user does not inherit the negative position (drop)
+/// of the preceding equation run.
+pub fn make_reset_run() -> Element {
+    let mut reset_run = Element::new(Some(NS_W), Some("w"), "r");
+    let mut rpr = Element::new(Some(NS_W), Some("w"), "rPr");
+    let mut pos = Element::new(Some(NS_W), Some("w"), "position");
+    pos.set_attr(Some(NS_W), Some("w"), "val", "0");
+    rpr.push(pos);
+    reset_run.push(rpr);
+    let mut t = Element::new(Some(NS_W), Some("w"), "t");
+    t.children.push(Node::Text("\u{200c}".to_string()));
+    reset_run.push(t);
+    reset_run
+}
+
+/// Recursively sanitize corrupted baselines across the document XML:
+/// 1. Removes any `<w:position>` from paragraph properties `<w:pPr><w:rPr>` to prevent
+///    paragraph-wide baseline leakage to newly typed text or new lines.
+/// 2. Removes any negative `<w:position>` from plain text runs (`<w:r>` with `<w:t>` but no equation/drawing/shape)
+///    that may have leaked from previously adjacent equations.
+pub fn sanitize_document_baselines(el: &mut Element) {
+    if el.is(NS_W, "pPr") || el.local == "pPr" {
+        for child in &mut el.children {
+            if let Node::Element(rpr) = child {
+                if rpr.is(NS_W, "rPr") || rpr.local == "rPr" {
+                    rpr.children.retain(|n| {
+                        !matches!(n, Node::Element(e) if e.is(NS_W, "position") || e.local == "position")
+                    });
+                }
+            }
+        }
+    }
+    if el.is(NS_W, "r") || el.local == "r" {
+        let has_text = el.children.iter().any(|n| matches!(n, Node::Element(e) if e.is(NS_W, "t") || e.local == "t"));
+        let has_math_or_shape = el.children.iter().any(|n| matches!(n, Node::Element(e) if e.local == "object" || e.local == "drawing" || e.local == "oMath" || e.local == "shape"));
+        if has_text && !has_math_or_shape {
+            for child in &mut el.children {
+                if let Node::Element(rpr) = child {
+                    if rpr.is(NS_W, "rPr") || rpr.local == "rPr" {
+                        rpr.children.retain(|n| {
+                            if let Node::Element(e) = n {
+                                if e.is(NS_W, "position") || e.local == "position" {
+                                    if let Some(val) = e.attr(Some(NS_W), "val").or_else(|| e.attr(None, "val")) {
+                                        if let Ok(num) = val.parse::<i32>() {
+                                            if num < 0 {
+                                                return false;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            true
+                        });
+                    }
+                }
+            }
+        }
+    }
+    for child in &mut el.children {
+        if let Node::Element(c) = child {
+            sanitize_document_baselines(c);
+        }
+    }
 }

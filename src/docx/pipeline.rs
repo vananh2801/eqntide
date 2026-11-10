@@ -120,6 +120,7 @@ pub fn convert_bytes_with(input: &[u8], opts: &Options) -> Result<(Vec<u8>, Conv
             }
         }
 
+        super::ole_xml::sanitize_document_baselines(&mut job.doc_root);
         job.pkg.set(&xml_path, xml::to_bytes(&job.doc_root));
         job.pkg.set(&rels_path, xml::to_bytes(&job.rels_root));
     }
