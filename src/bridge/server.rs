@@ -564,7 +564,8 @@ fn handle_http_request(
 
             let (mathml, latex) = if is_latex {
                 let clean = trimmed_data.trim_matches('$').trim().to_string();
-                (String::new(), Some(clean))
+                let mml = parse_latex_to_mathml(trimmed_data).ok().map(|m| m.to_xml()).unwrap_or_default();
+                (mml, Some(clean))
             } else if trimmed_data.is_empty() {
                 (String::new(), None)
             } else {
@@ -845,11 +846,25 @@ fn handle_http_request(
                 }
             };
 
+            let mut emf_path = None;
+            let mut width_pt = None;
+            let mut height_pt = None;
+            let mut depth_pt = None;
+
             let converted = match snip_req.to.as_str() {
                 "flat_opc_omml" => {
                     mathml_to_flat_opc(&math, FlatOpcMode::ModernOmml, snip_req.font_pt)
                 }
-                "flat_opc_mathtype" => {
+                "flat_opc_mathtype" | "mathtype" => {
+                    let mtef_bytes = mathml_to_mtef_bytes(&math).ok();
+                    if let Ok(pic) = render_emf_with_mtef(&math, snip_req.font_pt, mtef_bytes.as_deref()) {
+                        let path = format!("/tmp/matheditor_snippet_{}.emf", uuid::Uuid::new_v4());
+                        let _ = std::fs::write(&path, &pic.emf);
+                        emf_path = Some(path);
+                        width_pt = Some(pic.width_pt);
+                        height_pt = Some(pic.height_pt);
+                        depth_pt = Some(pic.depth_pt);
+                    }
                     mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, snip_req.font_pt)
                 }
                 "omml" => mathml_to_omml_xml(&math),
@@ -882,6 +897,10 @@ fn handle_http_request(
                         &ConvertSnippetResponse {
                             status: "ok".into(),
                             result,
+                            emf_path,
+                            width_pt,
+                            height_pt,
+                            depth_pt,
                         },
                         origin,
                     );
@@ -1033,9 +1052,34 @@ fn handle_http_request(
     }
 }
 
+/// Parse a LaTeX math string into a [`MathNode`] via latex2mathml.
+fn parse_latex_to_mathml(latex_str: &str) -> crate::error::Result<MathNode> {
+    let mut clean = latex_str.trim();
+    if clean.starts_with("$$") && clean.ends_with("$$") && clean.len() >= 4 {
+        clean = clean[2..clean.len() - 2].trim();
+    } else if clean.starts_with('$') && clean.ends_with('$') && clean.len() >= 2 {
+        clean = clean[1..clean.len() - 1].trim();
+    } else if clean.starts_with(r"\[") && clean.ends_with(r"\]") && clean.len() >= 4 {
+        clean = clean[2..clean.len() - 2].trim();
+    } else if clean.starts_with(r"\(") && clean.ends_with(r"\)") && clean.len() >= 4 {
+        clean = clean[2..clean.len() - 2].trim();
+    }
+    let mml = latex2mathml::latex_to_mathml(clean, latex2mathml::DisplayStyle::Inline)
+        .map_err(|e| crate::error::Error::Xml(format!("LaTeX parsing error: {e}")))?;
+    MathNode::parse(&mml)
+}
+
 /// Helper to decode any supported equation input representation into [`MathNode`].
 fn decode_input_to_mathml(data: &str, format: &str) -> crate::error::Result<MathNode> {
     let trimmed = data.trim();
+
+    if format == "latex"
+        || trimmed.starts_with('$')
+        || trimmed.starts_with(r"\[")
+        || trimmed.starts_with(r"\(")
+    {
+        return parse_latex_to_mathml(trimmed);
+    }
 
     if format == "flat_opc" || trimmed.contains("<pkg:package") || trimmed.starts_with("<?xml") {
         return flat_opc_to_mathml(trimmed);

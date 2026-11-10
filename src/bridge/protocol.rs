@@ -125,6 +125,14 @@ pub struct ConvertSnippetRequest {
 pub struct ConvertSnippetResponse {
     pub status: String,
     pub result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emf_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_pt: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_pt: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth_pt: Option<f32>,
 }
 
 /// Request payload for `POST /convert/document`.

@@ -329,6 +329,137 @@ function InsertEquation() {
 }
 
 /**
+ * Detect equation (OMML, MathType OLE, or EMF inline shape) in selection or adjacent to cursor.
+ */
+function findEquationTarget(selection, doc) {
+  if (!selection) return null;
+  var targetRange = null;
+
+  // 1. Check selection.OMaths
+  try {
+    if (selection.OMaths && selection.OMaths.Count > 0) {
+      targetRange = selection.OMaths.Item(1).Range;
+    }
+  } catch (_) {}
+
+  // 2. Check selection.Range.OMaths
+  if (!targetRange) {
+    try {
+      if (selection.Range && selection.Range.OMaths && selection.Range.OMaths.Count > 0) {
+        targetRange = selection.Range.OMaths.Item(1).Range;
+      }
+    } catch (_) {}
+  }
+
+  // 3. Check selection.InlineShapes
+  if (!targetRange) {
+    try {
+      if (selection.InlineShapes && selection.InlineShapes.Count > 0) {
+        targetRange = selection.InlineShapes.Item(1).Range;
+      }
+    } catch (_) {}
+  }
+
+  // 4. Check selection.Range.InlineShapes
+  if (!targetRange) {
+    try {
+      if (selection.Range && selection.Range.InlineShapes && selection.Range.InlineShapes.Count > 0) {
+        targetRange = selection.Range.InlineShapes.Item(1).Range;
+      }
+    } catch (_) {}
+  }
+
+  // 5. Check floating ShapeRange
+  if (!targetRange) {
+    try {
+      if (selection.ShapeRange && selection.ShapeRange.Count > 0) {
+        targetRange = selection.ShapeRange.Item(1).Anchor;
+      }
+    } catch (_) {}
+  }
+
+  // 6. Check adjacent word
+  if (!targetRange) {
+    try {
+      if (selection.Words && selection.Words.Count > 0) {
+        var word = selection.Words.Item(1);
+        if (word.InlineShapes && word.InlineShapes.Count > 0) {
+          targetRange = word.InlineShapes.Item(1).Range;
+        } else if (word.OMaths && word.OMaths.Count > 0) {
+          targetRange = word.OMaths.Item(1).Range;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 7. Check adjacent characters (left and right of cursor)
+  if (!targetRange && doc) {
+    try {
+      var start = selection.Start;
+      var end = selection.End;
+      if (start > 0) {
+        var prevChar = doc.Range(start - 1, start);
+        if (prevChar.InlineShapes && prevChar.InlineShapes.Count > 0) {
+          targetRange = prevChar.InlineShapes.Item(1).Range;
+        } else if (prevChar.OMaths && prevChar.OMaths.Count > 0) {
+          targetRange = prevChar.OMaths.Item(1).Range;
+        } else if (prevChar.Text === "‌" && start > 1) {
+          var beforeZwnj = doc.Range(start - 2, start - 1);
+          if (beforeZwnj.InlineShapes && beforeZwnj.InlineShapes.Count > 0) {
+            targetRange = beforeZwnj.InlineShapes.Item(1).Range;
+          } else if (beforeZwnj.OMaths && beforeZwnj.OMaths.Count > 0) {
+            targetRange = beforeZwnj.OMaths.Item(1).Range;
+          }
+        }
+      }
+      if (!targetRange && end < (doc.Content ? doc.Content.End : 999999)) {
+        var nextChar = doc.Range(end, end + 1);
+        if (nextChar.InlineShapes && nextChar.InlineShapes.Count > 0) {
+          targetRange = nextChar.InlineShapes.Item(1).Range;
+        } else if (nextChar.OMaths && nextChar.OMaths.Count > 0) {
+          targetRange = nextChar.OMaths.Item(1).Range;
+        }
+      }
+    } catch (_) {}
+  }
+
+  return targetRange;
+}
+
+/**
+ * Find enclosing LaTeX formula delimiters ($...$, $$...$$, \\[...\\], \\(...\\)) around relPos in paragraph text.
+ */
+function findEnclosingLatexInPara(text, relPos) {
+  if (!text || typeof text !== "string") return null;
+
+  var patterns = [
+    { regex: /\$\$[\s\S]*?\$\$/g, display: true },
+    { regex: /\\\[[\s\S]*?\\\]/g, display: true },
+    { regex: /\\\([\s\S]*?\\\)/g, display: false },
+    { regex: /\$(?:\\\$|[^\$\r\n])+\$/g, display: false }
+  ];
+
+  for (var i = 0; i < patterns.length; i++) {
+    var p = patterns[i];
+    var match;
+    p.regex.lastIndex = 0;
+    while ((match = p.regex.exec(text)) !== null) {
+      var start = match.index;
+      var end = match.index + match[0].length;
+      if (relPos >= start && relPos <= end) {
+        return {
+          start: start,
+          end: end,
+          text: match[0],
+          isDisplay: p.display
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * 2. Edit Equation:
  * Extracts selected equation from WPS Selection and opens it in editor.
  * If no equation is selected, alerts the user directly without redirecting or freezing WPS.
@@ -345,108 +476,9 @@ function EditEquation() {
     }
 
     var selData = "";
-    var targetRange = null;
-    var isEquationFound = false;
-
-    // 1. Check for OMML equation under cursor or in selection
-    try {
-      if (selection.OMaths && selection.OMaths.Count > 0) {
-        targetRange = selection.OMaths.Item(1).Range;
-        isEquationFound = true;
-      }
-    } catch (_) {}
-
-    if (!targetRange) {
-      try {
-        if (selection.Range && selection.Range.OMaths && selection.Range.OMaths.Count > 0) {
-          targetRange = selection.Range.OMaths.Item(1).Range;
-          isEquationFound = true;
-        }
-      } catch (_) {}
-    }
-
-    // 2. Check for MathType OLE / EMF inline shape
-    if (!targetRange) {
-      try {
-        if (selection.InlineShapes && selection.InlineShapes.Count > 0) {
-          targetRange = selection.InlineShapes.Item(1).Range;
-          isEquationFound = true;
-        }
-      } catch (_) {}
-    }
-
-    if (!targetRange) {
-      try {
-        if (selection.Range && selection.Range.InlineShapes && selection.Range.InlineShapes.Count > 0) {
-          targetRange = selection.Range.InlineShapes.Item(1).Range;
-          isEquationFound = true;
-        }
-      } catch (_) {}
-    }
-
-    // 3. Check for floating ShapeRange
-    if (!targetRange) {
-      try {
-        if (selection.ShapeRange && selection.ShapeRange.Count > 0) {
-          targetRange = selection.ShapeRange.Item(1).Anchor;
-          isEquationFound = true;
-        }
-      } catch (_) {}
-    }
-
-    // 4. Check adjacent word
-    if (!targetRange) {
-      try {
-        if (selection.Words && selection.Words.Count > 0) {
-          var word = selection.Words.Item(1);
-          if (word.InlineShapes && word.InlineShapes.Count > 0) {
-            targetRange = word.InlineShapes.Item(1).Range;
-            isEquationFound = true;
-          } else if (word.OMaths && word.OMaths.Count > 0) {
-            targetRange = word.OMaths.Item(1).Range;
-            isEquationFound = true;
-          }
-        }
-      } catch (_) {}
-    }
-
-    // 5. Check adjacent characters (left and right of cursor)
-    if (!targetRange) {
-      try {
-        var doc = app.ActiveDocument;
-        var start = selection.Start;
-        var end = selection.End;
-        if (doc && start > 0) {
-          var prevChar = doc.Range(start - 1, start);
-          if (prevChar.InlineShapes && prevChar.InlineShapes.Count > 0) {
-            targetRange = prevChar.InlineShapes.Item(1).Range;
-            isEquationFound = true;
-          } else if (prevChar.OMaths && prevChar.OMaths.Count > 0) {
-            targetRange = prevChar.OMaths.Item(1).Range;
-            isEquationFound = true;
-          } else if (prevChar.Text === "‌" && start > 1) {
-            var beforeZwnj = doc.Range(start - 2, start - 1);
-            if (beforeZwnj.InlineShapes && beforeZwnj.InlineShapes.Count > 0) {
-              targetRange = beforeZwnj.InlineShapes.Item(1).Range;
-              isEquationFound = true;
-            } else if (beforeZwnj.OMaths && beforeZwnj.OMaths.Count > 0) {
-              targetRange = beforeZwnj.OMaths.Item(1).Range;
-              isEquationFound = true;
-            }
-          }
-        }
-        if (!targetRange && doc && end < (doc.Content ? doc.Content.End : 999999)) {
-          var nextChar = doc.Range(end, end + 1);
-          if (nextChar.InlineShapes && nextChar.InlineShapes.Count > 0) {
-            targetRange = nextChar.InlineShapes.Item(1).Range;
-            isEquationFound = true;
-          } else if (nextChar.OMaths && nextChar.OMaths.Count > 0) {
-            targetRange = nextChar.OMaths.Item(1).Range;
-            isEquationFound = true;
-          }
-        }
-      } catch (_) {}
-    }
+    var doc = app.ActiveDocument;
+    var targetRange = findEquationTarget(selection, doc);
+    var isEquationFound = (targetRange !== null);
 
     // Focus selection on the target equation range if found
     if (targetRange && typeof targetRange.Select === "function") {
@@ -576,80 +608,201 @@ function EditEquation() {
 
 /**
  * 3. Toggle LaTeX:
- * Two-way conversion between LaTeX text and native equation in WPS.
+ * Two-way conversion between LaTeX text and MathType equation in WPS.
+ * - If an equation is selected or adjacent to cursor: converts to $...$ or $$...$$
+ * - If LaTeX text is selected or cursor is inside $...$ / \\[...\\]: converts to MathType 7 (Vector EMF + MTEF)
  */
 function ToggleLatex() {
   try {
+    wpsLog("ToggleLatex clicked");
     var app = wps.Application;
-    var selection = app.Selection;
+    var selection = app ? app.Selection : null;
     if (!selection) return;
+    var doc = app.ActiveDocument;
 
-    var text = (selection.Text || "").trim();
+    // STEP 1: Check if an equation is selected or adjacent to cursor
+    var eqRange = findEquationTarget(selection, doc);
+    var eqXml = "";
 
-    // Case A: Selected text is LaTeX ($...$ or \[...\])
-    if (
-      (text.startsWith("$") && text.endsWith("$")) ||
-      (text.startsWith("\\[") && text.endsWith("\\]"))
-    ) {
-      var cleanLatex = text;
-      if (cleanLatex.startsWith("$$") && cleanLatex.endsWith("$$")) {
-        cleanLatex = cleanLatex.slice(2, -2).trim();
-      } else if (cleanLatex.startsWith("$") && cleanLatex.endsWith("$")) {
-        cleanLatex = cleanLatex.slice(1, -1).trim();
-      } else if (cleanLatex.startsWith("\\[") && cleanLatex.endsWith("\\]")) {
-        cleanLatex = cleanLatex.slice(2, -2).trim();
+    if (eqRange) {
+      try {
+        if (eqRange.WordOpenXML && hasEquationInXml(eqRange.WordOpenXML)) {
+          eqXml = eqRange.WordOpenXML;
+        }
+      } catch (_) {}
+    }
+
+    if (!eqXml) {
+      try {
+        if (selection.WordOpenXML && hasEquationInXml(selection.WordOpenXML)) {
+          eqXml = selection.WordOpenXML;
+          if (!eqRange) eqRange = selection.Range;
+        } else if (selection.Range && selection.Range.WordOpenXML && hasEquationInXml(selection.Range.WordOpenXML)) {
+          eqXml = selection.Range.WordOpenXML;
+          if (!eqRange) eqRange = selection.Range;
+        }
+      } catch (_) {}
+    }
+
+    if (eqXml && eqRange) {
+      // Convert equation to LaTeX text
+      wpsLog("ToggleLatex: converting equation to LaTeX");
+      ensureBridgeRunning(function () {
+        ajaxPost(
+          BRIDGE_URL + "/convert/snippet",
+          JSON.stringify({
+            data: eqXml,
+            from: "auto",
+            to: "latex"
+          }),
+          function (status, responseText) {
+            if (status === 200) {
+              var snip = JSON.parse(responseText);
+              if (snip && snip.result) {
+                var clean = snip.result.trim();
+                var isDisplay = false;
+                try {
+                  if (eqRange.OMaths && eqRange.OMaths.Count > 0 && eqRange.OMaths.Item(1).ParentOMathPara) {
+                    isDisplay = true;
+                  }
+                } catch (_) {}
+
+                var latexStr = isDisplay ? ("$$" + clean + "$$") : ("$" + clean + "$");
+
+                // Clamp shape range to 1 character if it is an InlineShape
+                var rStart = eqRange.Start;
+                var rEnd = eqRange.End;
+                try {
+                  if (eqRange.InlineShapes && eqRange.InlineShapes.Count > 0 && rEnd - rStart > 1) {
+                    rEnd = rStart + 1;
+                  }
+                } catch (_) {}
+
+                var replaceRange = doc.Range(rStart, rEnd);
+                replaceRange.Text = latexStr;
+                if (replaceRange.Font) {
+                  replaceRange.Font.Position = 0;
+                  replaceRange.Font.Subscript = false;
+                  replaceRange.Font.Superscript = false;
+                }
+
+                // Move cursor after the inserted LaTeX text
+                var nextPos = rStart + latexStr.length;
+                var endRange = doc.Range(nextPos, nextPos);
+                endRange.Select();
+                var curSel = app.Selection;
+                if (curSel) {
+                  if (curSel.Font) curSel.Font.Position = 0;
+                  if (typeof curSel.Collapse === "function") curSel.Collapse(0);
+                  if (curSel.Font) curSel.Font.Position = 0;
+                }
+                wpsLog("ToggleLatex: converted equation to LaTeX string successfully");
+              }
+            } else {
+              wpsLog("ToggleLatex: equation to LaTeX failed: " + responseText);
+              alert("Không thể chuyển đổi công thức sang LaTeX: " + responseText);
+            }
+          }
+        );
+      });
+      return;
+    }
+
+    // STEP 2: Check if selection or cursor is LaTeX text
+    var targetLatexRange = null;
+    var rawLatexText = "";
+
+    // 2.1 User manually highlighted / selected text
+    var isRangeSelected = (typeof selection.Start === "number" && typeof selection.End === "number" && selection.Start !== selection.End);
+    if (isRangeSelected) {
+      var selText = (selection.Text || "").trim();
+      if (
+        (selText.startsWith("$") && selText.endsWith("$")) ||
+        (selText.startsWith("\\[") && selText.endsWith("\\]")) ||
+        (selText.startsWith("\\(") && selText.endsWith("\\)")) ||
+        isLatexText(selText)
+      ) {
+        targetLatexRange = selection.Range;
+        rawLatexText = selText;
       }
+    }
 
+    // 2.2 Cursor is collapsed (insertion point) inside or adjacent to LaTeX in current paragraph
+    if (!targetLatexRange && doc) {
+      try {
+        var para = selection.Paragraphs.Item(1);
+        if (para && para.Range) {
+          var pStart = para.Range.Start;
+          var curPos = selection.Start;
+          var pText = para.Range.Text || "";
+          var relPos = curPos - pStart;
+          var found = findEnclosingLatexInPara(pText, relPos);
+          if (found) {
+            targetLatexRange = doc.Range(pStart + found.start, pStart + found.end);
+            rawLatexText = found.text;
+            wpsLog("ToggleLatex: auto-detected enclosing LaTeX at [" + (pStart + found.start) + ".." + (pStart + found.end) + "]: " + rawLatexText);
+          }
+        }
+      } catch (e) {
+        wpsLog("ToggleLatex: auto-detection error: " + e);
+      }
+    }
+
+    // If neither equation nor LaTeX was found
+    if (!targetLatexRange || !rawLatexText) {
+      wpsLog("ToggleLatex: no equation or LaTeX found at cursor");
+      alert("Không tìm thấy công thức hoặc mã LaTeX nào tại vị trí con trỏ!\n\nBạn có thể đặt con trỏ bên trong mã LaTeX dạng $...$ hoặc bôi đen công thức cần chuyển đổi.");
+      return;
+    }
+
+    // Clean outer delimiters
+    var cleanLatex = rawLatexText.trim();
+    if (cleanLatex.startsWith("$$") && cleanLatex.endsWith("$$") && cleanLatex.length >= 4) {
+      cleanLatex = cleanLatex.slice(2, -2).trim();
+    } else if (cleanLatex.startsWith("$") && cleanLatex.endsWith("$") && cleanLatex.length >= 2) {
+      cleanLatex = cleanLatex.slice(1, -1).trim();
+    } else if (cleanLatex.startsWith("\\[") && cleanLatex.endsWith("\\]") && cleanLatex.length >= 4) {
+      cleanLatex = cleanLatex.slice(2, -2).trim();
+    } else if (cleanLatex.startsWith("\\(") && cleanLatex.endsWith("\\)") && cleanLatex.length >= 4) {
+      cleanLatex = cleanLatex.slice(2, -2).trim();
+    }
+
+    var docFontSize = getDocumentFontSize(targetLatexRange);
+    g_editRangeStart = targetLatexRange.Start;
+    g_editRangeEnd = targetLatexRange.End;
+    wpsLog("ToggleLatex: converting LaTeX '" + cleanLatex + "' to MathType at [" + g_editRangeStart + ".." + g_editRangeEnd + "]");
+
+    ensureBridgeRunning(function () {
       ajaxPost(
         BRIDGE_URL + "/convert/snippet",
         JSON.stringify({
           data: cleanLatex,
           from: "latex",
-          to: "flat_opc_omml"
+          to: "mathtype",
+          font_pt: docFontSize
         }),
         function (status, responseText) {
           if (status === 200) {
             var conv = JSON.parse(responseText);
-            InsertFlatOpcToSelection(conv.result);
+            if (conv.emf_path) {
+              InsertEmfPicture(conv);
+            } else if (conv.result) {
+              InsertFlatOpcToSelection(conv.result);
+            }
+            wpsLog("ToggleLatex: successfully converted LaTeX to MathType equation");
           } else {
-            console.error("LaTeX conversion failed.");
+            g_editRangeStart = null;
+            g_editRangeEnd = null;
+            wpsLog("ToggleLatex: LaTeX conversion error: " + responseText);
+            alert("Chuyển đổi LaTeX sang công thức thất bại:\n" + responseText);
           }
         }
       );
-      return;
-    }
-
-    // Case B: Selection contains an equation, convert to LaTeX string
-    var ooxml = "";
-    try {
-      if (selection.Range && selection.Range.WordOpenXML && hasEquationInXml(selection.Range.WordOpenXML)) {
-        ooxml = selection.Range.WordOpenXML;
-      } else if (selection.WordOpenXML && hasEquationInXml(selection.WordOpenXML)) {
-        ooxml = selection.WordOpenXML;
-      }
-    } catch (_) {}
-
-    if (!ooxml) {
-      return;
-    }
-
-    ajaxPost(
-      BRIDGE_URL + "/convert/snippet",
-      JSON.stringify({
-        data: ooxml,
-        from: "flat_opc",
-        to: "latex"
-      }),
-      function (status, responseText) {
-        if (status === 200) {
-          var snip = JSON.parse(responseText);
-          if (snip && snip.result) {
-            selection.Text = "$" + snip.result + "$";
-          }
-        }
-      }
-    );
+    });
   } catch (err) {
+    g_editRangeStart = null;
+    g_editRangeEnd = null;
+    wpsLog("ToggleLatex: unhandled error: " + err);
     console.error("ToggleLatex error:", err);
   }
 }
