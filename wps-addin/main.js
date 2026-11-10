@@ -76,9 +76,21 @@ function isLatexText(text) {
   return (
     (t.startsWith("$") && t.endsWith("$")) ||
     (t.startsWith("\\[") && t.endsWith("\\]")) ||
+    (t.startsWith("\\(") && t.endsWith("\\)")) ||
     t.indexOf("\\frac") !== -1 ||
     t.indexOf("\\sqrt") !== -1 ||
-    t.startsWith("\\begin")
+    t.startsWith("\\begin") ||
+    t.indexOf("\\sum") !== -1 ||
+    t.indexOf("\\int") !== -1 ||
+    t.indexOf("\\alpha") !== -1 ||
+    t.indexOf("\\beta") !== -1 ||
+    t.indexOf("\\gamma") !== -1 ||
+    t.indexOf("\\times") !== -1 ||
+    t.indexOf("\\pm") !== -1 ||
+    t.indexOf("\\le") !== -1 ||
+    t.indexOf("\\ge") !== -1 ||
+    t.indexOf("\\ne") !== -1 ||
+    (t.indexOf("=") !== -1 && (t.indexOf("+") !== -1 || t.indexOf("-") !== -1 || t.indexOf("^") !== -1 || t.indexOf("_") !== -1))
   );
 }
 
@@ -460,6 +472,43 @@ function findEnclosingLatexInPara(text, relPos) {
 }
 
 /**
+ * Find all LaTeX math formulas ($...$, $$...$$, \[...\], \(...\)) within text.
+ * Returns array of { start, end, raw, latex, isDisplay } sorted by start ascending.
+ */
+function findAllLatexMatches(text) {
+  if (!text || typeof text !== "string") return [];
+  var regex = /(\$\$[\s\S]*?\$\$)|(\\\[[\s\S]*?\\\])|(\\\([\s\S]*?\\\))|(\$(?:\\\$|[^\$\r\n])+?\$)/g;
+  var matches = [];
+  var m;
+  while ((m = regex.exec(text)) !== null) {
+    var raw = m[0];
+    var isDisplay = false;
+    var inner = raw;
+    if (raw.startsWith("$$") && raw.endsWith("$$") && raw.length >= 4) {
+      isDisplay = true;
+      inner = raw.slice(2, -2).trim();
+    } else if (raw.startsWith("\\[") && raw.endsWith("\\]") && raw.length >= 4) {
+      isDisplay = true;
+      inner = raw.slice(2, -2).trim();
+    } else if (raw.startsWith("\\(") && raw.endsWith("\\)") && raw.length >= 4) {
+      isDisplay = false;
+      inner = raw.slice(2, -2).trim();
+    } else if (raw.startsWith("$") && raw.endsWith("$") && raw.length >= 2) {
+      isDisplay = false;
+      inner = raw.slice(1, -1).trim();
+    }
+    matches.push({
+      start: m.index,
+      end: m.index + raw.length,
+      raw: raw,
+      latex: inner,
+      isDisplay: isDisplay
+    });
+  }
+  return matches;
+}
+
+/**
  * 2. Edit Equation:
  * Extracts selected equation from WPS Selection and opens it in editor.
  * If no equation is selected, alerts the user directly without redirecting or freezing WPS.
@@ -607,10 +656,359 @@ function EditEquation() {
 }
 
 /**
+ * Insert vector EMF picture with embedded MTEF at specified doc range.
+ * Applies baseline alignment (Font.Position), sanitizes paragraph mark,
+ * and optionally places cursor after shape.
+ */
+function insertEmfAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
+  if (!doc || !targetRange || !waitData || !waitData.emf_path) return null;
+
+  var insertPos = targetRange.Start;
+  var isRangeToDelete = (typeof targetRange.End === "number" && targetRange.End > targetRange.Start);
+  if (isRangeToDelete) {
+    try {
+      targetRange.Delete();
+    } catch (e) {
+      wpsLog("insertEmfAtDocRange: delete error: " + e);
+    }
+  }
+
+  var range = doc.Range(insertPos, insertPos);
+  var pic = null;
+  try {
+    pic = range.InlineShapes.AddPicture(waitData.emf_path, false, true, range);
+  } catch (e) {
+    wpsLog("insertEmfAtDocRange: AddPicture error: " + e);
+    return null;
+  }
+  if (!pic) return null;
+
+  try {
+    if (typeof waitData.width_pt === "number" && waitData.width_pt > 0) {
+      pic.Width = waitData.width_pt;
+    }
+    if (typeof waitData.height_pt === "number" && waitData.height_pt > 0) {
+      pic.Height = waitData.height_pt;
+    }
+
+    var docFontSize = 12.0;
+    if (typeof waitData.font_pt === "number" && waitData.font_pt > 0) {
+      docFontSize = waitData.font_pt;
+    } else {
+      try {
+        if (targetRange && targetRange.Font && targetRange.Font.Size > 0) {
+          docFontSize = targetRange.Font.Size;
+        } else if (range && range.Font && range.Font.Size > 0) {
+          docFontSize = range.Font.Size;
+        }
+      } catch (_) {}
+    }
+
+    var depthPt = (typeof waitData.depth_pt === "number") ? waitData.depth_pt : 0;
+    var fontBaselineOffset = docFontSize * 0.045; // ~0.54 pt for 12pt font
+    var pos = -Number((depthPt + fontBaselineOffset).toFixed(1));
+
+    var actualStart = (pic.Range && typeof pic.Range.Start === "number") ? pic.Range.Start : insertPos;
+    var shapeEnd = actualStart + 1;
+
+    // Set baseline position strictly on the 1-character shape range
+    var shapeRange = doc.Range(actualStart, shapeEnd);
+    if (shapeRange && shapeRange.Font) {
+      shapeRange.Font.Position = pos;
+    }
+
+    // Sanitize paragraph mark
+    try {
+      var para = shapeRange.Paragraphs.Item(1);
+      if (para && para.Range) {
+        var pEnd = para.Range.End;
+        if (pEnd > 0) {
+          var pMark = doc.Range(pEnd - 1, pEnd);
+          if (pMark && pMark.Font) {
+            pMark.Font.Position = 0;
+            pMark.Font.Subscript = false;
+            pMark.Font.Superscript = false;
+          }
+        }
+        // Fix plain text immediately following shape if it leaked negative position
+        if (shapeEnd < pEnd - 1) {
+          var nextChar = doc.Range(shapeEnd, shapeEnd + 1);
+          var isNextShape = (nextChar.InlineShapes && nextChar.InlineShapes.Count > 0) ||
+                            (nextChar.OMaths && nextChar.OMaths.Count > 0);
+          if (!isNextShape && nextChar.Font && nextChar.Font.Position !== 0) {
+            nextChar.Font.Position = 0;
+            nextChar.Font.Subscript = false;
+            nextChar.Font.Superscript = false;
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (shouldMoveCursor) {
+      try {
+        var cursorTarget = shapeEnd;
+        var endRange = doc.Range(cursorTarget, cursorTarget);
+        endRange.Select();
+        var curSel = wps.Application ? wps.Application.Selection : null;
+        if (curSel) {
+          if (curSel.Font) curSel.Font.Position = 0;
+          if (typeof curSel.Collapse === "function") curSel.Collapse(0);
+          if (curSel.Font) curSel.Font.Position = 0;
+        }
+      } catch (_) {}
+    }
+
+    return pic;
+  } catch (err) {
+    wpsLog("insertEmfAtDocRange: formatting error: " + err);
+    return pic;
+  }
+}
+
+/**
+ * Scan a range for all equation targets (InlineShapes with MathType/OMML XML and native OMaths).
+ * Returns array of { start, end, xml, isDisplay } sorted by start ascending.
+ */
+function findAllEquationTargetsInRange(range, doc) {
+  var list = [];
+  if (!range) return list;
+
+  function processShape(shape) {
+    if (!shape || !shape.Range) return;
+    try {
+      var sXml = "";
+      try { sXml = shape.Range.WordOpenXML || ""; } catch (_) {}
+      if (hasEquationInXml(sXml)) {
+        var sStart = shape.Range.Start;
+        var sEnd = shape.Range.End;
+        if (sEnd > sStart + 1) sEnd = sStart + 1;
+        list.push({
+          start: sStart,
+          end: sEnd,
+          xml: sXml,
+          isDisplay: false
+        });
+      }
+    } catch (_) {}
+  }
+
+  function processOMath(omath) {
+    if (!omath || !omath.Range) return;
+    try {
+      var oXml = "";
+      try { oXml = omath.Range.WordOpenXML || ""; } catch (_) {}
+      if (hasEquationInXml(oXml)) {
+        var isDisp = false;
+        try { isDisp = (omath.ParentOMathPara !== null && typeof omath.ParentOMathPara !== "undefined"); } catch (_) {}
+        list.push({
+          start: omath.Range.Start,
+          end: omath.Range.End,
+          xml: oXml,
+          isDisplay: isDisp
+        });
+      }
+    } catch (_) {}
+  }
+
+  // 1. Shapes from range.InlineShapes or selection.InlineShapes
+  try {
+    var shapes = range.InlineShapes;
+    if ((!shapes || shapes.Count === 0) && wps.Application && wps.Application.Selection && wps.Application.Selection.InlineShapes) {
+      shapes = wps.Application.Selection.InlineShapes;
+    }
+    if (shapes && shapes.Count > 0) {
+      for (var i = 1; i <= shapes.Count; i++) {
+        processShape(shapes.Item(i));
+      }
+    }
+  } catch (e) {
+    wpsLog("findAllEquationTargetsInRange InlineShapes error: " + e);
+  }
+
+  // 2. OMaths from range.OMaths or selection.OMaths
+  try {
+    var omaths = range.OMaths;
+    if ((!omaths || omaths.Count === 0) && wps.Application && wps.Application.Selection && wps.Application.Selection.OMaths) {
+      omaths = wps.Application.Selection.OMaths;
+    }
+    if (omaths && omaths.Count > 0) {
+      for (var j = 1; j <= omaths.Count; j++) {
+        processOMath(omaths.Item(j));
+      }
+    }
+  } catch (e) {
+    wpsLog("findAllEquationTargetsInRange OMaths error: " + e);
+  }
+
+  // Sort ascending by start offset
+  list.sort(function (a, b) { return a.start - b.start; });
+
+  // Filter out duplicates (if any item shares the exact start offset)
+  var uniqueList = [];
+  for (var k = 0; k < list.length; k++) {
+    if (k === 0 || list[k].start >= uniqueList[uniqueList.length - 1].end) {
+      uniqueList.push(list[k]);
+    }
+  }
+
+  return uniqueList;
+}
+
+/**
+ * Batch convert multiple LaTeX formulas in a highlighted range to MathType EMF pictures in-place.
+ */
+function batchLatexToMathType(doc, selection, latexMatches) {
+  var baseStart = selection.Start;
+  var docFontSize = getDocumentFontSize(selection.Range);
+  wpsLog("batchLatexToMathType: found " + latexMatches.length + " formulas in selection [start=" + baseStart + "]");
+
+  var total = latexMatches.length;
+  var completed = 0;
+
+  for (var i = 0; i < total; i++) {
+    (function (m) {
+      ajaxPost(
+        BRIDGE_URL + "/convert/snippet",
+        JSON.stringify({
+          data: m.latex,
+          from: "latex",
+          to: "mathtype",
+          font_pt: docFontSize
+        }),
+        function (status, responseText) {
+          completed++;
+          if (status === 200) {
+            try {
+              m.convData = JSON.parse(responseText);
+            } catch (_) {}
+          } else {
+            wpsLog("batchLatexToMathType: error converting '" + m.latex + "': " + responseText);
+          }
+
+          if (completed === total) {
+            // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
+            latexMatches.sort(function (a, b) { return b.start - a.start; });
+            var convertedCount = 0;
+
+            for (var j = 0; j < latexMatches.length; j++) {
+              var match = latexMatches[j];
+              if (match.convData && match.convData.emf_path) {
+                var rStart = baseStart + match.start;
+                var rEnd = baseStart + match.end;
+                var targetRange = doc.Range(rStart, rEnd);
+                var pic = insertEmfAtDocRange(doc, targetRange, match.convData, false);
+                if (pic) convertedCount++;
+              }
+            }
+
+            // Reset selection formatting so subsequent typing does not inherit baseline
+            try {
+              var app = wps.Application;
+              var curSel = app ? app.Selection : null;
+              if (curSel) {
+                if (curSel.Font) curSel.Font.Position = 0;
+                if (typeof curSel.Collapse === "function") curSel.Collapse(0);
+                if (curSel.Font) curSel.Font.Position = 0;
+              }
+            } catch (_) {}
+
+            wpsLog("batchLatexToMathType: converted " + convertedCount + "/" + total + " formulas.");
+          }
+        }
+      );
+    })(latexMatches[i]);
+  }
+}
+
+/**
+ * Batch convert multiple equations in a highlighted range to LaTeX $...$ strings in-place.
+ */
+function batchEquationToLatex(doc, selection, eqTargets) {
+  wpsLog("batchEquationToLatex: found " + eqTargets.length + " equations in selection");
+
+  var total = eqTargets.length;
+  var completed = 0;
+
+  for (var i = 0; i < total; i++) {
+    (function (eq) {
+      ajaxPost(
+        BRIDGE_URL + "/convert/snippet",
+        JSON.stringify({
+          data: eq.xml,
+          from: "auto",
+          to: "latex"
+        }),
+        function (status, responseText) {
+          completed++;
+          if (status === 200) {
+            try {
+              var res = JSON.parse(responseText);
+              if (res && res.result) {
+                eq.latex = res.result.trim();
+              }
+            } catch (_) {}
+          } else {
+            wpsLog("batchEquationToLatex: conversion error: " + responseText);
+          }
+
+          if (completed === total) {
+            // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
+            eqTargets.sort(function (a, b) { return b.start - a.start; });
+            var convertedCount = 0;
+
+            for (var j = 0; j < eqTargets.length; j++) {
+              var item = eqTargets[j];
+              if (item.latex) {
+                var rStart = item.start;
+                var rEnd = item.end;
+                var latexStr = item.isDisplay ? ("$$" + item.latex + "$$") : ("$" + item.latex + "$");
+                var repRange = doc.Range(rStart, rEnd);
+                repRange.Text = latexStr;
+                if (repRange.Font) {
+                  repRange.Font.Position = 0;
+                  repRange.Font.Subscript = false;
+                  repRange.Font.Superscript = false;
+                }
+
+                // Check and remove adjacent trailing ZWNJ if present
+                try {
+                  var afterPos = rStart + latexStr.length;
+                  var nextChar = doc.Range(afterPos, afterPos + 1);
+                  if (nextChar && nextChar.Text === "‌") {
+                    nextChar.Delete();
+                  }
+                } catch (_) {}
+
+                convertedCount++;
+              }
+            }
+
+            // Reset selection formatting
+            try {
+              var app = wps.Application;
+              var curSel = app ? app.Selection : null;
+              if (curSel) {
+                if (curSel.Font) curSel.Font.Position = 0;
+                if (typeof curSel.Collapse === "function") curSel.Collapse(0);
+                if (curSel.Font) curSel.Font.Position = 0;
+              }
+            } catch (_) {}
+
+            wpsLog("batchEquationToLatex: converted " + convertedCount + "/" + total + " equations to LaTeX.");
+          }
+        }
+      );
+    })(eqTargets[i]);
+  }
+}
+
+/**
  * 3. Toggle LaTeX:
  * Two-way conversion between LaTeX text and MathType equation in WPS.
- * - If an equation is selected or adjacent to cursor: converts to $...$ or $$...$$
- * - If LaTeX text is selected or cursor is inside $...$ / \\[...\\]: converts to MathType 7 (Vector EMF + MTEF)
+ * Supports:
+ * - Highlighting an entire paragraph / range with multiple LaTeX formulas -> batch converts to MathType equations in-place
+ * - Highlighting an entire paragraph / range with multiple equations -> batch converts to LaTeX $...$ text in-place
+ * - Single click / collapsed cursor inside/adjacent to equation or LaTeX -> toggles single target
  */
 function ToggleLatex() {
   try {
@@ -619,8 +1017,75 @@ function ToggleLatex() {
     var selection = app ? app.Selection : null;
     if (!selection) return;
     var doc = app.ActiveDocument;
+    if (!doc) return;
 
-    // STEP 1: Check if an equation is selected or adjacent to cursor
+    var isRangeSelected = (typeof selection.Start === "number" && typeof selection.End === "number" && selection.Start !== selection.End);
+
+    // ========================================================
+    // CASE 1: User highlighted / selected a range (paragraph, sentence, etc.)
+    // ========================================================
+    if (isRangeSelected) {
+      var selText = selection.Text || "";
+      var latexMatches = findAllLatexMatches(selText);
+
+      // If no delimited matches found, check if the entire selected text itself is bare LaTeX (e.g. \\frac{1}{2})
+      if (latexMatches.length === 0 && isLatexText(selText)) {
+        latexMatches.push({
+          start: 0,
+          end: selText.length,
+          raw: selText,
+          latex: selText.trim(),
+          isDisplay: false
+        });
+      }
+
+      if (latexMatches.length > 0) {
+        // Selection contains LaTeX formulas -> Batch convert LaTeX to MathType
+        wpsLog("ToggleLatex: range contains " + latexMatches.length + " LaTeX formulas -> converting to MathType");
+        ensureBridgeRunning(function () {
+          batchLatexToMathType(doc, selection, latexMatches);
+        });
+        return;
+      }
+
+      // If no LaTeX in selection text, check for equations in the selection
+      var eqTargets = findAllEquationTargetsInRange(selection.Range, doc);
+      if (eqTargets.length === 0) {
+        // Fallback check single equation
+        var singleEq = findEquationTarget(selection, doc);
+        if (singleEq) {
+          var sXml = "";
+          try { sXml = singleEq.WordOpenXML || ""; } catch (_) {}
+          if (hasEquationInXml(sXml)) {
+            eqTargets.push({
+              start: singleEq.Start,
+              end: (singleEq.End > singleEq.Start + 1) ? (singleEq.Start + 1) : singleEq.End,
+              xml: sXml,
+              isDisplay: false
+            });
+          }
+        }
+      }
+
+      if (eqTargets.length > 0) {
+        // Selection contains equations -> Batch convert Equations to LaTeX text
+        wpsLog("ToggleLatex: range contains " + eqTargets.length + " equations -> converting to LaTeX");
+        ensureBridgeRunning(function () {
+          batchEquationToLatex(doc, selection, eqTargets);
+        });
+        return;
+      }
+
+      // Selected text has neither LaTeX nor equations
+      wpsLog("ToggleLatex: no equation or LaTeX found in selected range");
+      alert("Không tìm thấy công thức hoặc mã LaTeX nào trong vùng chọn!\n\nBạn có thể bôi đen đoạn văn bản chứa mã LaTeX ($...$) hoặc công thức để chuyển đổi.");
+      return;
+    }
+
+    // ========================================================
+    // CASE 2: Selection is collapsed (single cursor insertion point)
+    // ========================================================
+    // 2.1 Check if an equation is selected or adjacent to cursor
     var eqRange = findEquationTarget(selection, doc);
     var eqXml = "";
 
@@ -645,8 +1110,8 @@ function ToggleLatex() {
     }
 
     if (eqXml && eqRange) {
-      // Convert equation to LaTeX text
-      wpsLog("ToggleLatex: converting equation to LaTeX");
+      // Convert single equation to LaTeX text
+      wpsLog("ToggleLatex: converting single equation to LaTeX");
       ensureBridgeRunning(function () {
         ajaxPost(
           BRIDGE_URL + "/convert/snippet",
@@ -669,7 +1134,6 @@ function ToggleLatex() {
 
                 var latexStr = isDisplay ? ("$$" + clean + "$$") : ("$" + clean + "$");
 
-                // Clamp shape range to 1 character if it is an InlineShape
                 var rStart = eqRange.Start;
                 var rEnd = eqRange.End;
                 try {
@@ -686,6 +1150,15 @@ function ToggleLatex() {
                   replaceRange.Font.Superscript = false;
                 }
 
+                // Clean up any trailing ZWNJ if present
+                try {
+                  var afterPos = rStart + latexStr.length;
+                  var nextChar = doc.Range(afterPos, afterPos + 1);
+                  if (nextChar && nextChar.Text === "‌") {
+                    nextChar.Delete();
+                  }
+                } catch (_) {}
+
                 // Move cursor after the inserted LaTeX text
                 var nextPos = rStart + latexStr.length;
                 var endRange = doc.Range(nextPos, nextPos);
@@ -696,7 +1169,7 @@ function ToggleLatex() {
                   if (typeof curSel.Collapse === "function") curSel.Collapse(0);
                   if (curSel.Font) curSel.Font.Position = 0;
                 }
-                wpsLog("ToggleLatex: converted equation to LaTeX string successfully");
+                wpsLog("ToggleLatex: converted single equation to LaTeX string successfully");
               }
             } else {
               wpsLog("ToggleLatex: equation to LaTeX failed: " + responseText);
@@ -708,50 +1181,30 @@ function ToggleLatex() {
       return;
     }
 
-    // STEP 2: Check if selection or cursor is LaTeX text
+    // 2.2 Cursor is collapsed inside or adjacent to LaTeX in current paragraph
     var targetLatexRange = null;
     var rawLatexText = "";
-
-    // 2.1 User manually highlighted / selected text
-    var isRangeSelected = (typeof selection.Start === "number" && typeof selection.End === "number" && selection.Start !== selection.End);
-    if (isRangeSelected) {
-      var selText = (selection.Text || "").trim();
-      if (
-        (selText.startsWith("$") && selText.endsWith("$")) ||
-        (selText.startsWith("\\[") && selText.endsWith("\\]")) ||
-        (selText.startsWith("\\(") && selText.endsWith("\\)")) ||
-        isLatexText(selText)
-      ) {
-        targetLatexRange = selection.Range;
-        rawLatexText = selText;
-      }
-    }
-
-    // 2.2 Cursor is collapsed (insertion point) inside or adjacent to LaTeX in current paragraph
-    if (!targetLatexRange && doc) {
-      try {
-        var para = selection.Paragraphs.Item(1);
-        if (para && para.Range) {
-          var pStart = para.Range.Start;
-          var curPos = selection.Start;
-          var pText = para.Range.Text || "";
-          var relPos = curPos - pStart;
-          var found = findEnclosingLatexInPara(pText, relPos);
-          if (found) {
-            targetLatexRange = doc.Range(pStart + found.start, pStart + found.end);
-            rawLatexText = found.text;
-            wpsLog("ToggleLatex: auto-detected enclosing LaTeX at [" + (pStart + found.start) + ".." + (pStart + found.end) + "]: " + rawLatexText);
-          }
+    try {
+      var para = selection.Paragraphs.Item(1);
+      if (para && para.Range) {
+        var pStart = para.Range.Start;
+        var curPos = selection.Start;
+        var pText = para.Range.Text || "";
+        var relPos = curPos - pStart;
+        var found = findEnclosingLatexInPara(pText, relPos);
+        if (found) {
+          targetLatexRange = doc.Range(pStart + found.start, pStart + found.end);
+          rawLatexText = found.text;
+          wpsLog("ToggleLatex: auto-detected enclosing LaTeX at [" + (pStart + found.start) + ".." + (pStart + found.end) + "]: " + rawLatexText);
         }
-      } catch (e) {
-        wpsLog("ToggleLatex: auto-detection error: " + e);
       }
+    } catch (e) {
+      wpsLog("ToggleLatex: auto-detection error: " + e);
     }
 
-    // If neither equation nor LaTeX was found
     if (!targetLatexRange || !rawLatexText) {
       wpsLog("ToggleLatex: no equation or LaTeX found at cursor");
-      alert("Không tìm thấy công thức hoặc mã LaTeX nào tại vị trí con trỏ!\n\nBạn có thể đặt con trỏ bên trong mã LaTeX dạng $...$ hoặc bôi đen công thức cần chuyển đổi.");
+      alert("Không tìm thấy công thức hoặc mã LaTeX nào tại vị trí con trỏ!\n\nBạn có thể đặt con trỏ bên trong mã LaTeX dạng $...$ hoặc bôi đen đoạn văn bản cần chuyển đổi.");
       return;
     }
 
@@ -768,9 +1221,7 @@ function ToggleLatex() {
     }
 
     var docFontSize = getDocumentFontSize(targetLatexRange);
-    g_editRangeStart = targetLatexRange.Start;
-    g_editRangeEnd = targetLatexRange.End;
-    wpsLog("ToggleLatex: converting LaTeX '" + cleanLatex + "' to MathType at [" + g_editRangeStart + ".." + g_editRangeEnd + "]");
+    wpsLog("ToggleLatex: converting single LaTeX '" + cleanLatex + "' to MathType");
 
     ensureBridgeRunning(function () {
       ajaxPost(
@@ -785,14 +1236,14 @@ function ToggleLatex() {
           if (status === 200) {
             var conv = JSON.parse(responseText);
             if (conv.emf_path) {
-              InsertEmfPicture(conv);
+              insertEmfAtDocRange(doc, targetLatexRange, conv, true);
             } else if (conv.result) {
+              g_editRangeStart = targetLatexRange.Start;
+              g_editRangeEnd = targetLatexRange.End;
               InsertFlatOpcToSelection(conv.result);
             }
-            wpsLog("ToggleLatex: successfully converted LaTeX to MathType equation");
+            wpsLog("ToggleLatex: successfully converted single LaTeX to MathType equation");
           } else {
-            g_editRangeStart = null;
-            g_editRangeEnd = null;
             wpsLog("ToggleLatex: LaTeX conversion error: " + responseText);
             alert("Chuyển đổi LaTeX sang công thức thất bại:\n" + responseText);
           }
@@ -800,8 +1251,6 @@ function ToggleLatex() {
       );
     });
   } catch (err) {
-    g_editRangeStart = null;
-    g_editRangeEnd = null;
     wpsLog("ToggleLatex: unhandled error: " + err);
     console.error("ToggleLatex error:", err);
   }
@@ -893,147 +1342,32 @@ function InsertEmfPicture(waitData) {
     var app = wps.Application;
     var doc = app ? app.ActiveDocument : null;
     var sel = app ? app.Selection : null;
-    var range = null;
+    if (!doc) return false;
 
     wpsLog("InsertEmfPicture: start. editRangeStart=" + g_editRangeStart + ", editRangeEnd=" + g_editRangeEnd);
 
-    var isEdit = (doc && g_editRangeStart !== null && g_editRangeEnd !== null);
-    var insertPos = isEdit ? g_editRangeStart : (sel ? sel.Range.Start : 0);
+    var isEdit = (g_editRangeStart !== null && g_editRangeEnd !== null);
+    var targetRange = null;
 
     if (isEdit) {
       try {
-        var oldRange = doc.Range(g_editRangeStart, g_editRangeEnd);
-        wpsLog("InsertEmfPicture: deleting old equation at range [" + g_editRangeStart + ".." + g_editRangeEnd + "]");
-        oldRange.Delete();
-        range = doc.Range(insertPos, insertPos);
+        targetRange = doc.Range(g_editRangeStart, g_editRangeEnd);
+        wpsLog("InsertEmfPicture: targeting edit range [" + g_editRangeStart + ".." + g_editRangeEnd + "]");
       } catch (e) {
-        wpsLog("InsertEmfPicture: error deleting old equation: " + e);
+        wpsLog("InsertEmfPicture: error getting edit range: " + e);
       }
     }
     g_editRangeStart = null;
     g_editRangeEnd = null;
     g_editTargetRange = null;
 
-    if (!range) {
-      range = sel ? sel.Range : null;
+    if (!targetRange) {
+      targetRange = sel ? sel.Range : null;
     }
-    if (!range) return false;
+    if (!targetRange) return false;
 
-    var emfPath = waitData.emf_path;
-    if (!emfPath) return false;
-
-    wpsLog("InsertEmfPicture: calling AddPicture(" + emfPath + ") at pos " + insertPos);
-    var pic = null;
-    try {
-      pic = range.InlineShapes.AddPicture(emfPath, false, true, range);
-    } catch (e) {
-      wpsLog("InsertEmfPicture: AddPicture exception: " + e);
-      return false;
-    }
-
-    if (!pic) {
-      wpsLog("InsertEmfPicture: AddPicture returned null");
-      return false;
-    }
-
-    try {
-      if (typeof waitData.width_pt === "number" && waitData.width_pt > 0) {
-        pic.Width = waitData.width_pt;
-      }
-      if (typeof waitData.height_pt === "number" && waitData.height_pt > 0) {
-        pic.Height = waitData.height_pt;
-      }
-
-      var docFontSize = 12.0;
-      if (typeof waitData.font_pt === "number" && waitData.font_pt > 0) {
-        docFontSize = waitData.font_pt;
-      } else {
-        try {
-          if (range && range.Font && range.Font.Size > 0) {
-            docFontSize = range.Font.Size;
-          } else if (pic.Range && pic.Range.Font && pic.Range.Font.Size > 0) {
-            docFontSize = pic.Range.Font.Size;
-          }
-        } catch (_) {}
-      }
-
-      var depthPt = (typeof waitData.depth_pt === "number") ? waitData.depth_pt : 0;
-      // In Word/WPS JS API, Font.Position is in points (NOT half-points like OpenXML w:val).
-      // WPS aligns the bottom of an InlineShape with the font descent/line box bottom.
-      // To align the formula baseline with adjacent text, add font baseline offset (~11-12% of font size).
-      var fontBaselineOffset = docFontSize * 0.045; // ~0.54 pt for 12pt font
-      var pos = -Number((depthPt + fontBaselineOffset).toFixed(1));
-
-      var actualStart = (pic.Range && typeof pic.Range.Start === "number") ? pic.Range.Start : insertPos;
-      var shapeEnd = actualStart + 1;
-
-      // 1. Set baseline position strictly on the 1-character shape range [actualStart .. shapeEnd]
-      var shapeRange = doc.Range(actualStart, shapeEnd);
-      if (shapeRange && shapeRange.Font) {
-        shapeRange.Font.Position = pos;
-        wpsLog("InsertEmfPicture: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ", offset=" + fontBaselineOffset.toFixed(2) + ", docFontSize=" + docFontSize + ")");
-      }
-
-      // 2. Sanitize paragraph mark: ensure paragraph default run properties (w:pPr) are never corrupted
-      try {
-        var para = shapeRange.Paragraphs.Item(1);
-        if (para && para.Range) {
-          var pEnd = para.Range.End;
-          if (pEnd > 0) {
-            var pMark = doc.Range(pEnd - 1, pEnd);
-            if (pMark && pMark.Font) {
-              pMark.Font.Position = 0;
-              pMark.Font.Subscript = false;
-              pMark.Font.Superscript = false;
-            }
-          }
-          // If editing an equation inside existing text that previously leaked negative position,
-          // restore trailing text up to the paragraph mark if it contains no other equations
-          if (pEnd - 1 > shapeEnd) {
-            var afterTextRange = doc.Range(shapeEnd, pEnd - 1);
-            if (afterTextRange) {
-              var hasOtherShapes = (afterTextRange.InlineShapes && afterTextRange.InlineShapes.Count > 0);
-              var hasOtherMath = (afterTextRange.OMaths && afterTextRange.OMaths.Count > 0);
-              if (!hasOtherShapes && !hasOtherMath && afterTextRange.Font && afterTextRange.Font.Position < 0) {
-                afterTextRange.Font.Position = 0;
-                wpsLog("InsertEmfPicture: restored leaked position on trailing text in paragraph");
-              }
-            }
-          }
-        }
-      } catch (e) {
-        wpsLog("InsertEmfPicture: paragraph mark sanitization error: " + e);
-      }
-
-      // 3. Position cursor immediately after shape with Position = 0 for subsequent typing
-      try {
-        var cursorTarget = shapeEnd;
-        var endRange = doc.Range(cursorTarget, cursorTarget);
-        endRange.Select();
-        var curSel = app.Selection;
-        if (curSel && curSel.Font) {
-          curSel.Font.Position = 0;
-          curSel.Font.Subscript = false;
-          curSel.Font.Superscript = false;
-        }
-        if (curSel && typeof curSel.Collapse === "function") {
-          curSel.Collapse(0); // wdCollapseEnd
-        }
-        if (curSel && curSel.Font) {
-          curSel.Font.Position = 0;
-          curSel.Font.Subscript = false;
-          curSel.Font.Superscript = false;
-        }
-        wpsLog("InsertEmfPicture: cursor placed at " + cursorTarget + " with Position=0");
-      } catch (e) {
-        wpsLog("InsertEmfPicture: cursor placement error: " + e);
-      }
-    } catch (e) {
-      wpsLog("InsertEmfPicture: formatting error: " + e);
-    }
-
-    wpsLog("InsertEmfPicture: finished successfully.");
-    return true;
+    var pic = insertEmfAtDocRange(doc, targetRange, waitData, true);
+    return pic !== null;
   } catch (err) {
     wpsLog("InsertEmfPicture: unhandled error: " + err);
     return false;
