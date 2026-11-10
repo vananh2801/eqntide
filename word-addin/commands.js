@@ -8,6 +8,42 @@ Office.onReady(() => {
 });
 
 /**
+ * Helper: Find all LaTeX math formulas ($...$, $$...$$, \[...\], \(...\)) within text.
+ */
+function findAllLatexMatches(text) {
+  if (!text || typeof text !== "string") return [];
+  const regex = /(\$\$[\s\S]*?\$\$)|(\\\[[\s\S]*?\\\])|(\\\([\s\S]*?\\\))|(\$(?:\\\$|[^\$\r\n])+?\$)/g;
+  const matches = [];
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    const raw = m[0];
+    let isDisplay = false;
+    let inner = raw;
+    if (raw.startsWith("$$") && raw.endsWith("$$") && raw.length >= 4) {
+      isDisplay = true;
+      inner = raw.slice(2, -2).trim();
+    } else if (raw.startsWith("\\[") && raw.endsWith("\\]") && raw.length >= 4) {
+      isDisplay = true;
+      inner = raw.slice(2, -2).trim();
+    } else if (raw.startsWith("\\(") && raw.endsWith("\\)") && raw.length >= 4) {
+      isDisplay = false;
+      inner = raw.slice(2, -2).trim();
+    } else if (raw.startsWith("$") && raw.endsWith("$") && raw.length >= 2) {
+      isDisplay = false;
+      inner = raw.slice(1, -1).trim();
+    }
+    matches.push({
+      start: m.index,
+      end: m.index + raw.length,
+      raw: raw,
+      latex: inner,
+      isDisplay: isDisplay
+    });
+  }
+  return matches;
+}
+
+/**
  * 1. Insert Equation at cursor:
  * Opens a new session in desktop editor, waits for user confirmation,
  * then inserts the resulting Flat OPC OOXML into Word.
@@ -104,8 +140,11 @@ async function editEquation(event) {
 
 /**
  * 3. Toggle LaTeX:
- * If selected text is LaTeX ($...$ or \[...\]), converts it to Word native equation.
- * If selected object is an equation, converts it to LaTeX text.
+ * Two-way toggle between LaTeX text and Word native equations (OMML).
+ * Supports:
+ * - Highlighting an entire paragraph / range with multiple LaTeX formulas -> batch converts to equations in-place
+ * - Single selection containing LaTeX ($...$ or \[...\]) -> converts to equation
+ * - Selected equation -> converts to LaTeX $...$ text string
  */
 async function toggleLatex(event) {
   try {
@@ -116,40 +155,42 @@ async function toggleLatex(event) {
       await context.sync();
 
       const selText = (selection.text || "").trim();
+      const latexMatches = findAllLatexMatches(selText);
 
-      // Case A: Selected text is LaTeX ($...$ or \[...\])
-      if (
-        (selText.startsWith("$") && selText.endsWith("$")) ||
-        (selText.startsWith("\\[") && selText.endsWith("\\]"))
-      ) {
-        let cleanLatex = selText;
-        if (cleanLatex.startsWith("$$") && cleanLatex.endsWith("$$")) {
-          cleanLatex = cleanLatex.slice(2, -2).trim();
-        } else if (cleanLatex.startsWith("$") && cleanLatex.endsWith("$")) {
-          cleanLatex = cleanLatex.slice(1, -1).trim();
-        } else if (cleanLatex.startsWith("\\[") && cleanLatex.endsWith("\\]")) {
-          cleanLatex = cleanLatex.slice(2, -2).trim();
+      // Case A: Selection contains one or more LaTeX formulas
+      if (latexMatches.length > 0) {
+        for (let i = 0; i < latexMatches.length; i++) {
+          const match = latexMatches[i];
+          try {
+            const convRes = await fetch(`${BRIDGE_URL}/convert/snippet`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                data: match.latex,
+                from: "latex",
+                to: "flat_opc_omml"
+              })
+            });
+
+            if (convRes.ok) {
+              const convData = await convRes.json();
+              if (convData.result) {
+                // Search match.raw within the selection range
+                const searchResults = selection.search(match.raw, { matchCase: true });
+                searchResults.load("items");
+                await context.sync();
+
+                if (searchResults.items.length > 0) {
+                  searchResults.items[0].insertOoxml(convData.result, Word.InsertLocation.replace);
+                  await context.sync();
+                }
+              }
+            }
+          } catch (e) {
+            console.warn(`Failed to convert LaTeX formula "${match.raw}":`, e);
+          }
         }
-
-        const convRes = await fetch(`${BRIDGE_URL}/convert/snippet`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            data: cleanLatex,
-            from: "latex",
-            to: "flat_opc_omml"
-          })
-        });
-
-        if (convRes.ok) {
-          const convData = await convRes.json();
-          Office.context.document.setSelectedDataAsync(
-            convData.result,
-            { coercionType: Office.CoercionType.Ooxml },
-            () => event.completed()
-          );
-          return;
-        }
+        return;
       }
 
       // Case B: Selection contains an equation, toggle to LaTeX string
@@ -159,16 +200,18 @@ async function toggleLatex(event) {
         body: JSON.stringify({
           data: ooxml.value,
           from: "flat_opc",
-          to: "mathml"
+          to: "latex"
         })
       });
 
       if (snipRes.ok) {
         const snipData = await snipRes.json();
-        // Insert as inline LaTeX text placeholder
-        const latexText = `$${snipData.result}$`;
-        selection.insertText(latexText, Word.InsertLocation.replace);
-        await context.sync();
+        if (snipData && snipData.result) {
+          const clean = snipData.result.trim();
+          const latexText = `$${clean}$`;
+          selection.insertText(latexText, Word.InsertLocation.replace);
+          await context.sync();
+        }
       }
     });
   } catch (err) {

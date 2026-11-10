@@ -1,5 +1,8 @@
 # Installation & Sideloading Guide
 
+> [!NOTE]
+> **Windows System Requirements**: Windows 10 (64-bit) or Windows 11 (64-bit) is required for the Desktop GUI and pre-built binaries. (Windows 7 / 8.1 are no longer supported by modern Rust runtimes and WebView2).
+
 This guide covers building the **omml-converter** CLI & Desktop Suite from source, running the application, and sideloading the **Microsoft Word** and **WPS Office** Add-ins on Windows, Linux, and macOS.
 
 ---

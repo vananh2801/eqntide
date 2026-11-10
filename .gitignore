@@ -4,3 +4,10 @@ target/
 node_modules/
 dist/
 /skills
+*.exe
+*.zip
+word-template/tmp_build/
+word-template/*.bin
+word-template/*.new
+release/*.exe
+release/*.zip

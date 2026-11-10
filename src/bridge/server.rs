@@ -252,12 +252,17 @@ fn serve_addin_file(
         return None;
     }
 
-    let candidates = [
+    let mut candidates = vec![
         std::path::PathBuf::from(folder).join(rel_path),
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(folder)
             .join(rel_path),
     ];
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            candidates.push(parent.join(folder).join(rel_path));
+        }
+    }
 
     let mut found_bytes = None;
     let mut resolved_path = None;
