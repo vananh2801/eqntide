@@ -715,7 +715,13 @@ function insertEmfAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
     var shapeRange = doc.Range(actualStart, shapeEnd);
     if (shapeRange && shapeRange.Font) {
       shapeRange.Font.Position = pos;
+      wpsLog("insertEmfAtDocRange: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ", offset=" + fontBaselineOffset.toFixed(2) + ", docFontSize=" + docFontSize + ")");
     }
+    try {
+      if (pic && pic.Range && pic.Range.Font) {
+        pic.Range.Font.Position = pos;
+      }
+    } catch (_) {}
 
     // Sanitize paragraph mark
     try {
@@ -751,9 +757,12 @@ function insertEmfAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
         endRange.Select();
         var curSel = wps.Application ? wps.Application.Selection : null;
         if (curSel) {
-          if (curSel.Font) curSel.Font.Position = 0;
           if (typeof curSel.Collapse === "function") curSel.Collapse(0);
-          if (curSel.Font) curSel.Font.Position = 0;
+          if (curSel.Font) {
+            curSel.Font.Position = 0;
+            curSel.Font.Subscript = false;
+            curSel.Font.Superscript = false;
+          }
         }
       } catch (_) {}
     }
@@ -862,6 +871,13 @@ function batchLatexToMathType(doc, selection, latexMatches) {
   var docFontSize = getDocumentFontSize(selection.Range);
   wpsLog("batchLatexToMathType: found " + latexMatches.length + " formulas in selection [start=" + baseStart + "]");
 
+  // Collapse selection immediately so the highlight is cleared and no selection-level formatting leaks
+  try {
+    if (selection && typeof selection.Collapse === "function") {
+      selection.Collapse(0);
+    }
+  } catch (_) {}
+
   var total = latexMatches.length;
   var completed = 0;
 
@@ -901,14 +917,19 @@ function batchLatexToMathType(doc, selection, latexMatches) {
               }
             }
 
-            // Reset selection formatting so subsequent typing does not inherit baseline
+            // Collapse selection at the end so subsequent typing does not inherit baseline
             try {
               var app = wps.Application;
               var curSel = app ? app.Selection : null;
               if (curSel) {
-                if (curSel.Font) curSel.Font.Position = 0;
-                if (typeof curSel.Collapse === "function") curSel.Collapse(0);
-                if (curSel.Font) curSel.Font.Position = 0;
+                if (typeof curSel.Collapse === "function") {
+                  curSel.Collapse(0);
+                }
+                if (curSel.Font) {
+                  curSel.Font.Position = 0;
+                  curSel.Font.Subscript = false;
+                  curSel.Font.Superscript = false;
+                }
               }
             } catch (_) {}
 
@@ -988,9 +1009,14 @@ function batchEquationToLatex(doc, selection, eqTargets) {
               var app = wps.Application;
               var curSel = app ? app.Selection : null;
               if (curSel) {
-                if (curSel.Font) curSel.Font.Position = 0;
-                if (typeof curSel.Collapse === "function") curSel.Collapse(0);
-                if (curSel.Font) curSel.Font.Position = 0;
+                if (typeof curSel.Collapse === "function") {
+                  curSel.Collapse(0);
+                }
+                if (curSel.Font) {
+                  curSel.Font.Position = 0;
+                  curSel.Font.Subscript = false;
+                  curSel.Font.Superscript = false;
+                }
               }
             } catch (_) {}
 
@@ -1165,9 +1191,12 @@ function ToggleLatex() {
                 endRange.Select();
                 var curSel = app.Selection;
                 if (curSel) {
-                  if (curSel.Font) curSel.Font.Position = 0;
                   if (typeof curSel.Collapse === "function") curSel.Collapse(0);
-                  if (curSel.Font) curSel.Font.Position = 0;
+                  if (curSel.Font) {
+                    curSel.Font.Position = 0;
+                    curSel.Font.Subscript = false;
+                    curSel.Font.Superscript = false;
+                  }
                 }
                 wpsLog("ToggleLatex: converted single equation to LaTeX string successfully");
               }
@@ -1440,11 +1469,6 @@ function InsertFlatOpcToSelection(flatOpcXml) {
           endSelRange.Select();
           var curSel = app.Selection;
           if (curSel) {
-            if (curSel.Font) {
-              curSel.Font.Position = 0;
-              curSel.Font.Subscript = false;
-              curSel.Font.Superscript = false;
-            }
             if (typeof curSel.Collapse === "function") {
               curSel.Collapse(0);
             }
