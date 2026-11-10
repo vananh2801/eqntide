@@ -296,6 +296,15 @@ function EditEquation() {
           } else if (prevChar.OMaths && prevChar.OMaths.Count > 0) {
             targetRange = prevChar.OMaths.Item(1).Range;
             isEquationFound = true;
+          } else if (prevChar.Text === "‌" && start > 1) {
+            var beforeZwnj = doc.Range(start - 2, start - 1);
+            if (beforeZwnj.InlineShapes && beforeZwnj.InlineShapes.Count > 0) {
+              targetRange = beforeZwnj.InlineShapes.Item(1).Range;
+              isEquationFound = true;
+            } else if (beforeZwnj.OMaths && beforeZwnj.OMaths.Count > 0) {
+              targetRange = beforeZwnj.OMaths.Item(1).Range;
+              isEquationFound = true;
+            }
           }
         }
         if (!targetRange && doc && end < (doc.Content ? doc.Content.End : 999999)) {
@@ -378,14 +387,16 @@ function EditEquation() {
         wpsLog("EditEquation: clamped range from [" + tStart + ".." + tEnd + "] to [" + tStart + ".." + (tStart + 1) + "]");
         tEnd = tStart + 1;
       }
-      // Check if immediate next character is U+200C (reset anchor), include it in deletion
+      // Check if immediate next character is U+200C (reset anchor), include in deletion (loop for all adjacent)
       try {
         var doc = app.ActiveDocument;
-        if (doc && tEnd < (doc.Content ? doc.Content.End : 999999)) {
+        while (doc && tEnd < (doc.Content ? doc.Content.End : 999999)) {
           var nextChar = doc.Range(tEnd, tEnd + 1);
           if (nextChar && nextChar.Text === "‌") {
             tEnd = tEnd + 1;
             wpsLog("EditEquation: included adjacent U+200C in editRange");
+          } else {
+            break;
           }
         }
       } catch (_) {}
@@ -671,25 +682,85 @@ function InsertEmfPicture(waitData) {
       // To align the formula baseline with adjacent text, add font baseline offset (~11-12% of font size).
       var fontBaselineOffset = docFontSize * 0.045; // ~0.54 pt for 12pt font
       var pos = -Number((depthPt + fontBaselineOffset).toFixed(1));
-      if (pic.Range && pic.Range.Font) {
-        pic.Range.Font.Position = pos;
-        wpsLog("InsertEmfPicture: set baseline Font.Position=" + pos + " (depthPt=" + depthPt + ", offset=" + fontBaselineOffset.toFixed(2) + ", docFontSize=" + docFontSize + ")");
-      }
 
-      // Add U+200C reset run with position 0 immediately after picture
-      var picEnd = pic.Range ? pic.Range.End : range.End;
-      var resetRange = doc.Range(picEnd, picEnd);
-      resetRange.InsertAfter("‌"); // U+200C
-      var zwnjRange = doc.Range(picEnd, picEnd + 1);
+      var actualStart = (pic.Range && typeof pic.Range.Start === "number") ? pic.Range.Start : insertPos;
+      var shapeEnd = actualStart + 1;
+
+      // 1. Insert U+200C reset run immediately after the picture BEFORE setting baseline position.
+      // This ensures the shape is NOT the last character touching the paragraph mark () when styled,
+      // preventing WPS from propagating negative Font.Position to the paragraph default (w:pPr).
+      var zwnjPos = shapeEnd;
+      var resetRange = doc.Range(zwnjPos, zwnjPos);
+      resetRange.InsertBefore("‌"); // U+200C
+
+      // 2. Set Font.Position = 0 on the newly inserted U+200C
+      var zwnjRange = doc.Range(zwnjPos, zwnjPos + 1);
       if (zwnjRange && zwnjRange.Font) {
         zwnjRange.Font.Position = 0;
         zwnjRange.Font.Subscript = false;
         zwnjRange.Font.Superscript = false;
       }
-      zwnjRange.Select();
-      var curSel = app.Selection;
-      if (curSel && typeof curSel.Collapse === "function") {
-        curSel.Collapse(0); // wdCollapseEnd
+
+      // 3. Set baseline position strictly on the 1-character shape range [actualStart .. shapeEnd]
+      var shapeRange = doc.Range(actualStart, shapeEnd);
+      if (shapeRange && shapeRange.Font) {
+        shapeRange.Font.Position = pos;
+        wpsLog("InsertEmfPicture: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ", offset=" + fontBaselineOffset.toFixed(2) + ", docFontSize=" + docFontSize + ")");
+      }
+
+      // 4. Sanitize paragraph mark (): ensure paragraph default run properties (w:pPr) are never corrupted
+      try {
+        var para = shapeRange.Paragraphs.Item(1);
+        if (para && para.Range) {
+          var pEnd = para.Range.End;
+          if (pEnd > 0) {
+            var pMark = doc.Range(pEnd - 1, pEnd);
+            if (pMark && pMark.Font) {
+              pMark.Font.Position = 0;
+              pMark.Font.Subscript = false;
+              pMark.Font.Superscript = false;
+            }
+          }
+          // If editing an equation inside existing text that previously leaked negative position,
+          // restore trailing text up to the paragraph mark if it contains no other equations
+          if (pEnd - 1 > zwnjPos + 1) {
+            var afterTextRange = doc.Range(zwnjPos + 1, pEnd - 1);
+            if (afterTextRange) {
+              var hasOtherShapes = (afterTextRange.InlineShapes && afterTextRange.InlineShapes.Count > 0);
+              var hasOtherMath = (afterTextRange.OMaths && afterTextRange.OMaths.Count > 0);
+              if (!hasOtherShapes && !hasOtherMath && afterTextRange.Font && afterTextRange.Font.Position < 0) {
+                afterTextRange.Font.Position = 0;
+                wpsLog("InsertEmfPicture: restored leaked position on trailing text in paragraph");
+              }
+            }
+          }
+        }
+      } catch (e) {
+        wpsLog("InsertEmfPicture: paragraph mark sanitization error: " + e);
+      }
+
+      // 5. Position cursor immediately after U+200C with Position = 0 for subsequent typing
+      try {
+        var cursorTarget = zwnjPos + 1;
+        var endRange = doc.Range(cursorTarget, cursorTarget);
+        endRange.Select();
+        var curSel = app.Selection;
+        if (curSel && curSel.Font) {
+          curSel.Font.Position = 0;
+          curSel.Font.Subscript = false;
+          curSel.Font.Superscript = false;
+        }
+        if (curSel && typeof curSel.Collapse === "function") {
+          curSel.Collapse(0); // wdCollapseEnd
+        }
+        if (curSel && curSel.Font) {
+          curSel.Font.Position = 0;
+          curSel.Font.Subscript = false;
+          curSel.Font.Superscript = false;
+        }
+        wpsLog("InsertEmfPicture: cursor placed at " + cursorTarget + " with Position=0");
+      } catch (e) {
+        wpsLog("InsertEmfPicture: cursor placement error: " + e);
       }
     } catch (e) {
       wpsLog("InsertEmfPicture: formatting error: " + e);
@@ -816,7 +887,27 @@ function InsertFlatOpcToSelection(flatOpcXml) {
           if (typeof curSel.Collapse === "function") {
             curSel.Collapse(0);
           }
+          if (curSel.Font) {
+            curSel.Font.Position = 0;
+            curSel.Font.Subscript = false;
+            curSel.Font.Superscript = false;
+          }
         }
+        // Sanitize paragraph mark
+        try {
+          var para = zwnjSelRange.Paragraphs.Item(1);
+          if (para && para.Range) {
+            var pEnd = para.Range.End;
+            if (pEnd > 0) {
+              var pMark = doc.Range(pEnd - 1, pEnd);
+              if (pMark && pMark.Font) {
+                pMark.Font.Position = 0;
+                pMark.Font.Subscript = false;
+                pMark.Font.Superscript = false;
+              }
+            }
+          }
+        } catch (_) {}
         wpsLog("InsertFlatOpcToSelection: selection collapsed to end of U+200C at " + actualZwnjPos);
       } catch (e) {
         wpsLog("InsertFlatOpcToSelection: error: " + e);
