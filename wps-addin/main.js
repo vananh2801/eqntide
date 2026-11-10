@@ -642,7 +642,7 @@ function InsertEmfPicture(waitData) {
       // In Word/WPS JS API, Font.Position is in points (NOT half-points like OpenXML w:val).
       // WPS aligns the bottom of an InlineShape with the font descent/line box bottom.
       // To align the formula baseline with adjacent text, add font baseline offset (~11-12% of font size).
-      var fontBaselineOffset = docFontSize * 0.115; // ~1.38 pt for 12pt font
+      var fontBaselineOffset = docFontSize * 0.045; // ~0.54 pt for 12pt font
       var pos = -Number((depthPt + fontBaselineOffset).toFixed(1));
       if (pic.Range && pic.Range.Font) {
         pic.Range.Font.Position = pos;
