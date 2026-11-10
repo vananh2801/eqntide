@@ -690,8 +690,22 @@ function InsertEmfPicture(waitData) {
       // This ensures the shape is NOT the last character touching the paragraph mark when styled,
       // preventing WPS from propagating negative Font.Position to the paragraph default (w:pPr).
       var zwnjPos = shapeEnd;
-      var resetRange = doc.Range(zwnjPos, zwnjPos);
-      resetRange.InsertBefore("‌"); // U+200C
+      try {
+        var resetRange = doc.Range(zwnjPos, zwnjPos);
+        resetRange.InsertAfter("‌"); // U+200C
+      } catch (e) {
+        wpsLog("InsertEmfPicture: InsertAfter error: " + e);
+      }
+      try {
+        var checkRange = doc.Range(zwnjPos, zwnjPos + 1);
+        if (!checkRange || checkRange.Text !== "‌") {
+          var fallbackRange = doc.Range(zwnjPos, zwnjPos);
+          fallbackRange.Text = "‌";
+          wpsLog("InsertEmfPicture: inserted ZWNJ via fallback Text");
+        }
+      } catch (e) {
+        wpsLog("InsertEmfPicture: fallback Text error: " + e);
+      }
 
       // 2. Set Font.Position = 0 on the newly inserted U+200C
       var zwnjRange = doc.Range(zwnjPos, zwnjPos + 1);
