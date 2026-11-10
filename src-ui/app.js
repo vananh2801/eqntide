@@ -93,13 +93,16 @@
     }
     if (payload && payload.session_id) {
       console.log("[MathEditor] Direct loadSession invoked:", payload);
-      loadSessionData(payload.session_id, payload.mathml, payload.latex);
+      loadSessionData(payload.session_id, payload.mathml, payload.latex, payload.font_pt);
     }
   };
 
-  async function loadSessionData(sessionId, mathml, latex) {
+  async function loadSessionData(sessionId, mathml, latex, fontPt) {
     if (!sessionId) return;
     activeSessionId = sessionId;
+    if (typeof fontPt === 'number' && fontPt > 0 && fontSizeInput) {
+      fontSizeInput.value = fontPt;
+    }
     console.log("Loaded active session:", activeSessionId);
 
     if (tabEditorBtn) {
@@ -143,6 +146,9 @@
       const res = await fetch(`${BRIDGE_URL}/session/${sessionId}`);
       if (res.ok) {
         const data = await res.json();
+        if (typeof data.font_pt === 'number' && data.font_pt > 0 && fontSizeInput) {
+          fontSizeInput.value = data.font_pt;
+        }
         if (data.latex && data.latex.trim().length > 0) {
           latexSource.value = data.latex.trim();
           if (mathField) {
@@ -251,7 +257,7 @@
       } catch (_) {}
     }
     if (payload.session_id) {
-      loadSessionData(payload.session_id, payload.mathml, payload.latex);
+      loadSessionData(payload.session_id, payload.mathml, payload.latex, payload.font_pt);
     }
   };
 
@@ -309,7 +315,7 @@
         const data = await res.json();
         if (data.session_id && data.session_id !== activeSessionId) {
           console.log('[MathEditor] Detected new active bridge session:', data.session_id);
-          await loadSessionData(data.session_id);
+          await loadSessionData(data.session_id, null, null, data.font_pt);
         }
       }
     } catch (_) {}

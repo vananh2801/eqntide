@@ -32,7 +32,7 @@ pub const DEFAULT_HOST: &str = "127.0.0.1";
 
 /// Callback invoked when a session is opened or window show is requested.
 /// Arguments: `(session_id, mathml, latex)`
-pub type WindowCallback = Arc<dyn Fn(&str, Option<&str>, Option<&str>) + Send + Sync + 'static>;
+pub type WindowCallback = Arc<dyn Fn(&str, Option<&str>, Option<&str>, Option<f32>) + Send + Sync + 'static>;
 
 /// Handle to a running bridge server instance.
 pub struct ServerHandle {
@@ -460,17 +460,17 @@ fn handle_http_request(
                 .unwrap_or_default();
             eprintln!("POST /window/show for session_id='{}'", sid);
 
-            let (m, l) = if !sid.is_empty() {
+            let (m, l, f) = if !sid.is_empty() {
                 session_mgr
                     .get_session(&sid)
-                    .map(|(m, l)| (Some(m), l))
-                    .unwrap_or((None, None))
+                    .map(|(m, l, f)| (Some(m), l, f))
+                    .unwrap_or((None, None, None))
             } else {
-                (None, None)
+                (None, None, None)
             };
 
             if let Some(ref cb) = window_cb {
-                cb(&sid, m.as_deref(), l.as_deref());
+                cb(&sid, m.as_deref(), l.as_deref(), f);
             } else {
                 spawn_desktop_editor(&sid);
             }
@@ -496,14 +496,15 @@ fn handle_http_request(
                 && p != "/session/latest" =>
         {
             let sid = p.strip_prefix("/session/").unwrap_or("");
-            if let Some((mathml, latex)) = session_mgr.get_session(sid) {
+            if let Some((mathml, latex, font_pt)) = session_mgr.get_session(sid) {
                 let resp = json_response(
                     200,
                     &serde_json::json!({
                         "status": "ok",
                         "session_id": sid,
                         "mathml": mathml,
-                        "latex": latex
+                        "latex": latex,
+                        "font_pt": font_pt,
                     }),
                     origin,
                 );
@@ -515,11 +516,13 @@ fn handle_http_request(
 
         (Method::Get, "/session/latest") => {
             let active = session_mgr.get_latest_session_id();
+            let font_pt = active.as_deref().and_then(|id| session_mgr.get_session(id)).and_then(|(_, _, f)| f);
             let resp = json_response(
                 200,
                 &serde_json::json!({
                     "status": "ok",
-                    "session_id": active
+                    "session_id": active,
+                    "font_pt": font_pt,
                 }),
                 origin,
             );
@@ -579,9 +582,9 @@ fn handle_http_request(
                 }
             };
 
-            let session_id = session_mgr.create_session(mathml.clone(), latex.clone());
+            let session_id = session_mgr.create_session(mathml.clone(), latex.clone(), open_req.font_pt);
             if let Some(ref cb) = window_cb {
-                cb(&session_id, Some(&mathml), latex.as_deref());
+                cb(&session_id, Some(&mathml), latex.as_deref(), open_req.font_pt);
             } else {
                 spawn_desktop_editor(&session_id);
             }
@@ -592,6 +595,7 @@ fn handle_http_request(
                     session_id,
                     mathml,
                     latex,
+                    font_pt: open_req.font_pt,
                 },
                 origin,
             );
@@ -624,6 +628,7 @@ fn handle_http_request(
                     width_pt,
                     height_pt,
                     depth_pt,
+                    font_pt,
                 }) => {
                     let resp = json_response(
                         200,
@@ -637,6 +642,7 @@ fn handle_http_request(
                             width_pt,
                             height_pt,
                             depth_pt,
+                            font_pt,
                         },
                         origin,
                     );
@@ -655,6 +661,7 @@ fn handle_http_request(
                             width_pt: None,
                             height_pt: None,
                             depth_pt: None,
+                            font_pt: None,
                         },
                         origin,
                     );
@@ -673,6 +680,7 @@ fn handle_http_request(
                             width_pt: None,
                             height_pt: None,
                             depth_pt: None,
+                            font_pt: None,
                         },
                         origin,
                     );
@@ -769,6 +777,7 @@ fn handle_http_request(
                 width_pt,
                 height_pt,
                 depth_pt,
+                Some(upd_req.font_pt),
             ) {
                 let _ = req.respond(error_response(404, e, origin));
                 return;

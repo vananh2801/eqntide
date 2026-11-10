@@ -18,6 +18,7 @@ pub enum SessionState {
         width_pt: Option<f32>,
         height_pt: Option<f32>,
         depth_pt: Option<f32>,
+        font_pt: Option<f32>,
     },
     /// Session was closed or cancelled by user without saving.
     Cancelled,
@@ -28,6 +29,7 @@ pub struct SessionData {
     pub id: String,
     pub initial_mathml: String,
     pub initial_latex: Option<String>,
+    pub initial_font_pt: Option<f32>,
     pub created_at: Instant,
     pub state: SessionState,
 }
@@ -68,14 +70,20 @@ impl SessionManager {
         latest.map(|(id, _)| id)
     }
 
-    /// Register a new session with initial MathML and optional LaTeX.
-    pub fn create_session(&self, initial_mathml: String, initial_latex: Option<String>) -> String {
+    /// Register a new session with initial MathML, optional LaTeX, and optional document font size.
+    pub fn create_session(
+        &self,
+        initial_mathml: String,
+        initial_latex: Option<String>,
+        initial_font_pt: Option<f32>,
+    ) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let entry = Arc::new(SessionEntry {
             data: Mutex::new(SessionData {
                 id: id.clone(),
                 initial_mathml,
                 initial_latex,
+                initial_font_pt,
                 created_at: Instant::now(),
                 state: SessionState::Waiting,
             }),
@@ -95,12 +103,12 @@ impl SessionManager {
         Some(data.initial_mathml.clone())
     }
 
-    /// Retrieve the initial MathML and LaTeX of an active session.
-    pub fn get_session(&self, id: &str) -> Option<(String, Option<String>)> {
+    /// Retrieve the initial MathML, LaTeX, and font_pt of an active session.
+    pub fn get_session(&self, id: &str) -> Option<(String, Option<String>, Option<f32>)> {
         let lock = self.sessions.lock().unwrap();
         let entry = lock.get(id)?;
         let data = entry.data.lock().unwrap();
-        Some((data.initial_mathml.clone(), data.initial_latex.clone()))
+        Some((data.initial_mathml.clone(), data.initial_latex.clone(), data.initial_font_pt))
     }
 
     /// Update a session with the newly generated equation payloads, notifying any waiting long-poll request.
@@ -114,6 +122,7 @@ impl SessionManager {
         width_pt: Option<f32>,
         height_pt: Option<f32>,
         depth_pt: Option<f32>,
+        font_pt: Option<f32>,
     ) -> Result<(), &'static str> {
         let entry = {
             let lock = self.sessions.lock().unwrap();
@@ -130,6 +139,7 @@ impl SessionManager {
                 width_pt,
                 height_pt,
                 depth_pt,
+                font_pt,
             };
         }
         entry.cond.notify_all();

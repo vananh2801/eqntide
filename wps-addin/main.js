@@ -150,13 +150,34 @@ function OnAction(control) {
  * 1. Insert Equation:
  * Opens a new session in desktop editor and inserts the resulting Flat OPC XML.
  */
+
+function getDocumentFontSize(range) {
+  var size = 12.0;
+  try {
+    if (range && range.Font && range.Font.Size > 0) {
+      size = Number(range.Font.Size);
+    } else {
+      var app = wps.WpsApplication();
+      if (app && app.Selection && app.Selection.Font && app.Selection.Font.Size > 0) {
+        size = Number(app.Selection.Font.Size);
+      } else if (app && app.ActiveDocument && app.ActiveDocument.ActiveWindow && app.ActiveDocument.ActiveWindow.Selection && app.ActiveDocument.ActiveWindow.Selection.Font && app.ActiveDocument.ActiveWindow.Selection.Font.Size > 0) {
+        size = Number(app.ActiveDocument.ActiveWindow.Selection.Font.Size);
+      }
+    }
+  } catch (e) {
+    wpsLog("getDocumentFontSize error: " + e);
+  }
+  return (size > 0 && isFinite(size)) ? size : 12.0;
+}
+
 function InsertEquation() {
   wpsLog("InsertEquation clicked");
   cancelPendingSession();
+  var docFontSize = getDocumentFontSize();
   ensureBridgeRunning(function () {
     ajaxPost(
       BRIDGE_URL + "/session/open",
-      JSON.stringify({ data: "", format: "auto", target_mode: "mathtype" }),
+      JSON.stringify({ data: "", format: "auto", target_mode: "mathtype", font_pt: docFontSize }),
       function (status, responseText) {
         if (status !== 200) {
           console.error("Bridge error (" + status + "): " + responseText);
@@ -375,7 +396,8 @@ function EditEquation() {
       g_editRangeStart = null;
       g_editRangeEnd = null;
     }
-    wpsLog("EditEquation: Found equation, payload len=" + selData.length + ", sending /session/open...");
+    var docFontSize = getDocumentFontSize(targetRange);
+    wpsLog("EditEquation: Found equation, payload len=" + selData.length + ", font_pt=" + docFontSize + ", sending /session/open...");
     cancelPendingSession();
 
     ensureBridgeRunning(function () {
@@ -384,7 +406,8 @@ function EditEquation() {
         JSON.stringify({
           data: selData,
           format: "auto",
-          target_mode: "mathtype"
+          target_mode: "mathtype",
+          font_pt: docFontSize
         }),
         function (status, responseText) {
           wpsLog("EditEquation: /session/open response (" + status + "): " + responseText);
@@ -630,13 +653,17 @@ function InsertEmfPicture(waitData) {
       }
 
       var docFontSize = 12.0;
-      try {
-        if (range && range.Font && range.Font.Size > 0) {
-          docFontSize = range.Font.Size;
-        } else if (pic.Range && pic.Range.Font && pic.Range.Font.Size > 0) {
-          docFontSize = pic.Range.Font.Size;
-        }
-      } catch (_) {}
+      if (typeof waitData.font_pt === "number" && waitData.font_pt > 0) {
+        docFontSize = waitData.font_pt;
+      } else {
+        try {
+          if (range && range.Font && range.Font.Size > 0) {
+            docFontSize = range.Font.Size;
+          } else if (pic.Range && pic.Range.Font && pic.Range.Font.Size > 0) {
+            docFontSize = pic.Range.Font.Size;
+          }
+        } catch (_) {}
+      }
 
       var depthPt = (typeof waitData.depth_pt === "number") ? waitData.depth_pt : 0;
       // In Word/WPS JS API, Font.Position is in points (NOT half-points like OpenXML w:val).

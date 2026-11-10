@@ -186,7 +186,7 @@ fn main() {
     let app_handle_state = Arc::new(std::sync::Mutex::new(None::<tauri::AppHandle>));
     let app_handle_cb = Arc::clone(&app_handle_state);
 
-    let window_cb: omml_converter::WindowCallback = Arc::new(move |session_id, mathml, latex| {
+    let window_cb: omml_converter::WindowCallback = Arc::new(move |session_id, mathml, latex, font_pt| {
         let lock = app_handle_cb.lock().unwrap();
         if let Some(ref app) = *lock {
             let app_clone = app.clone();
@@ -197,7 +197,8 @@ fn main() {
                 let payload = serde_json::json!({
                     "session_id": sid,
                     "mathml": m,
-                    "latex": l
+                    "latex": l,
+                    "font_pt": font_pt,
                 });
                 let _ = app_clone.emit("open-session", &payload);
                 let _ = app_clone.emit_to(tauri::EventTarget::any(), "open-session", &payload);

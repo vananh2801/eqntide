@@ -26,7 +26,7 @@ fn default_preview() -> String {
     "emf".into()
 }
 
-/// Response returned by `GET /health`.
+/// Response returned by `GET /health``.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HealthResponse {
     pub status: String,
@@ -46,6 +46,9 @@ pub struct SessionOpenRequest {
     /// Default target mode for the session ("omml" or "mathtype").
     #[serde(default = "default_target_mode")]
     pub target_mode: String,
+    /// Document font size in typographic points (e.g. 12.0, 14.0) at the cursor position.
+    #[serde(default)]
+    pub font_pt: Option<f32>,
 }
 
 /// Response returned by `POST /session/open`.
@@ -56,6 +59,8 @@ pub struct SessionOpenResponse {
     pub mathml: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latex: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_pt: Option<f32>,
 }
 
 /// Response returned by `GET /session/:id/wait` upon completion, cancellation, or timeout.
@@ -78,6 +83,8 @@ pub struct SessionWaitResponse {
     pub height_pt: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth_pt: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_pt: Option<f32>,
 }
 
 /// Request payload for `POST /session/:id/update`.
