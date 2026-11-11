@@ -65,4 +65,4 @@ jobs:
       - name: Check License & Security Advisories
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          arguments: check licenses bans sources
+          command-arguments: licenses bans sources
