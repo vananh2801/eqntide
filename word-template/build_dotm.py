@@ -3,8 +3,8 @@ import sys
 import zipfile
 import shutil
 
-sys.path.append("/tmp")
-from excel_press3 import CompressedVBA
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from excel_press import CompressedVBA
 
 from ms_ovba.vbaProject import VbaProject
 from ms_ovba.Models.Entities.std_module import StdModule
@@ -22,8 +22,8 @@ def patched_write_file(self):
 
 ModuleBase.write_file = patched_write_file
 
-DOTM_PATH = "word-template/MathEditor.dotm"
-BAS_PATH = "word-template/MathEditor.bas"
+DOTM_PATH = "word-template/EqnTide.dotm"
+BAS_PATH = "word-template/EqnTide.bas"
 TMP_DIR = "word-template/tmp_build"
 
 if os.path.exists(TMP_DIR):
@@ -33,7 +33,7 @@ os.makedirs(TMP_DIR, exist_ok=True)
 # 1. Generate vbaProject.bin using ms_ovba with patched compressor
 proj = VbaProject()
 proj.project_id = "{29F9E300-746A-4D92-BF39-382903C5D610}"
-mod = StdModule("MathEditor")
+mod = StdModule("EqnTide")
 mod.add_file(os.path.abspath(BAS_PATH))
 mod.normalize_file()
 proj.add_module(mod)
@@ -85,13 +85,13 @@ settings_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 styles_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"""
 
-customui14_xml = """<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+customui14_xml = r"""<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
   <ribbon>
     <tabs>
-      <tab id="MathEditorTab" label="Math Editor">
-        <group id="MathEditorEqGroup" label="Equations">
+      <tab id="EqnTideTab" label="EqnTide">
+        <group id="EqnTideEqGroup" label="Equations">
           <button id="btnToggleLatex" label="Toggle LaTeX" size="large" imageMso="EquationProfessional" onAction="RibbonToggleLatex" screentip="Toggle LaTeX (Alt + \)" supertip="Convert LaTeX to OMML or OMML equation back to LaTeX text." />
-          <button id="btnInsertEquation" label="Insert Equation" size="large" imageMso="EquationInsertGallery" onAction="RibbonInsertEquation" screentip="Insert Equation" supertip="Open MathLive equation editor." />
+          <button id="btnInsertEquation" label="Insert Equation" size="large" imageMso="EquationInsertGallery" onAction="RibbonInsertEquation" screentip="Insert Equation" supertip="Open EqnTide equation editor." />
           <button id="btnEditEquation" label="Edit Equation" size="large" imageMso="EquationNormalText" onAction="RibbonEditEquation" screentip="Edit Equation" supertip="Edit selected equation." />
           <button id="btnUpgradeMathType" label="Upgrade MathType" size="large" imageMso="EquationLinearFormat" onAction="RibbonUpgradeMathType" screentip="Upgrade MathType" supertip="Upgrade legacy MathType equations." />
         </group>
@@ -112,4 +112,5 @@ with zipfile.ZipFile(DOTM_PATH, "w", zipfile.ZIP_DEFLATED) as z:
     with open(vba_bin_path, "rb") as vf:
         z.writestr("word/vbaProject.bin", vf.read())
 
+shutil.rmtree(TMP_DIR, ignore_errors=True)
 print(f"Successfully generated: {DOTM_PATH} ({os.path.getsize(DOTM_PATH)} bytes)")

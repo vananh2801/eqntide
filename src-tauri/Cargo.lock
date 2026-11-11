@@ -988,6 +988,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "eqntide"
+version = "0.3.0"
+dependencies = [
+ "log",
+ "omml-converter",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-single-instance",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2463,19 +2476,6 @@ dependencies = [
  "ttf-parser",
  "uuid",
  "zip",
-]
-
-[[package]]
-name = "omml-editor-desktop"
-version = "0.3.0"
-dependencies = [
- "log",
- "omml-converter",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-single-instance",
 ]
 
 [[package]]

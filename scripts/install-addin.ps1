@@ -23,12 +23,12 @@ $WpsAddinDir = Join-Path $BaseDir "wps-addin"
 $ManifestPath = Join-Path $WordAddinDir "manifest.xml"
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " Math Editor Add-in Installer (Windows)" -ForegroundColor Cyan
+Write-Host " EqnTide Add-in Installer (Windows)" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 1. WPS Office JS Add-in Installation
 $WpsBasePath = Join-Path $env:APPDATA "Kingsoft\wps\jsaddons"
-$WpsTargetPath = Join-Path $WpsBasePath "MathEditor"
+$WpsTargetPath = Join-Path $WpsBasePath "EqnTide"
 
 if ($Uninstall) {
     if (Test-Path $WpsTargetPath) {
@@ -42,15 +42,15 @@ if ($Uninstall) {
         New-Item -ItemType Directory -Path $WpsTargetPath -Force | Out-Null
     }
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsTargetPath -Recurse -Force
-    $WpsVersionPath = Join-Path $WpsBasePath "MathEditor_1.0.0"
+    $WpsVersionPath = Join-Path $WpsBasePath "EqnTide_1.0.0"
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsVersionPath -Recurse -Force
 
     $PublishXml = Join-Path $WpsBasePath "publish.xml"
-    $xmlContent = "<?xml version=""1.0"" encoding=""UTF-8""?>`r`n<jsplugins>`r`n  <jsplugin name=""MathEditor"" type=""wps"" version=""1.0.0"" enable=""enable_dev"" url=""MathEditor_1.0.0/"" />`r`n  <jspluginonline name=""MathEditor"" type=""wps"" enable=""enable_dev"" debug=""true"" url=""http://127.0.0.1:17890/wps-addin/"" />`r`n</jsplugins>"
+    $xmlContent = "<?xml version=""1.0"" encoding=""UTF-8""?>`r`n<jsplugins>`r`n  <jsplugin name=""EqnTide"" type=""wps"" version=""1.0.0"" enable=""enable_dev"" url=""EqnTide_1.0.0/"" />`r`n  <jspluginonline name=""EqnTide"" type=""wps"" enable=""enable_dev"" debug=""true"" url=""http://127.0.0.1:17890/wps-addin/"" />`r`n</jsplugins>"
     Set-Content -Path $PublishXml -Value $xmlContent -Encoding UTF8
 
     $AuthJson = Join-Path $WpsBasePath "authaddin.json"
-    $jsonContent = "{`r`n  ""wps"": {`r`n    ""namelist"": ""MathEditor"",`r`n    ""MathEditor"": {`r`n      ""name"": ""MathEditor"",`r`n      ""enable"": true,`r`n      ""isload"": true,`r`n      ""path"": ""MathEditor_1.0.0/"",`r`n      ""md5"": """",`r`n      ""mode"": 2`r`n    }`r`n  }`r`n}"
+    $jsonContent = "{`r`n  ""wps"": {`r`n    ""namelist"": ""EqnTide"",`r`n    ""EqnTide"": {`r`n      ""name"": ""EqnTide"",`r`n      ""enable"": true,`r`n      ""isload"": true,`r`n      ""path"": ""EqnTide_1.0.0/"",`r`n      ""md5"": """",`r`n      ""mode"": 2`r`n    }`r`n  }`r`n}"
     Set-Content -Path $AuthJson -Value $jsonContent -Encoding UTF8
 
     Write-Host "[+] WPS Add-in successfully installed to $WpsTargetPath" -ForegroundColor Green
@@ -62,7 +62,7 @@ $RegistryPath = "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer"
 if ($Uninstall) {
     if (Test-Path $RegistryPath) {
         Write-Host "--> Removing Word Add-in Developer Catalog..." -ForegroundColor Yellow
-        Remove-ItemProperty -Path $RegistryPath -Name "MathEditor" -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path $RegistryPath -Name "EqnTide" -ErrorAction SilentlyContinue
         Write-Host "[+] Word Add-in registry entry removed." -ForegroundColor Green
     }
 } else {
@@ -70,7 +70,7 @@ if ($Uninstall) {
     if (!(Test-Path $RegistryPath)) {
         New-Item -Path $RegistryPath -Force | Out-Null
     }
-    Set-ItemProperty -Path $RegistryPath -Name "MathEditor" -Value $ManifestPath -Type String
+    Set-ItemProperty -Path $RegistryPath -Name "EqnTide" -Value $ManifestPath -Type String
     Write-Host "[+] Word Add-in registered via Developer Catalog." -ForegroundColor Green
 
     # Enable loopback exemption for local webview (Office JS localhost / 127.0.0.1 bridge access)

@@ -1,4 +1,4 @@
-Attribute VB_Name = "MathEditor"
+Attribute VB_Name = "EqnTide"
 Option Explicit
 
 Private Const BRIDGE_URL As String = "http://127.0.0.1:17890/convert"
@@ -67,7 +67,7 @@ Public Sub ToggleLatexMacro()
 
     If Len(Trim(txt)) = 0 Then
         ' Expand selection to current paragraph or word if nothing selected
-        MsgBox "Please select a LaTeX expression (e.g. $x+1=2$) or an equation.", vbInformation, "Math Editor"
+        MsgBox "Please select a LaTeX expression (e.g. $x+1=2$) or an equation.", vbInformation, "EqnTide"
         Exit Sub
     End If
 
@@ -124,7 +124,7 @@ Public Sub ToggleLatexMacro()
     Exit Sub
 
 ErrorHandler:
-    MsgBox "Error in Toggle LaTeX: " & Err.Description, vbExclamation, "Math Editor"
+    MsgBox "Error in Toggle LaTeX: " & Err.Description, vbExclamation, "EqnTide"
 End Sub
 
 ' =========================================================================
@@ -144,7 +144,7 @@ Public Sub EditEquationMacro()
 End Sub
 
 Public Sub UpgradeMathTypeMacro()
-    MsgBox "Upgrading MathType equations in active document...", vbInformation, "Math Editor"
+    MsgBox "Upgrading MathType equations in active document...", vbInformation, "EqnTide"
 End Sub
 
 ' =========================================================================
@@ -186,14 +186,14 @@ Private Function CallBridge(ByVal dataStr As String, ByVal fromFmt As String, By
         ' Simple JSON extract of 'result' field
         CallBridge = ExtractJsonResult(resp)
     Else
-        MsgBox "Bridge Server returned HTTP " & http.Status & ": " & http.responseText, vbExclamation, "Math Editor Bridge"
+        MsgBox "Bridge Server returned HTTP " & http.Status & ": " & http.responseText, vbExclamation, "EqnTide Bridge"
         CallBridge = ""
     End If
     Exit Function
 
 HttpError:
     MsgBox "Cannot connect to Bridge Server at " & BRIDGE_URL & vbCrLf & _
-           "Please ensure omml-editor-desktop.exe (or start-server.bat) is running!", vbCritical, "Math Editor"
+           "Please ensure omml-editor-desktop.exe (or start-server.bat) is running!", vbCritical, "EqnTide"
     CallBridge = ""
 End Function
 

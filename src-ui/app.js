@@ -92,7 +92,7 @@
       try { payload = JSON.parse(payload); } catch (_) {}
     }
     if (payload && payload.session_id) {
-      console.log("[MathEditor] Direct loadSession invoked:", payload);
+      console.log("[EqnTide] Direct loadSession invoked:", payload);
       loadSessionData(payload.session_id, payload.mathml, payload.latex, payload.font_pt);
     }
   };
@@ -250,7 +250,7 @@
   // Listen to Tauri single instance, close interception, or batch tab events
   const onOpenSession = async (event) => {
     const payload = event ? (event.payload || event) : {};
-    console.log('[MathEditor] Received open-session event:', payload);
+    console.log('[EqnTide] Received open-session event:', payload);
     if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {
       try {
         await window.__TAURI__.core.invoke('show_window');
@@ -314,7 +314,7 @@
       if (res.ok) {
         const data = await res.json();
         if (data.session_id && data.session_id !== activeSessionId) {
-          console.log('[MathEditor] Detected new active bridge session:', data.session_id);
+          console.log('[EqnTide] Detected new active bridge session:', data.session_id);
           await loadSessionData(data.session_id, null, null, data.font_pt);
         }
       }

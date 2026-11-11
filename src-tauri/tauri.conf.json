@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "omml-editor-desktop",
+  "productName": "EqnTide",
   "version": "0.3.0",
-  "identifier": "com.ommlconverter.desktop",
+  "identifier": "com.eqntide.desktop",
   "build": {
     "frontendDist": "../src-ui"
   },
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Math Equation Editor",
+        "title": "EqnTide - Equation Editor",
         "label": "main",
         "width": 940,
         "height": 650,

@@ -11,7 +11,7 @@
   <Version>1.0.0.0</Version>
   <ProviderName>OMML Converter Open Source</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="Math Editor"/>
+  <DisplayName DefaultValue="EqnTide"/>
   <Description DefaultValue="Native OMML and Modern MathType Equation Editor for Microsoft Word"/>
   <IconUrl DefaultValue="http://127.0.0.1:17890/word-addin/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="http://127.0.0.1:17890/word-addin/assets/icon-80.png"/>
@@ -51,8 +51,8 @@
 
         <!-- Custom Ribbon Tab: "Math Editor" -->
         <ExtensionPoint xsi:type="PrimaryCommandSurface">
-          <CustomTab id="TabMathEditor">
-            <Label resid="TabMathEditor.Label"/>
+          <CustomTab id="TabEqnTide">
+            <Label resid="TabEqnTide.Label"/>
 
             <!-- Group 1: Equations (Insert, Edit, Toggle LaTeX) -->
             <Group id="GroupEquation">
@@ -175,7 +175,7 @@
         <bt:Url id="Taskpane.Url" DefaultValue="http://127.0.0.1:17890/word-addin/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="TabMathEditor.Label" DefaultValue="Math Editor"/>
+        <bt:String id="TabEqnTide.Label" DefaultValue="EqnTide"/>
         <bt:String id="GroupEquation.Label" DefaultValue="Equations"/>
         <bt:String id="GroupConvert.Label" DefaultValue="Tools &amp; Upgrade"/>
         <bt:String id="BtnInsertEquation.Label" DefaultValue="Insert Equation"/>
@@ -185,7 +185,7 @@
         <bt:String id="BtnBatchConverter.Label" DefaultValue="Batch Converter"/>
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="BtnInsertEquation.Tooltip" DefaultValue="Opens the fast popup Math Editor to insert a new equation at current cursor position."/>
+        <bt:String id="BtnInsertEquation.Tooltip" DefaultValue="Opens the fast popup EqnTide Editor to insert a new equation at current cursor position."/>
         <bt:String id="BtnEditEquation.Tooltip" DefaultValue="Reads the selected equation (OMML, Legacy MathType, or Modern MathType) and opens it in the editor."/>
         <bt:String id="BtnToggleLatex.Tooltip" DefaultValue="Converts selected $...$ or \[...\] text into a Word equation, or selected equation into LaTeX text."/>
         <bt:String id="BtnUpgradeLegacy.Tooltip" DefaultValue="Opens the Upgrade Taskpane to convert all legacy Microsoft Equation 3.0 / WMF equations in this document into Modern OMML or MathType 7."/>
