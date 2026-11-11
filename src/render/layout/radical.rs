@@ -23,10 +23,10 @@ impl Layout {
 
         // 1. Determine horizontal degree offset and radical sign starting x (right-bottom anchored)
         let (crook_units, hook_font_y): (f32, f32) = match chosen_variant {
-            Some(&(gid, _)) if gid == 1657 => (440.0, 430.0),
-            Some(&(gid, _)) if gid == 1658 => (550.0, 620.0),
-            Some(&(gid, _)) if gid == 1659 => (620.0, 825.0),
-            Some(&(gid, _)) if gid == 1660 => (620.0, 1010.0),
+            Some(&(1657, _)) => (440.0, 430.0),
+            Some(&(1658, _)) => (550.0, 620.0),
+            Some(&(1659, _)) => (620.0, 825.0),
+            Some(&(1660, _)) => (620.0, 1010.0),
             Some(&(_gid, _)) => (620.0, 1010.0),
             None => (720.0, 1675.0),
         };
@@ -202,10 +202,7 @@ mod tests {
         let node_root3 = MathNode::parse("<math><mroot><mi>x</mi><mn>3</mn></mroot></math>").unwrap();
         let b_root3 = l.node(&node_root3, em, MathContext::DISPLAY).unwrap();
         // The degree '3' should be present
-        let has_three = b_root3.items.iter().any(|it| match it {
-            Item::Glyph { ch: '3', .. } => true,
-            _ => false,
-        });
+        let has_three = b_root3.items.iter().any(|it| matches!(it, Item::Glyph { ch: '3', .. }));
         assert!(has_three, "Degree '3' must be rendered inside the radical nook");
 
         // Multi-digit or wide degree should expand width horizontally: \sqrt[n \cdot p]{x}

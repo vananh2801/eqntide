@@ -175,7 +175,7 @@ impl Layout {
             b.place(u, ux, base.desc + gap + u.asc);
         }
 
-        b.w = b.w + 0.12 * em;
+        b.w += 0.12 * em;
         Ok(b)
     }
 }

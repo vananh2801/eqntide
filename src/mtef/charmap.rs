@@ -591,11 +591,10 @@ pub fn map_char_with_variant(ch: char, mathvariant: Option<&str>, default_tf: u8
                     return (TF_FUNCTION, cp);
                 }
             }
-            "sans-serif" | "monospace" => {
-                if ch.is_ascii_alphabetic() {
+            "sans-serif" | "monospace"
+                if ch.is_ascii_alphabetic() => {
                     return (TF_TEXT, cp);
                 }
-            }
             _ => {}
         }
     }

@@ -60,11 +60,10 @@ impl SessionManager {
         let mut latest: Option<(String, Instant)> = None;
         for (id, entry) in lock.iter() {
             if let Ok(data) = entry.data.lock() {
-                if matches!(data.state, SessionState::Waiting) {
-                    if latest.as_ref().map_or(true, |(_, t)| data.created_at > *t) {
+                if matches!(data.state, SessionState::Waiting)
+                    && latest.as_ref().is_none_or(|(_, t)| data.created_at > *t) {
                         latest = Some((id.clone(), data.created_at));
                     }
-                }
             }
         }
         latest.map(|(id, _)| id)
@@ -112,6 +111,7 @@ impl SessionManager {
     }
 
     /// Update a session with the newly generated equation payloads, notifying any waiting long-poll request.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_session(
         &self,
         id: &str,

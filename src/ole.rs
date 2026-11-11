@@ -67,7 +67,7 @@ fn get_u32(buf: &[u8], off: usize) -> Option<u32> {
 }
 
 fn div_ceil(a: usize, b: usize) -> usize {
-    (a + b - 1) / b
+    a.div_ceil(b)
 }
 
 /// Build one 128-byte directory entry.
@@ -294,7 +294,7 @@ struct DirItem {
     size: usize,
 }
 
-fn read_sector<'a>(data: &'a [u8], sector_size: usize, sect: u32) -> Option<&'a [u8]> {
+fn read_sector(data: &[u8], sector_size: usize, sect: u32) -> Option<&[u8]> {
     let off = (sect as usize).checked_add(1)?.checked_mul(sector_size)?;
     data.get(off..off.checked_add(sector_size)?)
 }
@@ -383,7 +383,7 @@ pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
     let mut fat = Vec::with_capacity(fat_sects.len() * (sector_size / 4));
     for &s in &fat_sects {
         if let Some(sec) = read_sector(data, sector_size, s) {
-            for chunk in sec.chunks_exact(4) {
+            for chunk in sec.as_chunks::<4>().0 {
                 fat.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
             }
         }
@@ -392,10 +392,10 @@ pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
     // 3. Read Directory stream
     let dir_bytes = read_chain(data, sector_size, &fat, first_dir_sect, None);
     let mut entries = Vec::new();
-    for entry in dir_bytes.chunks_exact(128) {
+    for entry in dir_bytes.as_chunks::<128>().0 {
         let name_len = get_u16(entry, 64).unwrap_or(0) as usize;
         let entry_type = entry[66];
-        if entry_type == 0 || name_len < 2 || name_len > 64 {
+        if entry_type == 0 || !(2..=64).contains(&name_len) {
             continue;
         }
         let u16_count = (name_len / 2).saturating_sub(1);
@@ -454,7 +454,7 @@ pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
         Vec::new()
     };
     let mut minifat = Vec::with_capacity(minifat_bytes.len() / 4);
-    for chunk in minifat_bytes.chunks_exact(4) {
+    for chunk in minifat_bytes.as_chunks::<4>().0 {
         minifat.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
 
@@ -509,9 +509,6 @@ pub fn extract_mtef_from_ole(ole_data: &[u8]) -> Option<Vec<u8>> {
 const WMF_PLACEABLE: [u8; 4] = [0xD7, 0xCD, 0xC6, 0x9A];
 pub const WMF_SIGNATURE: &[u8] = b"Design Science, Inc.\x00";
 
-/// Extract the MTEF byte stream embedded inside a MathType WMF picture
-/// (`META_ESCAPE` / `MFCOMMENT` with `"AppsMFCC"` signature), if any.
-
 /// Extract the MTEF byte stream embedded inside a MathType EMF picture
 /// (`EMR_COMMENT` with `"AppsMFCC"` signature), if any.
 pub fn extract_mtef_from_emf(data: &[u8]) -> Option<Vec<u8>> {
@@ -530,7 +527,7 @@ pub fn extract_mtef_from_emf(data: &[u8]) -> Option<Vec<u8>> {
     while pos + 8 <= data.len() {
         let kind = get_u32(data, pos)?;
         let size = get_u32(data, pos + 4)? as usize;
-        if size < 8 || size % 4 != 0 {
+        if size < 8 || !size.is_multiple_of(4) {
             break;
         }
         let next_pos = pos.checked_add(size)?;
@@ -590,6 +587,8 @@ pub fn extract_mtef_from_emf(data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// Extract the MTEF byte stream embedded inside a MathType WMF picture
+/// (`META_ESCAPE` / `MFCOMMENT` with `"AppsMFCC"` signature), if any.
 pub fn extract_mtef_from_wmf(data: &[u8]) -> Option<Vec<u8>> {
     let off = if data.starts_with(&WMF_PLACEABLE) { 22 } else { 0 };
     let mut pos = off + 18; // skip standard METAHEADER

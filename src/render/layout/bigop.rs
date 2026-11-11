@@ -46,7 +46,7 @@ impl Layout {
             Some(f) => self.node(f, em, ctx)?,
             None => LBox::default(),
         };
-        let big = base_char.map_or(false, is_big_op) || first.map_or(false, |f| f.tag == "mi" && is_function(f.text.trim()));
+        let big = base_char.is_some_and(is_big_op) || first.is_some_and(|f| f.tag == "mi" && is_function(f.text.trim()));
 
         // Accent over a normal base.
         let accent = over_n
@@ -57,7 +57,7 @@ impl Layout {
         let bar_under = under_n
             .filter(|u| u.tag == "mo" && !big)
             .and_then(|u| u.text.trim().chars().next())
-            .map_or(false, |c| c == '_' || c == '\u{0332}' || c == '\u{005F}' || c == '\u{00AF}' || c == '\u{203E}');
+            .is_some_and(|c| c == '_' || c == '\u{0332}' || c == '\u{005F}' || c == '\u{00AF}' || c == '\u{203E}');
 
         let under = match under_n {
             Some(u) if !brace_under && !bar_under => Some(self.node(u, lim_em, lim_ctx)?),

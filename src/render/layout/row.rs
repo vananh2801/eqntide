@@ -112,7 +112,7 @@ impl Layout {
                 }
                 _ => {
                     let b = if matches!(kid.tag.as_str(), "msub" | "msup" | "msubsup")
-                        && kid.children.first().map_or(false, delimiter::is_eval_bar_base)
+                        && kid.children.first().is_some_and(delimiter::is_eval_bar_base)
                         && !atoms.is_empty()
                     {
                         let start_idx = atoms.iter().rposition(|a| matches!(a.class, Class::Rel | Class::Open)).map_or(0, |idx| idx + 1);
@@ -158,7 +158,7 @@ impl Layout {
                 x += self.spacing(cls[i - 1], cls[i], em);
 
                 // If this atom is a prime mark following a base glyph:
-                let is_prime = atoms[i].b.items.first().map_or(false, |it| match it {
+                let is_prime = atoms[i].b.items.first().is_some_and(|it| match it {
                     Item::Glyph { ch, .. } => is_prime_char(*ch),
                     _ => false,
                 });

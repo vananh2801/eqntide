@@ -59,7 +59,7 @@ fn format_node(node: &MathNode, out: &mut String) {
             }
         }
         "mfrac" => {
-            let num = node.children.get(0);
+            let num = node.children.first();
             let den = node.children.get(1);
 
             let is_binom = node
@@ -97,7 +97,7 @@ fn format_node(node: &MathNode, out: &mut String) {
             out.push('}');
         }
         "mroot" => {
-            let base = node.children.get(0);
+            let base = node.children.first();
             let index = node.children.get(1);
             out.push_str("\\sqrt[");
             if let Some(idx) = index {
@@ -110,7 +110,7 @@ fn format_node(node: &MathNode, out: &mut String) {
             out.push('}');
         }
         "msup" => {
-            let base = node.children.get(0);
+            let base = node.children.first();
             let sup = node.children.get(1);
 
             if let Some(b) = base {
@@ -134,7 +134,7 @@ fn format_node(node: &MathNode, out: &mut String) {
             out.push('}');
         }
         "msub" => {
-            let base = node.children.get(0);
+            let base = node.children.first();
             let sub = node.children.get(1);
 
             if let Some(b) = base {
@@ -148,7 +148,7 @@ fn format_node(node: &MathNode, out: &mut String) {
             out.push('}');
         }
         "msubsup" => {
-            let base = node.children.get(0);
+            let base = node.children.first();
             let sub = node.children.get(1);
             let sup = node.children.get(2);
 
@@ -167,7 +167,7 @@ fn format_node(node: &MathNode, out: &mut String) {
             out.push('}');
         }
         "munder" => {
-            let base = node.children.get(0);
+            let base = node.children.first();
             let under = node.children.get(1);
 
             if is_large_operator(base) {
@@ -193,7 +193,7 @@ fn format_node(node: &MathNode, out: &mut String) {
             }
         }
         "mover" => {
-            let base = node.children.get(0);
+            let base = node.children.first();
             let over = node.children.get(1);
 
             let accent_cmd = over.and_then(|o| map_accent(&o.text));
@@ -227,7 +227,7 @@ fn format_node(node: &MathNode, out: &mut String) {
             }
         }
         "munderover" => {
-            let base = node.children.get(0);
+            let base = node.children.first();
             let under = node.children.get(1);
             let over = node.children.get(2);
 
@@ -291,7 +291,7 @@ fn format_node(node: &MathNode, out: &mut String) {
             } else if notation.contains("bottom") || notation.contains("underline") {
                 out.push_str("\\underline{");
             } else {
-                out.push_str("{");
+                out.push('{');
             }
             for child in &node.children {
                 format_node(child, out);

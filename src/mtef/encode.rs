@@ -29,6 +29,8 @@ const MAX_DEPTH: usize = 256;
 
 use crate::symbols::operators::ascii_operator_spelling as op_map;
 
+type ScriptedCloseFence = (usize, Vec<u8>, Vec<u8>);
+
 struct MathmlEncoder {
     depth: usize,
 }
@@ -164,7 +166,7 @@ impl MathmlEncoder {
         children: &[MathNode],
         open_idx: usize,
         sel: u8,
-    ) -> Result<Option<(usize, Vec<u8>, Vec<u8>)>> {
+    ) -> Result<Option<ScriptedCloseFence>> {
         let mut depth = 0usize;
         for (idx, child) in children.iter().enumerate().skip(open_idx + 1) {
             if child.tag == "mo" {

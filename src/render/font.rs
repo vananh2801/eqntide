@@ -530,6 +530,7 @@ impl Fonts {
     ///
     /// For superscript (`is_sub == false`), examines base's `top_right` kern and script's `bottom_left` kern.
     /// For subscript (`is_sub == true`), examines base's `bottom_right` kern and script's `top_left` kern.
+    #[allow(clippy::too_many_arguments)]
     pub fn math_kern(
         &self,
         base_style: MathStyle,
@@ -543,6 +544,7 @@ impl Fonts {
         self.math_kern_styled(base_style, base_ch, script_style, script_ch, is_sub, script_y, em_px, 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn math_kern_styled(
         &self,
         base_style: MathStyle,
@@ -663,8 +665,8 @@ impl Fonts {
 
     pub fn advance_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> f32 {
         let (f, id) = self.pick_styled(style, ch, ssty);
-        let adv = f.h_advance_unscaled(id) * em_px / f.units_per_em().unwrap_or(1000.0);
-        adv
+        
+        f.h_advance_unscaled(id) * em_px / f.units_per_em().unwrap_or(1000.0)
     }
 
     pub fn ink(&self, style: MathStyle, ch: char, em_px: f32) -> (f32, f32) {
@@ -703,6 +705,7 @@ impl Fonts {
         self.draw_styled(style, ch, em_px, x, y, canvas, 0);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_styled(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32, canvas: &mut Canvas, ssty: u8) {
         let (f, id) = self.pick_styled(style, ch, ssty);
         let g = id.with_scale_and_position(Self::scale_for(f, em_px), ab_glyph::point(x, y));
@@ -734,6 +737,7 @@ impl Fonts {
         self.glyph_polys_styled(style, ch, em_x, em_y, x, y, 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn glyph_polys_styled(&self, style: MathStyle, ch: char, em_x: f32, em_y: f32, x: f32, y: f32, ssty: u8) -> Vec<Vec<(f32, f32)>> {
         let Some(segs) = self.glyph_segments_styled(style, ch, em_y, 0.0, 0.0, ssty) else {
             return Vec::new();

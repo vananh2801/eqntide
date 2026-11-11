@@ -948,13 +948,13 @@ fn parse_v3_record(
             for _ in 0..=n_rows {
                 let _ = stream.nibble();
             }
-            if ((n_rows + 1) * 2) % 8 != 0 {
+            if !((n_rows + 1) * 2).is_multiple_of(8) {
                 stream.align_byte();
             }
             for _ in 0..=n_cols {
                 let _ = stream.nibble();
             }
-            if ((n_cols + 1) * 2) % 8 != 0 {
+            if !((n_cols + 1) * 2).is_multiple_of(8) {
                 stream.align_byte();
             }
             let cells = parse_v3_object_list(stream, depth);
@@ -1815,7 +1815,7 @@ fn convert_matrix(rows: usize, cols: usize, h_just: &str, cells: &[MtefObj]) -> 
     let actual_cols = if cols > 0 {
         cols
     } else if rows > 0 && !cell_nodes.is_empty() {
-        (cell_nodes.len() + rows - 1) / rows
+        cell_nodes.len().div_ceil(rows)
     } else {
         1
     };

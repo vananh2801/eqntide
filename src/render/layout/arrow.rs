@@ -59,7 +59,7 @@ pub(super) fn template_of(n: &MathNode) -> Option<ArrowTemplate<'_>> {
         "munderover" => (n.children.get(1), n.children.get(2)),
         _ => return None,
     };
-    let is_label = |x: Option<&MathNode>| x.map_or(true, |x| mo_arrow(x).is_none());
+    let is_label = |x: Option<&MathNode>| x.is_none_or(|x| mo_arrow(x).is_none());
 
     // 1. the base is the arrow, the children are its labels
     if let Some(dir) = mo_arrow(base) {
@@ -111,11 +111,13 @@ impl Layout {
             .fold(0.0f32, f32::max);
         let len = (label_w + 0.60 * em).max(1.40 * em);
 
-        let mut b = LBox::default();
-        b.w = len;
         let (head_asc, head_desc) = self.f.ink(Face::Symbol, '\u{2192}', em);
-        b.asc = head_asc;
-        b.desc = head_desc;
+        let mut b = LBox {
+            w: len,
+            asc: head_asc,
+            desc: head_desc,
+            ..Default::default()
+        };
 
         let k = em / 1000.0;
         let e_w = 322.0 * k; // advance of extender '\u{23AF}'
@@ -274,9 +276,6 @@ mod tests {
             "<math><mtable><mtr><mtd><mi>A</mi><mover><mo>→</mo><mi>yields</mi></mover><mi>B</mi></mtd></mtr><mtr><mtd><mi>A</mi><munder><mo>↔</mo><mi>x</mi></munder><mi>B</mi></mtd></mtr></mtable></math>"
         ).unwrap();
         let preview = crate::render::render_preview(&math_full, 12.0).unwrap();
-        std::fs::write(
-            "/home/vananh2801/.gemini/antigravity-acp/brain/7254f89c-aa06-46c3-b975-97ebc232255f/artifact_assembled_extensible_arrows.png",
-            &preview.png
-        ).unwrap();
+        assert!(!preview.png.is_empty(), "preview PNG must not be empty");
     }
 }

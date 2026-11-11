@@ -125,8 +125,8 @@ impl Layout {
         let mut sub_y = sub.as_ref().map(|s| shift_down.max(base.desc + 0.05 * em).max(s.asc - 0.32 * em));
 
         // Check if the superscript is a prime mark (', ′)
-        let is_prime = sup.as_ref().map_or(false, |s| {
-            s.items.first().map_or(false, |it| match it {
+        let is_prime = sup.as_ref().is_some_and(|s| {
+            s.items.first().is_some_and(|it| match it {
                 Item::Glyph { ch, .. } => matches!(*ch, '\'' | '\u{2032}' | '\u{2033}' | '\u{2034}'),
                 _ => false,
             })

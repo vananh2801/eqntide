@@ -42,7 +42,7 @@ impl Layout {
         // Lone `{` before a table (systems of equations) / lone `}` after one.
         for i in 0..atoms.len() {
             let Some(c) = atoms[i].delim else { continue };
-            if is_open(c) && atoms.get(i + 1).map_or(false, |a| a.is_table) && atoms[i].b.asc < 0.9 * em {
+            if is_open(c) && atoms.get(i + 1).is_some_and(|a| a.is_table) && atoms[i].b.asc < 0.9 * em {
                 let (a, d) = (atoms[i + 1].b.asc, atoms[i + 1].b.desc);
                 self.stretch_pair(atoms, i, a, d, em);
             } else if is_close(c) && i > 0 && atoms[i - 1].is_table && atoms[i].b.asc < 0.9 * em {

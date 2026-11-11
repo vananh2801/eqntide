@@ -319,15 +319,13 @@ pub fn start_bridge_server_with_callback(
     window_cb: Option<WindowCallback>,
 ) -> crate::error::Result<ServerHandle> {
     let server = Server::http(addr).map_err(|e| {
-        crate::error::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        crate::error::Error::Io(std::io::Error::other(
             format!("failed to bind HTTP server to {addr}: {e}"),
         ))
     })?;
 
     let bound_addr = server.server_addr().to_ip().ok_or_else(|| {
-        crate::error::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        crate::error::Error::Io(std::io::Error::other(
             "failed to query server IP address",
         ))
     })?;
@@ -1064,9 +1062,10 @@ fn parse_latex_to_mathml(latex_str: &str) -> crate::error::Result<MathNode> {
         clean = clean[2..clean.len() - 2].trim();
     } else if clean.starts_with('$') && clean.ends_with('$') && clean.len() >= 2 {
         clean = clean[1..clean.len() - 1].trim();
-    } else if clean.starts_with(r"\[") && clean.ends_with(r"\]") && clean.len() >= 4 {
-        clean = clean[2..clean.len() - 2].trim();
-    } else if clean.starts_with(r"\(") && clean.ends_with(r"\)") && clean.len() >= 4 {
+    } else if (clean.starts_with(r"\[") && clean.ends_with(r"\]")
+        || clean.starts_with(r"\(") && clean.ends_with(r"\)"))
+        && clean.len() >= 4
+    {
         clean = clean[2..clean.len() - 2].trim();
     }
     let mml = latex2mathml::latex_to_mathml(clean, latex2mathml::DisplayStyle::Inline)
