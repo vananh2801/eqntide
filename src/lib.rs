@@ -1,17 +1,17 @@
 //! Bidirectional converter between Word OMML equations and MathType OLE objects in `.docx` files.
 //!
-//! Pure Rust port of `omml-converter` and `mathtypejx`: no Word, no MathType,
+//! Pure Rust engine: no Word, no MathType,
 //! no Python/lxml/XSLT, no COM — it runs anywhere.
 //!
 //! ```no_run
 //! // OMML -> MathType OLE
-//! let summary = omml_converter::convert("input.docx", "output_mathtype.docx")?;
+//! let summary = eqntide::convert("input.docx", "output_mathtype.docx")?;
 //! println!("{}/{} converted to MathType", summary.converted, summary.found);
 //!
 //! // MathType OLE / WMF -> OMML
-//! let rev = omml_converter::convert_to_omml("output_mathtype.docx", "output_omml.docx")?;
+//! let rev = eqntide::convert_to_omml("output_mathtype.docx", "output_omml.docx")?;
 //! println!("{}/{} converted to OMML", rev.converted, rev.found);
-//! # Ok::<(), omml_converter::Error>(())
+//! # Ok::<(), eqntide::Error>(())
 //! ```
 //!
 //! # Pipeline
@@ -58,8 +58,8 @@ pub mod symbols;
 pub mod xml;
 
 pub use bridge::{
-    start_bridge_server, start_bridge_server_with_callback, WindowCallback, CustomUriAction, ServerHandle, SessionManager, SessionState, DEFAULT_HOST,
-    DEFAULT_PORT,
+    start_bridge_server, start_bridge_server_with_callback, CustomUriAction, ServerHandle,
+    SessionManager, SessionState, WindowCallback, DEFAULT_HOST, DEFAULT_PORT,
 };
 pub use docx::{
     base64_decode, base64_encode, convert, convert_bytes, convert_bytes_to_omml,
@@ -76,10 +76,10 @@ pub use mtef::decode::{mtef_to_mathml, ole_to_mathml};
 pub use mtef::encode::mathml_to_mtef_bytes;
 pub use mtef::make_equation_native;
 pub use ole::{extract_mtef_from_emf, extract_mtef_from_ole, extract_mtef_from_wmf, make_ole};
-pub use render::emf::{render_emf, render_emf_with_mtef};
-pub use render::{render_preview, Preview};
 pub use omml::decode::omml_to_mathml;
 pub use omml::encode::{apply_math_font, mathml_to_omml, mathml_to_omml_xml};
+pub use render::emf::{render_emf, render_emf_with_mtef};
+pub use render::{render_preview, Preview};
 
 /// Convenience helper: convert a MathType OLE `.bin` payload directly to an `<m:oMath>` XML string.
 pub fn ole_to_omml_xml(ole_data: &[u8]) -> Result<String> {

@@ -27,7 +27,7 @@ RequestExecutionLevel user
 Section "MainSection" SEC01
     SetOutPath "$INSTDIR"
     File "..\dist-package\EqnTide-windows-x64\EqnTide.exe"
-    File "..\dist-package\EqnTide-windows-x64\omml-converter.exe"
+    File "..\dist-package\EqnTide-windows-x64\eqntide-cli.exe"
     File "..\dist-package\EqnTide-windows-x64\start-server.bat"
     File "..\dist-package\EqnTide-windows-x64\HUONG-DAN-SU-DUNG.txt"
 
@@ -101,7 +101,7 @@ Section "Uninstall"
     RMDir /r "$INSTDIR\wps-addin"
     RMDir /r "$INSTDIR\word-template"
     Delete "$INSTDIR\EqnTide.exe"
-    Delete "$INSTDIR\omml-converter.exe"
+    Delete "$INSTDIR\eqntide-cli.exe"
     Delete "$INSTDIR\start-server.bat"
     Delete "$INSTDIR\HUONG-DAN-SU-DUNG.txt"
     Delete "$INSTDIR\Uninstall.exe"

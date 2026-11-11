@@ -3,7 +3,7 @@
 > [!NOTE]
 > **Windows System Requirements**: Windows 10 (64-bit) or Windows 11 (64-bit) is required for the Desktop GUI and pre-built binaries. (Windows 7 / 8.1 are no longer supported by modern Rust runtimes and WebView2).
 
-This guide covers building the **omml-converter** CLI & Desktop Suite from source, running the application, and sideloading the **Microsoft Word** and **WPS Office** Add-ins on Windows, Linux, and macOS.
+This guide covers building the **EqnTide** CLI & Desktop Suite from source, running the application, and sideloading the **Microsoft Word** and **WPS Office** Add-ins on Windows, Linux, and macOS.
 
 ---
 
@@ -28,17 +28,17 @@ This guide covers building the **omml-converter** CLI & Desktop Suite from sourc
 
 ## 2. Building from Source
 
-### CLI Binary (`omml-converter`)
+### CLI Binary (`eqntide-cli`)
 ```bash
 cargo build --release
-# Compiled executable located at: target/release/omml-converter
+# Compiled executable located at: target/release/eqntide-cli
 ```
 
-### Desktop GUI App (`omml-editor-desktop`)
+### Desktop GUI App (`EqnTide` / `eqntide-desktop`)
 ```bash
 cd src-tauri
 cargo build --release
-# Executable located at: target/release/omml-editor-desktop
+# Executable located at: src-tauri/target/release/eqntide-desktop (or EqnTide.exe)
 ```
 
 ---
@@ -76,16 +76,16 @@ scripts\install-addin.bat
 2. Open Windows Registry Editor (`regedit`) or run in PowerShell:
    ```powershell
    New-Item -Path "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer" -Force
-   Set-ItemProperty -Path "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer" -Name "MathEditor" -Value "C:\path\to\omml-converter-rust\word-addin\manifest.xml"
+   Set-ItemProperty -Path "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer" -Name "EqnTide" -Value "C:\path\to\eqntide\word-addin\manifest.xml"
    ```
 3. Restart Microsoft Word.
-4. Go to **Insert** ➔ **My Add-ins** ➔ **Developer Add-ins**, select **Math Equation Editor**. The **Math Editor** ribbon tab will appear with all 5 commands.
+4. Go to **Insert** ➔ **My Add-ins** ➔ **Developer Add-ins**, select **EqnTide**. The **EqnTide** ribbon tab will appear with all commands.
 
 ### B. Microsoft Word (macOS)
 1. Copy the manifest file to Word's container WEF directory:
    ```bash
    mkdir -p ~/Library/Containers/com.microsoft.Word/Data/Documents/wef
-   cp word-addin/manifest.xml ~/Library/Containers/com.microsoft.Word/Data/Documents/wef/manifest-matheditor.xml
+   cp word-addin/manifest.xml ~/Library/Containers/com.microsoft.Word/Data/Documents/wef/manifest-eqntide.xml
    ```
 2. Restart Microsoft Word for Mac.
 3. In Word, navigate to **Insert** ➔ **Add-ins** ➔ **Developer Add-ins** to activate the Ribbon.
@@ -98,15 +98,15 @@ scripts\install-addin.bat
 
 ### D. WPS Office (Windows & Linux)
 1. Copy the `wps-addin/` folder into your WPS jsaddons directory:
-   - **Linux:** `~/.local/share/Kingsoft/wps/jsaddons/MathEditor/`
-   - **Windows:** `%APPDATA%\Kingsoft\wps\jsaddons\MathEditor\`
+   - **Linux:** `~/.local/share/Kingsoft/wps/jsaddons/EqnTide/`
+   - **Windows:** `%APPDATA%\Kingsoft\wps\jsaddons\EqnTide\`
 2. Ensure `publish.xml` exists in the parent `jsaddons/` directory:
    ```xml
    <jsaddons>
-     <jsaddon name="MathEditor" enable="true" />
+     <jsaddon name="EqnTide" enable="true" />
    </jsaddons>
    ```
-3. Restart WPS Office Writer. The **Math Editor** tab will automatically appear on the top Ribbon bar.
+3. Restart WPS Office Writer. The **EqnTide** tab will automatically appear on the top Ribbon bar.
 
 ---
 
@@ -114,9 +114,9 @@ scripts\install-addin.bat
 
 - **Bridge connection shows "Bridge: Offline":**
   - Verify that the desktop app or local server is running.
-  - Test via browser: Open `http://127.0.0.1:17890/health`. It should return `{"status":"ok","server":"omml-converter-bridge"}`.
+  - Test via browser: Open `http://127.0.0.1:17890/health`. It should return `{"status":"ok","server":"eqntide-bridge"}`.
 - **Port 17890 is already occupied:**
-  - You can run the bridge on a custom port via CLI: `omml-converter --bridge --port 17891`.
+  - You can run the bridge on a custom port via CLI: `eqntide-cli --bridge --port 17891`.
 - **Linux WebKit GStreamer Warnings:**
   - The app automatically disables audio effects in MathLive to prevent GStreamer audio pipeline logs on Linux.
 - **License & Security:**

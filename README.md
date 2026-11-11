@@ -1,11 +1,10 @@
-# omml-converter (Rust)
+# EqnTide
 
-A standalone, high-performance **bidirectional math equation converter** for Microsoft Word `.docx` documents between **OMML** (Office Math Markup Language, Word's native equation format) and **MathType** (`Equation.DSMT4` / `Equation.3` OLE objects & WMF/EMF previews) — without requiring Microsoft Word, MathType, or Windows. Written in pure Rust as a single self-contained binary and library.
+A standalone, high-performance **bidirectional math equation converter and editor suite** for Microsoft Word `.docx` documents between **OMML** (Office Math Markup Language, Word's native equation format), **MathType** (`Equation.DSMT4` / `Equation.3` OLE objects & WMF/EMF previews), and **LaTeX** — without requiring Microsoft Word, MathType, or Windows. Written in pure Rust as a self-contained library, CLI tool (`eqntide-cli`), and Desktop application (`EqnTide`).
 
 - **Forward (`OMML → MathType`)**: Converts Word native OMML equations into embedded MathType 5.0 OLE objects (`Equation.DSMT4`) with crisp vector EMF (or PNG) previews. Double-clicking any converted equation in Microsoft Word or WPS Office opens it directly in **MathType** for full visual editing.
 - **Reverse (`MathType → OMML`)**: Extracts MTEF v3 (Equation Editor 3.x) and MTEF v5 (MathType 4–7) binary streams from embedded OLE `.bin` containers or WMF (`MTra`) preview images, decodes them into MathML, and replaces the VML `<w:object>` elements with native Word `<m:oMath>` XML.
-
-> **Roadmap Note**: This engine is designed as the core library for an upcoming interactive visual math editor & document conversion suite (planned UI integration).
+- **Interactive Visual Editor (`EqnTide Desktop & Word/WPS Add-in`)**: Modern MathLive-based visual equation editor with two-way LaTeX editing, customizable fonts, baseline alignment, and single-click insertion/replacement into Word or WPS Office documents.
 
 ---
 
@@ -42,19 +41,24 @@ A standalone, high-performance **bidirectional math equation converter** for Mic
 
 ## Installation
 
-### Prerequisites
+### System Requirements
+- **Windows**: Windows 10 (64-bit) or Windows 11 (64-bit).
+- **Linux**: x86_64, GTK3 / WebKit2GTK 4.1.
+- **macOS**: 11.0+ (Apple Silicon or Intel).
+
+### Build from Source
 Rust **1.75+** (MSRV).
 
 ```bash
 # Clone the repository
-git clone https://github.com/vananh2801/omml-converter-rust.git
-cd omml-converter-rust
+git clone https://github.com/vananh2801/eqntide.git
+cd eqntide
 
-# Build release binary:
+# Build release CLI binary:
 cargo build --release
 
 # The compiled binary will be located at:
-# target/release/omml-converter
+# target/release/eqntide-cli
 ```
 
 ---
@@ -65,43 +69,43 @@ cargo build --release
 
 ```bash
 # Basic single-file conversion (writes <input>_mathtype.docx)
-omml-converter input.docx
+eqntide-cli input.docx
 
 # Specify custom output file or output directory
-omml-converter input.docx -o output.docx
-omml-converter input.docx -o output_dir/
+eqntide-cli input.docx -o output.docx
+eqntide-cli input.docx -o output_dir/
 
 # Batch convert an entire directory recursively (preserves subfolder structure & filenames)
 # Default output directory: <input_dir>_mathtype/
-omml-converter ./my_documents
-omml-converter ./my_documents -o ./my_documents_mathtype
+eqntide-cli ./my_documents
+eqntide-cli ./my_documents -o ./my_documents_mathtype
 
 # Set preview font size (default: 12 pt, matching MathType default)
-omml-converter input.docx --font-size 13
+eqntide-cli input.docx --font-size 13
 
 # Use PNG raster preview instead of EMF vector
-omml-converter input.docx --preview png
+eqntide-cli input.docx --preview png
 
 # Keep original OMML visible (MathType OLE objects stored in background as fallback)
-omml-converter input.docx --omml-fallback
+eqntide-cli input.docx --omml-fallback
 ```
 
 ### 2. Convert MathType → Word OMML (`-r` / `--to-omml`)
 
 ```bash
 # Convert a single file (writes <input>_omml.docx)
-omml-converter input.docx --to-omml
+eqntide-cli input.docx --to-omml
 
 # Short flag with custom output path
-omml-converter input.docx -r -o output_omml.docx
+eqntide-cli input.docx -r -o output_omml.docx
 
 # Batch convert a folder of MathType .docx files to OMML (preserves subfolder structure)
 # Default output directory: <input_dir>_omml/
-omml-converter ./mathtype_docs -r
-omml-converter ./mathtype_docs -r -o ./omml_docs
+eqntide-cli ./mathtype_docs -r
+eqntide-cli ./mathtype_docs -r -o ./omml_docs
 
 # Apply a custom math font to all converted OMML runs
-omml-converter input.docx -r --math-font "Cambria Math"
+eqntide-cli input.docx -r --math-font "Cambria Math"
 ```
 
 ### CLI Options
@@ -124,10 +128,15 @@ omml-converter input.docx -r --math-font "Cambria Math"
 
 ## Library Usage
 
-Add `omml-converter` to your `Cargo.toml`, or use it directly as a Rust library:
+Add `eqntide` to your `Cargo.toml`:
+
+```toml
+[dependencies]
+eqntide = "0.3.0"
+```
 
 ```rust
-use omml_converter::{
+use eqntide::{
     convert, convert_bytes, convert_to_omml, convert_to_omml_with,
     ConversionSummary, ToOmmlOptions,
 };
@@ -193,9 +202,9 @@ Both conversion directions expose their intermediate AST and binary codecs:
          └───┬─────────────────────┬───┘                   ▲
              │                     │                       │
              ▼                     ▼                       │
-  [src/render/mod.rs]   [src/mtef/encode.rs]   [src/mtef/decode.rs]
-  Layout & Glyph Engine Encode MathNode →      Decode MTEF v3/v5 → MathNode
-  (EMF / PNG Preview)   MTEF 5.0 + OLE .bin                ▲
+   [src/render/mod.rs]   [src/mtef/encode.rs]   [src/mtef/decode.rs]
+   Layout & Glyph Engine Encode MathNode →      Decode MTEF v3/v5 → MathNode
+   (EMF / PNG Preview)   MTEF 5.0 + OLE .bin                ▲
              │                     │                       │
              └──────────┬──────────┘        [src/ole.rs]
                         ▼                   Extract MTEF from OLE .bin / WMF

@@ -1,21 +1,21 @@
 [package]
-name = "omml-converter"
+name = "eqntide"
 version = "0.3.0"
 edition = "2021"
-description = "Bidirectional math equation converter between Word OMML and MathType OLE/WMF in .docx documents"
+description = "EqnTide: Bidirectional math equation converter & editor between Word OMML, LaTeX, and MathType"
 readme = "README.md"
 license = "MIT"
 authors = ["Anh"]
-keywords = ["omml", "mathtype", "docx", "mathml", "mtef"]
+keywords = ["omml", "mathtype", "latex", "docx", "mathml"]
 categories = ["command-line-utilities", "text-processing", "parser-implementations"]
-repository = "https://github.com/vananh2801/omml-converter-rust"
+repository = "https://github.com/vananh2801/eqntide"
 
 [lib]
-name = "omml_converter"
+name = "eqntide"
 path = "src/lib.rs"
 
 [[bin]]
-name = "omml-converter"
+name = "eqntide-cli"
 path = "src/main.rs"
 
 [dependencies]

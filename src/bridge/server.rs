@@ -422,7 +422,7 @@ fn handle_http_request(
                 &HealthResponse {
                     status: "ok".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
-                    server: "omml-converter-bridge".into(),
+                    server: "eqntide-bridge".into(),
                 },
                 origin,
             );
@@ -1158,16 +1158,16 @@ pub(crate) fn spawn_desktop_editor(session_id: &str) {
     }
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(dir) = current_exe.parent() {
-            candidates.push(dir.join("omml-editor-desktop"));
-            candidates.push(dir.join("omml-editor-desktop.exe"));
-            candidates.push(dir.join("Math Equation Editor.app/Contents/MacOS/omml-editor-desktop"));
+            candidates.push(dir.join("EqnTide"));
+            candidates.push(dir.join("EqnTide.exe"));
+            candidates.push(dir.join("Math Equation Editor.app/Contents/MacOS/EqnTide"));
         }
     }
     #[cfg(target_os = "windows")]
-    candidates.push(std::path::PathBuf::from("omml-editor-desktop.exe"));
+    candidates.push(std::path::PathBuf::from("EqnTide.exe"));
     #[cfg(not(target_os = "windows"))]
-    candidates.push(std::path::PathBuf::from("/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/omml-editor-desktop"));
-    candidates.push(std::path::PathBuf::from("omml-editor-desktop"));
+    candidates.push(std::path::PathBuf::from("/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/EqnTide"));
+    candidates.push(std::path::PathBuf::from("EqnTide"));
 
     for path in &candidates {
         if path.is_absolute() && !path.exists() {
@@ -1188,7 +1188,7 @@ pub(crate) fn spawn_desktop_editor(session_id: &str) {
             }
         }
     }
-    log::warn!("Could not find or launch omml-editor-desktop UI binary");
+    log::warn!("Could not find or launch EqnTide UI binary");
 }
 
 #[cfg(test)]
@@ -1266,7 +1266,7 @@ mod tests {
         assert_eq!(resp.status, 200);
         let health: HealthResponse = serde_json::from_str(&resp.body).expect("json parse");
         assert_eq!(health.status, "ok");
-        assert_eq!(health.server, "omml-converter-bridge");
+        assert_eq!(health.server, "eqntide-bridge");
     }
 
     #[test]
@@ -1458,13 +1458,13 @@ mod tests {
         let req3 = format!("GET /manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         let resp3 = send_raw_http(addr, &req3);
         assert_eq!(resp3.status, 200);
-        assert!(resp3.body.contains("Math Editor"));
+        assert!(resp3.body.contains("EqnTide"));
 
         // 2. WPS Add-in files
         let req_wps = format!("GET /wps-addin/ribbon.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         let resp_wps = send_raw_http(addr, &req_wps);
         assert_eq!(resp_wps.status, 200);
-        assert!(resp_wps.body.contains("TabMathEditor"));
+        assert!(resp_wps.body.contains("TabEqnTide"));
         assert!(resp_wps.body.contains("btnInsertEquation"));
 
         let req_wps_js = format!("GET /wps-addin/main.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");

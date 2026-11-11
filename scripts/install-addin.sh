@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Math Editor Add-in Sideloading Script (Linux & macOS)
-# Registers Word & WPS Office Add-ins for the Math Equation Editor & Converter
+# EqnTide Add-in Sideloading Script (Linux & macOS)
+# Registers Word & WPS Office Add-ins for the EqnTide Equation Editor & Converter
 # ==============================================================================
 
 set -euo pipefail
@@ -18,7 +18,7 @@ if [[ "${1:-}" == "--uninstall" || "${1:-}" == "uninstall" ]]; then
 fi
 
 echo "=========================================================="
-echo " Math Editor Add-in Installer (${ACTION})"
+echo " EqnTide Add-in Installer (${ACTION})"
 echo "=========================================================="
 
 OS="$(uname -s)"
@@ -33,7 +33,7 @@ install_linux_wps() {
   )
 
   for TARGET_BASE in "${DIRS[@]}"; do
-    local TARGET_DIR="${TARGET_BASE}/MathEditor"
+    local TARGET_DIR="${TARGET_BASE}/EqnTide"
 
     if [[ "${ACTION}" == "uninstall" ]]; then
       if [[ -d "${TARGET_DIR}" ]]; then
@@ -46,7 +46,7 @@ install_linux_wps() {
 
     echo "--> Registering WPS Office JS Add-in into ${TARGET_BASE}..."
     mkdir -p "${TARGET_DIR}"
-    ln -sfn MathEditor "${TARGET_BASE}/MathEditor_1.0.0"
+    ln -sfn EqnTide "${TARGET_BASE}/EqnTide_1.0.0"
     cp -r "${WPS_ADDIN_DIR}"/* "${TARGET_DIR}/"
 
     # Write publish.xml using standard WPS jsplugins schema
@@ -54,22 +54,22 @@ install_linux_wps() {
     cat << 'EOF' > "${PUBLISH_XML}"
 <?xml version="1.0" encoding="UTF-8"?>
 <jsplugins>
-  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor_1.0.0/" />
-  <jspluginonline name="MathEditor" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
+  <jsplugin name="EqnTide" type="wps" version="1.0.0" enable="enable_dev" url="EqnTide_1.0.0/" />
+  <jspluginonline name="EqnTide" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
 </jsplugins>
 EOF
 
-    # Write authaddin.json to authorize MathEditor execution
+    # Write authaddin.json to authorize EqnTide execution
     local AUTH_JSON="${TARGET_BASE}/authaddin.json"
     cat << 'EOF' > "${AUTH_JSON}"
 {
   "wps": {
-    "namelist": "MathEditor",
-    "MathEditor": {
-      "name": "MathEditor",
+    "namelist": "EqnTide",
+    "EqnTide": {
+      "name": "EqnTide",
       "enable": true,
       "isload": true,
-      "path": "MathEditor_1.0.0/",
+      "path": "EqnTide_1.0.0/",
       "md5": "",
       "mode": 2
     }
@@ -82,7 +82,7 @@ EOF
 
   if [[ "${ACTION}" != "uninstall" ]]; then
     echo "ℹ Please completely exit WPS Office (close all windows) and reopen it."
-    echo "  The 'Math Editor' tab will now appear on the Ribbon."
+    echo "  The 'EqnTide' tab will now appear on the Ribbon."
   fi
 }
 
@@ -92,7 +92,7 @@ EOF
 install_macos_word() {
   local WEF_DIR="${HOME}/Library/Containers/com.microsoft.Word/Data/Documents/wef"
   local MANIFEST_SRC="${WORD_ADDIN_DIR}/manifest.xml"
-  local MANIFEST_DST="${WEF_DIR}/manifest-matheditor.xml"
+  local MANIFEST_DST="${WEF_DIR}/manifest-eqntide.xml"
 
   if [[ "${ACTION}" == "uninstall" ]]; then
     if [[ -f "${MANIFEST_DST}" ]]; then
@@ -113,27 +113,27 @@ install_macos_word() {
   local WPS_MAC_DIR="${HOME}/Library/Containers/com.kingsoft.wpsoffice.mac/Data/.kingsoft/wps/jsaddons"
   if [[ -d "$(dirname "${WPS_MAC_DIR}")" ]]; then
     if [[ "${ACTION}" == "uninstall" ]]; then
-      rm -rf "${WPS_MAC_DIR}/MathEditor"
+      rm -rf "${WPS_MAC_DIR}/EqnTide"
     else
       echo "--> Registering WPS Office JS Add-in for Mac..."
-      mkdir -p "${WPS_MAC_DIR}/MathEditor"
-      cp -r "${WPS_ADDIN_DIR}"/* "${WPS_MAC_DIR}/MathEditor_1.0.0/"
+      mkdir -p "${WPS_MAC_DIR}/EqnTide"
+      cp -r "${WPS_ADDIN_DIR}"/* "${WPS_MAC_DIR}/EqnTide_1.0.0/"
       cat << 'EOF' > "${WPS_MAC_DIR}/publish.xml"
 <?xml version="1.0" encoding="UTF-8"?>
 <jsplugins>
-  <jsplugin name="MathEditor" type="wps" version="1.0.0" enable="enable_dev" url="MathEditor_1.0.0/" />
-  <jspluginonline name="MathEditor" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
+  <jsplugin name="EqnTide" type="wps" version="1.0.0" enable="enable_dev" url="EqnTide_1.0.0/" />
+  <jspluginonline name="EqnTide" type="wps" enable="enable_dev" debug="true" url="http://127.0.0.1:17890/wps-addin/" />
 </jsplugins>
 EOF
       cat << 'EOF' > "${WPS_MAC_DIR}/authaddin.json"
 {
   "wps": {
-    "namelist": "MathEditor",
-    "MathEditor": {
-      "name": "MathEditor",
+    "namelist": "EqnTide",
+    "EqnTide": {
+      "name": "EqnTide",
       "enable": true,
       "isload": true,
-      "path": "MathEditor_1.0.0/",
+      "path": "EqnTide_1.0.0/",
       "md5": "",
       "mode": 2
     }
@@ -162,4 +162,4 @@ case "${OS}" in
 esac
 
 echo ""
-echo "Done! Make sure the desktop editor / local bridge is running on port 17890."
+echo "Done! Make sure EqnTide / local bridge is running on port 17890."

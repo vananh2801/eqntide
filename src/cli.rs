@@ -1,4 +1,4 @@
-//! Command-line interface for `omml-converter`.
+//! Command-line interface for `eqntide-cli`.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -15,7 +15,7 @@ use crate::error::Result as ConvResult;
 /// Convert equations in a .docx file or directory between OMML and MathType OLE objects.
 #[derive(Parser, Debug)]
 #[command(
-    name = "omml-converter",
+    name = "eqntide-cli",
     version,
     about = "Convert equations in a .docx file or directory (recursively) between OMML and MathType OLE objects."
 )]
@@ -566,7 +566,7 @@ mod tests {
         let mut err = Vec::new();
         let code = run_with_io(
             [
-                "omml-converter",
+                "eqntide-cli",
                 input_dir.to_str().unwrap(),
                 "-o",
                 mathtype_dir.to_str().unwrap(),
@@ -591,7 +591,7 @@ mod tests {
         err.clear();
         let code_rev = run_with_io(
             [
-                "omml-converter",
+                "eqntide-cli",
                 mathtype_dir.to_str().unwrap(),
                 "--to-omml",
             ],
@@ -671,7 +671,7 @@ mod tests {
         let mut err = Vec::new();
         let code = run_with_io(
             [
-                "omml-converter",
+                "eqntide-cli",
                 src_file.to_str().unwrap(),
                 "-o",
                 dst_file.to_str().unwrap(),

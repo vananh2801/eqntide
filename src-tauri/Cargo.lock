@@ -991,8 +991,28 @@ dependencies = [
 name = "eqntide"
 version = "0.3.0"
 dependencies = [
+ "ab_glyph",
+ "ab_glyph_rasterizer",
+ "clap",
+ "crc32fast",
+ "flate2",
+ "latex2mathml",
  "log",
- "omml-converter",
+ "quick-xml 0.31.0",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "ttf-parser",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "eqntide-desktop"
+version = "0.3.0"
+dependencies = [
+ "eqntide",
+ "log",
  "serde",
  "serde_json",
  "tauri",
@@ -2456,26 +2476,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
-]
-
-[[package]]
-name = "omml-converter"
-version = "0.3.0"
-dependencies = [
- "ab_glyph",
- "ab_glyph_rasterizer",
- "clap",
- "crc32fast",
- "flate2",
- "latex2mathml",
- "log",
- "quick-xml 0.31.0",
- "serde",
- "serde_json",
- "tiny_http",
- "ttf-parser",
- "uuid",
- "zip",
 ]
 
 [[package]]

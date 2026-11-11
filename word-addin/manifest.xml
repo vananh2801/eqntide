@@ -9,13 +9,13 @@
   <!-- Basic Metadata -->
   <Id>b29f9e30-746a-4d92-bf39-382903c5d610</Id>
   <Version>1.0.0.0</Version>
-  <ProviderName>OMML Converter Open Source</ProviderName>
+  <ProviderName>EqnTide Open Source</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="EqnTide"/>
   <Description DefaultValue="Native OMML and Modern MathType Equation Editor for Microsoft Word"/>
   <IconUrl DefaultValue="http://127.0.0.1:17890/word-addin/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="http://127.0.0.1:17890/word-addin/assets/icon-80.png"/>
-  <SupportUrl DefaultValue="https://github.com/vananh2801/omml-converter"/>
+  <SupportUrl DefaultValue="https://github.com/vananh2801/eqntide"/>
 
   <!-- Permitted Network Domains -->
   <AppDomains>
