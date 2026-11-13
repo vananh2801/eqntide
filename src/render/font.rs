@@ -7,6 +7,8 @@ use ab_glyph::{Font, FontRef, GlyphId, PxScale};
 
 use super::canvas::Canvas;
 
+mod metadata;
+
 static FONT_REGULAR: &[u8] =
     include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Regular.ttf");
 static FONT_ITALIC: &[u8] =
@@ -251,113 +253,8 @@ pub fn fonts() -> &'static Fonts {
             MathConstants::default()
         };
 
-        // Extract radical variants & assembly from OpenType MATH Variants table
-        let gid_radical = math_face.glyph_index('\u{221A}');
-        let mut variants_list = Vec::new();
-        let mut assembly_opt = None;
-        if let Some(gid) = gid_radical {
-            if let Some(variants) = math_face.tables().math.and_then(|m| m.variants) {
-                if let Some(construction) = variants.vertical_constructions.get(gid) {
-                    for v in construction.variants {
-                        variants_list.push((v.variant_glyph.0, v.advance_measurement));
-                    }
-                    if let Some(ga) = construction.assembly {
-                        let mut parts = Vec::new();
-                        for p in ga.parts {
-                            parts.push(RadicalPart {
-                                glyph_id: p.glyph_id.0,
-                                start_connector: p.start_connector_length,
-                                end_connector: p.end_connector_length,
-                                full_advance: p.full_advance,
-                                is_extender: p.part_flags.extender(),
-                            });
-                        }
-                        assembly_opt = Some(RadicalAssembly {
-                            min_connector_overlap: variants.min_connector_overlap,
-                            parts,
-                        });
-                    }
-                }
-            }
-        }
-        /// Extract optical size alternate glyph IDs for script levels from OpenType GSUB `ssty` feature.
-        ///
-        /// Maps base `GlyphId (u16)` -> `(script_level_1_glyph, script_level_2_glyph)`.
-        fn parse_ssty_map(math_face: &ttf_parser::Face<'static>) -> HashMap<u16, (u16, u16)> {
-            let mut ssty_map = HashMap::new();
-            if let Some(gsub) = math_face.tables().gsub {
-                if let Some(feature) = gsub.features.find(ttf_parser::Tag::from_bytes(b"ssty")) {
-                    for lookup_idx in feature.lookup_indices {
-                        if let Some(lookup) = gsub.lookups.get(lookup_idx) {
-                            for st_idx in 0..lookup.subtables.len() {
-                                if let Some(ttf_parser::gsub::SubstitutionSubtable::Alternate(
-                                    alt_sub,
-                                )) = lookup
-                                    .subtables
-                                    .get::<ttf_parser::gsub::SubstitutionSubtable>(st_idx)
-                                {
-                                    match alt_sub.coverage {
-                                        ttf_parser::opentype_layout::Coverage::Format1 {
-                                            glyphs,
-                                        } => {
-                                            for (cov_idx, gid) in glyphs.into_iter().enumerate() {
-                                                if let Some(set) =
-                                                    alt_sub.alternate_sets.get(cov_idx as u16)
-                                                {
-                                                    let s1 = set
-                                                        .alternates
-                                                        .get(0)
-                                                        .map(|g| g.0)
-                                                        .unwrap_or(gid.0);
-                                                    let s2 = set
-                                                        .alternates
-                                                        .get(1)
-                                                        .map(|g| g.0)
-                                                        .unwrap_or(s1);
-                                                    ssty_map.insert(gid.0, (s1, s2));
-                                                }
-                                            }
-                                        }
-                                        ttf_parser::opentype_layout::Coverage::Format2 {
-                                            records,
-                                        } => {
-                                            for rec in records {
-                                                for offset in 0..=(rec.end.0 - rec.start.0) {
-                                                    let gid = rec.start.0 + offset;
-                                                    let cov_idx = rec.value + offset;
-                                                    if let Some(set) =
-                                                        alt_sub.alternate_sets.get(cov_idx)
-                                                    {
-                                                        let s1 = set
-                                                            .alternates
-                                                            .get(0)
-                                                            .map(|g| g.0)
-                                                            .unwrap_or(gid);
-                                                        let s2 = set
-                                                            .alternates
-                                                            .get(1)
-                                                            .map(|g| g.0)
-                                                            .unwrap_or(s1);
-                                                        ssty_map.insert(gid, (s1, s2));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            ssty_map
-        }
-
-        let radical_info = RadicalInfo {
-            variants: variants_list,
-            assembly: assembly_opt,
-        };
-        let ssty_map = parse_ssty_map(&math_face);
+        let radical_info = metadata::radical_info(&math_face);
+        let ssty_map = metadata::ssty_map(&math_face);
 
         Fonts {
             regular: load_bundled_font(FONT_REGULAR),
