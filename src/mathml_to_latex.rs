@@ -25,85 +25,9 @@ fn format_node(node: &MathNode, out: &mut String) {
         "msup" => format_superscript(node, out),
         "msub" => format_subscript(node, out),
         "msubsup" => format_subsuperscript(node, out),
-        "munder" => {
-            let base = node.children.first();
-            let under = node.children.get(1);
-
-            if is_large_operator(base) {
-                if let Some(b) = base {
-                    format_node(b, out);
-                }
-                trim_trailing_whitespace(out);
-                out.push_str("_{");
-                if let Some(u) = under {
-                    format_node(u, out);
-                }
-                out.push('}');
-            } else {
-                out.push_str("\\underset{");
-                if let Some(u) = under {
-                    format_node(u, out);
-                }
-                out.push_str("}{");
-                if let Some(b) = base {
-                    format_node(b, out);
-                }
-                out.push('}');
-            }
-        }
-        "mover" => {
-            let base = node.children.first();
-            let over = node.children.get(1);
-
-            let accent_cmd = over.and_then(|o| map_accent(&o.text));
-            if let Some(cmd) = accent_cmd {
-                out.push_str(cmd);
-                out.push('{');
-                if let Some(b) = base {
-                    format_node(b, out);
-                }
-                out.push('}');
-            } else if is_large_operator(base) {
-                if let Some(b) = base {
-                    format_node(b, out);
-                }
-                trim_trailing_whitespace(out);
-                out.push_str("^{");
-                if let Some(o) = over {
-                    format_node(o, out);
-                }
-                out.push('}');
-            } else {
-                out.push_str("\\overset{");
-                if let Some(o) = over {
-                    format_node(o, out);
-                }
-                out.push_str("}{");
-                if let Some(b) = base {
-                    format_node(b, out);
-                }
-                out.push('}');
-            }
-        }
-        "munderover" => {
-            let base = node.children.first();
-            let under = node.children.get(1);
-            let over = node.children.get(2);
-
-            if let Some(b) = base {
-                format_node(b, out);
-            }
-            trim_trailing_whitespace(out);
-            out.push_str("_{");
-            if let Some(u) = under {
-                format_node(u, out);
-            }
-            out.push_str("}^{");
-            if let Some(o) = over {
-                format_node(o, out);
-            }
-            out.push('}');
-        }
+        "munder" => format_underscript(node, out),
+        "mover" => format_overscript(node, out),
+        "munderover" => format_underoverscript(node, out),
         "mfenced" => {
             let open = node.attr("open").unwrap_or("(");
             let close = node.attr("close").unwrap_or(")");
@@ -297,6 +221,48 @@ fn format_script(node: Option<&MathNode>, prefix: &str, out: &mut String) {
     out.push_str(prefix);
     format_optional_node(node, out);
     out.push('}');
+}
+
+fn format_underscript(node: &MathNode, out: &mut String) {
+    let base = node.children.first();
+    let underscript = node.children.get(1);
+    if is_large_operator(base) {
+        format_optional_node(base, out);
+        format_script(underscript, "_{", out);
+        return;
+    }
+    format_over_or_under_set("\\underset", underscript, base, out);
+}
+
+fn format_overscript(node: &MathNode, out: &mut String) {
+    let base = node.children.first();
+    let overscript = node.children.get(1);
+    if let Some(accent) = overscript.and_then(|node| map_accent(&node.text)) {
+        out.push_str(accent);
+        format_braced_child(base, out);
+    } else if is_large_operator(base) {
+        format_optional_node(base, out);
+        format_script(overscript, "^{", out);
+    } else {
+        format_over_or_under_set("\\overset", overscript, base, out);
+    }
+}
+
+fn format_underoverscript(node: &MathNode, out: &mut String) {
+    format_optional_node(node.children.first(), out);
+    format_script(node.children.get(1), "_{", out);
+    format_script(node.children.get(2), "^{", out);
+}
+
+fn format_over_or_under_set(
+    command: &str,
+    annotation: Option<&MathNode>,
+    base: Option<&MathNode>,
+    out: &mut String,
+) {
+    out.push_str(command);
+    format_braced_child(annotation, out);
+    format_braced_child(base, out);
 }
 
 fn trim_trailing_whitespace(s: &mut String) {
