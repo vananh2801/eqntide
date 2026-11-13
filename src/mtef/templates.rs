@@ -8,6 +8,10 @@
 use super::records::*;
 use super::typeface::{TF_EXPAND, TF_MTEXTRA, TF_SYMBOL};
 
+mod slots;
+
+use slots::{append_fraction_slot, append_line_slot, append_opt_line_slot, tmpl_header_u16};
+
 // ── Additional size record constants (MTEF 5) ───────────────────────────────
 
 /// `SYM` size record (`0x0D`): symbol size (used for big-operator characters).
@@ -305,53 +309,6 @@ pub const EMB_U_L1ARROW: u8 = 37;
 
 pub(super) fn cat(parts: &[&[u8]]) -> Vec<u8> {
     parts.concat()
-}
-
-/// Append a `LINE` slot to `out`. An empty slice is encoded as a null `LINE`
-/// (`[0x01, 0x01]`, no trailing `END`), which still produces a `<slot>` element
-/// in `mathtypejx/mtef/builder.py` so positional XSLT selectors (`slot[1]`,
-/// `slot[2]`, `slot[3]`, `slot[4]`) remain aligned.
-fn append_line_slot(out: &mut Vec<u8>, content: &[u8]) {
-    if content.is_empty() {
-        out.extend_from_slice(&line(true));
-    } else {
-        out.extend_from_slice(&line(false));
-        out.extend_from_slice(content);
-        out.extend_from_slice(END);
-    }
-}
-
-/// Append an optional `LINE` slot to `out`. `None` or `Some(&[])` writes a
-/// null `LINE` (`[0x01, 0x01]`).
-fn append_opt_line_slot(out: &mut Vec<u8>, content: Option<&[u8]>) {
-    match content {
-        Some(c) if !c.is_empty() => {
-            out.extend_from_slice(&line(false));
-            out.extend_from_slice(c);
-            out.extend_from_slice(END);
-        }
-        _ => out.extend_from_slice(&line(true)),
-    }
-}
-
-fn append_fraction_slot(out: &mut Vec<u8>, content: &[u8], small: bool) {
-    if small {
-        out.extend_from_slice(SUB);
-    }
-    append_line_slot(out, content);
-}
-
-/// Encode a `TMPL` header whose variation may use 1 or 2 bytes (MTEF 5).
-fn tmpl_header_u16(selector: u8, variation: u16, tmpl_opts: u8) -> Vec<u8> {
-    let mut out = vec![0x03, 0x00, selector];
-    if variation < 0x80 {
-        out.push(variation as u8);
-    } else {
-        out.push(0x80 | (variation as u8 & 0x7F));
-        out.push((variation >> 8) as u8);
-    }
-    out.push(tmpl_opts);
-    out
 }
 
 /// Generic one-slot template helper. Use only with selectors whose class has
