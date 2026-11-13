@@ -600,6 +600,23 @@ mod tests {
     }
 
     #[test]
+    fn relationships_resolve_relative_targets_and_skip_external_resources() {
+        let rels = xml::parse(
+            br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Target="media/equation.emf"/>
+<Relationship Id="rId2" Target="../embeddings/equation.bin"/>
+<Relationship Id="rId3" Target="https://example.test/equation" TargetMode="External"/>
+</Relationships>"#,
+        )
+        .unwrap();
+
+        let map = build_rel_map(&rels, "word/header1.xml");
+        assert_eq!(map.get("rId1"), Some(&"word/media/equation.emf".to_owned()));
+        assert_eq!(map.get("rId2"), Some(&"embeddings/equation.bin".to_owned()));
+        assert!(!map.contains_key("rId3"));
+    }
+
+    #[test]
     fn test_docx_convert_standalone_emf_with_mtef_to_omml() {
         let node = crate::mathml::MathNode::with_children(
             "math",
