@@ -19,57 +19,9 @@ fn format_node(node: &MathNode, out: &mut String) {
         "mn" => out.push_str(node.text.trim()),
         "mo" => format_operator(node, out),
         "mtext" => format_text(node, out),
-        "mfrac" => {
-            let num = node.children.first();
-            let den = node.children.get(1);
-
-            let is_binom = node
-                .attr("linethickness")
-                .map(|v| v == "0" || v == "0pt" || v == "none")
-                .unwrap_or(false);
-
-            if is_binom {
-                out.push_str("\\binom{");
-                if let Some(n) = num {
-                    format_node(n, out);
-                }
-                out.push_str("}{");
-                if let Some(d) = den {
-                    format_node(d, out);
-                }
-                out.push('}');
-            } else {
-                out.push_str("\\frac{");
-                if let Some(n) = num {
-                    format_node(n, out);
-                }
-                out.push_str("}{");
-                if let Some(d) = den {
-                    format_node(d, out);
-                }
-                out.push('}');
-            }
-        }
-        "msqrt" => {
-            out.push_str("\\sqrt{");
-            for child in &node.children {
-                format_node(child, out);
-            }
-            out.push('}');
-        }
-        "mroot" => {
-            let base = node.children.first();
-            let index = node.children.get(1);
-            out.push_str("\\sqrt[");
-            if let Some(idx) = index {
-                format_node(idx, out);
-            }
-            out.push_str("]{");
-            if let Some(b) = base {
-                format_node(b, out);
-            }
-            out.push('}');
-        }
+        "mfrac" => format_fraction(node, out),
+        "msqrt" => format_square_root(node, out),
+        "mroot" => format_indexed_root(node, out),
         "msup" => {
             let base = node.children.first();
             let sup = node.children.get(1);
@@ -317,6 +269,47 @@ fn format_text(node: &MathNode, out: &mut String) {
     out.push_str("\\text{");
     out.push_str(&escape_latex_text(text));
     out.push('}');
+}
+
+fn format_fraction(node: &MathNode, out: &mut String) {
+    let command = if is_binomial(node) {
+        "\\binom"
+    } else {
+        "\\frac"
+    };
+    out.push_str(command);
+    format_braced_child(node.children.first(), out);
+    format_braced_child(node.children.get(1), out);
+}
+
+fn is_binomial(node: &MathNode) -> bool {
+    matches!(node.attr("linethickness"), Some("0" | "0pt" | "none"))
+}
+
+fn format_square_root(node: &MathNode, out: &mut String) {
+    out.push_str("\\sqrt{");
+    format_children(node, out);
+    out.push('}');
+}
+
+fn format_indexed_root(node: &MathNode, out: &mut String) {
+    out.push_str("\\sqrt[");
+    format_optional_node(node.children.get(1), out);
+    out.push_str("]{");
+    format_optional_node(node.children.first(), out);
+    out.push('}');
+}
+
+fn format_braced_child(node: Option<&MathNode>, out: &mut String) {
+    out.push('{');
+    format_optional_node(node, out);
+    out.push('}');
+}
+
+fn format_optional_node(node: Option<&MathNode>, out: &mut String) {
+    if let Some(node) = node {
+        format_node(node, out);
+    }
 }
 
 fn trim_trailing_whitespace(s: &mut String) {
