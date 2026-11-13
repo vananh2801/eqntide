@@ -28,59 +28,10 @@ fn format_node(node: &MathNode, out: &mut String) {
         "munder" => format_underscript(node, out),
         "mover" => format_overscript(node, out),
         "munderover" => format_underoverscript(node, out),
-        "mfenced" => {
-            let open = node.attr("open").unwrap_or("(");
-            let close = node.attr("close").unwrap_or(")");
-            let open_tex = map_fence_delimiter(open, true);
-            let close_tex = map_fence_delimiter(close, false);
-
-            out.push_str(&open_tex);
-            for (i, child) in node.children.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                format_node(child, out);
-            }
-            out.push_str(&close_tex);
-        }
-        "mtable" => {
-            out.push_str("\\begin{matrix} ");
-            for (r_idx, row) in node.children.iter().enumerate() {
-                if r_idx > 0 {
-                    out.push_str(" \\\\ ");
-                }
-                for (c_idx, cell) in row.children.iter().enumerate() {
-                    if c_idx > 0 {
-                        out.push_str(" & ");
-                    }
-                    format_node(cell, out);
-                }
-            }
-            out.push_str(" \\end{matrix}");
-        }
-        "mtr" | "mtd" => {
-            for child in &node.children {
-                format_node(child, out);
-            }
-        }
-        "menclose" => {
-            let notation = node.attr("notation").unwrap_or("box");
-            if notation.contains("box") {
-                out.push_str("\\boxed{");
-            } else if notation.contains("radical") {
-                out.push_str("\\sqrt{");
-            } else if notation.contains("top") || notation.contains("overline") {
-                out.push_str("\\overline{");
-            } else if notation.contains("bottom") || notation.contains("underline") {
-                out.push_str("\\underline{");
-            } else {
-                out.push('{');
-            }
-            for child in &node.children {
-                format_node(child, out);
-            }
-            out.push('}');
-        }
+        "mfenced" => format_fenced(node, out),
+        "mtable" => format_matrix(node, out),
+        "mtr" | "mtd" => format_children(node, out),
+        "menclose" => format_enclosure(node, out),
         "mprescripts" | "none" => {}
         _ => {
             if !node.text.is_empty() {
@@ -263,6 +214,59 @@ fn format_over_or_under_set(
     out.push_str(command);
     format_braced_child(annotation, out);
     format_braced_child(base, out);
+}
+
+fn format_fenced(node: &MathNode, out: &mut String) {
+    let open = map_fence_delimiter(node.attr("open").unwrap_or("("), true);
+    let close = map_fence_delimiter(node.attr("close").unwrap_or(")"), false);
+    out.push_str(&open);
+    for (index, child) in node.children.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        format_node(child, out);
+    }
+    out.push_str(&close);
+}
+
+fn format_matrix(node: &MathNode, out: &mut String) {
+    out.push_str("\\begin{matrix} ");
+    for (row_index, row) in node.children.iter().enumerate() {
+        if row_index > 0 {
+            out.push_str(" \\\\ ");
+        }
+        format_matrix_row(row, out);
+    }
+    out.push_str(" \\end{matrix}");
+}
+
+fn format_matrix_row(row: &MathNode, out: &mut String) {
+    for (cell_index, cell) in row.children.iter().enumerate() {
+        if cell_index > 0 {
+            out.push_str(" & ");
+        }
+        format_node(cell, out);
+    }
+}
+
+fn format_enclosure(node: &MathNode, out: &mut String) {
+    out.push_str(enclosure_command(node.attr("notation").unwrap_or("box")));
+    format_children(node, out);
+    out.push('}');
+}
+
+fn enclosure_command(notation: &str) -> &'static str {
+    if notation.contains("box") {
+        "\\boxed{"
+    } else if notation.contains("radical") {
+        "\\sqrt{"
+    } else if notation.contains("top") || notation.contains("overline") {
+        "\\overline{"
+    } else if notation.contains("bottom") || notation.contains("underline") {
+        "\\underline{"
+    } else {
+        "{"
+    }
 }
 
 fn trim_trailing_whitespace(s: &mut String) {
