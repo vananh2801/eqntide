@@ -14,50 +14,11 @@ pub fn mathml_to_latex(node: &MathNode) -> String {
 
 fn format_node(node: &MathNode, out: &mut String) {
     match node.tag.as_str() {
-        "math" | "mrow" | "mstyle" => {
-            for child in &node.children {
-                format_node(child, out);
-            }
-        }
-        "mi" => {
-            let t = node.text.trim();
-            if let Some(greek) = map_greek_or_symbol(t) {
-                out.push_str(greek);
-            } else if is_named_function(t) {
-                out.push('\\');
-                out.push_str(t);
-                out.push(' ');
-            } else if t.len() > 1 && t.chars().all(|c| c.is_alphabetic()) {
-                out.push_str("\\mathrm{");
-                out.push_str(t);
-                out.push('}');
-            } else {
-                out.push_str(t);
-            }
-        }
-        "mn" => {
-            out.push_str(node.text.trim());
-        }
-        "mo" => {
-            let t = node.text.trim();
-            if is_invisible_operator(t) {
-                // Invisible times/comma/plus/apply: omit
-                return;
-            }
-            if let Some(op) = map_operator(t) {
-                out.push_str(op);
-            } else {
-                out.push_str(t);
-            }
-        }
-        "mtext" => {
-            let t = node.text.trim();
-            if !t.is_empty() {
-                out.push_str("\\text{");
-                out.push_str(&escape_latex_text(t));
-                out.push('}');
-            }
-        }
+        "math" | "mrow" | "mstyle" => format_children(node, out),
+        "mi" => format_identifier(node, out),
+        "mn" => out.push_str(node.text.trim()),
+        "mo" => format_operator(node, out),
+        "mtext" => format_text(node, out),
         "mfrac" => {
             let num = node.children.first();
             let den = node.children.get(1);
@@ -310,6 +271,52 @@ fn format_node(node: &MathNode, out: &mut String) {
             }
         }
     }
+}
+
+fn format_children(node: &MathNode, out: &mut String) {
+    for child in &node.children {
+        format_node(child, out);
+    }
+}
+
+fn format_identifier(node: &MathNode, out: &mut String) {
+    let text = node.text.trim();
+    if let Some(greek) = map_greek_or_symbol(text) {
+        out.push_str(greek);
+    } else if is_named_function(text) {
+        out.push('\\');
+        out.push_str(text);
+        out.push(' ');
+    } else if text.len() > 1 && text.chars().all(char::is_alphabetic) {
+        out.push_str("\\mathrm{");
+        out.push_str(text);
+        out.push('}');
+    } else {
+        out.push_str(text);
+    }
+}
+
+fn format_operator(node: &MathNode, out: &mut String) {
+    let text = node.text.trim();
+    if is_invisible_operator(text) {
+        // Invisible times/comma/plus/apply are structural MathML markers.
+        return;
+    }
+    if let Some(operator) = map_operator(text) {
+        out.push_str(operator);
+    } else {
+        out.push_str(text);
+    }
+}
+
+fn format_text(node: &MathNode, out: &mut String) {
+    let text = node.text.trim();
+    if text.is_empty() {
+        return;
+    }
+    out.push_str("\\text{");
+    out.push_str(&escape_latex_text(text));
+    out.push('}');
 }
 
 fn trim_trailing_whitespace(s: &mut String) {
