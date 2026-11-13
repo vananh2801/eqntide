@@ -8,6 +8,19 @@ A standalone, high-performance **bidirectional math equation converter and edito
 
 ---
 
+## Repository Components
+
+| Component | Location | Description |
+| --- | --- | --- |
+| Rust library and CLI | `src/`, root `Cargo.toml` | Pure Rust conversion engine and the `eqntide-cli` command-line application. |
+| Desktop application | `src-tauri/`, `src-ui/` | Tauri v2 desktop shell backed by the same Rust conversion engine. The frontend is a static, vendored MathLive UI. |
+| Microsoft Word add-in | `word-addin/` | Static Office.js manifest, task pane, commands, and assets. It communicates with the local EqnTide bridge. |
+| WPS Office add-in | `wps-addin/` | Static WPS JavaScript add-in, ribbon definition, task pane, and assets. It communicates with the same bridge. |
+
+The Word and WPS add-ins are not separate compiled applications. They are served or copied as static files and require either the desktop application or `eqntide-cli --server` to provide the local bridge at `http://127.0.0.1:17890`.
+
+---
+
 ## Key Features
 
 - **Bidirectional End-to-End Conversion Pipelines**:
@@ -41,25 +54,223 @@ A standalone, high-performance **bidirectional math equation converter and edito
 
 ## Installation
 
-### System Requirements
-- **Windows**: Windows 10 (64-bit) or Windows 11 (64-bit).
-- **Linux**: x86_64, GTK3 / WebKit2GTK 4.1.
-- **macOS**: 11.0+ (Apple Silicon or Intel).
+### Prerequisites
 
-### Build from Source
-Rust **1.75+** (MSRV).
+- A current stable [Rust toolchain](https://rustup.rs/) with Cargo.
+- **Windows**: 64-bit Windows 10/11 and Microsoft Visual Studio C++ Build Tools with the Windows SDK.
+- **macOS**: macOS 10.15 or later and Xcode Command Line Tools (`xcode-select --install`).
+- **Linux**: GTK3, WebKit2GTK 4.1, and the other Tauri system libraries. On Ubuntu/Debian:
+
+  ```bash
+  sudo apt-get update
+  sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+    librsvg2-dev patchelf libgtk-3-dev
+  ```
+
+  On Fedora/RHEL:
+
+  ```bash
+  sudo dnf install -y webkit2gtk4.1-devel libappindicator-gtk3-devel \
+    librsvg2-devel gtk3-devel
+  ```
+
+Node.js is not required for a normal build. The desktop frontend is loaded directly from `src-ui/`, and its MathLive runtime is already vendored in `src-ui/vendor/mathlive/`.
+
+### Clone the Repository
 
 ```bash
-# Clone the repository
 git clone https://github.com/vananh2801/eqntide.git
 cd eqntide
-
-# Build release CLI binary:
-cargo build --release
-
-# The compiled binary will be located at:
-# target/release/eqntide-cli
 ```
+
+### Build the Pure Rust CLI
+
+Run this command from the repository root:
+
+```bash
+cargo build --release --bin eqntide-cli
+```
+
+The release binary is written to:
+
+- Linux/macOS: `target/release/eqntide-cli`
+- Windows: `target\release\eqntide-cli.exe`
+
+Verify the build with:
+
+```bash
+./target/release/eqntide-cli --version
+```
+
+On Windows PowerShell, use `./target/release/eqntide-cli.exe --version`.
+
+### Build the Tauri v2 Desktop Application
+
+Install the Tauri v2 CLI once:
+
+```bash
+cargo install tauri-cli --version "^2.0.0" --locked
+```
+
+For development with automatic rebuilds:
+
+```bash
+cd src-tauri
+cargo tauri dev
+```
+
+For a release executable and the platform installer/bundles configured in `src-tauri/tauri.conf.json`:
+
+```bash
+cd src-tauri
+cargo tauri build
+```
+
+Build outputs are placed under `src-tauri/target/release/`:
+
+- Raw executable: `eqntide-desktop` on Linux/macOS or `eqntide-desktop.exe` on Windows.
+- Installers/packages: `src-tauri/target/release/bundle/` (for example NSIS on Windows, DEB/AppImage on Linux, and app/DMG bundles on macOS when supported by the host platform).
+
+If only the raw desktop executable is needed, without generating a Tauri installer, run this from the repository root:
+
+```bash
+cargo build --release --manifest-path src-tauri/Cargo.toml
+```
+
+Tauri bundles are platform-specific and should normally be built on the target operating system.
+
+### Prepare and Install the Word/WPS Add-ins
+
+There is no npm, Cargo, or bundling step for either add-in. Keep each directory intact:
+
+```text
+word-addin/   # Microsoft Word Office.js add-in
+wps-addin/    # WPS Office JavaScript add-in
+```
+
+When making a portable distribution, copy both directories beside `eqntide-cli[.exe]` so the bridge can serve `/word-addin/*` and `/wps-addin/*`. When running from a source checkout, start the bridge from the repository root:
+
+```bash
+./target/release/eqntide-cli --server
+```
+
+The desktop application starts the same bridge automatically. Confirm it is available before opening the add-in:
+
+```bash
+curl http://127.0.0.1:17890/health
+```
+
+#### Windows: Word and WPS Office
+
+Run the PowerShell registration script from the repository root, then restart Word or WPS Office:
+
+```powershell
+.\scripts\install-addin.ps1
+```
+
+The script registers `word-addin/manifest.xml` in the current user's Word developer catalog and copies `wps-addin/` into the WPS `jsaddons` directory. To remove both registrations:
+
+```powershell
+.\scripts\install-addin.ps1 -Uninstall
+```
+
+#### Linux: WPS Office
+
+```bash
+./scripts/install-addin.sh
+```
+
+This installs the static files under the current user's Kingsoft/WPS `jsaddons` directories. Uninstall them with:
+
+```bash
+./scripts/install-addin.sh --uninstall
+```
+
+#### macOS: Word and WPS Office
+
+```bash
+./scripts/install-addin.sh
+```
+
+The script sideloads the Word manifest into Word's `wef` directory and installs the WPS add-in when a WPS container is present. Restart the Office application after registration.
+
+### Manual Add-in Sideloading
+
+Use these steps when the registration scripts are unavailable or when you need to inspect the installation manually. Start the EqnTide desktop application or CLI bridge before opening an add-in.
+
+#### Microsoft Word on Windows
+
+Register the manifest in the current user's Word developer catalog from PowerShell, replacing the example path with the absolute path to this checkout:
+
+```powershell
+$manifest = "C:\path\to\eqntide\word-addin\manifest.xml"
+New-Item -Path "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer" -Force
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer" `
+  -Name "EqnTide" -Value $manifest
+```
+
+Restart Word, then open **Insert → My Add-ins → Developer Add-ins** and select **EqnTide**.
+
+#### Microsoft Word on macOS
+
+```bash
+mkdir -p ~/Library/Containers/com.microsoft.Word/Data/Documents/wef
+cp word-addin/manifest.xml \
+  ~/Library/Containers/com.microsoft.Word/Data/Documents/wef/manifest-eqntide.xml
+```
+
+Restart Word, then activate EqnTide from **Insert → Add-ins → Developer Add-ins**.
+
+#### Microsoft Word on the Web
+
+Open a document in Word on the Web, choose **Insert → Add-ins → More Add-ins → Manage My Add-ins → Upload My Add-in**, and upload `word-addin/manifest.xml`. The browser must be able to access the bridge URLs in the manifest; organizational Office policies may disable developer add-in uploads or local HTTP endpoints.
+
+#### WPS Office on Windows or Linux
+
+Copy the complete `wps-addin/` directory into the WPS `jsaddons` directory as `EqnTide_1.0.0`:
+
+- Windows: `%APPDATA%\Kingsoft\wps\jsaddons\EqnTide_1.0.0\`
+- Linux: `~/.local/share/Kingsoft/wps/jsaddons/EqnTide_1.0.0/`
+- Linux international builds may use `~/.local/share/Kingsoft/wps_intl/jsaddons/EqnTide_1.0.0/`.
+
+Create `publish.xml` in the parent `jsaddons` directory:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<jsplugins>
+  <jsplugin name="EqnTide" type="wps" version="1.0.0"
+    enable="enable_dev" url="EqnTide_1.0.0/" />
+</jsplugins>
+```
+
+Create `authaddin.json` in the same directory:
+
+```json
+{
+  "wps": {
+    "namelist": "EqnTide",
+    "EqnTide": {
+      "name": "EqnTide",
+      "enable": true,
+      "isload": true,
+      "path": "EqnTide_1.0.0/",
+      "md5": "",
+      "mode": 2
+    }
+  }
+}
+```
+
+Completely exit and restart WPS Writer. The **EqnTide** tab should then appear in the ribbon.
+
+### Installation Troubleshooting
+
+- **The add-in reports `Bridge: Offline`:** Start the desktop application or run `eqntide-cli --server`, then open `http://127.0.0.1:17890/health`. A working bridge returns JSON containing `"status":"ok"` and `"server":"eqntide-bridge"`.
+- **Port 17890 is already occupied:** Stop the other process using the port before starting EqnTide. Although the CLI supports `--port`, the bundled Word/WPS manifests and scripts are configured for port `17890`; using another port requires updating those add-in URLs as well.
+- **The add-in files return 404:** Run the CLI bridge from the repository root, or place `word-addin/` and `wps-addin/` beside the distributed executable.
+- **The ribbon does not appear:** Fully close all Word/WPS processes, verify that the manifest or `jsaddons` files were installed for the current user, and reopen the application.
+- **Linux WebKit/GStreamer warnings:** EqnTide disables MathLive audio effects; remaining media-framework warnings are normally harmless unless the editor fails to render.
+- **Network and privacy:** Conversion runs locally and the bridge binds to `127.0.0.1`; EqnTide does not require a conversion cloud service or telemetry endpoint.
 
 ---
 
