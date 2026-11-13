@@ -1,3 +1,10 @@
+//! Tauri desktop application entry point.
+//!
+//! This crate adapts the public `eqntide` library for the bundled web UI. It
+//! owns window lifecycle and Tauri command boundaries; MathML, OMML, MTEF, and
+//! DOCX conversion rules remain in the library so the CLI and desktop app
+//! produce the same results.
+
 #![forbid(unsafe_code)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
