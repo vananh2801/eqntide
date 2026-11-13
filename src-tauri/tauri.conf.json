@@ -25,6 +25,13 @@
       "csp": null
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["eqntide"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
@@ -41,6 +48,9 @@
       }
     },
     "linux": {
+      "rpm": {
+        "desktopTemplate": "EqnTide.desktop.hbs"
+      },
       "deb": {
         "depends": [
           "libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37",
