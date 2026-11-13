@@ -243,6 +243,10 @@ fn parse_query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
+fn is_cors_preflight(method: &Method) -> bool {
+    *method == Method::Options
+}
+
 /// Serve static files for Office Word/WPS Add-ins directly from the bridge server.
 fn serve_addin_file(folder: &str, rel_path: &str, origin: Option<&str>) -> Option<HttpResponse> {
     if rel_path.contains("..") || rel_path.starts_with('/') || rel_path.starts_with('\\') {
@@ -397,7 +401,7 @@ fn handle_http_request(
     let origin = origin_owned.as_deref();
 
     // 3. CORS Preflight
-    if method == Method::Options {
+    if is_cors_preflight(&method) {
         let resp = empty_cors_response(204, origin);
         let _ = req.respond(resp);
         return;
