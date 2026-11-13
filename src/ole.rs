@@ -337,6 +337,43 @@ struct DirItem {
     size: usize,
 }
 
+/// Parsed CFB header fields needed to locate the allocation tables and streams.
+struct CfbHeader {
+    sector_size: usize,
+    mini_sector_size: usize,
+    first_dir_sect: u32,
+    mini_cutoff: usize,
+    first_minifat_sect: u32,
+    num_minifat_sects: usize,
+    first_difat_sect: u32,
+    num_difat_sects: usize,
+}
+
+impl CfbHeader {
+    fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() < SECTOR || data.get(0..8)? != MAGIC {
+            return None;
+        }
+
+        let sector_shift = get_u16(data, 30)? as usize;
+        let mini_shift = get_u16(data, 32)? as usize;
+        if !(7..=16).contains(&sector_shift) || !(4..=sector_shift).contains(&mini_shift) {
+            return None;
+        }
+
+        Some(Self {
+            sector_size: 1usize << sector_shift,
+            mini_sector_size: 1usize << mini_shift,
+            first_dir_sect: get_u32(data, 48)?,
+            mini_cutoff: get_u32(data, 56)? as usize,
+            first_minifat_sect: get_u32(data, 60)?,
+            num_minifat_sects: get_u32(data, 64)? as usize,
+            first_difat_sect: get_u32(data, 68)?,
+            num_difat_sects: get_u32(data, 72)? as usize,
+        })
+    }
+}
+
 fn read_sector(data: &[u8], sector_size: usize, sect: u32) -> Option<&[u8]> {
     let off = (sect as usize).checked_add(1)?.checked_mul(sector_size)?;
     data.get(off..off.checked_add(sector_size)?)
@@ -429,107 +466,134 @@ fn parse_directory_entries(dir_bytes: &[u8]) -> Vec<DirItem> {
     entries
 }
 
-/// Extract a named stream from an OLE2 Compound File Binary (`data`).
-pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
-    if data.len() < SECTOR || data.get(0..8)? != MAGIC {
-        return None;
-    }
-
-    let sector_shift = get_u16(data, 30)? as usize;
-    let mini_shift = get_u16(data, 32)? as usize;
-    if !(7..=16).contains(&sector_shift) || !(4..=sector_shift).contains(&mini_shift) {
-        return None;
-    }
-    let sector_size = 1usize << sector_shift;
-    let mini_sector_size = 1usize << mini_shift;
-
-    let first_dir_sect = get_u32(data, 48)?;
-    let mini_cutoff = get_u32(data, 56)? as usize;
-    let first_minifat_sect = get_u32(data, 60)?;
-    let num_minifat_sects = get_u32(data, 64)? as usize;
-    let first_difat_sect = get_u32(data, 68)?;
-    let num_difat_sects = get_u32(data, 72)? as usize;
-
-    // 1. Collect DIFAT (FAT sector numbers)
+fn collect_fat_sector_ids(data: &[u8], header: &CfbHeader) -> Option<Vec<u32>> {
     let mut fat_sects = Vec::new();
-    for i in 0..109 {
-        let s = get_u32(data, 76 + i * 4)?;
-        if s < DIFSECT {
-            fat_sects.push(s);
+    for i in 0..CFB_HEADER_DIFAT_ENTRIES {
+        let sect = get_u32(data, 76 + i * 4)?;
+        if sect < DIFSECT {
+            fat_sects.push(sect);
         }
     }
-    let mut difat_cur = first_difat_sect;
-    let mut difat_steps = 0;
-    while difat_cur < DIFSECT && difat_steps < num_difat_sects {
-        let Some(sec) = read_sector(data, sector_size, difat_cur) else {
+
+    let mut difat_sect = header.first_difat_sect;
+    for _ in 0..header.num_difat_sects {
+        if difat_sect >= DIFSECT {
+            break;
+        }
+        let Some(sector) = read_sector(data, header.sector_size, difat_sect) else {
             break;
         };
-        let entries_per_sect = sector_size / 4;
-        for i in 0..entries_per_sect.saturating_sub(1) {
-            if let Some(s) = get_u32(sec, i * 4) {
-                if s < DIFSECT {
-                    fat_sects.push(s);
+        let entries = header.sector_size / 4;
+        for i in 0..entries.saturating_sub(1) {
+            if let Some(sect) = get_u32(sector, i * 4) {
+                if sect < DIFSECT {
+                    fat_sects.push(sect);
                 }
             }
         }
-        difat_cur = get_u32(sec, (entries_per_sect - 1) * 4).unwrap_or(ENDOFCHAIN);
-        difat_steps += 1;
+        difat_sect = get_u32(sector, (entries - 1) * 4).unwrap_or(ENDOFCHAIN);
     }
+    Some(fat_sects)
+}
 
-    // 2. Build FAT
+fn collect_fat(data: &[u8], sector_size: usize, fat_sects: &[u32]) -> Vec<u32> {
     let mut fat = Vec::with_capacity(fat_sects.len() * (sector_size / 4));
-    for &s in &fat_sects {
-        if let Some(sec) = read_sector(data, sector_size, s) {
-            for chunk in sec.as_chunks::<4>().0 {
-                fat.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    for &sect in fat_sects {
+        if let Some(sector) = read_sector(data, sector_size, sect) {
+            for entry in sector.as_chunks::<4>().0 {
+                fat.push(u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]));
             }
         }
     }
+    fat
+}
 
-    // 3. Read Directory stream
-    let dir_bytes = read_chain(data, sector_size, &fat, first_dir_sect, None);
-    let entries = parse_directory_entries(&dir_bytes);
+struct CfbReader<'a> {
+    data: &'a [u8],
+    header: CfbHeader,
+    fat: Vec<u32>,
+}
 
-    let root = entries.iter().find(|e| e.entry_type == 5)?;
-    let target = target_names.iter().find_map(|&cand| {
-        entries
-            .iter()
-            .find(|e| e.entry_type == 2 && e.name.eq_ignore_ascii_case(cand))
-    })?;
-
-    if target.size == 0 {
-        return Some(Vec::new());
+impl<'a> CfbReader<'a> {
+    fn parse(data: &'a [u8]) -> Option<Self> {
+        let header = CfbHeader::parse(data)?;
+        let fat_sects = collect_fat_sector_ids(data, &header)?;
+        let fat = collect_fat(data, header.sector_size, &fat_sects);
+        Some(Self { data, header, fat })
     }
 
-    if target.size >= mini_cutoff {
-        return Some(read_chain(
-            data,
-            sector_size,
-            &fat,
-            target.start_sect,
-            Some(target.size),
-        ));
+    fn directory_entries(&self) -> Vec<DirItem> {
+        let bytes = read_chain(
+            self.data,
+            self.header.sector_size,
+            &self.fat,
+            self.header.first_dir_sect,
+            None,
+        );
+        parse_directory_entries(&bytes)
     }
 
-    // 4. Read from MiniStream via MiniFAT
-    let mini_stream = read_chain(data, sector_size, &fat, root.start_sect, Some(root.size));
-    let minifat_bytes = if first_minifat_sect < DIFSECT && num_minifat_sects > 0 {
+    fn read_regular_stream(&self, stream: &DirItem) -> Vec<u8> {
         read_chain(
-            data,
-            sector_size,
-            &fat,
-            first_minifat_sect,
-            Some(num_minifat_sects * sector_size),
+            self.data,
+            self.header.sector_size,
+            &self.fat,
+            stream.start_sect,
+            Some(stream.size),
         )
-    } else {
-        Vec::new()
-    };
-    let mut minifat = Vec::with_capacity(minifat_bytes.len() / 4);
-    for chunk in minifat_bytes.as_chunks::<4>().0 {
-        minifat.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
 
-    read_mini_chain(&mini_stream, mini_sector_size, &minifat, target)
+    fn mini_fat(&self) -> Vec<u32> {
+        if self.header.first_minifat_sect >= DIFSECT || self.header.num_minifat_sects == 0 {
+            return Vec::new();
+        }
+        let bytes = read_chain(
+            self.data,
+            self.header.sector_size,
+            &self.fat,
+            self.header.first_minifat_sect,
+            Some(self.header.num_minifat_sects * self.header.sector_size),
+        );
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|entry| u32::from_le_bytes(*entry))
+            .collect()
+    }
+
+    fn read_mini_stream(&self, root: &DirItem, stream: &DirItem) -> Option<Vec<u8>> {
+        let mini_stream = self.read_regular_stream(root);
+        read_mini_chain(
+            &mini_stream,
+            self.header.mini_sector_size,
+            &self.mini_fat(),
+            stream,
+        )
+    }
+
+    fn read_stream(&self, target_names: &[&str]) -> Option<Vec<u8>> {
+        let entries = self.directory_entries();
+        let root = entries.iter().find(|entry| entry.entry_type == 5)?;
+        let target = target_names.iter().find_map(|&candidate| {
+            entries
+                .iter()
+                .find(|entry| entry.entry_type == 2 && entry.name.eq_ignore_ascii_case(candidate))
+        })?;
+
+        if target.size == 0 {
+            return Some(Vec::new());
+        }
+        if target.size >= self.header.mini_cutoff {
+            return Some(self.read_regular_stream(target));
+        }
+        self.read_mini_stream(root, target)
+    }
+}
+
+/// Extract a named stream from an OLE2 Compound File Binary (`data`).
+pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
+    CfbReader::parse(data)?.read_stream(target_names)
 }
 
 /// Strip the 28-byte `EQNOLEFILEHDR` prefix from a raw `Equation Native` stream
