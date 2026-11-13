@@ -713,4 +713,49 @@ mod tests {
         let extracted_large = extract_mtef_from_ole(&ole_large).unwrap();
         assert_eq!(extracted_large.len(), native_large.len() - 28);
     }
+
+    #[test]
+    fn reads_equation_native_at_the_mini_stream_boundary() {
+        for payload_len in [MINI_CUTOFF - 29, MINI_CUTOFF - 28] {
+            let payload = vec![0xA5; payload_len];
+            let native = crate::mtef::make_equation_native(&payload);
+            let ole = make_ole(&native).unwrap();
+
+            assert_eq!(read_ole_stream(&ole, MTEF_STREAM_NAMES), Some(native));
+            assert_eq!(
+                extract_mtef_from_ole(&ole),
+                Some(crate::mtef::build_mtef(&payload))
+            );
+        }
+    }
+
+    #[test]
+    fn reads_streams_across_fat_and_mini_fat_chains() {
+        let mini_payload = vec![0x11; MINI_SECTOR * 3 + 7];
+        let large_payload = vec![0x22; SECTOR * 3 + 19];
+        for payload in [&mini_payload, &large_payload] {
+            let native = crate::mtef::make_equation_native(payload);
+            let ole = make_ole(&native).unwrap();
+
+            assert_eq!(read_ole_stream(&ole, MTEF_STREAM_NAMES), Some(native));
+            assert_eq!(
+                extract_mtef_from_ole(&ole),
+                Some(crate::mtef::build_mtef(payload))
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_compound_files_without_panicking() {
+        assert_eq!(read_ole_stream(&[], MTEF_STREAM_NAMES), None);
+        assert_eq!(read_ole_stream(&MAGIC, MTEF_STREAM_NAMES), None);
+
+        let native = crate::mtef::make_equation_native(&[5, 0, 0]);
+        let mut ole = make_ole(&native).unwrap();
+        ole[0] = 0;
+        assert_eq!(read_ole_stream(&ole, MTEF_STREAM_NAMES), None);
+
+        let truncated = &make_ole(&native).unwrap()[..SECTOR];
+        assert_eq!(read_ole_stream(truncated, MTEF_STREAM_NAMES), None);
+    }
 }
