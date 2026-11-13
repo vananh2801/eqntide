@@ -135,11 +135,7 @@ pub fn upgrade_legacy_mathtype_bytes_with(
         if summary.converted > before_converted {
             pkg.set(&xml_path, xml::to_bytes(&doc_root));
 
-            let remaining_rids = collect_referenced_rids(&doc_root);
-            let dead_rids: HashSet<String> = converted_rids
-                .into_iter()
-                .filter(|rid| !remaining_rids.contains(rid))
-                .collect();
+            let dead_rids = obsolete_relationship_ids(&doc_root, converted_rids);
 
             if !dead_rids.is_empty() {
                 for rid in &dead_rids {
@@ -185,6 +181,14 @@ fn next_package_part_indices(pkg: &Package) -> (usize, usize) {
 
 fn default_relationships_root() -> Element {
     xml::parse(EMPTY_RELS).expect("built-in relationship XML is valid")
+}
+
+fn obsolete_relationship_ids(root: &Element, converted: HashSet<String>) -> HashSet<String> {
+    let remaining = collect_referenced_rids(root);
+    converted
+        .into_iter()
+        .filter(|rid| !remaining.contains(rid))
+        .collect()
 }
 
 fn next_unique_id(existing: &mut HashSet<String>, prefix: &str) -> String {
