@@ -51,11 +51,7 @@ pub fn convert_bytes_to_omml_with(
         let mut doc_root = xml::parse(xml_bytes)?;
 
         let rels_path = rels_path_for_part(&xml_path);
-        let rels_opt = pkg.get(&rels_path).map(xml::parse).transpose()?;
-        let rel_map = rels_opt
-            .as_ref()
-            .map(|r| build_rel_map(r, &xml_path))
-            .unwrap_or_default();
+        let (rels_opt, rel_map) = read_part_relationships(&pkg, &xml_path, &rels_path)?;
 
         let mut converted_rids: HashSet<String> = HashSet::new();
         let before_converted = summary.converted;
@@ -157,6 +153,19 @@ pub(crate) fn rels_path_for_part(xml_path: &str) -> String {
         Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
         None => format!("_rels/{xml_path}.rels"),
     }
+}
+
+fn read_part_relationships(
+    pkg: &Package,
+    xml_path: &str,
+    rels_path: &str,
+) -> Result<(Option<Element>, HashMap<String, String>)> {
+    let rels = pkg.get(rels_path).map(xml::parse).transpose()?;
+    let map = rels
+        .as_ref()
+        .map(|root| build_rel_map(root, xml_path))
+        .unwrap_or_default();
+    Ok((rels, map))
 }
 
 pub(crate) fn resolve_target_path(part_dir: &str, target: &str) -> String {
