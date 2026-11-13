@@ -9,10 +9,15 @@ pub fn is_accent(c: char) -> bool {
 }
 
 /// Returns true if character is a prime mark or apostrophe.
-pub const PRIME_CHARS: &[char] = &['\'', '\u{2032}', '\u{2033}', '\u{2034}', '\u{00B4}', '`', '\u{2035}'];
+pub const PRIME_CHARS: &[char] = &[
+    '\'', '\u{2032}', '\u{2033}', '\u{2034}', '\u{00B4}', '`', '\u{2035}',
+];
 
 pub fn is_prime_char(c: char) -> bool {
-    matches!(c, '\'' | '\u{2032}' | '\u{2033}' | '\u{2034}' | '\u{00B4}' | '`' | '\u{2035}')
+    matches!(
+        c,
+        '\'' | '\u{2032}' | '\u{2033}' | '\u{2034}' | '\u{00B4}' | '`' | '\u{2035}'
+    )
 }
 
 /// Returns the order of a derivative prime mark (1 for ', 2 for '', 3 for ''', etc.), or None if not a prime.
@@ -41,7 +46,9 @@ pub fn prime_order(text: &str) -> Option<u8> {
                 let mut count = 0u8;
                 for c in chars {
                     match c {
-                        '\'' | '\u{2032}' | '\u{00B4}' | '`' | '\u{2035}' => count = count.saturating_add(1),
+                        '\'' | '\u{2032}' | '\u{00B4}' | '`' | '\u{2035}' => {
+                            count = count.saturating_add(1)
+                        }
                         '\u{2033}' => count = count.saturating_add(2),
                         '\u{2034}' => count = count.saturating_add(3),
                         _ => {}

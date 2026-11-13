@@ -51,9 +51,7 @@ impl MathmlEncoder {
         while i < children.len() {
             // 1. Check for fence `<mo>` wrapping an `<mtable>` (e.g. matrix `( ... )`
             //    or piecewise system `{ ...` produced by `omml::decode::handle_d`).
-            if i + 1 < children.len()
-                && children[i].tag == "mo"
-                && children[i + 1].tag == "mtable"
+            if i + 1 < children.len() && children[i].tag == "mo" && children[i + 1].tag == "mtable"
             {
                 if let Some(sel) = open_fence_selector(children[i].text.trim()) {
                     let table_bytes = self.dispatch(&children[i + 1])?;
@@ -66,9 +64,7 @@ impl MathmlEncoder {
                 }
             }
             // 2. Also check for `<mtable>` followed by a lone closing fence `<mo>`.
-            if i + 1 < children.len()
-                && children[i].tag == "mtable"
-                && children[i + 1].tag == "mo"
+            if i + 1 < children.len() && children[i].tag == "mtable" && children[i + 1].tag == "mo"
             {
                 if let Some(sel) = close_fence_selector(children[i + 1].text.trim()) {
                     let table_bytes = self.dispatch(&children[i])?;
@@ -108,8 +104,7 @@ impl MathmlEncoder {
                 {
                     let split_end = find_bigop_operand_end(&children[i + 1..]) + (i + 1);
                     if split_end > i + 1 {
-                        let main_bytes =
-                            self.encode_children_slice(&children[i + 1..split_end])?;
+                        let main_bytes = self.encode_children_slice(&children[i + 1..split_end])?;
                         let lo_bytes = match lo_node {
                             Some(n) => self.dispatch(n)?,
                             None => Vec::new(),
@@ -230,10 +225,9 @@ impl MathmlEncoder {
         let is_left_angle = matches!(first_mo, Some("\u{2329}" | "\u{27E8}" | "<"));
         let is_right_angle = matches!(last_mo, Some("\u{232A}" | "\u{27E9}" | ">"));
         if is_left_angle && is_right_angle {
-            if let Some(bar_pos) = inner_slice
-                .iter()
-                .position(|n| n.tag == "mo" && n.attr("stretchy") == Some("true") && n.text.trim() == "|")
-            {
+            if let Some(bar_pos) = inner_slice.iter().position(|n| {
+                n.tag == "mo" && n.attr("stretchy") == Some("true") && n.text.trim() == "|"
+            }) {
                 let left_bytes = self.encode_children_slice(&inner_slice[..bar_pos])?;
                 let right_bytes = self.encode_children_slice(&inner_slice[bar_pos + 1..])?;
                 return Ok(Some(dirac(
@@ -256,7 +250,9 @@ impl MathmlEncoder {
 
         // 2. Check for unmatched interval fences (`[a, b)`, `(a, b]`, `]a, b[`, `[a, b[`, `]a, b]`)
         if let (Some(l_str), Some(r_str)) = (first_mo, last_mo) {
-            if let (Some(l_kind), Some(r_kind)) = (interval_fence_kind(l_str), interval_fence_kind(r_str)) {
+            if let (Some(l_kind), Some(r_kind)) =
+                (interval_fence_kind(l_str), interval_fence_kind(r_str))
+            {
                 let is_matched_paren = l_str == "(" && r_str == ")";
                 let is_matched_brack = l_str == "[" && r_str == "]";
                 if !is_matched_paren && !is_matched_brack {
@@ -345,7 +341,11 @@ impl MathmlEncoder {
             }
             "msup" => {
                 let mut base = self.nth(node, 0)?;
-                let sup_text = node.children.get(1).and_then(unwrap_leaf_text).unwrap_or("");
+                let sup_text = node
+                    .children
+                    .get(1)
+                    .and_then(unwrap_leaf_text)
+                    .unwrap_or("");
                 if is_single_char_record(&base) {
                     if let Some(order) = prime_order(sup_text) {
                         let emb = match order {
@@ -513,7 +513,13 @@ impl MathmlEncoder {
                     let over = self.nth(node, 1)?;
                     let hi_opt = (!over.is_empty()).then_some(over.as_slice());
                     let sum_style = node.attr("data-limloc") != Some("subSup");
-                    return Ok(encode_bigop_template(base_text, &[], None, hi_opt, sum_style));
+                    return Ok(encode_bigop_template(
+                        base_text,
+                        &[],
+                        None,
+                        hi_opt,
+                        sum_style,
+                    ));
                 }
 
                 let base = self.nth(node, 0)?;
@@ -532,8 +538,8 @@ impl MathmlEncoder {
                     // Double overbar
                     "\u{033F}" | "==" | "═" => Ok(double_overbar(&base)),
                     // Overbar (\overline{AB}, \bar{x})
-                    "\u{0304}" | "\u{0305}" | "\u{00AF}" | "\u{203E}" | "\u{02C9}" | "―"
-                    | "-" | "_" => Ok(overbar(&base)),
+                    "\u{0304}" | "\u{0305}" | "\u{00AF}" | "\u{203E}" | "\u{02C9}" | "―" | "-"
+                    | "_" => Ok(overbar(&base)),
                     // Tilde over characters (\widetilde{AB}, \tilde{x})
                     "~" | "\u{02DC}" | "\u{0303}" | "\u{223C}" => Ok(over_tilde(&base)),
                     // Arc over characters (\wideparen{AB})
@@ -554,9 +560,7 @@ impl MathmlEncoder {
                     "\u{20DB}" | "..." | "\u{2026}" if is_single_char_record(&base) => {
                         Ok(attach_embell(base, EMB_3DOT))
                     }
-                    "\u{20DC}" if is_single_char_record(&base) => {
-                        Ok(attach_embell(base, EMB_4DOT))
-                    }
+                    "\u{20DC}" if is_single_char_record(&base) => Ok(attach_embell(base, EMB_4DOT)),
                     "'" | "\u{2032}" | "\u{00B4}" | "\u{0301}" if is_single_char_record(&base) => {
                         Ok(attach_embell(base, EMB_1PRIME))
                     }
@@ -569,7 +573,9 @@ impl MathmlEncoder {
                     "`" | "\u{2035}" if is_single_char_record(&base) => {
                         Ok(attach_embell(base, EMB_BPRIME))
                     }
-                    "\u{2323}" | "\u{23DD}" | "\u{0306}" | "\u{02D8}" if is_single_char_record(&base) => {
+                    "\u{2323}" | "\u{23DD}" | "\u{0306}" | "\u{02D8}"
+                        if is_single_char_record(&base) =>
+                    {
                         Ok(attach_embell(base, EMB_SMILE))
                     }
                     // Fallback: overscript limit (`tmLIM` with `TV_BO_UPPER`)
@@ -639,7 +645,13 @@ impl MathmlEncoder {
                     let under = self.nth(node, 1)?;
                     let lo_opt = (!under.is_empty()).then_some(under.as_slice());
                     let sum_style = node.attr("data-limloc") != Some("subSup");
-                    return Ok(encode_bigop_template(base_text, &[], lo_opt, None, sum_style));
+                    return Ok(encode_bigop_template(
+                        base_text,
+                        &[],
+                        lo_opt,
+                        None,
+                        sum_style,
+                    ));
                 }
 
                 let base = self.nth(node, 0)?;
@@ -662,9 +674,8 @@ impl MathmlEncoder {
                             return Ok(under_harpoon_arrow(&base, false));
                         }
                         "\u{20EC}" | "\u{20ED}" | "\u{20EE}" | "\u{20EF}" | "\u{0362}"
-                        | "\u{2192}" | "\u{20D7}" | "\u{27F6}"
-                        | "\u{2190}" | "\u{20D6}" | "\u{27F5}"
-                        | "\u{2194}" | "\u{20E1}" | "\u{27F7}" => {
+                        | "\u{2192}" | "\u{20D7}" | "\u{27F6}" | "\u{2190}" | "\u{20D6}"
+                        | "\u{27F5}" | "\u{2194}" | "\u{20E1}" | "\u{27F7}" => {
                             return Ok(under_vector_arrow(&base, under_text));
                         }
                         _ => {}
@@ -721,11 +732,7 @@ impl MathmlEncoder {
 
     fn encode_mmultiscripts(&mut self, node: &MathNode) -> Result<Vec<u8>> {
         let base = self.nth(node, 0)?;
-        if let Some(prescripts_pos) = node
-            .children
-            .iter()
-            .position(|c| c.tag == "mprescripts")
-        {
+        if let Some(prescripts_pos) = node.children.iter().position(|c| c.tag == "mprescripts") {
             let presub_node = node.children.get(prescripts_pos + 1);
             let presup_node = node.children.get(prescripts_pos + 2);
             let presub = match presub_node {
@@ -828,7 +835,10 @@ impl MathmlEncoder {
         if ncols <= 1 {
             // Check for 2-row long division with quotient (`tmLDIV` with `tvLD_UPPER` decoded by `mtef/decode.rs`)
             if nrows == 2 {
-                let row1_cell = node.children[1].children.first().unwrap_or(&node.children[1]);
+                let row1_cell = node.children[1]
+                    .children
+                    .first()
+                    .unwrap_or(&node.children[1]);
                 if row1_cell.children.len() == 1
                     && row1_cell.children[0].tag == "menclose"
                     && row1_cell.children[0]
@@ -836,7 +846,10 @@ impl MathmlEncoder {
                         .unwrap_or("")
                         .contains("longdiv")
                 {
-                    let row0_cell = node.children[0].children.first().unwrap_or(&node.children[0]);
+                    let row0_cell = node.children[0]
+                        .children
+                        .first()
+                        .unwrap_or(&node.children[0]);
                     let quotient = self.encode_children(row0_cell)?;
                     let dividend = self.encode_children(&row1_cell.children[0])?;
                     return Ok(long_division(
@@ -1035,34 +1048,10 @@ fn encode_bigop_template(
         '∫' => integral(main, upper, lower, &[], TV_INT_1 | sum_bit),
         '∬' => integral(main, upper, lower, &[], TV_INT_2 | sum_bit),
         '∭' => integral(main, upper, lower, &[], TV_INT_3 | sum_bit),
-        '∮' => integral(
-            main,
-            upper,
-            lower,
-            &[],
-            TV_INT_1 | TV_INT_LOOP | sum_bit,
-        ),
-        '∯' => integral(
-            main,
-            upper,
-            lower,
-            &[],
-            TV_INT_2 | TV_INT_LOOP | sum_bit,
-        ),
-        '∰' => integral(
-            main,
-            upper,
-            lower,
-            &[],
-            TV_INT_3 | TV_INT_LOOP | sum_bit,
-        ),
-        '∲' => integral(
-            main,
-            upper,
-            lower,
-            &[],
-            TV_INT_1 | TV_INT_CW_LOOP | sum_bit,
-        ),
+        '∮' => integral(main, upper, lower, &[], TV_INT_1 | TV_INT_LOOP | sum_bit),
+        '∯' => integral(main, upper, lower, &[], TV_INT_2 | TV_INT_LOOP | sum_bit),
+        '∰' => integral(main, upper, lower, &[], TV_INT_3 | TV_INT_LOOP | sum_bit),
+        '∲' => integral(main, upper, lower, &[], TV_INT_1 | TV_INT_CW_LOOP | sum_bit),
         '∳' => integral(
             main,
             upper,
@@ -1330,7 +1319,9 @@ fn enc_mi(node: &MathNode) -> Vec<u8> {
 
         let (tf, mt_code) = map_char_with_variant(ch, variant, TF_VARIABLE);
         idx += 1;
-        out.extend(emit_char_with_combining_marks(&chars, &mut idx, tf, mt_code));
+        out.extend(emit_char_with_combining_marks(
+            &chars, &mut idx, tf, mt_code,
+        ));
     }
     out
 }
@@ -1352,7 +1343,9 @@ fn enc_mn(node: &MathNode) -> Vec<u8> {
             map_char_with_variant(ch, variant, TF_NUMBER)
         };
         idx += 1;
-        out.extend(emit_char_with_combining_marks(&chars, &mut idx, tf, mt_code));
+        out.extend(emit_char_with_combining_marks(
+            &chars, &mut idx, tf, mt_code,
+        ));
     }
     out
 }
@@ -1363,7 +1356,8 @@ fn enc_mo(node: &MathNode) -> Vec<u8> {
         return Vec::new();
     }
     if let Some(cp) = op_map(text) {
-        let (tf, mt_code) = map_char_with_variant(char::from_u32(cp).unwrap_or('='), None, TF_SYMBOL);
+        let (tf, mt_code) =
+            map_char_with_variant(char::from_u32(cp).unwrap_or('='), None, TF_SYMBOL);
         return char_record(tf, mt_code);
     }
     let variant = node.attr("mathvariant");
@@ -1377,7 +1371,9 @@ fn enc_mo(node: &MathNode) -> Vec<u8> {
         let ch = chars[idx];
         let (tf, mt_code) = map_char_with_variant(ch, variant, TF_SYMBOL);
         idx += 1;
-        out.extend(emit_char_with_combining_marks(&chars, &mut idx, tf, mt_code));
+        out.extend(emit_char_with_combining_marks(
+            &chars, &mut idx, tf, mt_code,
+        ));
     }
     out
 }

@@ -4,15 +4,24 @@
 
 use super::*;
 
-
 impl Layout {
     /// A big operator glyph centred on the math axis.
     pub(super) fn big_glyph(&self, ch: char, face: Face, em: f32, scale: f32) -> LBox {
         let size = em * scale;
         let (a, d) = self.f.ink(face, ch, size);
         let y = (a - d) / 2.0 - AXIS * em;
-        let mut b = LBox { w: self.f.advance(face, ch, size), ..Default::default() };
-        b.items.push(Item::Glyph { ch, face, em: size, x: 0.0, y, ssty: 0 });
+        let mut b = LBox {
+            w: self.f.advance(face, ch, size),
+            ..Default::default()
+        };
+        b.items.push(Item::Glyph {
+            ch,
+            face,
+            em: size,
+            x: 0.0,
+            y,
+            ssty: 0,
+        });
         b.asc = a - y;
         b.desc = d + y;
         b
@@ -46,18 +55,23 @@ impl Layout {
             Some(f) => self.node(f, em, ctx)?,
             None => LBox::default(),
         };
-        let big = base_char.is_some_and(is_big_op) || first.is_some_and(|f| f.tag == "mi" && is_function(f.text.trim()));
+        let big = base_char.is_some_and(is_big_op)
+            || first.is_some_and(|f| f.tag == "mi" && is_function(f.text.trim()));
 
         // Accent over a normal base.
         let accent = over_n
             .filter(|o| o.tag == "mo" && !big)
             .and_then(|o| o.text.trim().chars().next())
             .filter(|c| is_accent(*c));
-        let brace_under = under_n.filter(|u| u.tag == "mo" && u.text.trim() == "\u{23DF}").is_some();
+        let brace_under = under_n
+            .filter(|u| u.tag == "mo" && u.text.trim() == "\u{23DF}")
+            .is_some();
         let bar_under = under_n
             .filter(|u| u.tag == "mo" && !big)
             .and_then(|u| u.text.trim().chars().next())
-            .is_some_and(|c| c == '_' || c == '\u{0332}' || c == '\u{005F}' || c == '\u{00AF}' || c == '\u{203E}');
+            .is_some_and(|c| {
+                c == '_' || c == '\u{0332}' || c == '\u{005F}' || c == '\u{00AF}' || c == '\u{203E}'
+            });
 
         let under = match under_n {
             Some(u) if !brace_under && !bar_under => Some(self.node(u, lim_em, lim_ctx)?),
@@ -69,10 +83,14 @@ impl Layout {
         };
 
         let gap = if big { 0.10 * em } else { 0.12 * em };
-        let w = [Some(base.w), under.as_ref().map(|u| u.w), over.as_ref().map(|o| o.w)]
-            .into_iter()
-            .flatten()
-            .fold(0.0f32, f32::max);
+        let w = [
+            Some(base.w),
+            under.as_ref().map(|u| u.w),
+            over.as_ref().map(|o| o.w),
+        ]
+        .into_iter()
+        .flatten()
+        .fold(0.0f32, f32::max);
         let mut b = LBox::default();
         b.place(&base, (w - base.w) / 2.0, 0.0);
         if let Some(o) = &over {

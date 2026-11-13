@@ -132,7 +132,12 @@ fn configure_logging(verbose: bool, quiet: bool) {
     });
 }
 
-fn default_file_output(input: &Path, to_omml: bool, upgrade: bool, upgrade_target: UpgradeTargetArg) -> PathBuf {
+fn default_file_output(
+    input: &Path,
+    to_omml: bool,
+    upgrade: bool,
+    upgrade_target: UpgradeTargetArg,
+) -> PathBuf {
     let stem = input
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -150,7 +155,12 @@ fn default_file_output(input: &Path, to_omml: bool, upgrade: bool, upgrade_targe
     input.with_file_name(format!("{stem}_{suffix}.docx"))
 }
 
-fn default_dir_output(input: &Path, to_omml: bool, upgrade: bool, upgrade_target: UpgradeTargetArg) -> PathBuf {
+fn default_dir_output(
+    input: &Path,
+    to_omml: bool,
+    upgrade: bool,
+    upgrade_target: UpgradeTargetArg,
+) -> PathBuf {
     let suffix = if upgrade {
         match upgrade_target {
             UpgradeTargetArg::Omml => "upgraded_omml",
@@ -295,7 +305,10 @@ where
         let _ = writeln!(out, "Starting local bridge server on http://{addr} ...");
         match crate::bridge::start_bridge_server(&addr) {
             Ok(handle) => {
-                let _ = writeln!(out, "Bridge server running on http://{addr}. Press Ctrl+C to stop.");
+                let _ = writeln!(
+                    out,
+                    "Bridge server running on http://{addr}. Press Ctrl+C to stop."
+                );
                 while handle.addr().port() != 0 {
                     std::thread::sleep(std::time::Duration::from_millis(500));
                 }
@@ -367,10 +380,9 @@ where
 
     // ── Directory batch mode (recursive, preserving folder hierarchy) ────────
     if inp.is_dir() {
-        let out_dir = args
-            .output
-            .clone()
-            .unwrap_or_else(|| default_dir_output(inp, args.to_omml, args.upgrade, args.upgrade_target));
+        let out_dir = args.output.clone().unwrap_or_else(|| {
+            default_dir_output(inp, args.to_omml, args.upgrade, args.upgrade_target)
+        });
 
         // Avoid scanning `out_dir` if it is a subdirectory of `inp` (unless in-place `out_dir == inp`).
         let same_dir = *inp == out_dir
@@ -486,11 +498,7 @@ where
         return 0;
     }
 
-    let _ = writeln!(
-        err,
-        "Error: unsupported input path: {}",
-        inp.display()
-    );
+    let _ = writeln!(err, "Error: unsupported input path: {}", inp.display());
     1
 }
 
@@ -534,10 +542,8 @@ mod tests {
 
     #[test]
     fn test_cli_directory_batch_preserves_hierarchy_both_directions() {
-        let temp_root = std::env::temp_dir().join(format!(
-            "omml_conv_cli_test_{}",
-            std::process::id()
-        ));
+        let temp_root =
+            std::env::temp_dir().join(format!("omml_conv_cli_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_root);
 
         let input_dir = temp_root.join("input_docs");
@@ -584,17 +590,16 @@ mod tests {
             .join("section_a")
             .join("exercises.docx")
             .is_file());
-        assert!(!mathtype_dir.join("chapter1").join("~$lesson1.docx").exists());
+        assert!(!mathtype_dir
+            .join("chapter1")
+            .join("~$lesson1.docx")
+            .exists());
 
         // 2. Reverse batch conversion (--to-omml) with default output directory (<dir>_omml)
         out.clear();
         err.clear();
         let code_rev = run_with_io(
-            [
-                "eqntide-cli",
-                mathtype_dir.to_str().unwrap(),
-                "--to-omml",
-            ],
+            ["eqntide-cli", mathtype_dir.to_str().unwrap(), "--to-omml"],
             &mut out,
             &mut err,
         );
@@ -617,12 +622,16 @@ mod tests {
 
     #[test]
     fn test_cli_upgrade_single_file() {
-        let temp_dir = std::env::temp_dir().join(format!("omml_cli_upgrade_test_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("omml_cli_upgrade_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let src_file = temp_dir.join("input.docx");
         let dst_file = temp_dir.join("upgraded.docx");
 
-        let node = crate::mathml::MathNode::with_children("math", vec![crate::mathml::MathNode::leaf("mi", "a")]);
+        let node = crate::mathml::MathNode::with_children(
+            "math",
+            vec![crate::mathml::MathNode::leaf("mi", "a")],
+        );
         let preview = crate::render::emf::render_emf(&node, 12.0).unwrap();
 
         let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

@@ -13,7 +13,11 @@ pub struct Canvas {
 impl Canvas {
     /// A blank canvas.
     pub fn new(w: usize, h: usize) -> Self {
-        Canvas { w, h, cov: vec![0.0; w * h] }
+        Canvas {
+            w,
+            h,
+            cov: vec![0.0; w * h],
+        }
     }
 
     /// Add coverage (clamped to 1) at a pixel; out-of-range pixels are ignored.

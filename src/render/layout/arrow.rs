@@ -64,17 +64,29 @@ pub(super) fn template_of(n: &MathNode) -> Option<ArrowTemplate<'_>> {
     // 1. the base is the arrow, the children are its labels
     if let Some(dir) = mo_arrow(base) {
         if (under.is_some() || over.is_some()) && is_label(under) && is_label(over) {
-            return Some(ArrowTemplate { dir, top: over, bottom: under });
+            return Some(ArrowTemplate {
+                dir,
+                top: over,
+                bottom: under,
+            });
         }
     }
     // 2. ↔ or ← drawn over the base text
     if let Some(dir) = over.and_then(mo_arrow).filter(|d| *d != ArrowDir::Right) {
-        return Some(ArrowTemplate { dir, top: None, bottom: Some(base) });
+        return Some(ArrowTemplate {
+            dir,
+            top: None,
+            bottom: Some(base),
+        });
     }
     // 3. an arrow drawn under the base text (limits such as `lim` keep their subscript)
     if let Some(dir) = under.and_then(mo_arrow) {
         if !base.text.contains("lim") {
-            return Some(ArrowTemplate { dir, top: Some(base), bottom: None });
+            return Some(ArrowTemplate {
+                dir,
+                top: Some(base),
+                bottom: None,
+            });
         }
     }
     None
@@ -141,7 +153,11 @@ impl Layout {
                 let to_x = (arrow_x + 150.0 * k).max(0.0);
                 if to_x > 0.0 {
                     let count = (to_x / e_w).ceil().max(1.0) as usize;
-                    let step = if count > 1 { (to_x - e_w) / (count - 1) as f32 } else { 0.0 };
+                    let step = if count > 1 {
+                        (to_x - e_w) / (count - 1) as f32
+                    } else {
+                        0.0
+                    };
                     for i in 0..count {
                         b.items.push(Item::Glyph {
                             ch: '\u{23AF}',
@@ -172,7 +188,11 @@ impl Layout {
                 let gap = to_x - from_x;
                 if gap > 0.0 {
                     let count = (gap / e_w).ceil().max(1.0) as usize;
-                    let step = if count > 1 { (gap - e_w) / (count - 1) as f32 } else { 0.0 };
+                    let step = if count > 1 {
+                        (gap - e_w) / (count - 1) as f32
+                    } else {
+                        0.0
+                    };
                     for i in 0..count {
                         b.items.push(Item::Glyph {
                             ch: '\u{23AF}',
@@ -212,7 +232,11 @@ impl Layout {
                 let gap = to_x - from_x;
                 if gap > e_w {
                     let count = (gap / e_w).ceil().max(1.0) as usize;
-                    let step = if count > 1 { (gap - e_w) / (count - 1) as f32 } else { 0.0 };
+                    let step = if count > 1 {
+                        (gap - e_w) / (count - 1) as f32
+                    } else {
+                        0.0
+                    };
                     for i in 0..count {
                         b.items.push(Item::Glyph {
                             ch: '\u{23AF}',
@@ -247,29 +271,51 @@ mod tests {
 
     #[test]
     fn test_labeled_arrow_glyph_assembly() {
-        let mut l = Layout { f: fonts(), depth: 0 };
+        let mut l = Layout {
+            f: fonts(),
+            depth: 0,
+        };
         let em = 12.0 * 96.0 / 72.0;
         let ctx = MathContext::DISPLAY;
 
-        let node_top = MathNode::parse("<math><mover><mo>→</mo><mi>yields</mi></mover></math>").unwrap();
+        let node_top =
+            MathNode::parse("<math><mover><mo>→</mo><mi>yields</mi></mover></math>").unwrap();
         let b = l.node(&node_top.children[0], em, ctx).unwrap();
         assert!(b.w > 0.0);
-        let glyphs: Vec<char> = b.items.iter().filter_map(|it| match it {
-            Item::Glyph { ch, .. } => Some(*ch),
-            _ => None,
-        }).collect();
-        assert!(glyphs.contains(&'\u{2192}'), "must contain right arrow glyph");
+        let glyphs: Vec<char> = b
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Glyph { ch, .. } => Some(*ch),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            glyphs.contains(&'\u{2192}'),
+            "must contain right arrow glyph"
+        );
         assert!(glyphs.contains(&'\u{23AF}'), "must contain extender glyph");
 
         // Bidirectional arrow with label below
-        let node_under = MathNode::parse("<math><munder><mo>↔</mo><mi>x</mi></munder></math>").unwrap();
+        let node_under =
+            MathNode::parse("<math><munder><mo>↔</mo><mi>x</mi></munder></math>").unwrap();
         let b2 = l.node(&node_under.children[0], em, ctx).unwrap();
-        let glyphs2: Vec<char> = b2.items.iter().filter_map(|it| match it {
-            Item::Glyph { ch, .. } => Some(*ch),
-            _ => None,
-        }).collect();
-        assert!(glyphs2.contains(&'\u{2190}'), "must contain left arrow glyph");
-        assert!(glyphs2.contains(&'\u{2192}'), "must contain right arrow glyph");
+        let glyphs2: Vec<char> = b2
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Glyph { ch, .. } => Some(*ch),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            glyphs2.contains(&'\u{2190}'),
+            "must contain left arrow glyph"
+        );
+        assert!(
+            glyphs2.contains(&'\u{2192}'),
+            "must contain right arrow glyph"
+        );
 
         // Render preview images for visual inspection
         let math_full = MathNode::parse(

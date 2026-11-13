@@ -20,12 +20,22 @@ pub(super) fn stroke(pts: &[(f32, f32)], width: f32) -> Vec<Vec<(f32, f32)>> {
         let (ex, ey) = (ux * w / 2.0, uy * w / 2.0);
         let (a0, a1) = (ax - ex, ay - ey);
         let (b0, b1) = (bx + ex, by + ey);
-        out.push(vec![(a0 + nx, a1 + ny), (b0 + nx, b1 + ny), (b0 - nx, b1 - ny), (a0 - nx, a1 - ny)]);
+        out.push(vec![
+            (a0 + nx, a1 + ny),
+            (b0 + nx, b1 + ny),
+            (b0 - nx, b1 - ny),
+            (a0 - nx, a1 - ny),
+        ]);
     }
     out
 }
 
-pub(super) fn quad_bezier(p0: (f32, f32), c: (f32, f32), p1: (f32, f32), n: usize) -> Vec<(f32, f32)> {
+pub(super) fn quad_bezier(
+    p0: (f32, f32),
+    c: (f32, f32),
+    p1: (f32, f32),
+    n: usize,
+) -> Vec<(f32, f32)> {
     (0..=n)
         .map(|i| {
             let t = i as f32 / n as f32;

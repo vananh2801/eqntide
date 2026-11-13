@@ -9,9 +9,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;
-use tauri::{
-    Emitter, Manager, WindowEvent,
-};
+use tauri::{Emitter, Manager, WindowEvent};
 
 #[tauri::command]
 fn get_server_status() -> Result<serde_json::Value, String> {
@@ -33,20 +31,16 @@ fn convert_equation(
     let font_pt = font_size_pt.unwrap_or(12.0);
     match (from_format.as_str(), to_format.as_str()) {
         ("mathml", "flat_opc_omml") => {
-            let node = eqntide::MathNode::parse(&data)
-                .map_err(|e| format!("parse MathML failed: {e}"))?;
+            let node =
+                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
             eqntide::mathml_to_flat_opc(&node, eqntide::FlatOpcMode::ModernOmml, font_pt)
                 .map_err(|e| format!("flat opc pack failed: {e}"))
         }
         ("mathml", "flat_opc_mathtype") => {
-            let node = eqntide::MathNode::parse(&data)
-                .map_err(|e| format!("parse MathML failed: {e}"))?;
-            eqntide::mathml_to_flat_opc(
-                &node,
-                eqntide::FlatOpcMode::ModernMathtypeOleEmf,
-                font_pt,
-            )
-            .map_err(|e| format!("flat opc pack failed: {e}"))
+            let node =
+                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
+            eqntide::mathml_to_flat_opc(&node, eqntide::FlatOpcMode::ModernMathtypeOleEmf, font_pt)
+                .map_err(|e| format!("flat opc pack failed: {e}"))
         }
         ("flat_opc", "mathml") | ("omml", "mathml") => {
             let node = eqntide::flat_opc_to_mathml(&data)
@@ -54,26 +48,27 @@ fn convert_equation(
             Ok(node.to_xml())
         }
         ("mathml", "emf") | ("mathml", "emf_base64") => {
-            let node = eqntide::MathNode::parse(&data)
-                .map_err(|e| format!("parse MathML failed: {e}"))?;
+            let node =
+                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
             let p = eqntide::render_emf(&node, font_pt)
                 .map_err(|e| format!("render EMF failed: {e}"))?;
             Ok(eqntide::base64_encode(&p.emf))
         }
         ("mathml", "png") | ("mathml", "png_base64") => {
-            let node = eqntide::MathNode::parse(&data)
-                .map_err(|e| format!("parse MathML failed: {e}"))?;
+            let node =
+                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
             let prev = eqntide::render_preview(&node, font_pt)
                 .map_err(|e| format!("render PNG failed: {e}"))?;
             Ok(eqntide::base64_encode(&prev.png))
         }
         ("mathml", "omml") => {
-            let node = eqntide::MathNode::parse(&data)
-                .map_err(|e| format!("parse MathML failed: {e}"))?;
-            eqntide::mathml_to_omml_xml(&node)
-                .map_err(|e| format!("render OMML failed: {e}"))
+            let node =
+                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
+            eqntide::mathml_to_omml_xml(&node).map_err(|e| format!("render OMML failed: {e}"))
         }
-        _ => Err(format!("unsupported conversion from '{from_format}' to '{to_format}'")),
+        _ => Err(format!(
+            "unsupported conversion from '{from_format}' to '{to_format}'"
+        )),
     }
 }
 
@@ -132,13 +127,11 @@ fn convert_document(
                 preview: eqntide::PreviewFormat::Emf,
                 ..Default::default()
             };
-            eqntide::convert_with(in_p, out_p, &opts)
-                .map_err(|e| e.to_string())?
+            eqntide::convert_with(in_p, out_p, &opts).map_err(|e| e.to_string())?
         }
         "mathtype_to_omml" | "omml" => {
             let opts = eqntide::ToOmmlOptions::default();
-            eqntide::convert_to_omml_with(in_p, out_p, &opts)
-                .map_err(|e| e.to_string())?
+            eqntide::convert_to_omml_with(in_p, out_p, &opts).map_err(|e| e.to_string())?
         }
         other => return Err(format!("unsupported conversion direction: {other}")),
     };
@@ -218,7 +211,10 @@ fn main() {
                     let _ = window.emit("open-session", &payload);
 
                     if let Ok(json_str) = serde_json::to_string(&payload) {
-                        let eval_js = format!("if (window.__loadSession) {{ window.__loadSession({}); }}", json_str);
+                        let eval_js = format!(
+                            "if (window.__loadSession) {{ window.__loadSession({}); }}",
+                            json_str
+                        );
                         let _ = window.eval(&eval_js);
                     }
                 }
@@ -227,7 +223,6 @@ fn main() {
     });
 
     let window_cb_setup = Arc::clone(&window_cb);
-
 
     let app_handle_setup = Arc::clone(&app_handle_state);
 
@@ -247,15 +242,16 @@ fn main() {
             *app_handle_setup.lock().unwrap() = Some(app.handle().clone());
 
             // Check if daemon is already running on 127.0.0.1:17890
-            let bind_addr = format!(
-                "{}:{}",
-                eqntide::DEFAULT_HOST,
-                eqntide::DEFAULT_PORT
-            );
+            let bind_addr = format!("{}:{}", eqntide::DEFAULT_HOST, eqntide::DEFAULT_PORT);
             if std::net::TcpStream::connect(&bind_addr).is_ok() {
-                log::info!("Daemon bridge server already active on {bind_addr}, using existing daemon.");
+                log::info!(
+                    "Daemon bridge server already active on {bind_addr}, using existing daemon."
+                );
             } else {
-                match eqntide::start_bridge_server_with_callback(&bind_addr, Some(Arc::clone(&window_cb_setup))) {
+                match eqntide::start_bridge_server_with_callback(
+                    &bind_addr,
+                    Some(Arc::clone(&window_cb_setup)),
+                ) {
                     Ok(handle) => {
                         log::info!("Local bridge HTTP server active on {}", handle.addr());
                         app.manage(handle);
@@ -314,13 +310,9 @@ mod tests {
         assert!(flat_opc.contains("pkg:package"));
         assert!(flat_opc.contains("m:oMath"));
 
-        let roundtrip_mathml = convert_equation(
-            flat_opc,
-            "flat_opc".to_string(),
-            "mathml".to_string(),
-            None,
-        )
-        .expect("convert back to mathml");
+        let roundtrip_mathml =
+            convert_equation(flat_opc, "flat_opc".to_string(), "mathml".to_string(), None)
+                .expect("convert back to mathml");
 
         assert!(roundtrip_mathml.contains("<math"));
         assert!(roundtrip_mathml.contains("x"));

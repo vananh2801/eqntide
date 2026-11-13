@@ -13,10 +13,10 @@
 //! * [`png`]    – PNG encoder for the alpha mask
 
 pub mod canvas;
+pub mod emf;
 pub mod font;
 pub(crate) mod layout;
 pub mod png;
-pub mod emf;
 
 use ab_glyph_rasterizer::{point, Rasterizer};
 
@@ -62,10 +62,15 @@ pub fn render_preview(math: &MathNode, font_pt: f32) -> Result<Preview> {
     let left_extra = (-min_x).max(0.0);
     let right_extra = (max_x - b.w).max(0.0);
     let (pad_x, pad_y) = (2.0f32, 2.0f32);
-    let w_px = (b.w + left_extra + right_extra + 2.0 * pad_x).ceil().max(1.0) as usize;
+    let w_px = (b.w + left_extra + right_extra + 2.0 * pad_x)
+        .ceil()
+        .max(1.0) as usize;
     let h_px = (asc + desc + 2.0 * pad_y).ceil().max(1.0) as usize;
     if w_px > MAX_WIDTH_PX || w_px * h_px > MAX_PIXELS {
-        return Err(Error::PreviewTooLarge { width: w_px, height: h_px });
+        return Err(Error::PreviewTooLarge {
+            width: w_px,
+            height: h_px,
+        });
     }
 
     let (ox, oy) = (pad_x + left_extra, pad_y + asc);
@@ -73,13 +78,22 @@ pub fn render_preview(math: &MathNode, font_pt: f32) -> Result<Preview> {
     let mut ras = Rasterizer::new(w_px, h_px);
     for it in &b.items {
         match it {
-            Item::Glyph { ch, face, em, x, y, ssty } => f.draw_styled(*face, *ch, *em, ox + x, oy + y, &mut canvas, *ssty),
+            Item::Glyph {
+                ch,
+                face,
+                em,
+                x,
+                y,
+                ssty,
+            } => f.draw_styled(*face, *ch, *em, ox + x, oy + y, &mut canvas, *ssty),
             Item::Poly(pts) => {
                 let mut p: Vec<(f32, f32)> = pts.iter().map(|(x, y)| (ox + x, oy + y)).collect();
-                let area: f32 = (0..p.len()).map(|i| {
-                    let (a, c) = (p[i], p[(i + 1) % p.len()]);
-                    a.0 * c.1 - c.0 * a.1
-                }).sum();
+                let area: f32 = (0..p.len())
+                    .map(|i| {
+                        let (a, c) = (p[i], p[(i + 1) % p.len()]);
+                        a.0 * c.1 - c.0 * a.1
+                    })
+                    .sum();
                 if area < 0.0 {
                     p.reverse();
                 }

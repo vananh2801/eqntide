@@ -1,8 +1,6 @@
 //! Primitive MTEF records: END / LINE / CHAR / SIZE / TMPL headers.
 
-use super::typeface::{
-    TF_DOUBLESTRUCK, TF_FRAKTUR, TF_FRAKTUR_BOLD, TF_SCRIPT, TF_SCRIPT_BOLD,
-};
+use super::typeface::{TF_DOUBLESTRUCK, TF_FRAKTUR, TF_FRAKTUR_BOLD, TF_SCRIPT, TF_SCRIPT_BOLD};
 
 /// END record.
 pub const END: &[u8] = b"\x00";

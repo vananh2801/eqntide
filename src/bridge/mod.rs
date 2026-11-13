@@ -19,6 +19,9 @@ pub mod session;
 pub mod uri;
 
 pub use protocol::*;
-pub use server::{start_bridge_server, start_bridge_server_with_callback, ServerHandle, WindowCallback, DEFAULT_HOST, DEFAULT_PORT};
+pub use server::{
+    start_bridge_server, start_bridge_server_with_callback, ServerHandle, WindowCallback,
+    DEFAULT_HOST, DEFAULT_PORT,
+};
 pub use session::{SessionManager, SessionState};
 pub use uri::{format_custom_uri, parse_custom_uri, CustomUriAction};

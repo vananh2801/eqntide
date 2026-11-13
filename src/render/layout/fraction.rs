@@ -111,7 +111,8 @@ impl Layout {
         b.place(&num, (w - num.w) / 2.0, ny);
         b.place(&den, (w - den.w) / 2.0, dy);
         if thick > 0.0 {
-            b.items.push(Item::Poly(rect(0.0, -axis - thick / 2.0, w, thick)));
+            b.items
+                .push(Item::Poly(rect(0.0, -axis - thick / 2.0, w, thick)));
         }
         b.w = w;
         Ok(b)
@@ -130,10 +131,14 @@ mod tests {
         assert!(em > 0.0);
         assert!(!b.items.is_empty());
 
-        let poly_bars: Vec<_> = b.items.iter().filter_map(|it| match it {
-            Item::Poly(pts) => Some(pts),
-            _ => None,
-        }).collect();
+        let poly_bars: Vec<_> = b
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Poly(pts) => Some(pts),
+                _ => None,
+            })
+            .collect();
         assert!(!poly_bars.is_empty(), "Fraction bar must be present");
     }
 
@@ -142,18 +147,28 @@ mod tests {
         let frac_a_b = MathNode::parse("<math><mfrac><mi>a</mi><mi>b</mi></mfrac></math>").unwrap();
         let frac_x_y = MathNode::parse("<math><mfrac><mi>x</mi><mi>y</mi></mfrac></math>").unwrap();
 
-        let mut l = Layout { f: fonts(), depth: 0 };
+        let mut l = Layout {
+            f: fonts(),
+            depth: 0,
+        };
         let em = 20.0;
 
-        let b1 = l.frac(&frac_a_b.children[0], em, MathContext::DISPLAY).unwrap();
-        let b2 = l.frac(&frac_x_y.children[0], em, MathContext::DISPLAY).unwrap();
+        let b1 = l
+            .frac(&frac_a_b.children[0], em, MathContext::DISPLAY)
+            .unwrap();
+        let b2 = l
+            .frac(&frac_x_y.children[0], em, MathContext::DISPLAY)
+            .unwrap();
 
         // Numerator baseline (y position of the glyph)
         let get_glyph_y = |b: &LBox| -> f32 {
-            b.items.iter().find_map(|it| match it {
-                Item::Glyph { y, .. } => Some(*y),
-                _ => None,
-            }).unwrap()
+            b.items
+                .iter()
+                .find_map(|it| match it {
+                    Item::Glyph { y, .. } => Some(*y),
+                    _ => None,
+                })
+                .unwrap()
         };
 
         let y1 = get_glyph_y(&b1);
@@ -161,24 +176,44 @@ mod tests {
 
         // Under TeX Rule 15, both 'a' and 'x' (whose descenders fit comfortably within shift_up)
         // are placed on the exact same standardized baseline shift up!
-        assert!((y1 - y2).abs() < 1e-4, "y1 ({}) and y2 ({}) must be equal", y1, y2);
+        assert!(
+            (y1 - y2).abs() < 1e-4,
+            "y1 ({}) and y2 ({}) must be equal",
+            y1,
+            y2
+        );
 
         // A numerator with a deep descender (g) pushes shift_up just enough to clear min_gap
         let frac_g_y = MathNode::parse("<math><mfrac><mi>g</mi><mi>y</mi></mfrac></math>").unwrap();
-        let b_g = l.frac(&frac_g_y.children[0], em, MathContext::DISPLAY).unwrap();
+        let b_g = l
+            .frac(&frac_g_y.children[0], em, MathContext::DISPLAY)
+            .unwrap();
         let y_g = get_glyph_y(&b_g);
-        assert!(y_g < y1, "g must be shifted up further to clear the fraction rule (y_g={}, y1={})", y_g, y1);
+        assert!(
+            y_g < y1,
+            "g must be shifted up further to clear the fraction rule (y_g={}, y1={})",
+            y_g,
+            y1
+        );
 
         // Verify binomial coefficient (linethickness = 0)
-        let binom = MathNode::parse("<math><mfrac linethickness=\"0\"><mn>10</mn><mn>3</mn></mfrac></math>").unwrap();
-        let b_binom = l.frac(&binom.children[0], em, MathContext::DISPLAY).unwrap();
+        let binom = MathNode::parse(
+            "<math><mfrac linethickness=\"0\"><mn>10</mn><mn>3</mn></mfrac></math>",
+        )
+        .unwrap();
+        let b_binom = l
+            .frac(&binom.children[0], em, MathContext::DISPLAY)
+            .unwrap();
         // Binomial should have no horizontal rule polygon
         assert!(!b_binom.items.iter().any(|it| matches!(it, Item::Poly(_))));
     }
 
     #[test]
     fn test_fraction_parts_full_size_in_text_and_table() {
-        let mut l = Layout { f: fonts(), depth: 0 };
+        let mut l = Layout {
+            f: fonts(),
+            depth: 0,
+        };
         let em = 24.0;
         let frac = MathNode::parse("<math><mfrac><mn>1</mn><mn>2</mn></mfrac></math>").unwrap();
 
@@ -188,10 +223,13 @@ mod tests {
         let b_text = l.frac(&frac.children[0], em, MathContext::TEXT).unwrap();
 
         let get_em = |b: &LBox| -> f32 {
-            b.items.iter().find_map(|it| match it {
-                Item::Glyph { ch: '1', em, .. } => Some(*em),
-                _ => None,
-            }).unwrap()
+            b.items
+                .iter()
+                .find_map(|it| match it {
+                    Item::Glyph { ch: '1', em, .. } => Some(*em),
+                    _ => None,
+                })
+                .unwrap()
         };
 
         let em_disp = get_em(&b_disp);

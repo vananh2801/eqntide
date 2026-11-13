@@ -41,12 +41,12 @@ mod typeface;
 pub mod decode;
 pub mod encode;
 
+pub use crate::symbols::greek::{greek, is_greek_codepoint, GREEK};
 pub use charmap::*;
 pub use decode::{mtef_to_mathml, ole_to_mathml};
 pub use records::*;
 pub use templates::*;
 pub use typeface::*;
-pub use crate::symbols::greek::{greek, is_greek_codepoint, GREEK};
 
 /// MTEF v5 definition records (`ENCODING_DEF`, `FONT_DEF`, `FONT_STYLE_DEF`)
 /// for MathType's bundled Euclid fonts (`Euclid Fraktur`, `Euclid Math One`,
@@ -104,7 +104,11 @@ pub fn build_mtef(equation_bytes: &[u8]) -> Vec<u8> {
         0x00, // equation options: 0 = display/block
     ];
     let has_euclid = uses_euclid_font_defs(equation_bytes);
-    let extra_len = if has_euclid { EUCLID_FONT_DEFS.len() } else { 0 };
+    let extra_len = if has_euclid {
+        EUCLID_FONT_DEFS.len()
+    } else {
+        0
+    };
     let mut out = Vec::with_capacity(header.len() + extra_len + equation_bytes.len() + 12);
     out.extend_from_slice(&header);
     if has_euclid {

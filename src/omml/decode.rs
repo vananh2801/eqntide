@@ -39,10 +39,7 @@ fn m_val(node: Option<&Element>, child_tag: &str, default: Option<&str>) -> Opti
     let child = node.and_then(|n| n.find(NS_M, child_tag));
     match child {
         None => default.map(str::to_owned),
-        Some(c) => c
-            .attr(Some(NS_M), "val")
-            .or(default)
-            .map(str::to_owned),
+        Some(c) => c.attr(Some(NS_M), "val").or(default).map(str::to_owned),
     }
 }
 
@@ -86,7 +83,9 @@ pub fn is_number(s: &str) -> bool {
 
 /// `true` when every character is a known operator symbol.
 pub fn is_operator(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| OPS.contains(c) || OP_ALIASES.contains(&c))
+    !s.is_empty()
+        && s.chars()
+            .all(|c| OPS.contains(c) || OP_ALIASES.contains(&c))
 }
 
 /// Classify a run of text as `<mn>`, `<mo>` or `<mi>`; `None` when blank.
@@ -172,7 +171,10 @@ impl OmmlConverter {
                         3.. => "'''",
                         0 => unreachable!(),
                     };
-                    Ok(Some(mel("mrow", vec![base, MathNode::leaf("mo", prime_str)])))
+                    Ok(Some(mel(
+                        "mrow",
+                        vec![base, MathNode::leaf("mo", prime_str)],
+                    )))
                 } else {
                     Ok(Some(mel("msup", vec![base, sup])))
                 }
@@ -444,7 +446,11 @@ impl OmmlConverter {
         let end = m_val(d_pr, "endChr", Some(")")).unwrap_or_default();
         let e_nodes = node.find_all(NS_M, "e");
         // Per ECMA-376 §22.1.2.93, default sepChr when multiple <m:e> elements are present is "|".
-        let default_sep = if e_nodes.len() > 1 { Some("|") } else { Some("") };
+        let default_sep = if e_nodes.len() > 1 {
+            Some("|")
+        } else {
+            Some("")
+        };
         let sep = m_val(d_pr, "sepChr", default_sep).unwrap_or_default();
 
         let mut row = mrow();
@@ -496,8 +502,16 @@ impl OmmlConverter {
         let sub_hide = m_bool(nary_pr, "subHide");
         let sup_hide = m_bool(nary_pr, "supHide");
 
-        let sub_node = if sub_hide { None } else { node.find(NS_M, "sub") };
-        let sup_node = if sup_hide { None } else { node.find(NS_M, "sup") };
+        let sub_node = if sub_hide {
+            None
+        } else {
+            node.find(NS_M, "sub")
+        };
+        let sup_node = if sup_hide {
+            None
+        } else {
+            node.find(NS_M, "sup")
+        };
 
         let lo_opt = match sub_node {
             Some(s) => {
@@ -570,7 +584,19 @@ impl OmmlConverter {
         // - `pos="top"`: arrow at top, label `<m:e>` below -> `<munder><mo>arrow</mo><m:e/></munder>`
         let is_arrow = matches!(
             ch,
-            "→" | "←" | "↔" | "⇐" | "⇒" | "⇔" | "⟵" | "⟶" | "⟷" | "⟸" | "⟹" | "⟺" | "⇄" | "⇌"
+            "→" | "←"
+                | "↔"
+                | "⇐"
+                | "⇒"
+                | "⇔"
+                | "⟵"
+                | "⟶"
+                | "⟷"
+                | "⟸"
+                | "⟹"
+                | "⟺"
+                | "⇄"
+                | "⇌"
         );
         if is_arrow {
             let tag = if pos == "top" { "munder" } else { "mover" };
@@ -591,8 +617,7 @@ impl OmmlConverter {
             if !e_cells.is_empty() {
                 for e_node in e_cells {
                     let mut mtd = MathNode::new("mtd");
-                    mtd.children
-                        .extend(self.children_to_mrow(e_node)?.children);
+                    mtd.children.extend(self.children_to_mrow(e_node)?.children);
                     mtr.children.push(mtd);
                 }
             } else {
@@ -600,8 +625,7 @@ impl OmmlConverter {
                 for mc in mr.find_all(NS_M, "mc") {
                     let mut mtd = MathNode::new("mtd");
                     if let Some(e_node) = mc.find(NS_M, "e") {
-                        mtd.children
-                            .extend(self.children_to_mrow(e_node)?.children);
+                        mtd.children.extend(self.children_to_mrow(e_node)?.children);
                     }
                     mtr.children.push(mtd);
                 }
@@ -615,8 +639,7 @@ impl OmmlConverter {
         let mut table = MathNode::new("mtable");
         for e_node in node.find_all(NS_M, "e") {
             let mut mtd = MathNode::new("mtd");
-            mtd.children
-                .extend(self.children_to_mrow(e_node)?.children);
+            mtd.children.extend(self.children_to_mrow(e_node)?.children);
             table.children.push(mel("mtr", vec![mtd]));
         }
         Ok(table)
@@ -665,20 +688,23 @@ mod tests {
             "<m:sPre><m:sub><m:r><m:t>92</m:t></m:r></m:sub><m:sup><m:r><m:t>235</m:t></m:r></m:sup><m:e><m:r><m:t>U</m:t></m:r></m:e></m:sPre>",
         );
         // Should contain a TMPL record with selector TM_SUBSUP (30) and TV_SU_PRECEDES (0x01)
-        assert!(bytes.windows(4).any(|w| w[0] == 0x03 && w[2] == TM_SUBSUP && (w[3] & 0x01) != 0));
+        assert!(bytes
+            .windows(4)
+            .any(|w| w[0] == 0x03 && w[2] == TM_SUBSUP && (w[3] & 0x01) != 0));
     }
 
     #[test]
     fn test_border_box_and_strikethrough_encode() {
-        let box_bytes = parse_and_encode(
-            "<m:borderBox><m:e><m:r><m:t>x</m:t></m:r></m:e></m:borderBox>",
-        );
+        let box_bytes =
+            parse_and_encode("<m:borderBox><m:e><m:r><m:t>x</m:t></m:r></m:e></m:borderBox>");
         assert!(box_bytes.windows(3).any(|w| w[0] == 0x03 && w[2] == TM_BOX));
 
         let strike_bytes = parse_and_encode(
             "<m:borderBox><m:borderBoxPr><m:strikeBLTR/></m:borderBoxPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:borderBox>",
         );
-        assert!(strike_bytes.windows(3).any(|w| w[0] == 0x03 && w[2] == TM_STRIKE));
+        assert!(strike_bytes
+            .windows(3)
+            .any(|w| w[0] == 0x03 && w[2] == TM_STRIKE));
     }
 
     #[test]
@@ -686,12 +712,16 @@ mod tests {
         let skw_bytes = parse_and_encode(
             "<m:f><m:fPr><m:type m:val=\"skw\"/></m:fPr><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f>",
         );
-        assert!(skw_bytes.windows(4).any(|w| w[0] == 0x03 && w[2] == TM_FRACT && w[3] == 0x02));
+        assert!(skw_bytes
+            .windows(4)
+            .any(|w| w[0] == 0x03 && w[2] == TM_FRACT && w[3] == 0x02));
 
         let nary_bytes = parse_and_encode(
             "<m:nary><m:naryPr><m:chr m:val=\"∫\"/><m:subHide m:val=\"1\"/><m:supHide m:val=\"1\"/></m:naryPr><m:sub><m:r><m:t>a</m:t></m:r></m:sub><m:sup><m:r><m:t>b</m:t></m:r></m:sup><m:e><m:r><m:t>x</m:t></m:r></m:e></m:nary>",
         );
-        assert!(nary_bytes.windows(3).any(|w| w[0] == 0x03 && w[2] == TM_INTEG));
+        assert!(nary_bytes
+            .windows(3)
+            .any(|w| w[0] == 0x03 && w[2] == TM_INTEG));
     }
 
     #[test]
@@ -700,13 +730,17 @@ mod tests {
         let dirac_bytes = parse_and_encode(
             "<m:d><m:dPr><m:begChr m:val=\"⟨\"/><m:sepChr m:val=\"|\"/><m:endChr m:val=\"⟩\"/></m:dPr><m:e><m:r><m:t>ψ</m:t></m:r></m:e><m:e><m:r><m:t>φ</m:t></m:r></m:e></m:d>",
         );
-        assert!(dirac_bytes.windows(3).any(|w| w[0] == 0x03 && w[2] == TM_DIRAC));
+        assert!(dirac_bytes
+            .windows(3)
+            .any(|w| w[0] == 0x03 && w[2] == TM_DIRAC));
 
         // Half-open interval [a, b)
         let interval_bytes = parse_and_encode(
             "<m:d><m:dPr><m:begChr m:val=\"[\"/><m:endChr m:val=\")\"/></m:dPr><m:e><m:r><m:t>a,b</m:t></m:r></m:e></m:d>",
         );
-        assert!(interval_bytes.windows(3).any(|w| w[0] == 0x03 && w[2] == TM_INTERVAL));
+        assert!(interval_bytes
+            .windows(3)
+            .any(|w| w[0] == 0x03 && w[2] == TM_INTERVAL));
 
         // Absolute value |x|
         let abs_bytes = parse_and_encode(

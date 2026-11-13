@@ -629,7 +629,10 @@ fn parse_v5_record(
             let mut embells = Vec::new();
             if (opts & OPT_CHAR_EMBELL) != 0 {
                 for obj in parse_v5_object_list(stream, depth) {
-                    if let MtefObj::Char { mt_code: e_code, .. } = obj {
+                    if let MtefObj::Char {
+                        mt_code: e_code, ..
+                    } = obj
+                    {
                         embells.push(e_code as u8);
                     }
                 }
@@ -860,12 +863,7 @@ fn parse_v3_object_list(stream: &mut ByteStream<'_>, depth: usize) -> Vec<MtefOb
     objs
 }
 
-fn parse_v3_record(
-    stream: &mut ByteStream<'_>,
-    rt: u8,
-    opts: u8,
-    depth: usize,
-) -> Option<MtefObj> {
+fn parse_v3_record(stream: &mut ByteStream<'_>, rt: u8, opts: u8, depth: usize) -> Option<MtefObj> {
     match rt {
         REC_LINE => {
             if (opts & OPT_NUDGE) != 0 {
@@ -896,7 +894,10 @@ fn parse_v3_record(
             let mut embells = Vec::new();
             if (opts & OPT_CHAR_EMBELL) != 0 {
                 for obj in parse_v3_object_list(stream, depth) {
-                    if let MtefObj::Char { mt_code: e_code, .. } = obj {
+                    if let MtefObj::Char {
+                        mt_code: e_code, ..
+                    } = obj
+                    {
                         embells.push(e_code as u8);
                     }
                 }
@@ -1171,9 +1172,7 @@ fn close_open_pair(close: u16) -> Option<u16> {
 
 fn is_suitable_base(obj: &MtefObj) -> bool {
     match obj {
-        MtefObj::Char { mt_code, .. } => {
-            !is_mt_space_code(*mt_code) && !is_non_base_code(*mt_code)
-        }
+        MtefObj::Char { mt_code, .. } => !is_mt_space_code(*mt_code) && !is_non_base_code(*mt_code),
         MtefObj::Tmpl {
             selector,
             subobjects,
@@ -1201,7 +1200,15 @@ fn is_suitable_base(obj: &MtefObj) -> bool {
 /// Apply the sub/sup base mover recursively across an object list.
 fn apply_mover_to_list(objects: &mut Vec<MtefObj>) {
     // 1. Strip 0xEF01 (MT Zero Space) and recurse into children first
-    objects.retain(|o| !matches!(o, MtefObj::Char { mt_code: 0xEF01, .. }));
+    objects.retain(|o| {
+        !matches!(
+            o,
+            MtefObj::Char {
+                mt_code: 0xEF01,
+                ..
+            }
+        )
+    });
 
     for obj in objects.iter_mut() {
         match obj {
@@ -1759,7 +1766,9 @@ fn convert_obj(obj: &MtefObj) -> Option<MathNode> {
             is_textmode,
             embells,
         } => convert_char_to_mathnode(*typeface, *mt_code, *is_textmode, embells),
-        MtefObj::Line { objects, .. } => Some(MathNode::with_children("mrow", convert_objs(objects))),
+        MtefObj::Line { objects, .. } => {
+            Some(MathNode::with_children("mrow", convert_objs(objects)))
+        }
         MtefObj::Pile { halign, lines } => {
             let mut pile_lines = Vec::new();
             for l in lines {
@@ -1837,11 +1846,7 @@ fn convert_matrix(rows: usize, cols: usize, h_just: &str, cells: &[MtefObj]) -> 
     mtable
 }
 
-fn convert_tmpl(
-    selector: &str,
-    variations: &[&str],
-    subobjects: &[MtefObj],
-) -> Option<MathNode> {
+fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> Option<MathNode> {
     let slots = extract_template_slots(selector, variations, subobjects);
     let has_var = |v: &str| variations.contains(&v);
 
@@ -1991,7 +1996,10 @@ fn convert_tmpl(
                 (l, r)
             };
             let body = slot_to_node(slots.first());
-            Some(MathNode::with_children("mrow", vec![open_node, body, close_node]))
+            Some(MathNode::with_children(
+                "mrow",
+                vec![open_node, body, close_node],
+            ))
         }
 
         "tmDIRAC" => {
@@ -2014,7 +2022,11 @@ fn convert_tmpl(
                 };
                 Some(MathNode::with_children(
                     "mrow",
-                    vec![MathNode::leaf("mo", "|"), s, MathNode::leaf("mo", "\u{232A}")],
+                    vec![
+                        MathNode::leaf("mo", "|"),
+                        s,
+                        MathNode::leaf("mo", "\u{232A}"),
+                    ],
                 ))
             } else {
                 Some(MathNode::with_children(
@@ -2054,10 +2066,19 @@ fn convert_tmpl(
         }
 
         // ── Long embellishments (bars, vec, hat, tilde, arc, strike, box, ldiv)
-        "tmTILDE" => Some(mover_stretchy_accent(slot_to_node(slots.first()), "\u{02DC}")),
-        "tmARC" => Some(mover_stretchy_accent(slot_to_node(slots.first()), "\u{2322}")),
+        "tmTILDE" => Some(mover_stretchy_accent(
+            slot_to_node(slots.first()),
+            "\u{02DC}",
+        )),
+        "tmARC" => Some(mover_stretchy_accent(
+            slot_to_node(slots.first()),
+            "\u{2322}",
+        )),
         "tmHAT" => Some(mover_stretchy_accent(slot_to_node(slots.first()), "^")),
-        "tmJSTATUS" => Some(mover_stretchy_accent(slot_to_node(slots.first()), "\u{FE39}")),
+        "tmJSTATUS" => Some(mover_stretchy_accent(
+            slot_to_node(slots.first()),
+            "\u{FE39}",
+        )),
         "tmOBAR" => {
             let base = slot_to_node(slots.first());
             let first = mover_stretchy_accent(base, "\u{00AF}");
@@ -2221,7 +2242,11 @@ fn convert_tmpl(
             } else {
                 let sub = slot_to_node(slots.get(1));
                 let sup = slot_to_node(slots.get(2));
-                let tag = if is_sum_style { "munderover" } else { "msubsup" };
+                let tag = if is_sum_style {
+                    "munderover"
+                } else {
+                    "msubsup"
+                };
                 MathNode::with_children(tag, vec![op, sub, sup])
             };
 
@@ -2313,7 +2338,11 @@ fn convert_tmpl(
             } else {
                 let sub = slot_to_node(slots.get(1));
                 let sup = slot_to_node(slots.get(2));
-                let tag = if is_sum_style { "munderover" } else { "msubsup" };
+                let tag = if is_sum_style {
+                    "munderover"
+                } else {
+                    "msubsup"
+                };
                 MathNode::with_children(tag, vec![op, sub, sup])
             };
 

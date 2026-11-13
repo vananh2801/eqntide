@@ -7,8 +7,8 @@
 use crate::error::{Error, Result};
 use crate::mathml::MathNode;
 use crate::omml::decode::NS_M;
-use crate::xml::{Element, Node};
 use crate::symbols::{is_prime_char, prime_order};
+use crate::xml::{Element, Node};
 
 const MAX_DEPTH: usize = 256;
 
@@ -18,10 +18,9 @@ const NS_W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main
 /// individual `<mi>` character records.
 const KNOWN_FUNCTIONS: &[&str] = &[
     "arcsin", "arccos", "arctan", "arccot", "arcsec", "arccsc", "arsinh", "arcosh", "artanh",
-    "arcoth", "sinh", "cosh", "tanh", "coth", "sech", "csch", "cotg", "cosec", "sin", "cos",
-    "tan", "cot", "sec", "csc", "tg", "ctg", "log", "ln", "lg", "exp", "lim", "limsup", "liminf",
-    "max", "min", "sup", "inf", "det", "dim", "deg", "gcd", "lcm", "arg", "ker", "hom", "mod",
-    "Pr",
+    "arcoth", "sinh", "cosh", "tanh", "coth", "sech", "csch", "cotg", "cosec", "sin", "cos", "tan",
+    "cot", "sec", "csc", "tg", "ctg", "log", "ln", "lg", "exp", "lim", "limsup", "liminf", "max",
+    "min", "sup", "inf", "det", "dim", "deg", "gcd", "lcm", "arg", "ker", "hom", "mod", "Pr",
 ];
 
 // ── XML Element Helpers ──────────────────────────────────────────────────────
@@ -119,7 +118,9 @@ fn normalize_nary_chr(s: &str, has_scripts_or_big_style: bool) -> Option<&str> {
 /// Extract `(chr, lim_loc, sub_node, sup_node)` if `node` represents an N-ary operator
 /// (either a bare `<mo>` with a large operator character, or a script/underover node
 /// whose base is such an `<mo>`).
-fn as_nary_op(node: &MathNode) -> Option<(&str, &'static str, Option<&MathNode>, Option<&MathNode>)> {
+fn as_nary_op(
+    node: &MathNode,
+) -> Option<(&str, &'static str, Option<&MathNode>, Option<&MathNode>)> {
     if let Some((mo, big_style)) = unwrap_single_mo(node) {
         let t = mo.text.trim();
         if mo.attr("stretchy") != Some("false") {
@@ -140,12 +141,22 @@ fn as_nary_op(node: &MathNode) -> Option<(&str, &'static str, Option<&MathNode>,
         "msub" if node.children.len() == 2 => {
             let (mo, _) = unwrap_single_mo(&node.children[0])?;
             let chr = normalize_nary_chr(mo.text.trim(), true)?;
-            Some((chr, explicit_loc.unwrap_or("subSup"), Some(&node.children[1]), None))
+            Some((
+                chr,
+                explicit_loc.unwrap_or("subSup"),
+                Some(&node.children[1]),
+                None,
+            ))
         }
         "msup" if node.children.len() == 2 => {
             let (mo, _) = unwrap_single_mo(&node.children[0])?;
             let chr = normalize_nary_chr(mo.text.trim(), true)?;
-            Some((chr, explicit_loc.unwrap_or("subSup"), None, Some(&node.children[1])))
+            Some((
+                chr,
+                explicit_loc.unwrap_or("subSup"),
+                None,
+                Some(&node.children[1]),
+            ))
         }
         "msubsup" if node.children.len() == 3 => {
             let (mo, _) = unwrap_single_mo(&node.children[0])?;
@@ -160,12 +171,22 @@ fn as_nary_op(node: &MathNode) -> Option<(&str, &'static str, Option<&MathNode>,
         "munder" if node.children.len() == 2 => {
             let (mo, _) = unwrap_single_mo(&node.children[0])?;
             let chr = normalize_nary_chr(mo.text.trim(), true)?;
-            Some((chr, explicit_loc.unwrap_or("undOvr"), Some(&node.children[1]), None))
+            Some((
+                chr,
+                explicit_loc.unwrap_or("undOvr"),
+                Some(&node.children[1]),
+                None,
+            ))
         }
         "mover" if node.children.len() == 2 => {
             let (mo, _) = unwrap_single_mo(&node.children[0])?;
             let chr = normalize_nary_chr(mo.text.trim(), true)?;
-            Some((chr, explicit_loc.unwrap_or("undOvr"), None, Some(&node.children[1])))
+            Some((
+                chr,
+                explicit_loc.unwrap_or("undOvr"),
+                None,
+                Some(&node.children[1]),
+            ))
         }
         "munderover" if node.children.len() == 3 => {
             let (mo, _) = unwrap_single_mo(&node.children[0])?;
@@ -185,7 +206,19 @@ fn is_arrow_mo(node: &MathNode) -> bool {
     node.tag == "mo"
         && matches!(
             node.text.trim(),
-            "→" | "←" | "↔" | "⇄" | "⇌" | "⟵" | "⟶" | "⟷" | "⇐" | "⇒" | "⇔" | "⟸" | "⟹" | "⟺"
+            "→" | "←"
+                | "↔"
+                | "⇄"
+                | "⇌"
+                | "⟵"
+                | "⟶"
+                | "⟷"
+                | "⇐"
+                | "⇒"
+                | "⇔"
+                | "⟸"
+                | "⟹"
+                | "⟺"
         )
 }
 
@@ -399,7 +432,9 @@ fn normalize_mathml(node: &MathNode) -> MathNode {
     }
 
     // <mroot> with empty degree -> <msqrt>
-    if node.tag == "mroot" && normalized_children.len() == 2 && is_empty_node(&normalized_children[1])
+    if node.tag == "mroot"
+        && normalized_children.len() == 2
+        && is_empty_node(&normalized_children[1])
     {
         return MathNode::with_children("msqrt", vec![normalized_children.remove(0)]);
     }
@@ -455,7 +490,8 @@ fn normalize_mathml(node: &MathNode) -> MathNode {
                 let mut iter = child.children.into_iter();
                 let base = iter.next().unwrap();
                 let sub = iter.next().unwrap();
-                let primed_base = MathNode::with_children("mrow", vec![base, MathNode::leaf("mo", prime_str)]);
+                let primed_base =
+                    MathNode::with_children("mrow", vec![base, MathNode::leaf("mo", prime_str)]);
                 cleaned_children.push(MathNode::with_children("msub", vec![primed_base, sub]));
                 continue;
             }
@@ -577,7 +613,7 @@ impl MathmlEncoder {
                 } else {
                     self.encode_msup(node).map(|e| vec![e])
                 }
-            },
+            }
             "msubsup" => self.encode_msubsup(node).map(|e| vec![e]),
             "mmultiscripts" => self.encode_mmultiscripts(node),
             "munder" => self.encode_munder(node).map(|e| vec![e]),
@@ -618,9 +654,7 @@ impl MathmlEncoder {
             {
                 (Some(FenceKind::Open), Some(FenceKind::Close)) => true,
                 (Some(FenceKind::Neutral), Some(FenceKind::Neutral)) => beg == end,
-                _ => {
-                    matches!(beg, "(" | ")" | "[" | "]") && matches!(end, "(" | ")" | "[" | "]")
-                }
+                _ => matches!(beg, "(" | ")" | "[" | "]") && matches!(end, "(" | ")" | "[" | "]"),
             };
             if is_matched_or_interval {
                 let inner_els = self.encode_nary_and_items(&nodes[1..nodes.len() - 1])?;
@@ -640,7 +674,12 @@ impl MathmlEncoder {
             {
                 let mut out = self.encode_nary_and_items(&nodes[..nodes.len() - 2])?;
                 let mtable_els = self.encode_node(prev)?;
-                out.push(build_delimiter("", last.text.trim(), None, vec![mtable_els]));
+                out.push(build_delimiter(
+                    "",
+                    last.text.trim(),
+                    None,
+                    vec![mtable_els],
+                ));
                 return Ok(out);
             }
         }
@@ -792,7 +831,9 @@ impl MathmlEncoder {
                     (Vec::new(), i + 1)
                 } else if (i == 0
                     && nodes.len() > 2
-                    && !nodes[1..].iter().any(|n| n.tag == "mo" && n.text.trim() == "="))
+                    && !nodes[1..]
+                        .iter()
+                        .any(|n| n.tag == "mo" && n.text.trim() == "="))
                     || as_nary_op(&nodes[i + 1]).is_some()
                 {
                     (self.encode_nary_and_items(&nodes[i + 1..])?, nodes.len())
@@ -1498,7 +1539,9 @@ mod tests {
         let omml = mathml_to_omml(&mml).unwrap();
         let nary = omml.find(NS_M, "nary").expect("should have m:nary");
         let e = nary.find(NS_M, "e").expect("nary should have m:e");
-        let ssup = e.find(NS_M, "sSup").expect("sin^2 should be merged into sSup");
+        let ssup = e
+            .find(NS_M, "sSup")
+            .expect("sin^2 should be merged into sSup");
         let ssup_e = ssup.find(NS_M, "e").unwrap();
         let r = ssup_e.find(NS_M, "r").unwrap();
         assert_eq!(r.find(NS_M, "t").unwrap().text(), "sin");
@@ -1515,11 +1558,17 @@ mod tests {
         let d_left = omml_left.find(NS_M, "d").expect("should wrap in m:d");
         let d_pr_left = d_left.find(NS_M, "dPr").unwrap();
         assert_eq!(
-            d_pr_left.find(NS_M, "begChr").unwrap().attr(Some(NS_M), "val"),
+            d_pr_left
+                .find(NS_M, "begChr")
+                .unwrap()
+                .attr(Some(NS_M), "val"),
             Some("{")
         );
         assert_eq!(
-            d_pr_left.find(NS_M, "endChr").unwrap().attr(Some(NS_M), "val"),
+            d_pr_left
+                .find(NS_M, "endChr")
+                .unwrap()
+                .attr(Some(NS_M), "val"),
             Some("")
         );
 
@@ -1532,11 +1581,17 @@ mod tests {
         let d_right = omml_right.find(NS_M, "d").expect("should wrap in m:d");
         let d_pr_right = d_right.find(NS_M, "dPr").unwrap();
         assert_eq!(
-            d_pr_right.find(NS_M, "begChr").unwrap().attr(Some(NS_M), "val"),
+            d_pr_right
+                .find(NS_M, "begChr")
+                .unwrap()
+                .attr(Some(NS_M), "val"),
             Some("")
         );
         assert_eq!(
-            d_pr_right.find(NS_M, "endChr").unwrap().attr(Some(NS_M), "val"),
+            d_pr_right
+                .find(NS_M, "endChr")
+                .unwrap()
+                .attr(Some(NS_M), "val"),
             Some("}")
         );
     }
@@ -1574,7 +1629,10 @@ mod tests {
         .unwrap();
         let vec_bytes = mathml_to_mtef_bytes(&vec_mml).unwrap();
         assert_eq!(
-            vec_bytes.windows(3).filter(|w| w[0] == 0x03 && w[2] == TM_VEC).count(),
+            vec_bytes
+                .windows(3)
+                .filter(|w| w[0] == 0x03 && w[2] == TM_VEC)
+                .count(),
             3
         );
         let decoded_vec = mtef_to_mathml(&build_mtef(&vec_bytes)).unwrap();
@@ -1583,10 +1641,15 @@ mod tests {
         assert_eq!(omml_vec.find_all(NS_M, "groupChr").len(), 1);
 
         // 2. Combining marks on <mi>/<mo> -> EMB_* record
-        let comb_mml = MathNode::parse("<math><mrow><mi>x\u{0307}</mi><mo>=\u{0338}</mo><mn>0</mn></mrow></math>").unwrap();
+        let comb_mml = MathNode::parse(
+            "<math><mrow><mi>x\u{0307}</mi><mo>=\u{0338}</mo><mn>0</mn></mrow></math>",
+        )
+        .unwrap();
         let comb_bytes = mathml_to_mtef_bytes(&comb_mml).unwrap();
         // Should contain CHAR records with OPT_CHAR_EMBELL (0x01) followed by EMBELL (0x06)
-        assert!(comb_bytes.windows(2).any(|w| w[0] == 0x02 && (w[1] & 0x01) != 0));
+        assert!(comb_bytes
+            .windows(2)
+            .any(|w| w[0] == 0x02 && (w[1] & 0x01) != 0));
         let decoded_comb = mtef_to_mathml(&build_mtef(&comb_bytes)).unwrap();
         let omml_comb = mathml_to_omml(&decoded_comb).unwrap();
         assert!(omml_comb.find(NS_M, "acc").is_some());
@@ -1598,12 +1661,20 @@ mod tests {
         )
         .unwrap();
         let union_bytes = mathml_to_mtef_bytes(&union_mml).unwrap();
-        assert!(union_bytes.windows(3).any(|w| w[0] == 0x03 && w[2] == TM_UNION));
+        assert!(union_bytes
+            .windows(3)
+            .any(|w| w[0] == 0x03 && w[2] == TM_UNION));
         let decoded_union = mtef_to_mathml(&build_mtef(&union_bytes)).unwrap();
         let omml_union = mathml_to_omml(&decoded_union).unwrap();
-        let nary = omml_union.find(NS_M, "nary").expect("tmUNION should map to m:nary");
+        let nary = omml_union
+            .find(NS_M, "nary")
+            .expect("tmUNION should map to m:nary");
         assert_eq!(
-            nary.find(NS_M, "naryPr").unwrap().find(NS_M, "chr").unwrap().attr(Some(NS_M), "val"),
+            nary.find(NS_M, "naryPr")
+                .unwrap()
+                .find(NS_M, "chr")
+                .unwrap()
+                .attr(Some(NS_M), "val"),
             Some("⋃")
         );
 
@@ -1614,10 +1685,14 @@ mod tests {
         .unwrap();
         let box_bytes = mathml_to_mtef_bytes(&box_mml).unwrap();
         assert!(box_bytes.windows(3).any(|w| w[0] == 0x03 && w[2] == TM_BOX));
-        assert!(box_bytes.windows(4).any(|w| w[0] == 0x03 && w[2] == TM_LDIV && (w[3] & 0x01) != 0));
+        assert!(box_bytes
+            .windows(4)
+            .any(|w| w[0] == 0x03 && w[2] == TM_LDIV && (w[3] & 0x01) != 0));
         let decoded_box = mtef_to_mathml(&build_mtef(&box_bytes)).unwrap();
         let roundtrip_box_bytes = mathml_to_mtef_bytes(&decoded_box).unwrap();
-        assert!(roundtrip_box_bytes.windows(4).any(|w| w[0] == 0x03 && w[2] == TM_LDIV && (w[3] & 0x01) != 0));
+        assert!(roundtrip_box_bytes
+            .windows(4)
+            .any(|w| w[0] == 0x03 && w[2] == TM_LDIV && (w[3] & 0x01) != 0));
     }
 
     #[test]
@@ -1689,7 +1764,10 @@ mod tests {
         use crate::mtef::{build_mtef, EMB_1PRIME};
         let mml = MathNode::parse("<math><mrow><mo>(</mo><mi>O</mi><mi>u</mi><mo>,</mo><mi>O</mi><mi>v</mi><mo>)</mo></mrow></math>").unwrap();
         let mtef = mathml_to_mtef_bytes(&mml).unwrap();
-        assert!(!mtef.windows(3).any(|w| w[0] == 0x06 && w[2] == EMB_1PRIME), "Comma must not be converted to prime embellishment");
+        assert!(
+            !mtef.windows(3).any(|w| w[0] == 0x06 && w[2] == EMB_1PRIME),
+            "Comma must not be converted to prime embellishment"
+        );
         let decoded = mtef_to_mathml(&build_mtef(&mtef)).unwrap();
         let latex = decoded.to_latex();
         assert_eq!(latex, "(Ou,Ov)");

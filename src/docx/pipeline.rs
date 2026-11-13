@@ -144,7 +144,10 @@ pub fn convert_bytes_with(input: &[u8], opts: &Options) -> Result<(Vec<u8>, Conv
 /// converted, skipped and failed. The output `.docx` is always written, even
 /// when some equations fail to convert (failed equations are left as their
 /// original OMML).
-pub fn convert(input_path: impl AsRef<Path>, output_path: impl AsRef<Path>) -> Result<ConversionSummary> {
+pub fn convert(
+    input_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+) -> Result<ConversionSummary> {
     convert_with(input_path, output_path, &Options::default())
 }
 

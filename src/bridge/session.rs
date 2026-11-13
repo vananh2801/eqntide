@@ -61,9 +61,10 @@ impl SessionManager {
         for (id, entry) in lock.iter() {
             if let Ok(data) = entry.data.lock() {
                 if matches!(data.state, SessionState::Waiting)
-                    && latest.as_ref().is_none_or(|(_, t)| data.created_at > *t) {
-                        latest = Some((id.clone(), data.created_at));
-                    }
+                    && latest.as_ref().is_none_or(|(_, t)| data.created_at > *t)
+                {
+                    latest = Some((id.clone(), data.created_at));
+                }
             }
         }
         latest.map(|(id, _)| id)
@@ -107,7 +108,11 @@ impl SessionManager {
         let lock = self.sessions.lock().unwrap();
         let entry = lock.get(id)?;
         let data = entry.data.lock().unwrap();
-        Some((data.initial_mathml.clone(), data.initial_latex.clone(), data.initial_font_pt))
+        Some((
+            data.initial_mathml.clone(),
+            data.initial_latex.clone(),
+            data.initial_font_pt,
+        ))
     }
 
     /// Update a session with the newly generated equation payloads, notifying any waiting long-poll request.

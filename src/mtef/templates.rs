@@ -1072,8 +1072,8 @@ pub fn fence(
     left_char: &[u8],
     right_char: &[u8],
 ) -> Vec<u8> {
-    let variation = (if has_left { TV_FENCE_L } else { 0 })
-        | (if has_right { TV_FENCE_R } else { 0 });
+    let variation =
+        (if has_left { TV_FENCE_L } else { 0 }) | (if has_right { TV_FENCE_R } else { 0 });
     let (def_l, def_r) = default_fence_chars(selector);
     let mut out = tmpl_header(selector, variation, 0);
     append_line_slot(&mut out, main);
@@ -1264,8 +1264,8 @@ pub fn dirac(
 ) -> Vec<u8> {
     let has_left = left.is_some_and(|s| !s.is_empty());
     let has_right = right.is_some_and(|s| !s.is_empty());
-    let variation = (if has_left { TV_DI_LEFT } else { 0 })
-        | (if has_right { TV_DI_RIGHT } else { 0 });
+    let variation =
+        (if has_left { TV_DI_LEFT } else { 0 }) | (if has_right { TV_DI_RIGHT } else { 0 });
     let mut out = tmpl_header(TM_DIRAC, variation, 0);
     append_opt_line_slot(&mut out, left);
     append_opt_line_slot(&mut out, right);
@@ -1349,14 +1349,7 @@ pub fn pile(halign: u8, valign: u8, rows: &[&[u8]]) -> Vec<u8> {
 /// Format in `records5.py`:
 /// `[0x05, options(0), valign, h_just, v_just, rows, cols, row_parts..., col_parts..., cell_1, ..., cell_(rows*cols), END]`.
 /// Partition byte counts are `(rows + 4) / 4` and `(cols + 4) / 4`.
-pub fn matrix(
-    valign: u8,
-    h_just: u8,
-    v_just: u8,
-    rows: u8,
-    cols: u8,
-    cells: &[&[u8]],
-) -> Vec<u8> {
+pub fn matrix(valign: u8, h_just: u8, v_just: u8, rows: u8, cols: u8, cells: &[&[u8]]) -> Vec<u8> {
     let n_row_bytes = (usize::from(rows) + 4) / 4;
     let n_col_bytes = (usize::from(cols) + 4) / 4;
     let mut out = vec![0x05, 0x00, valign, h_just, v_just, rows, cols];
@@ -1477,7 +1470,10 @@ mod tests {
         let psi = char_record(TF_VARIABLE, 'x' as u32);
         let ket = dirac(None, Some(&psi), &[], &[], &[]);
         // Variation is TV_DI_RIGHT (0x02), followed by null slot 1 [0x01, 0x01], then slot 2 [0x01, 0x00, ...]
-        assert_eq!(&ket[0..7], &[0x03, 0x00, TM_DIRAC, TV_DI_RIGHT, 0x00, 0x01, 0x01]);
+        assert_eq!(
+            &ket[0..7],
+            &[0x03, 0x00, TM_DIRAC, TV_DI_RIGHT, 0x00, 0x01, 0x01]
+        );
         assert_eq!(&ket[7..9], &[0x01, 0x00]);
     }
     #[test]
@@ -1488,15 +1484,21 @@ mod tests {
         assert_eq!(&vec_f[0..5], &[0x03, 0x00, TM_VEC, TV_VE_RIGHT, 0x00]);
         // Must contain expandable CHAR record: [0x02, 0x00, 22 + 128 = 150, 0xD7, 0x20]
         let exp_char = char_record(TF_EXPAND, 0x20D7);
-        assert!(vec_f.windows(exp_char.len()).any(|w| w == exp_char.as_slice()));
+        assert!(vec_f
+            .windows(exp_char.len())
+            .any(|w| w == exp_char.as_slice()));
 
         let hat = over_hat(&x);
         let hat_char = char_record(TF_EXPAND, 0x0302);
-        assert!(hat.windows(hat_char.len()).any(|w| w == hat_char.as_slice()));
+        assert!(hat
+            .windows(hat_char.len())
+            .any(|w| w == hat_char.as_slice()));
 
         let arc = over_arc(&x);
         let arc_char = char_record(TF_EXPAND, 0x2322);
-        assert!(arc.windows(arc_char.len()).any(|w| w == arc_char.as_slice()));
+        assert!(arc
+            .windows(arc_char.len())
+            .any(|w| w == arc_char.as_slice()));
     }
 
     #[test]
@@ -1513,36 +1515,62 @@ mod tests {
         // Single integral: 1 CHAR(TF_SYMBOL, 0x222B)
         let int1 = integral(&x, None, None, &[], TV_INT_1);
         let int_char = char_record(TF_SYMBOL, 0x222B);
-        let count = int1.windows(int_char.len()).filter(|w| *w == int_char.as_slice()).count();
+        let count = int1
+            .windows(int_char.len())
+            .filter(|w| *w == int_char.as_slice())
+            .count();
         assert_eq!(count, 1);
 
         // Double integral: 2 CHAR(TF_SYMBOL, 0x222B)
         let int2 = integral(&x, None, None, &[], TV_INT_2);
-        let count2 = int2.windows(int_char.len()).filter(|w| *w == int_char.as_slice()).count();
+        let count2 = int2
+            .windows(int_char.len())
+            .filter(|w| *w == int_char.as_slice())
+            .count();
         assert_eq!(count2, 2);
 
         // Triple integral: 3 CHAR(TF_SYMBOL, 0x222B)
         let int3 = integral(&x, None, None, &[], TV_INT_3);
-        let count3 = int3.windows(int_char.len()).filter(|w| *w == int_char.as_slice()).count();
+        let count3 = int3
+            .windows(int_char.len())
+            .filter(|w| *w == int_char.as_slice())
+            .count();
         assert_eq!(count3, 3);
 
         // Loop integral: 1 CHAR(TF_MTEXTRA, 0xEE11) + 1 CHAR(TF_SYMBOL, 0x222B)
         let oint = integral(&x, None, None, &[], TV_INT_1 | TV_INT_LOOP);
         let loop1 = char_record(TF_MTEXTRA, 0xEE11);
         assert!(oint.windows(loop1.len()).any(|w| w == loop1.as_slice()));
-        assert_eq!(oint.windows(int_char.len()).filter(|w| *w == int_char.as_slice()).count(), 1);
+        assert_eq!(
+            oint.windows(int_char.len())
+                .filter(|w| *w == int_char.as_slice())
+                .count(),
+            1
+        );
 
         // Double loop integral: 1 CHAR(TF_MTEXTRA, 0xEE12) + 2 CHAR(TF_SYMBOL, 0x222B)
         let oiint = integral(&x, None, None, &[], TV_INT_2 | TV_INT_LOOP);
         let loop2 = char_record(TF_MTEXTRA, 0xEE12);
         assert!(oiint.windows(loop2.len()).any(|w| w == loop2.as_slice()));
-        assert_eq!(oiint.windows(int_char.len()).filter(|w| *w == int_char.as_slice()).count(), 2);
+        assert_eq!(
+            oiint
+                .windows(int_char.len())
+                .filter(|w| *w == int_char.as_slice())
+                .count(),
+            2
+        );
 
         // Triple loop integral: 1 CHAR(TF_MTEXTRA, 0xEE13) + 3 CHAR(TF_SYMBOL, 0x222B)
         let oiiint = integral(&x, None, None, &[], TV_INT_3 | TV_INT_LOOP);
         let loop3 = char_record(TF_MTEXTRA, 0xEE13);
         assert!(oiiint.windows(loop3.len()).any(|w| w == loop3.as_slice()));
-        assert_eq!(oiiint.windows(int_char.len()).filter(|w| *w == int_char.as_slice()).count(), 3);
+        assert_eq!(
+            oiiint
+                .windows(int_char.len())
+                .filter(|w| *w == int_char.as_slice())
+                .count(),
+            3
+        );
 
         // Loop integral with upper limit: upper limit must be suppressed (tvBO_UPPER not set)
         let a = char_record(TF_VARIABLE, 'a' as u32);

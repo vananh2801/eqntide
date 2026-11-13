@@ -58,8 +58,18 @@ fn recipe(c: char) -> Option<Pieces> {
         '⌉' => Pieces::new(Some('\u{23A4}'), '\u{23A5}', None, None),
         '⌊' => Pieces::new(None, '\u{23A2}', None, Some('\u{23A3}')),
         '⌋' => Pieces::new(None, '\u{23A5}', None, Some('\u{23A6}')),
-        '{' => Pieces::new(Some('\u{23A7}'), '\u{23AA}', Some('\u{23A8}'), Some('\u{23A9}')),
-        '}' => Pieces::new(Some('\u{23AB}'), '\u{23AA}', Some('\u{23AC}'), Some('\u{23AD}')),
+        '{' => Pieces::new(
+            Some('\u{23A7}'),
+            '\u{23AA}',
+            Some('\u{23A8}'),
+            Some('\u{23A9}'),
+        ),
+        '}' => Pieces::new(
+            Some('\u{23AB}'),
+            '\u{23AA}',
+            Some('\u{23AC}'),
+            Some('\u{23AD}'),
+        ),
         _ => return None,
     })
 }
@@ -96,7 +106,10 @@ impl Layout {
         };
         for s in segs {
             match s {
-                Seg::Move(x, y) | Seg::Line(x, y) | Seg::Quad(_, _, x, y) | Seg::Cubic(_, _, _, _, x, y) => add(x, y),
+                Seg::Move(x, y)
+                | Seg::Line(x, y)
+                | Seg::Quad(_, _, x, y)
+                | Seg::Cubic(_, _, _, _, x, y) => add(x, y),
                 Seg::Close => {}
             }
         }
@@ -187,10 +200,22 @@ impl Layout {
     }
 
     /// Height, ascent and straight-stem lengths of one assembly piece at `eff_em`.
-    fn piece_geom(&self, face: Face, ch: char, eff_em: f32, ext_xmin: f32, ext_xmax: f32) -> PieceGeom {
+    fn piece_geom(
+        &self,
+        face: Face,
+        ch: char,
+        eff_em: f32,
+        ext_xmin: f32,
+        ext_xmax: f32,
+    ) -> PieceGeom {
         let (asc, desc, _, _) = self.exact_ink(face, ch, eff_em);
         let (stem_top, stem_bot) = self.piece_stem_lengths(face, ch, eff_em, ext_xmin, ext_xmax);
-        PieceGeom { asc, h: asc + desc, stem_top, stem_bot }
+        PieceGeom {
+            asc,
+            h: asc + desc,
+            stem_top,
+            stem_bot,
+        }
     }
 
     /// The smallest span (in pixels) that can be built by *clipped* glyph assembly.
@@ -207,8 +232,12 @@ impl Layout {
 
         let span = match mid {
             Some(m) => {
-                let upper = top.map_or(m.h / 2.0 - m.stem_top, |t| t.h + m.h / 2.0 - (t.stem_bot + m.stem_top));
-                let lower = bot.map_or(m.h / 2.0 - m.stem_bot, |b| b.h + m.h / 2.0 - (b.stem_top + m.stem_bot));
+                let upper = top.map_or(m.h / 2.0 - m.stem_top, |t| {
+                    t.h + m.h / 2.0 - (t.stem_bot + m.stem_top)
+                });
+                let lower = bot.map_or(m.h / 2.0 - m.stem_bot, |b| {
+                    b.h + m.h / 2.0 - (b.stem_top + m.stem_bot)
+                });
                 2.0 * upper.max(lower)
             }
             None => match (top, bot) {
@@ -245,7 +274,12 @@ impl Layout {
             if natural.is_empty() {
                 return None;
             }
-            let (y_lo, y_hi) = natural.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
+            let (y_lo, y_hi) = natural
+                .iter()
+                .flatten()
+                .fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+                    (lo.min(p.1), hi.max(p.1))
+                });
             let h0 = y_hi - y_lo;
             if h0 <= 0.0 {
                 return None;
@@ -290,7 +324,12 @@ impl Layout {
             if natural.is_empty() {
                 return None;
             }
-            let (y_lo, y_hi) = natural.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
+            let (y_lo, y_hi) = natural
+                .iter()
+                .flatten()
+                .fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+                    (lo.min(p.1), hi.max(p.1))
+                });
             let h0 = y_hi - y_lo;
             if h0 <= 0.0 {
                 return None;
@@ -364,14 +403,22 @@ impl Layout {
             let (j_lo, j_hi, seam) = match (up, lo) {
                 (Some(u), Some(l)) => {
                     let (u, l) = (&pieces[u], &pieces[l]);
-                    ((u.bot - u.stem_bot).max(l.top), u.bot.min(l.top + l.stem_top), ov / 2.0)
+                    (
+                        (u.bot - u.stem_bot).max(l.top),
+                        u.bot.min(l.top + l.stem_top),
+                        ov / 2.0,
+                    )
                 }
                 (None, Some(_)) => (top_y, top_y, 0.0),
                 (Some(_), None) => (bot_y, bot_y, 0.0),
                 (None, None) => continue,
             };
             let want = (up_end + lo_start) / 2.0;
-            let j = if j_lo <= j_hi { want.clamp(j_lo, j_hi) } else { (j_lo + j_hi) / 2.0 };
+            let j = if j_lo <= j_hi {
+                want.clamp(j_lo, j_hi)
+            } else {
+                (j_lo + j_hi) / 2.0
+            };
             if let Some(u) = up {
                 pieces[u].clip_bot = pieces[u].clip_bot.min(j + seam);
             }
@@ -384,7 +431,14 @@ impl Layout {
         let mut items: Vec<Item> = Vec::new();
         let emit = |ch: char, y: f32, ink: (f32, f32), clip: (f32, f32), items: &mut Vec<Item>| {
             if clip.0 <= ink.0 + 1e-3 && clip.1 >= ink.1 - 1e-3 {
-                items.push(Item::Glyph { ch, face, em: eff_em, x: pad, y, ssty: 0 });
+                items.push(Item::Glyph {
+                    ch,
+                    face,
+                    em: eff_em,
+                    x: pad,
+                    y,
+                    ssty: 0,
+                });
                 return;
             }
             for poly in self.f.glyph_polys(face, ch, eff_em, eff_em, pad, y) {
@@ -395,7 +449,13 @@ impl Layout {
             }
         };
         for p in &pieces {
-            emit(p.ch, p.y, (p.top, p.bot), (p.clip_top, p.clip_bot), &mut items);
+            emit(
+                p.ch,
+                p.y,
+                (p.top, p.bot),
+                (p.clip_top, p.clip_bot),
+                &mut items,
+            );
         }
         let (ea, ed, _, _) = self.exact_ink(face, r.ext, eff_em);
         let e_h = (ea + ed).max(1.0);
@@ -472,14 +532,14 @@ impl Layout {
         let gap_min = c.sub_superscript_gap_min * em;
 
         // Position superscript near top of bar:
-        let sup_y = sup.as_ref().map(|s| {
-            (-actual_asc + s.asc + 0.04 * em).min(-shift_up)
-        });
+        let sup_y = sup
+            .as_ref()
+            .map(|s| (-actual_asc + s.asc + 0.04 * em).min(-shift_up));
 
         // Position subscript near bottom of bar:
-        let mut sub_y = sub.as_ref().map(|s| {
-            (actual_desc - s.desc - 0.04 * em).max(shift_down)
-        });
+        let mut sub_y = sub
+            .as_ref()
+            .map(|s| (actual_desc - s.desc - 0.04 * em).max(shift_down));
 
         // Ensure minimum gap between sub and sup:
         if let (Some(s1), Some(s2), Some(sy), Some(py)) = (&sub, &sup, sub_y, sup_y) {
@@ -490,7 +550,11 @@ impl Layout {
         }
 
         let mut out = LBox {
-            w: script_x + sub.as_ref().map_or(0.0, |s| s.w).max(sup.as_ref().map_or(0.0, |s| s.w)),
+            w: script_x
+                + sub
+                    .as_ref()
+                    .map_or(0.0, |s| s.w)
+                    .max(sup.as_ref().map_or(0.0, |s| s.w)),
             asc: actual_asc.max(sup.as_ref().map_or(0.0, |s| -sup_y.unwrap_or(0.0) + s.asc)),
             desc: actual_desc.max(sub.as_ref().map_or(0.0, |s| sub_y.unwrap_or(0.0) + s.desc)),
             items: Vec::new(),
@@ -513,7 +577,10 @@ mod tests {
     use super::*;
 
     fn layout() -> Layout {
-        Layout { f: fonts(), depth: 0 }
+        Layout {
+            f: fonts(),
+            depth: 0,
+        }
     }
 
     #[test]
@@ -526,7 +593,11 @@ mod tests {
         for c in ['(', ')', '[', ']', '{', '}'] {
             let r = recipe(c).unwrap();
             let min_span = l.min_assembly_span(face, &r, eff_em);
-            println!("DELIMITER '{c}': auto-calculated min_piece_h = {:.2} px ({:.3} em)", min_span, min_span / em);
+            println!(
+                "DELIMITER '{c}': auto-calculated min_piece_h = {:.2} px ({:.3} em)",
+                min_span,
+                min_span / em
+            );
         }
     }
 
@@ -540,28 +611,44 @@ mod tests {
             let short_span = 0.6 * em;
             let asc_s = short_span / 2.0 + AXIS * em;
             let desc_s = short_span / 2.0 - AXIS * em;
-            let b_s = l.stretchy_delimiter(c, asc_s, desc_s, em).expect("delimiter supported");
+            let b_s = l
+                .stretchy_delimiter(c, asc_s, desc_s, em)
+                .expect("delimiter supported");
             assert_eq!(b_s.asc, asc_s);
             assert_eq!(b_s.desc, desc_s);
             if c != '[' && c != ']' {
                 assert_eq!(b_s.items.len(), usize::from(c == '‖') + 1);
             }
-            assert!(b_s.items.iter().all(|it| matches!(it, Item::Poly(_))), "{c}: short should be Poly");
+            assert!(
+                b_s.items.iter().all(|it| matches!(it, Item::Poly(_))),
+                "{c}: short should be Poly"
+            );
 
             // Tall span (6em): Tier 3 assembly. Unclipped end/mid pieces stay Glyph,
             // while the last tiled extender is cut to fit and emitted as a Poly.
             let tall_span = 6.0 * em;
             let asc_t = tall_span / 2.0 + AXIS * em;
             let desc_t = tall_span / 2.0 - AXIS * em;
-            let b_t = l.stretchy_delimiter(c, asc_t, desc_t, em).expect("delimiter supported");
+            let b_t = l
+                .stretchy_delimiter(c, asc_t, desc_t, em)
+                .expect("delimiter supported");
             assert_eq!(b_t.asc, asc_t);
             assert_eq!(b_t.desc, desc_t);
             if c == '|' || c == '‖' {
-                assert!(b_t.items.iter().all(|it| matches!(it, Item::Poly(_))), "{c}: tall bar should be Poly");
+                assert!(
+                    b_t.items.iter().all(|it| matches!(it, Item::Poly(_))),
+                    "{c}: tall bar should be Poly"
+                );
             } else {
-                assert!(b_t.items.iter().any(|it| matches!(it, Item::Glyph { .. })), "{c}: tall should have Glyph pieces");
+                assert!(
+                    b_t.items.iter().any(|it| matches!(it, Item::Glyph { .. })),
+                    "{c}: tall should have Glyph pieces"
+                );
                 if c == '{' {
-                    assert!(b_t.items.len() > 3, "curly brace at 6.0em should have extenders");
+                    assert!(
+                        b_t.items.len() > 3,
+                        "curly brace at 6.0em should have extenders"
+                    );
                 }
             }
         }
@@ -572,12 +659,22 @@ mod tests {
             let span = k * em;
             let asc = span / 2.0 + AXIS * em;
             let desc = span / 2.0 - AXIS * em;
-            let b = l.stretchy_delimiter('{', asc, desc, em).expect("delimiter supported");
-            assert_eq!(b.items.len(), 3, "curly brace at {k}em should be 3 pieces without extenders");
+            let b = l
+                .stretchy_delimiter('{', asc, desc, em)
+                .expect("delimiter supported");
+            assert_eq!(
+                b.items.len(),
+                3,
+                "curly brace at {k}em should be 3 pieces without extenders"
+            );
             for it in &b.items {
                 if let Item::Poly(pts) = it {
                     for &(_, y) in pts {
-                        assert!(y >= -asc - 1e-2 && y <= desc + 1e-2, "point y={y} outside [{}, {desc}]", -asc);
+                        assert!(
+                            y >= -asc - 1e-2 && y <= desc + 1e-2,
+                            "point y={y} outside [{}, {desc}]",
+                            -asc
+                        );
                     }
                 }
             }
@@ -592,14 +689,22 @@ mod tests {
         let sub = MathNode::leaf("mn", "0");
         let sup = MathNode::leaf("mn", "1");
 
-        let b = l.evaluation_bar(Some(&sub), Some(&sup), 1.5 * em, 1.2 * em, em, ctx).unwrap();
+        let b = l
+            .evaluation_bar(Some(&sub), Some(&sup), 1.5 * em, 1.2 * em, em, ctx)
+            .unwrap();
         assert!(b.w > 0.4 * em);
         assert!(b.asc >= 1.5 * em);
         assert!(b.desc >= 1.2 * em);
         // Verify bar poly and limits are present
         assert!(b.items.iter().any(|it| matches!(it, Item::Poly(_))));
-        assert!(b.items.iter().any(|it| matches!(it, Item::Glyph { ch: '0', .. })));
-        assert!(b.items.iter().any(|it| matches!(it, Item::Glyph { ch: '1', .. })));
+        assert!(b
+            .items
+            .iter()
+            .any(|it| matches!(it, Item::Glyph { ch: '0', .. })));
+        assert!(b
+            .items
+            .iter()
+            .any(|it| matches!(it, Item::Glyph { ch: '1', .. })));
     }
 
     #[test]
@@ -624,7 +729,10 @@ mod tests {
         let (_, bot) = l.piece_stem_lengths(face, '\u{23A7}', em, xmin, xmax);
         assert!(near(bot, 645.0), "⎧ bottom stem = {bot}");
         let (top, bot) = l.piece_stem_lengths(face, '\u{23A8}', em, xmin, xmax);
-        assert!(near(top, 560.0) && near(bot, 558.0), "⎨ stems = {top}, {bot}");
+        assert!(
+            near(top, 560.0) && near(bot, 558.0),
+            "⎨ stems = {top}, {bot}"
+        );
         let (top, _) = l.piece_stem_lengths(face, '\u{23A9}', em, xmin, xmax);
         assert!(near(top, 646.0), "⎩ top stem = {top}");
     }

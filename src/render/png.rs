@@ -94,7 +94,9 @@ pub fn encode_alpha(width: u32, height: u32, alpha: &[u8], pixels_per_metre: u32
     chunk(&mut out, b"IHDR", &ihdr);
 
     chunk(&mut out, b"PLTE", &[0u8; LEVELS * 3]); // every entry black
-    let trns: Vec<u8> = (0..LEVELS).map(|i| (i * 255 / (LEVELS - 1)) as u8).collect();
+    let trns: Vec<u8> = (0..LEVELS)
+        .map(|i| (i * 255 / (LEVELS - 1)) as u8)
+        .collect();
     chunk(&mut out, b"tRNS", &trns);
 
     let mut phys = Vec::with_capacity(9);

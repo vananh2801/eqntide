@@ -7,10 +7,14 @@ use ab_glyph::{Font, FontRef, GlyphId, PxScale};
 
 use super::canvas::Canvas;
 
-static FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Regular.ttf");
-static FONT_ITALIC: &[u8] = include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Italic.ttf");
-static FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Bold.ttf");
-static FONT_MATH: &[u8] = include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoMath-Regular.ttf");
+static FONT_REGULAR: &[u8] =
+    include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Regular.ttf");
+static FONT_ITALIC: &[u8] =
+    include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Italic.ttf");
+static FONT_BOLD: &[u8] =
+    include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Bold.ttf");
+static FONT_MATH: &[u8] =
+    include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoMath-Regular.ttf");
 
 /// OpenType MATH table constants extracted directly from `STIXTwoMath-Regular.ttf`.
 ///
@@ -186,32 +190,51 @@ pub fn fonts() -> &'static Fonts {
     static F: OnceLock<Fonts> = OnceLock::new();
     F.get_or_init(|| {
         let load = |d: &'static [u8]| FontRef::try_from_slice(d).expect("bundled font is valid");
-        let math_face = ttf_parser::Face::parse(FONT_MATH, 0).expect("bundled STIX Two Math font is valid");
+        let math_face =
+            ttf_parser::Face::parse(FONT_MATH, 0).expect("bundled STIX Two Math font is valid");
         let upem = math_face.units_per_em() as f32;
         let constants = if let Some(math) = math_face.tables().math {
             if let Some(c) = math.constants {
                 MathConstants {
                     axis_height: c.axis_height().value as f32 / upem,
                     fraction_rule_thickness: c.fraction_rule_thickness().value as f32 / upem,
-                    fraction_num_display_style_shift_up: c.fraction_numerator_display_style_shift_up().value as f32 / upem,
+                    fraction_num_display_style_shift_up: c
+                        .fraction_numerator_display_style_shift_up()
+                        .value as f32
+                        / upem,
                     fraction_num_shift_up: c.fraction_numerator_shift_up().value as f32 / upem,
-                    fraction_den_display_style_shift_down: c.fraction_denominator_display_style_shift_down().value as f32 / upem,
-                    fraction_den_shift_down: c.fraction_denominator_shift_down().value as f32 / upem,
-                    fraction_num_display_style_gap_min: c.fraction_num_display_style_gap_min().value as f32 / upem,
+                    fraction_den_display_style_shift_down: c
+                        .fraction_denominator_display_style_shift_down()
+                        .value as f32
+                        / upem,
+                    fraction_den_shift_down: c.fraction_denominator_shift_down().value as f32
+                        / upem,
+                    fraction_num_display_style_gap_min: c.fraction_num_display_style_gap_min().value
+                        as f32
+                        / upem,
                     fraction_num_gap_min: c.fraction_numerator_gap_min().value as f32 / upem,
-                    fraction_den_display_style_gap_min: c.fraction_denom_display_style_gap_min().value as f32 / upem,
+                    fraction_den_display_style_gap_min: c
+                        .fraction_denom_display_style_gap_min()
+                        .value as f32
+                        / upem,
                     fraction_den_gap_min: c.fraction_denominator_gap_min().value as f32 / upem,
                     script_percent_scale_down: c.script_percent_scale_down() as f32 / 100.0,
-                    script_script_percent_scale_down: c.script_script_percent_scale_down() as f32 / 100.0,
+                    script_script_percent_scale_down: c.script_script_percent_scale_down() as f32
+                        / 100.0,
                     superscript_shift_up: c.superscript_shift_up().value as f32 / upem,
-                    superscript_shift_up_cramped: c.superscript_shift_up_cramped().value as f32 / upem,
+                    superscript_shift_up_cramped: c.superscript_shift_up_cramped().value as f32
+                        / upem,
                     subscript_shift_down: c.subscript_shift_down().value as f32 / upem,
                     sub_superscript_gap_min: c.sub_superscript_gap_min().value as f32 / upem,
                     radical_vertical_gap: c.radical_vertical_gap().value as f32 / upem,
-                    radical_display_style_vertical_gap: c.radical_display_style_vertical_gap().value as f32 / upem,
+                    radical_display_style_vertical_gap: c.radical_display_style_vertical_gap().value
+                        as f32
+                        / upem,
                     radical_rule_thickness: c.radical_rule_thickness().value as f32 / upem,
                     radical_extra_ascender: c.radical_extra_ascender().value as f32 / upem,
-                    radical_degree_bottom_raise_percent: c.radical_degree_bottom_raise_percent() as f32 / 100.0,
+                    radical_degree_bottom_raise_percent: c.radical_degree_bottom_raise_percent()
+                        as f32
+                        / 100.0,
                     radical_kern_before_degree: c.radical_kern_before_degree().value as f32 / upem,
                     radical_kern_after_degree: c.radical_kern_after_degree().value as f32 / upem,
                 }
@@ -251,38 +274,67 @@ pub fn fonts() -> &'static Fonts {
                 }
             }
         }
-/// Extract optical size alternate glyph IDs for script levels from OpenType GSUB `ssty` feature.
-///
-/// Maps base `GlyphId (u16)` -> `(script_level_1_glyph, script_level_2_glyph)`.
-fn parse_ssty_map(math_face: &ttf_parser::Face<'static>) -> HashMap<u16, (u16, u16)> {
-    let mut ssty_map = HashMap::new();
-    if let Some(gsub) = math_face.tables().gsub {
-        if let Some(feature) = gsub.features.find(ttf_parser::Tag::from_bytes(b"ssty")) {
-            for lookup_idx in feature.lookup_indices {
-                if let Some(lookup) = gsub.lookups.get(lookup_idx) {
-                    for st_idx in 0..lookup.subtables.len() {
-                        if let Some(ttf_parser::gsub::SubstitutionSubtable::Alternate(alt_sub)) =
-                            lookup.subtables.get::<ttf_parser::gsub::SubstitutionSubtable>(st_idx)
-                        {
-                            match alt_sub.coverage {
-                                ttf_parser::opentype_layout::Coverage::Format1 { glyphs } => {
-                                    for (cov_idx, gid) in glyphs.into_iter().enumerate() {
-                                        if let Some(set) = alt_sub.alternate_sets.get(cov_idx as u16) {
-                                            let s1 = set.alternates.get(0).map(|g| g.0).unwrap_or(gid.0);
-                                            let s2 = set.alternates.get(1).map(|g| g.0).unwrap_or(s1);
-                                            ssty_map.insert(gid.0, (s1, s2));
+        /// Extract optical size alternate glyph IDs for script levels from OpenType GSUB `ssty` feature.
+        ///
+        /// Maps base `GlyphId (u16)` -> `(script_level_1_glyph, script_level_2_glyph)`.
+        fn parse_ssty_map(math_face: &ttf_parser::Face<'static>) -> HashMap<u16, (u16, u16)> {
+            let mut ssty_map = HashMap::new();
+            if let Some(gsub) = math_face.tables().gsub {
+                if let Some(feature) = gsub.features.find(ttf_parser::Tag::from_bytes(b"ssty")) {
+                    for lookup_idx in feature.lookup_indices {
+                        if let Some(lookup) = gsub.lookups.get(lookup_idx) {
+                            for st_idx in 0..lookup.subtables.len() {
+                                if let Some(ttf_parser::gsub::SubstitutionSubtable::Alternate(
+                                    alt_sub,
+                                )) = lookup
+                                    .subtables
+                                    .get::<ttf_parser::gsub::SubstitutionSubtable>(st_idx)
+                                {
+                                    match alt_sub.coverage {
+                                        ttf_parser::opentype_layout::Coverage::Format1 {
+                                            glyphs,
+                                        } => {
+                                            for (cov_idx, gid) in glyphs.into_iter().enumerate() {
+                                                if let Some(set) =
+                                                    alt_sub.alternate_sets.get(cov_idx as u16)
+                                                {
+                                                    let s1 = set
+                                                        .alternates
+                                                        .get(0)
+                                                        .map(|g| g.0)
+                                                        .unwrap_or(gid.0);
+                                                    let s2 = set
+                                                        .alternates
+                                                        .get(1)
+                                                        .map(|g| g.0)
+                                                        .unwrap_or(s1);
+                                                    ssty_map.insert(gid.0, (s1, s2));
+                                                }
+                                            }
                                         }
-                                    }
-                                }
-                                ttf_parser::opentype_layout::Coverage::Format2 { records } => {
-                                    for rec in records {
-                                        for offset in 0..=(rec.end.0 - rec.start.0) {
-                                            let gid = rec.start.0 + offset;
-                                            let cov_idx = rec.value + offset;
-                                            if let Some(set) = alt_sub.alternate_sets.get(cov_idx) {
-                                                let s1 = set.alternates.get(0).map(|g| g.0).unwrap_or(gid);
-                                                let s2 = set.alternates.get(1).map(|g| g.0).unwrap_or(s1);
-                                                ssty_map.insert(gid, (s1, s2));
+                                        ttf_parser::opentype_layout::Coverage::Format2 {
+                                            records,
+                                        } => {
+                                            for rec in records {
+                                                for offset in 0..=(rec.end.0 - rec.start.0) {
+                                                    let gid = rec.start.0 + offset;
+                                                    let cov_idx = rec.value + offset;
+                                                    if let Some(set) =
+                                                        alt_sub.alternate_sets.get(cov_idx)
+                                                    {
+                                                        let s1 = set
+                                                            .alternates
+                                                            .get(0)
+                                                            .map(|g| g.0)
+                                                            .unwrap_or(gid);
+                                                        let s2 = set
+                                                            .alternates
+                                                            .get(1)
+                                                            .map(|g| g.0)
+                                                            .unwrap_or(s1);
+                                                        ssty_map.insert(gid, (s1, s2));
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -292,10 +344,8 @@ fn parse_ssty_map(math_face: &ttf_parser::Face<'static>) -> HashMap<u16, (u16, u
                     }
                 }
             }
+            ssty_map
         }
-    }
-    ssty_map
-}
 
         let radical_info = RadicalInfo {
             variants: variants_list,
@@ -316,7 +366,13 @@ fn parse_ssty_map(math_face: &ttf_parser::Face<'static>) -> HashMap<u16, (u16, u
     })
 }
 
-fn outline_to_segments(outline: &ab_glyph::Outline, upem: f32, em_px: f32, x: f32, y: f32) -> Vec<Seg> {
+fn outline_to_segments(
+    outline: &ab_glyph::Outline,
+    upem: f32,
+    em_px: f32,
+    x: f32,
+    y: f32,
+) -> Vec<Seg> {
     use ab_glyph::OutlineCurve as C;
     let k = em_px / upem;
     let pt = |p: ab_glyph::Point| (x + p.x * k, y - p.y * k);
@@ -383,7 +439,10 @@ fn segments_to_polys(segs: &[Seg], em_x: f32, em_y: f32, x: f32, y: f32) -> Vec<
                 for i in 1..=STEPS {
                     let t = i as f32 / STEPS as f32;
                     let u = 1.0 - t;
-                    cur.push(map(u * u * sx + 2.0 * u * t * cx + t * t * ex, u * u * sy + 2.0 * u * t * cy + t * t * ey));
+                    cur.push(map(
+                        u * u * sx + 2.0 * u * t * cx + t * t * ex,
+                        u * u * sy + 2.0 * u * t * cy + t * t * ey,
+                    ));
                 }
                 pen = (*ex, *ey);
             }
@@ -393,7 +452,10 @@ fn segments_to_polys(segs: &[Seg], em_x: f32, em_y: f32, x: f32, y: f32) -> Vec<
                     let t = i as f32 / STEPS as f32;
                     let u = 1.0 - t;
                     let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-                    cur.push(map(b0 * sx + b1 * c1x + b2 * c2x + b3 * ex, b0 * sy + b1 * c1y + b2 * c2y + b3 * ey));
+                    cur.push(map(
+                        b0 * sx + b1 * c1x + b2 * c2x + b3 * ex,
+                        b0 * sy + b1 * c1y + b2 * c2y + b3 * ey,
+                    ));
                 }
                 pen = (*ex, *ey);
             }
@@ -465,9 +527,17 @@ impl Fonts {
     }
 
     /// Look up glyph index in STIX Two Math font, optionally substituting optical size variant.
-    pub fn glyph_id_for_math_styled(&self, style: MathStyle, ch: char, ssty: u8) -> Option<ttf_parser::GlyphId> {
+    pub fn glyph_id_for_math_styled(
+        &self,
+        style: MathStyle,
+        ch: char,
+        ssty: u8,
+    ) -> Option<ttf_parser::GlyphId> {
         let math_ch = Self::to_math_char(style, ch);
-        let base_gid = self.math_face.glyph_index(math_ch).or_else(|| self.math_face.glyph_index(ch))?;
+        let base_gid = self
+            .math_face
+            .glyph_index(math_ch)
+            .or_else(|| self.math_face.glyph_index(ch))?;
         if ssty > 0 {
             Some(ttf_parser::GlyphId(self.ssty_glyph(base_gid.0, ssty)))
         } else {
@@ -482,7 +552,13 @@ impl Fonts {
 
     /// Retrieve the italic correction (in pixels) for `ch` under `style` at `em_px`,
     /// accounting for script optical alternate glyphs if `ssty > 0`.
-    pub fn italic_correction_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> f32 {
+    pub fn italic_correction_styled(
+        &self,
+        style: MathStyle,
+        ch: char,
+        em_px: f32,
+        ssty: u8,
+    ) -> f32 {
         let base_gid = self.glyph_id_for_math(style, ch);
         let eff_gid = if ssty > 0 {
             base_gid.map(|g| ttf_parser::GlyphId(self.ssty_glyph(g.0, ssty)))
@@ -517,7 +593,9 @@ impl Fonts {
                 if let Some(gi) = math.glyph_info {
                     if let Some(tas) = gi.top_accent_attachments {
                         if let Some(v) = tas.get(gid) {
-                            return Some((v.value as f32 / self.math_face.units_per_em() as f32) * em_px);
+                            return Some(
+                                (v.value as f32 / self.math_face.units_per_em() as f32) * em_px,
+                            );
                         }
                     }
                 }
@@ -541,7 +619,16 @@ impl Fonts {
         script_y: f32,
         em_px: f32,
     ) -> f32 {
-        self.math_kern_styled(base_style, base_ch, script_style, script_ch, is_sub, script_y, em_px, 0)
+        self.math_kern_styled(
+            base_style,
+            base_ch,
+            script_style,
+            script_ch,
+            is_sub,
+            script_y,
+            em_px,
+            0,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -574,7 +661,8 @@ impl Fonts {
         };
 
         let b_gid_opt = self.glyph_id_for_math(base_style, base_ch);
-        let s_gid_opt = self.glyph_id_for_math_styled(script_style, script_ch, ssty)
+        let s_gid_opt = self
+            .glyph_id_for_math_styled(script_style, script_ch, ssty)
             .or_else(|| self.glyph_id_for_math(script_style, script_ch));
         if let (Some(b_gid), Some(s_gid)) = (b_gid_opt, s_gid_opt) {
             if let Some(math) = self.math_face.tables().math {
@@ -665,7 +753,7 @@ impl Fonts {
 
     pub fn advance_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> f32 {
         let (f, id) = self.pick_styled(style, ch, ssty);
-        
+
         f.h_advance_unscaled(id) * em_px / f.units_per_em().unwrap_or(1000.0)
     }
 
@@ -701,12 +789,29 @@ impl Fonts {
         }
     }
 
-    pub fn draw(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32, canvas: &mut Canvas) {
+    pub fn draw(
+        &self,
+        style: MathStyle,
+        ch: char,
+        em_px: f32,
+        x: f32,
+        y: f32,
+        canvas: &mut Canvas,
+    ) {
         self.draw_styled(style, ch, em_px, x, y, canvas, 0);
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_styled(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32, canvas: &mut Canvas, ssty: u8) {
+    pub fn draw_styled(
+        &self,
+        style: MathStyle,
+        ch: char,
+        em_px: f32,
+        x: f32,
+        y: f32,
+        canvas: &mut Canvas,
+        ssty: u8,
+    ) {
         let (f, id) = self.pick_styled(style, ch, ssty);
         let g = id.with_scale_and_position(Self::scale_for(f, em_px), ab_glyph::point(x, y));
         if let Some(o) = f.outline_glyph(g) {
@@ -719,11 +824,26 @@ impl Fonts {
     /// The outline of `ch` as drawing commands in pixels (y pointing down), with its
     /// baseline origin at `(x, y)` and `em_px` pixels per em. `None` when the glyph has
     /// no outline (e.g. a space).
-    pub fn glyph_segments(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32) -> Option<Vec<Seg>> {
+    pub fn glyph_segments(
+        &self,
+        style: MathStyle,
+        ch: char,
+        em_px: f32,
+        x: f32,
+        y: f32,
+    ) -> Option<Vec<Seg>> {
         self.glyph_segments_styled(style, ch, em_px, x, y, 0)
     }
 
-    pub fn glyph_segments_styled(&self, style: MathStyle, ch: char, em_px: f32, x: f32, y: f32, ssty: u8) -> Option<Vec<Seg>> {
+    pub fn glyph_segments_styled(
+        &self,
+        style: MathStyle,
+        ch: char,
+        em_px: f32,
+        x: f32,
+        y: f32,
+        ssty: u8,
+    ) -> Option<Vec<Seg>> {
         let (f, id) = self.pick_styled(style, ch, ssty);
         let outline = f.outline(id)?;
         let upem = f.units_per_em().unwrap_or(1000.0);
@@ -733,12 +853,29 @@ impl Fonts {
     /// The outline of `ch` flattened to polygons (one per contour), drawn with
     /// independent horizontal and vertical scales: `em_x` / `em_y` pixels per em.
     /// The baseline origin sits at `(x, y)`; pixels grow downwards.
-    pub fn glyph_polys(&self, style: MathStyle, ch: char, em_x: f32, em_y: f32, x: f32, y: f32) -> Vec<Vec<(f32, f32)>> {
+    pub fn glyph_polys(
+        &self,
+        style: MathStyle,
+        ch: char,
+        em_x: f32,
+        em_y: f32,
+        x: f32,
+        y: f32,
+    ) -> Vec<Vec<(f32, f32)>> {
         self.glyph_polys_styled(style, ch, em_x, em_y, x, y, 0)
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn glyph_polys_styled(&self, style: MathStyle, ch: char, em_x: f32, em_y: f32, x: f32, y: f32, ssty: u8) -> Vec<Vec<(f32, f32)>> {
+    pub fn glyph_polys_styled(
+        &self,
+        style: MathStyle,
+        ch: char,
+        em_x: f32,
+        em_y: f32,
+        x: f32,
+        y: f32,
+        ssty: u8,
+    ) -> Vec<Vec<(f32, f32)>> {
         let Some(segs) = self.glyph_segments_styled(style, ch, em_y, 0.0, 0.0, ssty) else {
             return Vec::new();
         };
@@ -746,7 +883,14 @@ impl Fonts {
     }
 
     /// Extract polygon contours of a glyph directly from `STIXTwoMath` by its raw `glyph_id`.
-    pub fn math_glyph_polys(&self, gid: u16, em_x: f32, em_y: f32, x: f32, y: f32) -> Vec<Vec<(f32, f32)>> {
+    pub fn math_glyph_polys(
+        &self,
+        gid: u16,
+        em_x: f32,
+        em_y: f32,
+        x: f32,
+        y: f32,
+    ) -> Vec<Vec<(f32, f32)>> {
         let f = &self.math;
         let id = ab_glyph::GlyphId(gid);
         let Some(outline) = f.outline(id) else {
@@ -782,7 +926,10 @@ mod tests {
         assert_eq!((c.script_percent_scale_down * 100.0).round() as i32, 70);
 
         // Radical constants
-        assert_eq!((c.radical_degree_bottom_raise_percent * 100.0).round() as i32, 55);
+        assert_eq!(
+            (c.radical_degree_bottom_raise_percent * 100.0).round() as i32,
+            55
+        );
         assert_eq!((c.radical_kern_before_degree * 1000.0).round() as i32, 65);
         assert_eq!((c.radical_kern_after_degree * 1000.0).round() as i32, -335);
 
@@ -803,29 +950,66 @@ mod tests {
         assert!(ta_v.is_some());
 
         // Verify math kerning on P with subscript
-        let mk_p = f.math_kern(MathStyle::Variable, 'P', MathStyle::Variable, 'i', true, 5.0, 100.0);
-        assert!(mk_p < 0.0, "Subscript under P should be kerned negatively, got {}", mk_p);
+        let mk_p = f.math_kern(
+            MathStyle::Variable,
+            'P',
+            MathStyle::Variable,
+            'i',
+            true,
+            5.0,
+            100.0,
+        );
+        assert!(
+            mk_p < 0.0,
+            "Subscript under P should be kerned negatively, got {}",
+            mk_p
+        );
 
         // Verify GSUB ssty feature (Phase 6)
-        assert_eq!(f.ssty_map().len(), 529, "Expected 529 ssty alternate mappings in STIXTwoMath");
+        assert_eq!(
+            f.ssty_map().len(),
+            529,
+            "Expected 529 ssty alternate mappings in STIXTwoMath"
+        );
 
         // Verify optical size substitution for math italic x
-        let x_gid = f.glyph_id_for_math(MathStyle::Variable, 'x').expect("math italic x must exist");
+        let x_gid = f
+            .glyph_id_for_math(MathStyle::Variable, 'x')
+            .expect("math italic x must exist");
         let x_ssty1 = f.ssty_glyph(x_gid.0, 1);
         let x_ssty2 = f.ssty_glyph(x_gid.0, 2);
-        assert_ne!(x_ssty1, x_gid.0, "ssty level 1 alternate should differ from base");
-        assert_ne!(x_ssty2, x_gid.0, "ssty level 2 alternate should differ from base");
+        assert_ne!(
+            x_ssty1, x_gid.0,
+            "ssty level 1 alternate should differ from base"
+        );
+        assert_ne!(
+            x_ssty2, x_gid.0,
+            "ssty level 2 alternate should differ from base"
+        );
         assert_ne!(x_ssty1, x_ssty2, "ssty level 1 and 2 should differ");
 
         // Verify optical advance: ssty glyph is designed wider with heavier stems
         let adv_norm = f.advance(MathStyle::Variable, 'x', 100.0);
         let adv_ssty1 = f.advance_styled(MathStyle::Variable, 'x', 100.0, 1);
         let adv_ssty2 = f.advance_styled(MathStyle::Variable, 'x', 100.0, 2);
-        assert!(adv_ssty1 > adv_norm, "ssty level 1 advance ({}) must be wider than base ({})", adv_ssty1, adv_norm);
-        assert!(adv_ssty2 > adv_ssty1, "ssty level 2 advance ({}) must be wider than level 1 ({})", adv_ssty2, adv_ssty1);
+        assert!(
+            adv_ssty1 > adv_norm,
+            "ssty level 1 advance ({}) must be wider than base ({})",
+            adv_ssty1,
+            adv_norm
+        );
+        assert!(
+            adv_ssty2 > adv_ssty1,
+            "ssty level 2 advance ({}) must be wider than level 1 ({})",
+            adv_ssty2,
+            adv_ssty1
+        );
 
         // Verify outline segments are successfully produced for ssty glyph
         let segs = f.glyph_segments_styled(MathStyle::Variable, 'x', 100.0, 0.0, 0.0, 1);
-        assert!(segs.is_some() && !segs.unwrap().is_empty(), "ssty glyph must produce valid outline segments");
+        assert!(
+            segs.is_some() && !segs.unwrap().is_empty(),
+            "ssty glyph must produce valid outline segments"
+        );
     }
 }

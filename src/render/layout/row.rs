@@ -63,7 +63,9 @@ impl Layout {
                 .chars()
                 .filter(|c| !c.is_whitespace() && *c != '\u{00A0}' && *c != '\u{200B}')
                 .collect();
-            if kid.tag == "mspace" || ((kid.tag == "mo" || kid.tag == "mtext") && text_clean.is_empty()) {
+            if kid.tag == "mspace"
+                || ((kid.tag == "mo" || kid.tag == "mtext") && text_clean.is_empty())
+            {
                 continue;
             }
 
@@ -79,7 +81,12 @@ impl Layout {
                         } else {
                             Face::Number
                         };
-                        atoms.push(Atom { class: Class::Ord, b: self.text_styled(&text_clean, face, em, ssty), delim: None, is_table: false });
+                        atoms.push(Atom {
+                            class: Class::Ord,
+                            b: self.text_styled(&text_clean, face, em, ssty),
+                            delim: None,
+                            is_table: false,
+                        });
                     }
                 }
                 "mtext" => {
@@ -88,7 +95,11 @@ impl Layout {
                         let bold = kid.attr("mathvariant") == Some("bold");
                         // If it's a sequence of digits (e.g. "2025" or a single digit "2")
                         if t.chars().all(|c| c.is_ascii_digit()) {
-                            let face = if bold { Face::VectorMatrix } else { Face::Number };
+                            let face = if bold {
+                                Face::VectorMatrix
+                            } else {
+                                Face::Number
+                            };
                             atoms.push(Atom {
                                 class: Class::Ord, // Ord + Ord gets 0.0 spacing (tightly packed)
                                 b: self.text_styled(t, face, em, ssty),
@@ -112,11 +123,21 @@ impl Layout {
                 }
                 _ => {
                     let b = if matches!(kid.tag.as_str(), "msub" | "msup" | "msubsup")
-                        && kid.children.first().is_some_and(delimiter::is_eval_bar_base)
+                        && kid
+                            .children
+                            .first()
+                            .is_some_and(delimiter::is_eval_bar_base)
                         && !atoms.is_empty()
                     {
-                        let start_idx = atoms.iter().rposition(|a| matches!(a.class, Class::Rel | Class::Open)).map_or(0, |idx| idx + 1);
-                        let expr_atoms = if start_idx < atoms.len() { &atoms[start_idx..] } else { &atoms[..] };
+                        let start_idx = atoms
+                            .iter()
+                            .rposition(|a| matches!(a.class, Class::Rel | Class::Open))
+                            .map_or(0, |idx| idx + 1);
+                        let expr_atoms = if start_idx < atoms.len() {
+                            &atoms[start_idx..]
+                        } else {
+                            &atoms[..]
+                        };
                         let prev_asc = expr_atoms.iter().map(|a| a.b.asc).fold(0.0f32, f32::max);
                         let prev_desc = expr_atoms.iter().map(|a| a.b.desc).fold(0.0f32, f32::max);
                         let h2 = (prev_asc - AXIS * em).max(prev_desc + AXIS * em);
@@ -132,7 +153,12 @@ impl Layout {
                         self.node(kid, em, ctx)?
                     };
                     let class = self.class_of_node(kid);
-                    atoms.push(Atom { class, b, delim: None, is_table: kid.tag == "mtable" });
+                    atoms.push(Atom {
+                        class,
+                        b,
+                        delim: None,
+                        is_table: kid.tag == "mtable",
+                    });
                 }
             }
         }
@@ -143,8 +169,13 @@ impl Layout {
         let mut cls: Vec<Class> = atoms.iter().map(|a| a.class).collect();
         for i in 0..n {
             if cls[i] == Class::Bin {
-                let prev_bad = i == 0 || matches!(cls[i - 1], Class::Bin | Class::Rel | Class::Open | Class::Punct | Class::Op);
-                let next_bad = i + 1 == n || matches!(cls[i + 1], Class::Rel | Class::Close | Class::Punct);
+                let prev_bad = i == 0
+                    || matches!(
+                        cls[i - 1],
+                        Class::Bin | Class::Rel | Class::Open | Class::Punct | Class::Op
+                    );
+                let next_bad =
+                    i + 1 == n || matches!(cls[i + 1], Class::Rel | Class::Close | Class::Punct);
                 if prev_bad || next_bad {
                     cls[i] = Class::Ord;
                 }
@@ -167,7 +198,10 @@ impl Layout {
                     let (overhang, ic) = last_g.map_or((0.0, 0.0), |(face, ch, gem)| {
                         let (_, x_max) = self.f.ink_x(face, ch, gem);
                         let adv = self.f.advance(face, ch, gem);
-                        ((x_max - adv).max(0.0), self.f.italic_correction(face, ch, gem))
+                        (
+                            (x_max - adv).max(0.0),
+                            self.f.italic_correction(face, ch, gem),
+                        )
                     });
                     let clearance = ic.max(overhang);
                     x += clearance.max(0.04 * em) + 0.03 * em;
@@ -187,7 +221,10 @@ impl Layout {
                 return class_of(c);
             }
         }
-        if matches!(k.tag.as_str(), "munder" | "mover" | "munderover" | "msub" | "msup" | "msubsup") {
+        if matches!(
+            k.tag.as_str(),
+            "munder" | "mover" | "munderover" | "msub" | "msup" | "msubsup"
+        ) {
             if let Some(base) = k.children.first() {
                 if base.tag == "mo" {
                     if let Some(c) = base.text.trim().chars().next() {
@@ -227,15 +264,25 @@ impl Layout {
                 continue;
             }
             let class = class_of(ch);
-            let delim = if is_open(ch) || is_close(ch) || is_bar(ch) { Some(ch) } else { None };
+            let delim = if is_open(ch) || is_close(ch) || is_bar(ch) {
+                Some(ch)
+            } else {
+                None
+            };
             let b = if is_integral(ch) {
-                self.integral_without_limits(ch, 1.45 * em, em).unwrap_or_else(|| self.glyph_styled(display_char(ch), Face::Symbol, em, ssty))
+                self.integral_without_limits(ch, 1.45 * em, em)
+                    .unwrap_or_else(|| self.glyph_styled(display_char(ch), Face::Symbol, em, ssty))
             } else if is_big_op(ch) {
                 self.big_glyph(ch, Face::ExtraMath, em, 1.45)
             } else {
                 self.glyph_styled(display_char(ch), Face::Symbol, em, ssty)
             };
-            out.push(Atom { class, b, delim, is_table: false });
+            out.push(Atom {
+                class,
+                b,
+                delim,
+                is_table: false,
+            });
         }
     }
 
@@ -247,14 +294,28 @@ impl Layout {
         let variant = kid.attr("mathvariant");
         let bold = matches!(variant, Some("bold") | Some("bold-italic"));
         if t.chars().count() > 1 && is_function(t) {
-            let face = if bold { Face::VectorMatrix } else { Face::Function };
-            out.push(Atom { class: Class::Op, b: self.text_styled(t, face, em, ssty), delim: None, is_table: false });
+            let face = if bold {
+                Face::VectorMatrix
+            } else {
+                Face::Function
+            };
+            out.push(Atom {
+                class: Class::Op,
+                b: self.text_styled(t, face, em, ssty),
+                delim: None,
+                is_table: false,
+            });
             return;
         }
         if has_foreign_letters(t) {
             // A word with Vietnamese letters, not a run of variables.
             let face = if bold { Face::VectorMatrix } else { Face::Text };
-            out.push(Atom { class: Class::Ord, b: self.text_styled(t, face, em, ssty), delim: None, is_table: false });
+            out.push(Atom {
+                class: Class::Ord,
+                b: self.text_styled(t, face, em, ssty),
+                delim: None,
+                is_table: false,
+            });
             return;
         }
         for ch in t.chars() {
@@ -270,21 +331,46 @@ impl Layout {
                     is_table: false,
                 });
             } else if bold {
-                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, Face::VectorMatrix, em, ssty), delim: None, is_table: false });
+                out.push(Atom {
+                    class: Class::Ord,
+                    b: self.glyph_styled(ch, Face::VectorMatrix, em, ssty),
+                    delim: None,
+                    is_table: false,
+                });
             } else if ch.is_ascii_digit() {
                 // Digits inside <mi> runs must be upright numbers, not math operators.
-                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, Face::Number, em, ssty), delim: None, is_table: false });
+                out.push(Atom {
+                    class: Class::Ord,
+                    b: self.glyph_styled(ch, Face::Number, em, ssty),
+                    delim: None,
+                    is_table: false,
+                });
             } else if is_latin_letter(ch) {
                 let face = if variant == Some("normal") {
                     Face::Function
                 } else {
                     Face::Variable
                 };
-                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, face, em, ssty), delim: None, is_table: false });
+                out.push(Atom {
+                    class: Class::Ord,
+                    b: self.glyph_styled(ch, face, em, ssty),
+                    delim: None,
+                    is_table: false,
+                });
             } else if is_greek_lower(ch) {
-                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, Face::LcGreek, em, ssty), delim: None, is_table: false });
+                out.push(Atom {
+                    class: Class::Ord,
+                    b: self.glyph_styled(ch, Face::LcGreek, em, ssty),
+                    delim: None,
+                    is_table: false,
+                });
             } else if is_greek_upper(ch) {
-                out.push(Atom { class: Class::Ord, b: self.glyph_styled(ch, Face::UcGreek, em, ssty), delim: None, is_table: false });
+                out.push(Atom {
+                    class: Class::Ord,
+                    b: self.glyph_styled(ch, Face::UcGreek, em, ssty),
+                    delim: None,
+                    is_table: false,
+                });
             } else {
                 self.atoms_mo(&ch.to_string(), em, out, ssty);
             }

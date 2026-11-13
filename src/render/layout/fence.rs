@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 impl Layout {
     pub(super) fn stretch_delims(&self, atoms: &mut [Atom], em: f32) {
         // Match pairs.
@@ -42,7 +41,10 @@ impl Layout {
         // Lone `{` before a table (systems of equations) / lone `}` after one.
         for i in 0..atoms.len() {
             let Some(c) = atoms[i].delim else { continue };
-            if is_open(c) && atoms.get(i + 1).is_some_and(|a| a.is_table) && atoms[i].b.asc < 0.9 * em {
+            if is_open(c)
+                && atoms.get(i + 1).is_some_and(|a| a.is_table)
+                && atoms[i].b.asc < 0.9 * em
+            {
                 let (a, d) = (atoms[i + 1].b.asc, atoms[i + 1].b.desc);
                 self.stretch_pair(atoms, i, a, d, em);
             } else if is_close(c) && i > 0 && atoms[i - 1].is_table && atoms[i].b.asc < 0.9 * em {
@@ -53,7 +55,10 @@ impl Layout {
         // Unmatched closing bar / bracket after an expression (e.g. evaluation bar \left. F(x) \right|):
         for i in 0..atoms.len() {
             let Some(c) = atoms[i].delim else { continue };
-            if (is_bar(c) || is_close(c)) && !pairs.iter().any(|&(_, close_idx)| close_idx == i) && i > 0 {
+            if (is_bar(c) || is_close(c))
+                && !pairs.iter().any(|&(_, close_idx)| close_idx == i)
+                && i > 0
+            {
                 let mut asc = 0.0f32;
                 let mut desc = 0.0f32;
                 for a in &atoms[..i] {
@@ -67,7 +72,14 @@ impl Layout {
         }
     }
 
-    pub(super) fn stretch_pair(&self, atoms: &mut [Atom], idx: usize, asc: f32, desc: f32, em: f32) {
+    pub(super) fn stretch_pair(
+        &self,
+        atoms: &mut [Atom],
+        idx: usize,
+        asc: f32,
+        desc: f32,
+        em: f32,
+    ) {
         if asc + desc <= 1.25 * em {
             return;
         }
@@ -86,7 +98,11 @@ impl Layout {
         let h = asc + desc;
         let t = (0.05 * em).max(1.0);
         let pad = 0.04 * em;
-        let mut b = LBox { asc, desc, ..Default::default() };
+        let mut b = LBox {
+            asc,
+            desc,
+            ..Default::default()
+        };
         let top = -asc;
         match c {
             '|' => {
@@ -100,8 +116,15 @@ impl Layout {
             }
             '⟨' | '⟩' => {
                 let w = 0.28 * em;
-                let pts = if c == '⟨' { [(w, top), (0.0, top + h / 2.0), (w, top + h)] } else { [(0.0, top), (w, top + h / 2.0), (0.0, top + h)] };
-                for q in stroke(&pts.iter().map(|(x, y)| (x + pad, *y)).collect::<Vec<_>>(), 0.045 * em) {
+                let pts = if c == '⟨' {
+                    [(w, top), (0.0, top + h / 2.0), (w, top + h)]
+                } else {
+                    [(0.0, top), (w, top + h / 2.0), (0.0, top + h)]
+                };
+                for q in stroke(
+                    &pts.iter().map(|(x, y)| (x + pad, *y)).collect::<Vec<_>>(),
+                    0.045 * em,
+                ) {
                     b.items.push(Item::Poly(q));
                 }
                 b.w = w + 2.0 * pad;

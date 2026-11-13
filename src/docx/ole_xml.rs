@@ -43,8 +43,8 @@ pub fn make_ole_xml(
     let mut ac = Element::new(Some(NS_MC), Some("mc"), "AlternateContent");
 
     // ── Primary: MathType OLE ────────────────────────────────────────────────
-    let mut choice = Element::new(Some(NS_MC), Some("mc"), "Choice")
-        .with_nsdecl(Some("mtype"), MTYPE_NS);
+    let mut choice =
+        Element::new(Some(NS_MC), Some("mc"), "Choice").with_nsdecl(Some("mtype"), MTYPE_NS);
     choice.set_attr(None, None, "Requires", "mtype");
 
     let mut wr = Element::new(Some(NS_W), Some("w"), "r");
@@ -146,7 +146,11 @@ pub fn make_object_run(
         None,
         None,
         "style",
-        &format!("width:{:.1}pt;height:{:.1}pt", dxa_w as f64 / 20.0, dxa_h as f64 / 20.0),
+        &format!(
+            "width:{:.1}pt;height:{:.1}pt",
+            dxa_w as f64 / 20.0,
+            dxa_h as f64 / 20.0
+        ),
     );
     shape.set_attr(Some(NS_O), Some("o"), "ole", "");
     let mut img = Element::new(Some(NS_V), Some("v"), "imagedata");
@@ -202,7 +206,10 @@ pub fn sanitize_document_baselines(el: &mut Element) {
         }
     }
     if el.is(NS_W, "r") || el.local == "r" {
-        let has_text = el.children.iter().any(|n| matches!(n, Node::Element(e) if e.is(NS_W, "t") || e.local == "t"));
+        let has_text = el
+            .children
+            .iter()
+            .any(|n| matches!(n, Node::Element(e) if e.is(NS_W, "t") || e.local == "t"));
         let has_math_or_shape = el.children.iter().any(|n| {
             matches!(
                 n,
@@ -241,7 +248,9 @@ pub fn sanitize_document_baselines(el: &mut Element) {
                         rpr.children.retain(|n| {
                             if let Node::Element(e) = n {
                                 if e.is(NS_W, "position") || e.local == "position" {
-                                    if let Some(val) = e.attr(Some(NS_W), "val").or_else(|| e.attr(None, "val")) {
+                                    if let Some(val) =
+                                        e.attr(Some(NS_W), "val").or_else(|| e.attr(None, "val"))
+                                    {
                                         if let Ok(num) = val.parse::<i32>() {
                                             if num < 0 {
                                                 return false;
@@ -281,16 +290,22 @@ pub fn sanitize_document_baselines(el: &mut Element) {
                         .children
                         .iter()
                         .filter_map(|c| match c {
-                            Node::Element(e) if e.local == "t" => {
-                                Some(e.children.iter().map(|n| match n {
-                                    Node::Text(s) => s.len(),
-                                    _ => 0,
-                                }).sum::<usize>())
-                            }
+                            Node::Element(e) if e.local == "t" => Some(
+                                e.children
+                                    .iter()
+                                    .map(|n| match n {
+                                        Node::Text(s) => s.len(),
+                                        _ => 0,
+                                    })
+                                    .sum::<usize>(),
+                            ),
                             _ => None,
                         })
                         .sum();
-                    let has_t_element = r.children.iter().any(|c| matches!(c, Node::Element(e) if e.local == "t"));
+                    let has_t_element = r
+                        .children
+                        .iter()
+                        .any(|c| matches!(c, Node::Element(e) if e.local == "t"));
                     if has_t_element && total_text_len == 0 {
                         return false;
                     }

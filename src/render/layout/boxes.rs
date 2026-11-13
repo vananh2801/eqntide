@@ -10,7 +10,14 @@ use crate::render::font::Face;
 pub(crate) enum Item {
     /// A single glyph at `(x, y)` (baseline origin) drawn at `em` pixels per em,
     /// with optical size script level `ssty` (0 = normal, 1 = script, 2 = scriptscript).
-    Glyph { ch: char, face: Face, em: f32, x: f32, y: f32, ssty: u8 },
+    Glyph {
+        ch: char,
+        face: Face,
+        em: f32,
+        x: f32,
+        y: f32,
+        ssty: u8,
+    },
     /// A filled polygon (rules, radical strokes, brace outlines, …).
     Poly(Vec<(f32, f32)>),
 }
@@ -29,7 +36,14 @@ impl LBox {
     pub(crate) fn place(&mut self, o: &LBox, dx: f32, dy: f32) {
         for it in &o.items {
             self.items.push(match it {
-                Item::Glyph { ch, face, em, x, y, ssty } => Item::Glyph {
+                Item::Glyph {
+                    ch,
+                    face,
+                    em,
+                    x,
+                    y,
+                    ssty,
+                } => Item::Glyph {
                     ch: *ch,
                     face: *face,
                     em: *em,
@@ -55,7 +69,14 @@ impl LBox {
 
         for it in &self.items {
             match it {
-                Item::Glyph { ch, face, em, x, y, ssty } => {
+                Item::Glyph {
+                    ch,
+                    face,
+                    em,
+                    x,
+                    y,
+                    ssty,
+                } => {
                     let (gx0, gx1) = f.ink_x_styled(*face, *ch, *em, *ssty);
                     if gx0 != 0.0 || gx1 != 0.0 {
                         min_x = min_x.min(x + gx0);

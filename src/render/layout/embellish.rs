@@ -2,9 +2,16 @@
 
 use super::*;
 
-
 impl Layout {
-    pub(super) fn draw_accent(&self, b: &mut LBox, c: char, w: f32, x0: f32, base_asc: f32, em: f32) {
+    pub(super) fn draw_accent(
+        &self,
+        b: &mut LBox,
+        c: char,
+        w: f32,
+        x0: f32,
+        base_asc: f32,
+        em: f32,
+    ) {
         // Retrieve top accent attachment position from OpenType MATH table if available;
         // fallback to italic correction compensation if slanted.
         let cx = if let Some(att) = self.top_accent_attachment_of_box(b) {
@@ -38,7 +45,9 @@ impl Layout {
                     let em_x = eff_em * span / min_w;
                     let ox = x_left - 71.0 * (em_x / 1000.0);
                     let oy = y_glyph;
-                    let pts = self.f.glyph_polys(Face::Symbol, '\u{2192}', em_x, eff_em, ox, oy);
+                    let pts = self
+                        .f
+                        .glyph_polys(Face::Symbol, '\u{2192}', em_x, eff_em, ox, oy);
                     polys.extend(pts);
                 } else {
                     // Delimiter-style piece assembly:
@@ -59,8 +68,16 @@ impl Layout {
                     if gap > 0.0 {
                         let e_w = 322.0 * k;
                         let count = (gap / e_w).ceil().max(1.0) as usize;
-                        let step = if count > 1 { (gap - e_w) / (count - 1) as f32 } else { 0.0 };
-                        let first = if count > 1 { from_x } else { from_x + (gap - e_w) / 2.0 };
+                        let step = if count > 1 {
+                            (gap - e_w) / (count - 1) as f32
+                        } else {
+                            0.0
+                        };
+                        let first = if count > 1 {
+                            from_x
+                        } else {
+                            from_x + (gap - e_w) / 2.0
+                        };
                         for i in 0..count {
                             b.items.push(Item::Glyph {
                                 ch: '\u{23AF}',
@@ -116,10 +133,22 @@ impl Layout {
                 b.asc = b.asc.max(-y_apex + 0.04 * em);
             }
             '\u{2312}' | '\u{23DC}' | '\u{2322}' => {
-                let natural = self.f.glyph_polys(Face::Symbol, '\u{2322}', em, em, 0.0, 0.0);
+                let natural = self
+                    .f
+                    .glyph_polys(Face::Symbol, '\u{2322}', em, em, 0.0, 0.0);
                 if !natural.is_empty() {
-                    let (x_lo, x_hi) = natural.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
-                    let (y_lo, y_hi) = natural.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
+                    let (x_lo, x_hi) = natural
+                        .iter()
+                        .flatten()
+                        .fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+                            (lo.min(p.0), hi.max(p.0))
+                        });
+                    let (y_lo, y_hi) = natural
+                        .iter()
+                        .flatten()
+                        .fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+                            (lo.min(p.1), hi.max(p.1))
+                        });
                     let w0 = (x_hi - x_lo).max(1.0);
                     let content_w = w - 2.0 * x0;
                     let span = content_w.max(0.40 * em);
@@ -128,20 +157,30 @@ impl Layout {
                     let y_target = -(base_asc + 0.04 * em);
                     let oy = y_target - y_hi;
                     let ox = cx - (x_lo + x_hi) / 2.0 * (em_x / em);
-                    let pts = self.f.glyph_polys(Face::Symbol, '\u{2322}', em_x, em_y, ox, oy);
+                    let pts = self
+                        .f
+                        .glyph_polys(Face::Symbol, '\u{2322}', em_x, em_y, ox, oy);
                     polys.extend(pts);
                     b.asc = b.asc.max(-(oy + y_lo) + 0.04 * em);
                 }
             }
             '\u{00AF}' | '\u{0304}' | '\u{203E}' | '\u{2015}' | '\u{02C9}' => {
                 let y_bar = -(base_asc + 0.08 * em);
-                polys.push(rect(x0, y_bar - st / 2.0, (w - 2.0 * x0).max(0.3 * em), st.max(1.0)));
+                polys.push(rect(
+                    x0,
+                    y_bar - st / 2.0,
+                    (w - 2.0 * x0).max(0.3 * em),
+                    st.max(1.0),
+                ));
             }
             '~' | '\u{0303}' | '\u{02DC}' => {
                 let pts: Vec<(f32, f32)> = (0..=12)
                     .map(|i| {
                         let t = i as f32 / 12.0;
-                        (cx - 0.17 * em + 0.34 * em * t, y - 0.04 * em * (t * std::f32::consts::TAU).sin())
+                        (
+                            cx - 0.17 * em + 0.34 * em * t,
+                            y - 0.04 * em * (t * std::f32::consts::TAU).sin(),
+                        )
                     })
                     .collect();
                 polys.extend(stroke(&pts, st));

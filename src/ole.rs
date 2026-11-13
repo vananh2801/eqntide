@@ -143,14 +143,24 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
             let first = mini_fat.len();
             let n = div_ceil(data.len().max(1), MINI_SECTOR);
             for i in 0..n {
-                mini_fat.push(if i + 1 < n { (first + i + 1) as u32 } else { ENDOFCHAIN });
+                mini_fat.push(if i + 1 < n {
+                    (first + i + 1) as u32
+                } else {
+                    ENDOFCHAIN
+                });
             }
             mini_stream.extend_from_slice(data);
             mini_stream.resize((first + n) * MINI_SECTOR, 0);
-            placed.push(Placed { start: first as u32, size: data.len() });
+            placed.push(Placed {
+                start: first as u32,
+                size: data.len(),
+            });
         } else {
             big_sizes.push(div_ceil(data.len(), SECTOR));
-            placed.push(Placed { start: 0, size: data.len() }); // fixed up below
+            placed.push(Placed {
+                start: 0,
+                size: data.len(),
+            }); // fixed up below
         }
     }
 
@@ -165,7 +175,9 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
         n_fat += 1;
     }
     if n_fat > 109 {
-        return Err(Error::EquationTooLarge { stream_len: equation_native.len() });
+        return Err(Error::EquationTooLarge {
+            stream_len: equation_native.len(),
+        });
     }
 
     let dir_first = n_fat;
@@ -181,7 +193,11 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
     }
     let chain = |fat: &mut [u32], first: usize, count: usize| {
         for i in 0..count {
-            fat[first + i] = if i + 1 < count { (first + i + 1) as u32 } else { ENDOFCHAIN };
+            fat[first + i] = if i + 1 < count {
+                (first + i + 1) as u32
+            } else {
+                ENDOFCHAIN
+            };
         }
     };
     chain(&mut fat, dir_first, n_dir);
@@ -212,13 +228,21 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
     put_u32(
         &mut header,
         60,
-        if n_minifat > 0 { minifat_first as u32 } else { ENDOFCHAIN },
+        if n_minifat > 0 {
+            minifat_first as u32
+        } else {
+            ENDOFCHAIN
+        },
     );
     put_u32(&mut header, 64, n_minifat as u32);
     put_u32(&mut header, 68, ENDOFCHAIN); // no DIFAT sectors
     put_u32(&mut header, 72, 0);
     for i in 0..109 {
-        put_u32(&mut header, 76 + i * 4, if i < n_fat { i as u32 } else { FREESECT });
+        put_u32(
+            &mut header,
+            76 + i * 4,
+            if i < n_fat { i as u32 } else { FREESECT },
+        );
     }
 
     // ── Directory (balanced tree exactly like MathType writes it) ───────────
@@ -234,7 +258,11 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
         3,
         FREESECT,
         FREESECT,
-        if n_ministream > 0 { ministream_first as u32 } else { ENDOFCHAIN },
+        if n_ministream > 0 {
+            ministream_first as u32
+        } else {
+            ENDOFCHAIN
+        },
         mini_stream.len() as u32,
         MATHTYPE_CLSID,
     );
@@ -590,7 +618,11 @@ pub fn extract_mtef_from_emf(data: &[u8]) -> Option<Vec<u8>> {
 /// Extract the MTEF byte stream embedded inside a MathType WMF picture
 /// (`META_ESCAPE` / `MFCOMMENT` with `"AppsMFCC"` signature), if any.
 pub fn extract_mtef_from_wmf(data: &[u8]) -> Option<Vec<u8>> {
-    let off = if data.starts_with(&WMF_PLACEABLE) { 22 } else { 0 };
+    let off = if data.starts_with(&WMF_PLACEABLE) {
+        22
+    } else {
+        0
+    };
     let mut pos = off + 18; // skip standard METAHEADER
     let mut total: Option<usize> = None;
     let mut payload = Vec::new();
@@ -647,10 +679,12 @@ pub fn extract_mtef_from_wmf(data: &[u8]) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_extract_mtef_from_emf_roundtrip() {
-        let node = crate::mathml::MathNode::with_children("math", vec![crate::mathml::MathNode::leaf("mi", "x")]);
+        let node = crate::mathml::MathNode::with_children(
+            "math",
+            vec![crate::mathml::MathNode::leaf("mi", "x")],
+        );
         let preview = crate::render::emf::render_emf(&node, 12.0).unwrap();
         let extracted = extract_mtef_from_emf(&preview.emf).expect("MTEF extracted from EMF");
         assert_eq!(extracted[0], 5, "MTEF version should be 5");
@@ -661,7 +695,10 @@ mod tests {
     #[test]
     fn test_make_and_extract_ole_roundtrip_small_and_large() {
         // Small stream (< 4096 bytes -> MiniStream)
-        let eq_small = vec![0x05, 0x00, 0x00, 0x05, 0x00, b'D', b'S', b'M', b'T', b'5', 0x00, 0x00, 0x0A, 0x01, 0x00, 0x00];
+        let eq_small = vec![
+            0x05, 0x00, 0x00, 0x05, 0x00, b'D', b'S', b'M', b'T', b'5', 0x00, 0x00, 0x0A, 0x01,
+            0x00, 0x00,
+        ];
         let native_small = crate::mtef::make_equation_native(&[0x02, 0x00, 0x83, b'x', 0x00]);
         let ole_small = make_ole(&native_small).unwrap();
         let extracted_small = extract_mtef_from_ole(&ole_small).unwrap();

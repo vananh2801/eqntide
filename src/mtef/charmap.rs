@@ -17,9 +17,8 @@
 //!   `MathType_MTCode.xml` and `char.xsl`.
 
 use super::typeface::{
-    py_isdigit, TF_DOUBLESTRUCK, TF_FRAKTUR, TF_FRAKTUR_BOLD, TF_FUNCTION, TF_LCGREEK,
-    TF_MTEXTRA, TF_NUMBER, TF_SCRIPT, TF_SCRIPT_BOLD, TF_SYMBOL, TF_TEXT, TF_UCGREEK,
-    TF_VARIABLE, TF_VECTOR,
+    py_isdigit, TF_DOUBLESTRUCK, TF_FRAKTUR, TF_FRAKTUR_BOLD, TF_FUNCTION, TF_LCGREEK, TF_MTEXTRA,
+    TF_NUMBER, TF_SCRIPT, TF_SCRIPT_BOLD, TF_SYMBOL, TF_TEXT, TF_UCGREEK, TF_VARIABLE, TF_VECTOR,
 };
 
 /// Map an uppercase ASCII letter `'A'..='Z'` to its MathType Double-Struck
@@ -127,11 +126,11 @@ pub fn unicode_to_mtcode(cp: u32) -> u32 {
         0x2141 => 0xED01, // ⅁ Turned sans-serif capital G
 
         // MathType spaces (char.xsl / MathType_MTCode.xml)
-        0x200B => 0xEF01, // Zero-width space
-        0x2009 => 0xEF02, // Thin space
+        0x200B => 0xEF01,          // Zero-width space
+        0x2009 => 0xEF02,          // Thin space
         0x2005 | 0x205F => 0xEF03, // Medium mathematical space
-        0x2004 => 0xEF04, // Thick space (3-per-em)
-        0x2003 => 0xEF05, // Em space
+        0x2004 => 0xEF04,          // Thick space (3-per-em)
+        0x2003 => 0xEF05,          // Em space
         0x2002 | 0x200A => 0xEF08, // En / hair / 1-point space
 
         // Extended relational and binary operators (char.xsl / MathType_MTCode.xml)
@@ -227,9 +226,7 @@ pub fn map_supplementary_math_char(cp: u32) -> Option<(u8, u32)> {
         0x210F => Some((TF_MTEXTRA, 0x210F)), // ℏ in MT Extra
 
         // BMP Double-Struck letters (ℂ, ℍ, ℕ, ℙ, ℚ, ℝ, ℤ) -> Euclid Math Two
-        0x2102 | 0x210D | 0x2115 | 0x2119 | 0x211A | 0x211D | 0x2124 => {
-            Some((TF_DOUBLESTRUCK, cp))
-        }
+        0x2102 | 0x210D | 0x2115 | 0x2119 | 0x211A | 0x211D | 0x2124 => Some((TF_DOUBLESTRUCK, cp)),
 
         // BMP Fraktur letters (ℌ, ℑ, ℜ, ℨ, ℭ) -> Euclid Fraktur
         0x210C | 0x2111 | 0x211C | 0x2128 | 0x212D => Some((TF_FRAKTUR, cp)),
@@ -521,7 +518,10 @@ pub fn map_char_with_variant(ch: char, mathvariant: Option<&str>, default_tf: u8
     // 1. Supplementary Mathematical Alphanumeric Symbols (U+1D400..=U+1D7FF)
     //    and BMP Letterlike Symbols (ℝ, ℤ, ℒ, ℜ, …)
     if let Some((tf, mt_code)) = map_supplementary_math_char(cp) {
-        if matches!(mathvariant, Some("bold") | Some("bold-italic")) && tf == TF_VARIABLE && mt_code < 0x80 {
+        if matches!(mathvariant, Some("bold") | Some("bold-italic"))
+            && tf == TF_VARIABLE
+            && mt_code < 0x80
+        {
             return (TF_VECTOR, mt_code);
         }
         return (tf, mt_code);
@@ -591,10 +591,9 @@ pub fn map_char_with_variant(ch: char, mathvariant: Option<&str>, default_tf: u8
                     return (TF_FUNCTION, cp);
                 }
             }
-            "sans-serif" | "monospace"
-                if ch.is_ascii_alphabetic() => {
-                    return (TF_TEXT, cp);
-                }
+            "sans-serif" | "monospace" if ch.is_ascii_alphabetic() => {
+                return (TF_TEXT, cp);
+            }
             _ => {}
         }
     }
@@ -680,25 +679,55 @@ mod tests {
     #[test]
     fn test_supplementary_math_alphanumeric() {
         // Bold A (U+1D400) -> TF_VECTOR, 'A'
-        assert_eq!(map_char_with_variant('𝐀', None, TF_VARIABLE), (TF_VECTOR, 'A' as u32));
+        assert_eq!(
+            map_char_with_variant('𝐀', None, TF_VARIABLE),
+            (TF_VECTOR, 'A' as u32)
+        );
         // Italic x (U+1D465) -> TF_VARIABLE, 'x'
-        assert_eq!(map_char_with_variant('𝑥', None, TF_VARIABLE), (TF_VARIABLE, 'x' as u32));
+        assert_eq!(
+            map_char_with_variant('𝑥', None, TF_VARIABLE),
+            (TF_VARIABLE, 'x' as u32)
+        );
         // Double-struck R (ℝ U+211D) -> TF_DOUBLESTRUCK, 0x211D
-        assert_eq!(map_char_with_variant('ℝ', None, TF_VARIABLE), (TF_DOUBLESTRUCK, 0x211D));
+        assert_eq!(
+            map_char_with_variant('ℝ', None, TF_VARIABLE),
+            (TF_DOUBLESTRUCK, 0x211D)
+        );
         // Double-struck A (𝔸 U+1D538) -> TF_DOUBLESTRUCK, 0xF080
-        assert_eq!(map_char_with_variant('𝔸', None, TF_VARIABLE), (TF_DOUBLESTRUCK, 0xF080));
+        assert_eq!(
+            map_char_with_variant('𝔸', None, TF_VARIABLE),
+            (TF_DOUBLESTRUCK, 0xF080)
+        );
         // Double-struck k (𝕜 U+1D55C) -> TF_DOUBLESTRUCK, 0xF0A4
-        assert_eq!(map_char_with_variant('𝕜', None, TF_VARIABLE), (TF_DOUBLESTRUCK, 0xF0A4));
+        assert_eq!(
+            map_char_with_variant('𝕜', None, TF_VARIABLE),
+            (TF_DOUBLESTRUCK, 0xF0A4)
+        );
         // Double-struck a (𝕒 U+1D552, not in Euclid Math Two) -> TF_VARIABLE, 'a'
-        assert_eq!(map_char_with_variant('𝕒', None, TF_VARIABLE), (TF_VARIABLE, 'a' as u32));
+        assert_eq!(
+            map_char_with_variant('𝕒', None, TF_VARIABLE),
+            (TF_VARIABLE, 'a' as u32)
+        );
         // Script L (ℒ U+2112) -> TF_SCRIPT, 0x2112
-        assert_eq!(map_char_with_variant('ℒ', None, TF_VARIABLE), (TF_SCRIPT, 0x2112));
+        assert_eq!(
+            map_char_with_variant('ℒ', None, TF_VARIABLE),
+            (TF_SCRIPT, 0x2112)
+        );
         // Script A (𝒜 U+1D49C) -> TF_SCRIPT, 0xF100
-        assert_eq!(map_char_with_variant('𝒜', None, TF_VARIABLE), (TF_SCRIPT, 0xF100));
+        assert_eq!(
+            map_char_with_variant('𝒜', None, TF_VARIABLE),
+            (TF_SCRIPT, 0xF100)
+        );
         // Fraktur g (𝔤 U+1D524) -> TF_FRAKTUR, 0xF01A + 6 = 0xF020
-        assert_eq!(map_char_with_variant('𝔤', None, TF_VARIABLE), (TF_FRAKTUR, 0xF020));
+        assert_eq!(
+            map_char_with_variant('𝔤', None, TF_VARIABLE),
+            (TF_FRAKTUR, 0xF020)
+        );
         // Italic Greek alpha (𝛼 U+1D6FC) -> TF_LCGREEK, 0x03B1
-        assert_eq!(map_char_with_variant('𝛼', None, TF_VARIABLE), (TF_LCGREEK, 0x03B1));
+        assert_eq!(
+            map_char_with_variant('𝛼', None, TF_VARIABLE),
+            (TF_LCGREEK, 0x03B1)
+        );
     }
 
     #[test]
@@ -728,14 +757,29 @@ mod tests {
     #[test]
     fn test_greek_and_vietnamese_classification() {
         // Greek variant varphi ϕ (U+03D5) and vartheta ϑ (U+03D1)
-        assert_eq!(map_char_with_variant('ϕ', None, TF_VARIABLE), (TF_LCGREEK, 0x03D5));
-        assert_eq!(map_char_with_variant('ϑ', None, TF_VARIABLE), (TF_LCGREEK, 0x03D1));
+        assert_eq!(
+            map_char_with_variant('ϕ', None, TF_VARIABLE),
+            (TF_LCGREEK, 0x03D5)
+        );
+        assert_eq!(
+            map_char_with_variant('ϑ', None, TF_VARIABLE),
+            (TF_LCGREEK, 0x03D1)
+        );
         // Capital Omicron Ο (U+039F)
-        assert_eq!(map_char_with_variant('Ο', None, TF_VARIABLE), (TF_UCGREEK, 0x039F));
+        assert_eq!(
+            map_char_with_variant('Ο', None, TF_VARIABLE),
+            (TF_UCGREEK, 0x039F)
+        );
         // Vietnamese character 'ă' -> TF_TEXT
-        assert_eq!(map_char_with_variant('ă', None, TF_VARIABLE), (TF_TEXT, 'ă' as u32));
+        assert_eq!(
+            map_char_with_variant('ă', None, TF_VARIABLE),
+            (TF_TEXT, 'ă' as u32)
+        );
         // Math symbol '∞' inside <mi> -> TF_SYMBOL
-        assert_eq!(map_char_with_variant('∞', None, TF_VARIABLE), (TF_SYMBOL, 0x221E));
+        assert_eq!(
+            map_char_with_variant('∞', None, TF_VARIABLE),
+            (TF_SYMBOL, 0x221E)
+        );
     }
 
     #[test]

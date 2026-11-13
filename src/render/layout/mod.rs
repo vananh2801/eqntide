@@ -44,8 +44,8 @@ use crate::render::PX_PER_PT;
 #[allow(unused_imports)]
 use crate::symbols::{
     class_of, display_char, has_foreign_letters, is_accent, is_bar, is_big_op, is_close,
-    is_function, is_greek_lower, is_greek_upper, is_integral, is_latin_letter, is_open, open_for, is_prime_char,
-    Class,
+    is_function, is_greek_lower, is_greek_upper, is_integral, is_latin_letter, is_open,
+    is_prime_char, open_for, Class,
 };
 
 pub(crate) use boxes::{Item, LBox};
@@ -107,7 +107,10 @@ impl MathContext {
     /// Whether this context is script or scriptscript level.
     #[inline]
     pub fn is_script(&self) -> bool {
-        matches!(self.style, MathVariantStyle::Script | MathVariantStyle::ScriptScript)
+        matches!(
+            self.style,
+            MathVariantStyle::Script | MathVariantStyle::ScriptScript
+        )
     }
 
     /// Optical size alternate level for OpenType GSUB `ssty` feature:
@@ -173,7 +176,9 @@ impl MathContext {
         Self {
             style: match self.style {
                 MathVariantStyle::Display | MathVariantStyle::Text => MathVariantStyle::Script,
-                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => {
+                    MathVariantStyle::ScriptScript
+                }
             },
             cramped: self.cramped,
         }
@@ -185,7 +190,9 @@ impl MathContext {
         Self {
             style: match self.style {
                 MathVariantStyle::Display | MathVariantStyle::Text => MathVariantStyle::Script,
-                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => {
+                    MathVariantStyle::ScriptScript
+                }
             },
             cramped: true,
         }
@@ -215,7 +222,9 @@ impl MathContext {
         Self {
             style: match self.style {
                 MathVariantStyle::Display | MathVariantStyle::Text => MathVariantStyle::Script,
-                MathVariantStyle::Script | MathVariantStyle::ScriptScript => MathVariantStyle::ScriptScript,
+                MathVariantStyle::Script | MathVariantStyle::ScriptScript => {
+                    MathVariantStyle::ScriptScript
+                }
             },
             cramped: true,
         }
@@ -243,8 +252,24 @@ impl Layout {
 
     pub(super) fn glyph_styled(&self, ch: char, face: Face, em: f32, ssty: u8) -> LBox {
         let (a, d) = self.f.ink_styled(face, ch, em, ssty);
-        let items = if ch == ' ' { vec![] } else { vec![Item::Glyph { ch, face, em, x: 0.0, y: 0.0, ssty }] };
-        LBox { w: self.f.advance_styled(face, ch, em, ssty), asc: a, desc: d, items }
+        let items = if ch == ' ' {
+            vec![]
+        } else {
+            vec![Item::Glyph {
+                ch,
+                face,
+                em,
+                x: 0.0,
+                y: 0.0,
+                ssty,
+            }]
+        };
+        LBox {
+            w: self.f.advance_styled(face, ch, em, ssty),
+            asc: a,
+            desc: d,
+            items,
+        }
     }
 
     #[allow(dead_code)]
@@ -266,24 +291,42 @@ impl Layout {
 
     /// Returns the italic correction of the trailing glyph in `b` (or 0.0 if none).
     pub(super) fn italic_correction_of_box(&self, b: &LBox) -> f32 {
-        b.items.iter().rev().find_map(|it| match it {
-            Item::Glyph { ch, face, em, ssty, .. } => {
-                let ic = self.f.italic_correction_styled(*face, *ch, *em, *ssty);
-                if ic > 0.0 { Some(ic) } else { None }
-            }
-            _ => None,
-        }).unwrap_or(0.0)
+        b.items
+            .iter()
+            .rev()
+            .find_map(|it| match it {
+                Item::Glyph {
+                    ch, face, em, ssty, ..
+                } => {
+                    let ic = self.f.italic_correction_styled(*face, *ch, *em, *ssty);
+                    if ic > 0.0 {
+                        Some(ic)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .unwrap_or(0.0)
     }
 
     /// Returns the top accent attachment x coordinate for `b` if `b` contains a single glyph.
     pub(super) fn top_accent_attachment_of_box(&self, b: &LBox) -> Option<f32> {
-        let glyphs: Vec<_> = b.items.iter().filter_map(|it| match it {
-            Item::Glyph { ch, face, em, x, .. } => Some((*ch, *face, *em, *x)),
-            _ => None,
-        }).collect();
+        let glyphs: Vec<_> = b
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Glyph {
+                    ch, face, em, x, ..
+                } => Some((*ch, *face, *em, *x)),
+                _ => None,
+            })
+            .collect();
         if glyphs.len() == 1 {
             let (ch, face, em, x) = glyphs[0];
-            self.f.top_accent_attachment(face, ch, em).map(|att| x + att)
+            self.f
+                .top_accent_attachment(face, ch, em)
+                .map(|att| x + att)
         } else {
             None
         }
@@ -358,7 +401,10 @@ impl Layout {
 /// Lay out a `<math>` tree; returns the box and the em size in pixels.
 pub(crate) fn layout_math(math: &MathNode, font_pt: f32) -> Result<(LBox, f32)> {
     let em = font_pt * PX_PER_PT;
-    let mut l = Layout { f: fonts(), depth: 0 };
+    let mut l = Layout {
+        f: fonts(),
+        depth: 0,
+    };
     let kids: &[MathNode] = match math.children.as_slice() {
         [only] if only.tag == "mrow" => &only.children,
         all => all,

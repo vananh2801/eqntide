@@ -2,19 +2,38 @@
 
 use super::*;
 
-
 /// Polyline of a horizontal brace of width `w` whose bar is at `y0`.
 pub(super) fn brace_h(w: f32, y0: f32, depth: f32, tip_down: bool) -> Vec<(f32, f32)> {
     let s = if tip_down { 1.0 } else { -1.0 };
     let k = depth / 2.0;
     let m = w / 2.0;
     let mut p = vec![(0.0, y0)];
-    p.extend(quad_bezier((0.0, y0), (0.0, y0 + s * k), (k, y0 + s * k), 6));
+    p.extend(quad_bezier(
+        (0.0, y0),
+        (0.0, y0 + s * k),
+        (k, y0 + s * k),
+        6,
+    ));
     p.push((m - k, y0 + s * k));
-    p.extend(quad_bezier((m - k, y0 + s * k), (m, y0 + s * k), (m, y0 + s * depth), 6));
-    p.extend(quad_bezier((m, y0 + s * depth), (m, y0 + s * k), (m + k, y0 + s * k), 6));
+    p.extend(quad_bezier(
+        (m - k, y0 + s * k),
+        (m, y0 + s * k),
+        (m, y0 + s * depth),
+        6,
+    ));
+    p.extend(quad_bezier(
+        (m, y0 + s * depth),
+        (m, y0 + s * k),
+        (m + k, y0 + s * k),
+        6,
+    ));
     p.push((w - k, y0 + s * k));
-    p.extend(quad_bezier((w - k, y0 + s * k), (w, y0 + s * k), (w, y0), 6));
+    p.extend(quad_bezier(
+        (w - k, y0 + s * k),
+        (w, y0 + s * k),
+        (w, y0),
+        6,
+    ));
     p
 }
 

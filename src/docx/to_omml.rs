@@ -51,10 +51,7 @@ pub fn convert_bytes_to_omml_with(
         let mut doc_root = xml::parse(xml_bytes)?;
 
         let rels_path = rels_path_for_part(&xml_path);
-        let rels_opt = pkg
-            .get(&rels_path)
-            .map(xml::parse)
-            .transpose()?;
+        let rels_opt = pkg.get(&rels_path).map(xml::parse).transpose()?;
         let rel_map = rels_opt
             .as_ref()
             .map(|r| build_rel_map(r, &xml_path))
@@ -79,7 +76,9 @@ pub fn convert_bytes_to_omml_with(
                 .iter()
                 .any(|(p, u)| p.as_deref() == Some("m") || u == NS_M)
             {
-                doc_root.nsdecls.push((Some("m".to_owned()), NS_M.to_owned()));
+                doc_root
+                    .nsdecls
+                    .push((Some("m".to_owned()), NS_M.to_owned()));
             }
             pkg.set(&xml_path, xml::to_bytes(&doc_root));
 
@@ -97,9 +96,9 @@ pub fn convert_bytes_to_omml_with(
                         }
                     }
                     rels_root.children.retain(|n| match n {
-                        Node::Element(e) if e.local == "Relationship" => e
-                            .attr(None, "Id")
-                            .is_none_or(|id| !dead_rids.contains(id)),
+                        Node::Element(e) if e.local == "Relationship" => {
+                            e.attr(None, "Id").is_none_or(|id| !dead_rids.contains(id))
+                        }
                         _ => true,
                     });
                     pkg.set(&rels_path, xml::to_bytes(&rels_root));
@@ -281,7 +280,9 @@ fn rewrite_element(
             if !ole_nodes.is_empty() {
                 summary.found += 1;
                 let eq_num = summary.found;
-                let ole_rid = ole_nodes[0].attr(Some(NS_R), "id").or_else(|| ole_nodes[0].attr(None, "id"));
+                let ole_rid = ole_nodes[0]
+                    .attr(Some(NS_R), "id")
+                    .or_else(|| ole_nodes[0].attr(None, "id"));
                 let img_rids = collect_imagedata_rids(&el);
 
                 let converted_omml = match ole_rid {
@@ -309,7 +310,9 @@ fn rewrite_element(
                     continue;
                 } else {
                     summary.errors += 1;
-                    log::error!("Equation {eq_num}: failed to convert AlternateContent MathType object");
+                    log::error!(
+                        "Equation {eq_num}: failed to convert AlternateContent MathType object"
+                    );
                     new_children.push(Node::Element(el));
                     continue;
                 }
@@ -379,10 +382,12 @@ fn convert_ole_run(
             let eq_num = summary.found;
             let ole_rid = get_r_attr(oles[0], "id");
             let img_rids = collect_imagedata_rids(obj);
-            match ole_rid.ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into())).and_then(|rid| {
-                let omml = convert_ole_rid_to_omml(rid, pkg, rel_map, opts)?;
-                Ok((rid, omml))
-            }) {
+            match ole_rid
+                .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
+                .and_then(|rid| {
+                    let omml = convert_ole_rid_to_omml(rid, pkg, rel_map, opts)?;
+                    Ok((rid, omml))
+                }) {
                 Ok((rid, omml)) => {
                     converted_rids.insert(rid.to_owned());
                     converted_rids.extend(img_rids);
@@ -471,7 +476,9 @@ fn try_convert_metafile_run(
         let eq_num = summary.found;
         let kind_str = if is_wmf { "WMF" } else { "EMF" };
         match mtef_to_mathml(&mtef_bytes)
-            .ok_or_else(|| Error::InvalidMtef(format!("failed to decode {kind_str} MTEF in {target_path}")))
+            .ok_or_else(|| {
+                Error::InvalidMtef(format!("failed to decode {kind_str} MTEF in {target_path}"))
+            })
             .and_then(|mml| mathml_to_omml(&mml))
         {
             Ok(mut omml) => {
@@ -510,7 +517,10 @@ pub(crate) fn collect_referenced_rids(root: &Element) -> HashSet<String> {
     rids
 }
 
-pub(crate) fn cleanup_unreferenced_files(pkg: &mut Package, candidates: &HashSet<String>) -> Result<()> {
+pub(crate) fn cleanup_unreferenced_files(
+    pkg: &mut Package,
+    candidates: &HashSet<String>,
+) -> Result<()> {
     // Collect all targets still referenced across ALL .rels files in the package
     let mut still_referenced: HashSet<String> = HashSet::new();
     for name in pkg.part_names() {
@@ -560,7 +570,6 @@ pub(crate) fn cleanup_unreferenced_files(pkg: &mut Package, candidates: &HashSet
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,10 +599,12 @@ mod tests {
         w.finish().unwrap().into_inner()
     }
 
-
     #[test]
     fn test_docx_convert_standalone_emf_with_mtef_to_omml() {
-        let node = crate::mathml::MathNode::with_children("math", vec![crate::mathml::MathNode::leaf("mi", "z")]);
+        let node = crate::mathml::MathNode::with_children(
+            "math",
+            vec![crate::mathml::MathNode::leaf("mi", "z")],
+        );
         let preview = crate::render::emf::render_emf(&node, 12.0).unwrap();
 
         let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -644,7 +655,11 @@ mod tests {
 
         let pkg = Package::read(&omml_docx).unwrap();
         let doc_el = xml::parse(pkg.get("word/document.xml").unwrap()).unwrap();
-        let omaths: Vec<_> = doc_el.iter().into_iter().filter(|e| e.is(NS_M, "oMath")).collect();
+        let omaths: Vec<_> = doc_el
+            .iter()
+            .into_iter()
+            .filter(|e| e.is(NS_M, "oMath"))
+            .collect();
         assert_eq!(omaths.len(), 1);
     }
 

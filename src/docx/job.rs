@@ -1,22 +1,20 @@
 //! One conversion run: locating equations in the document tree and turning
 //! each into an OLE object (plus preview picture).
 
-use std::collections::{HashSet};
-
-
+use std::collections::HashSet;
 
 use crate::error::{Error, Result};
 use crate::mtef::encode::mathml_to_mtef_bytes;
 use crate::mtef::make_equation_native;
-use crate::ole::{make_ole};
+use crate::ole::make_ole;
 use crate::omml::decode::{omml_to_mathml, NS_M};
 use crate::render::emf::render_emf_with_mtef;
 use crate::render::render_preview;
 use crate::xml::{Element, Node};
 
 use super::consts::*;
-use super::options::*;
 use super::ole_xml::*;
+use super::options::*;
 use super::package::*;
 
 /// The preview picture of one equation, in whichever format was chosen.
@@ -28,7 +26,6 @@ struct Picture {
     height_pt: f32,
     depth_pt: f32,
 }
-
 
 // ── Tree helpers ──────────────────────────────────────────────────────────────
 
@@ -179,9 +176,7 @@ impl Job {
             if parent.find_all(NS_M, "oMath").len() > 1 {
                 // Replacing the wrapper would silently drop its other equations.
                 self.summary.skipped += 1;
-                log::warn!(
-                    "Equation {eq_num}: oMathPara contains several equations; left as OMML"
-                );
+                log::warn!("Equation {eq_num}: oMathPara contains several equations; left as OMML");
                 return Ok(Outcome::Skipped);
             }
             if parent_path.is_empty() {
@@ -227,15 +222,24 @@ impl Job {
                     &img_name["word/".len()..],
                 );
                 ensure_default_extension(&mut self.ct_root, pv.ext, pv.content_type);
-                let obj_id = format!("_{}", 1_000_000_000u128 + uuid::Uuid::new_v4().as_u128() % 9_000_000_000u128);
-                make_object_run(&rel_id, &img_rid, &shape_id, &obj_id, pv.width_pt, pv.height_pt, pv.depth_pt)
+                let obj_id = format!(
+                    "_{}",
+                    1_000_000_000u128 + uuid::Uuid::new_v4().as_u128() % 9_000_000_000u128
+                );
+                make_object_run(
+                    &rel_id,
+                    &img_rid,
+                    &shape_id,
+                    &obj_id,
+                    pv.width_pt,
+                    pv.height_pt,
+                    pv.depth_pt,
+                )
             }
             None => {
                 let obj_id = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
                 make_ole_xml(
-                    &rel_id,
-                    &shape_id,
-                    &obj_id,
+                    &rel_id, &shape_id, &obj_id,
                     914_400, // 1 inch wide  — default display size
                     457_200, // 0.5 inch tall
                     &omath,  // original equation kept as visible fallback
@@ -249,7 +253,6 @@ impl Job {
         let holder = element_at_mut(&mut self.doc_root, holder_path)
             .ok_or_else(|| Error::Xml("equation has no parent".into()))?;
         holder.children[slot] = Node::Element(alt);
-
 
         self.summary.converted += 1;
         log::info!("Equation {eq_num}: converted → {bin_name}");

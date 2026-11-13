@@ -32,7 +32,11 @@ pub fn ensure_default_extension(ct_root: &mut Element, ext: &str, content_type: 
 
 /// Append a `Relationship` to a package-relationships root.
 pub fn add_relationship(rels_root: &mut Element, rel_id: &str, rel_type: &str, target: &str) {
-    let mut rel = Element::new(Some(NS_PKG_REL), rels_root.prefix.as_deref(), "Relationship");
+    let mut rel = Element::new(
+        Some(NS_PKG_REL),
+        rels_root.prefix.as_deref(),
+        "Relationship",
+    );
     rel.set_attr(None, None, "Id", rel_id);
     rel.set_attr(None, None, "Type", rel_type);
     rel.set_attr(None, None, "Target", target);
@@ -108,7 +112,9 @@ impl Package {
     }
 
     pub(super) fn get(&self, name: &str) -> Option<&[u8]> {
-        self.index.get(name).map(|&i| self.entries[i].data.as_slice())
+        self.index
+            .get(name)
+            .map(|&i| self.entries[i].data.as_slice())
     }
 
     pub(super) fn part_names(&self) -> Vec<String> {

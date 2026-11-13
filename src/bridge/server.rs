@@ -9,17 +9,17 @@ use std::time::Duration;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use crate::docx::{
-    base64_decode, base64_encode, convert_to_omml_with, convert_with, flat_opc_to_mathml, mathml_to_flat_opc,
-    upgrade_legacy_mathtype_docx_with, FlatOpcMode, Options, PreviewFormat, ToOmmlOptions,
-    UpgradeOptions, UpgradeTarget,
+    base64_decode, base64_encode, convert_to_omml_with, convert_with, flat_opc_to_mathml,
+    mathml_to_flat_opc, upgrade_legacy_mathtype_docx_with, FlatOpcMode, Options, PreviewFormat,
+    ToOmmlOptions, UpgradeOptions, UpgradeTarget,
 };
-use crate::render::emf::{render_emf, render_emf_with_mtef};
-use crate::mtef::encode::mathml_to_mtef_bytes;
-use crate::render::render_preview;
 use crate::mathml::MathNode;
 use crate::mtef::decode::{mtef_to_mathml, ole_to_mathml};
+use crate::mtef::encode::mathml_to_mtef_bytes;
 use crate::ole::{extract_mtef_from_emf, extract_mtef_from_wmf};
 use crate::omml::encode::mathml_to_omml_xml;
+use crate::render::emf::{render_emf, render_emf_with_mtef};
+use crate::render::render_preview;
 
 use super::protocol::*;
 use super::session::{SessionManager, SessionState};
@@ -32,7 +32,8 @@ pub const DEFAULT_HOST: &str = "127.0.0.1";
 
 /// Callback invoked when a session is opened or window show is requested.
 /// Arguments: `(session_id, mathml, latex)`
-pub type WindowCallback = Arc<dyn Fn(&str, Option<&str>, Option<&str>, Option<f32>) + Send + Sync + 'static>;
+pub type WindowCallback =
+    Arc<dyn Fn(&str, Option<&str>, Option<&str>, Option<f32>) + Send + Sync + 'static>;
 
 /// Handle to a running bridge server instance.
 pub struct ServerHandle {
@@ -196,8 +197,10 @@ fn json_response<T: serde::Serialize>(
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let body = serde_json::to_vec(data).unwrap_or_default();
     let mut resp = Response::from_data(body).with_status_code(StatusCode(status_code));
-    if let Ok(h) = Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..])
-    {
+    if let Ok(h) = Header::from_bytes(
+        &b"Content-Type"[..],
+        &b"application/json; charset=utf-8"[..],
+    ) {
         resp.add_header(h);
     }
     add_cors_headers(&mut resp, origin);
@@ -219,7 +222,10 @@ fn error_response(
     )
 }
 
-fn empty_cors_response(status_code: u16, origin: Option<&str>) -> Response<std::io::Cursor<Vec<u8>>> {
+fn empty_cors_response(
+    status_code: u16,
+    origin: Option<&str>,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     let mut resp = Response::from_data(Vec::new()).with_status_code(StatusCode(status_code));
     add_cors_headers(&mut resp, origin);
     resp
@@ -319,15 +325,13 @@ pub fn start_bridge_server_with_callback(
     window_cb: Option<WindowCallback>,
 ) -> crate::error::Result<ServerHandle> {
     let server = Server::http(addr).map_err(|e| {
-        crate::error::Error::Io(std::io::Error::other(
-            format!("failed to bind HTTP server to {addr}: {e}"),
-        ))
+        crate::error::Error::Io(std::io::Error::other(format!(
+            "failed to bind HTTP server to {addr}: {e}"
+        )))
     })?;
 
     let bound_addr = server.server_addr().to_ip().ok_or_else(|| {
-        crate::error::Error::Io(std::io::Error::other(
-            "failed to query server IP address",
-        ))
+        crate::error::Error::Io(std::io::Error::other("failed to query server IP address"))
     })?;
 
     let server_arc = Arc::new(server);
@@ -395,11 +399,7 @@ fn handle_http_request(
     if let Some(ref orig) = origin_owned {
         if !is_allowed_origin(orig) {
             log::warn!("Rejected request from untrusted Origin: {orig}");
-            let _ = req.respond(error_response(
-                403,
-                "forbidden: untrusted Origin",
-                None,
-            ));
+            let _ = req.respond(error_response(403, "forbidden: untrusted Origin", None));
             return;
         }
     }
@@ -519,7 +519,10 @@ fn handle_http_request(
 
         (Method::Get, "/session/latest") => {
             let active = session_mgr.get_latest_session_id();
-            let font_pt = active.as_deref().and_then(|id| session_mgr.get_session(id)).and_then(|(_, _, f)| f);
+            let font_pt = active
+                .as_deref()
+                .and_then(|id| session_mgr.get_session(id))
+                .and_then(|(_, _, f)| f);
             let resp = json_response(
                 200,
                 &serde_json::json!({
@@ -557,8 +560,14 @@ fn handle_http_request(
 
             let trimmed_data = open_req.data.trim();
             let _ = std::fs::write("/tmp/last_open_req.xml", trimmed_data.as_bytes());
-            eprintln!("POST /session/open received payload len={}", trimmed_data.len());
-            log::info!("POST /session/open received payload len={}", trimmed_data.len());
+            eprintln!(
+                "POST /session/open received payload len={}",
+                trimmed_data.len()
+            );
+            log::info!(
+                "POST /session/open received payload len={}",
+                trimmed_data.len()
+            );
             let is_latex = open_req.format == "latex"
                 || trimmed_data.starts_with('$')
                 || trimmed_data.starts_with('\\')
@@ -567,7 +576,10 @@ fn handle_http_request(
 
             let (mathml, latex) = if is_latex {
                 let clean = trimmed_data.trim_matches('$').trim().to_string();
-                let mml = parse_latex_to_mathml(trimmed_data).ok().map(|m| m.to_xml()).unwrap_or_default();
+                let mml = parse_latex_to_mathml(trimmed_data)
+                    .ok()
+                    .map(|m| m.to_xml())
+                    .unwrap_or_default();
                 (mml, Some(clean))
             } else if trimmed_data.is_empty() {
                 (String::new(), None)
@@ -575,9 +587,12 @@ fn handle_http_request(
                 match decode_input_to_mathml(trimmed_data, &open_req.format) {
                     Ok(m) => {
                         let latex = m.to_latex();
-                        eprintln!("POST /session/open successfully parsed equation to latex: '{}'", latex);
+                        eprintln!(
+                            "POST /session/open successfully parsed equation to latex: '{}'",
+                            latex
+                        );
                         (m.to_xml(), Some(latex))
-                    },
+                    }
                     Err(e) => {
                         eprintln!("POST /session/open could not parse equation data: {e}");
                         log::warn!("Could not parse equation data in /session/open ({e}), opening session as empty canvas");
@@ -586,9 +601,15 @@ fn handle_http_request(
                 }
             };
 
-            let session_id = session_mgr.create_session(mathml.clone(), latex.clone(), open_req.font_pt);
+            let session_id =
+                session_mgr.create_session(mathml.clone(), latex.clone(), open_req.font_pt);
             if let Some(ref cb) = window_cb {
-                cb(&session_id, Some(&mathml), latex.as_deref(), open_req.font_pt);
+                cb(
+                    &session_id,
+                    Some(&mathml),
+                    latex.as_deref(),
+                    open_req.font_pt,
+                );
             } else {
                 spawn_desktop_editor(&session_id);
             }
@@ -694,12 +715,14 @@ fn handle_http_request(
         }
 
         (Method::Post, p)
-            if p.starts_with("/session/")
-                && (p.ends_with("/update") || p.ends_with("/submit")) =>
+            if p.starts_with("/session/") && (p.ends_with("/update") || p.ends_with("/submit")) =>
         {
             let session_id = p
                 .strip_prefix("/session/")
-                .and_then(|s| s.strip_suffix("/update").or_else(|| s.strip_suffix("/submit")))
+                .and_then(|s| {
+                    s.strip_suffix("/update")
+                        .or_else(|| s.strip_suffix("/submit"))
+                })
                 .unwrap_or("");
 
             if session_id.is_empty() {
@@ -763,11 +786,17 @@ fn handle_http_request(
             };
 
             let mtef_bytes = mathml_to_mtef_bytes(&math_node).ok();
-            let emf_pic = render_emf_with_mtef(&math_node, upd_req.font_pt, mtef_bytes.as_deref()).ok();
+            let emf_pic =
+                render_emf_with_mtef(&math_node, upd_req.font_pt, mtef_bytes.as_deref()).ok();
             let (emf_path, width_pt, height_pt, depth_pt) = if let Some(ref pic) = emf_pic {
                 let path = format!("/tmp/matheditor_{}.emf", session_id);
                 let _ = std::fs::write(&path, &pic.emf);
-                (Some(path), Some(pic.width_pt), Some(pic.height_pt), Some(pic.depth_pt))
+                (
+                    Some(path),
+                    Some(pic.width_pt),
+                    Some(pic.height_pt),
+                    Some(pic.depth_pt),
+                )
             } else {
                 (None, None, None, None)
             };
@@ -799,12 +828,14 @@ fn handle_http_request(
         }
 
         (Method::Post, p)
-            if p.starts_with("/session/")
-                && (p.ends_with("/close") || p.ends_with("/cancel")) =>
+            if p.starts_with("/session/") && (p.ends_with("/close") || p.ends_with("/cancel")) =>
         {
             let session_id = p
                 .strip_prefix("/session/")
-                .and_then(|s| s.strip_suffix("/close").or_else(|| s.strip_suffix("/cancel")))
+                .and_then(|s| {
+                    s.strip_suffix("/close")
+                        .or_else(|| s.strip_suffix("/cancel"))
+                })
                 .unwrap_or("");
 
             if let Err(e) = session_mgr.cancel_session(session_id) {
@@ -860,7 +891,9 @@ fn handle_http_request(
                 }
                 "flat_opc_mathtype" | "mathtype" => {
                     let mtef_bytes = mathml_to_mtef_bytes(&math).ok();
-                    if let Ok(pic) = render_emf_with_mtef(&math, snip_req.font_pt, mtef_bytes.as_deref()) {
+                    if let Ok(pic) =
+                        render_emf_with_mtef(&math, snip_req.font_pt, mtef_bytes.as_deref())
+                    {
                         let path = format!("/tmp/matheditor_snippet_{}.emf", uuid::Uuid::new_v4());
                         let _ = std::fs::write(&path, &pic.emf);
                         emf_path = Some(path);
@@ -873,16 +906,12 @@ fn handle_http_request(
                 "omml" => mathml_to_omml_xml(&math),
                 "mathml" => Ok(math.to_xml()),
                 "latex" => Ok(math.to_latex()),
-                "emf" | "emf_base64" => {
-                    render_emf(&math, snip_req.font_pt)
-                        .map(|p| base64_encode(&p.emf))
-                        .map_err(|e| crate::error::Error::Xml(format!("EMF rendering error: {e}")))
-                }
-                "png" | "png_base64" => {
-                    render_preview(&math, snip_req.font_pt)
-                        .map(|prev| base64_encode(&prev.png))
-                        .map_err(|e| crate::error::Error::Xml(format!("PNG rendering error: {e}")))
-                }
+                "emf" | "emf_base64" => render_emf(&math, snip_req.font_pt)
+                    .map(|p| base64_encode(&p.emf))
+                    .map_err(|e| crate::error::Error::Xml(format!("EMF rendering error: {e}"))),
+                "png" | "png_base64" => render_preview(&math, snip_req.font_pt)
+                    .map(|prev| base64_encode(&prev.png))
+                    .map_err(|e| crate::error::Error::Xml(format!("PNG rendering error: {e}"))),
                 other => {
                     let _ = req.respond(error_response(
                         400,
@@ -955,7 +984,10 @@ fn handle_http_request(
                 return;
             }
 
-            let out_path = doc_req.output_path.as_deref().unwrap_or(&doc_req.input_path);
+            let out_path = doc_req
+                .output_path
+                .as_deref()
+                .unwrap_or(&doc_req.input_path);
             let preview_fmt = if doc_req.preview.eq_ignore_ascii_case("png") {
                 PreviewFormat::Png
             } else {
@@ -1038,11 +1070,15 @@ fn handle_http_request(
                     p
                 };
                 #[cfg(target_os = "windows")]
-                let _ = std::process::Command::new("explorer").arg(target_dir).spawn();
+                let _ = std::process::Command::new("explorer")
+                    .arg(target_dir)
+                    .spawn();
                 #[cfg(target_os = "macos")]
                 let _ = std::process::Command::new("open").arg(target_dir).spawn();
                 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-                let _ = std::process::Command::new("xdg-open").arg(target_dir).spawn();
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(target_dir)
+                    .spawn();
             }
             let resp = json_response(200, &serde_json::json!({"status": "ok"}), origin);
             let _ = req.respond(resp);
@@ -1178,8 +1214,16 @@ pub(crate) fn spawn_desktop_editor(session_id: &str) {
         }
         match cmd.spawn() {
             Ok(child) => {
-                log::info!("Spawned desktop editor UI (PID {}) via {}", child.id(), path.display());
-                eprintln!("Spawned desktop editor UI (PID {}) via {}", child.id(), path.display());
+                log::info!(
+                    "Spawned desktop editor UI (PID {}) via {}",
+                    child.id(),
+                    path.display()
+                );
+                eprintln!(
+                    "Spawned desktop editor UI (PID {}) via {}",
+                    child.id(),
+                    path.display()
+                );
                 return;
             }
             Err(e) => {
@@ -1207,7 +1251,9 @@ mod tests {
         let mut stream = TcpStream::connect(addr).expect("connect to test server");
         stream.write_all(req.as_bytes()).expect("write request");
         let mut response_bytes = Vec::new();
-        stream.read_to_end(&mut response_bytes).expect("read response");
+        stream
+            .read_to_end(&mut response_bytes)
+            .expect("read response");
         let response_str = String::from_utf8_lossy(&response_bytes);
 
         let (head, body) = response_str
@@ -1323,10 +1369,7 @@ mod tests {
 
         // 1. Open a new session with OMML input
         let raw_omml = r#"<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath></w:p>"#;
-        let open_payload = format!(
-            "{{\"data\": \"{}\", \"format\": \"omml\"}}",
-            raw_omml
-        );
+        let open_payload = format!("{{\"data\": \"{}\", \"format\": \"omml\"}}", raw_omml);
         let open_req = format!(
             "POST /session/open HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             open_payload.len(),
@@ -1352,7 +1395,8 @@ mod tests {
 
         // 3. Update the session from the editor side
         std::thread::sleep(Duration::from_millis(50));
-        let upd_payload = r#"{"mathml": "<math><mi>y</mi><mo>=</mo><mn>2</mn></math>", "target_mode": "omml"}"#;
+        let upd_payload =
+            r#"{"mathml": "<math><mi>y</mi><mo>=</mo><mn>2</mn></math>", "target_mode": "omml"}"#;
         let upd_req = format!(
             "POST /session/{session_id}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             upd_payload.len(),
@@ -1366,7 +1410,11 @@ mod tests {
         // 4. Verify the waiting thread woke up with the result
         let wait_result = wait_handle.join().expect("thread join");
         assert_eq!(wait_result.status, "ready");
-        assert!(wait_result.flat_opc.as_ref().unwrap().contains("pkg:package"));
+        assert!(wait_result
+            .flat_opc
+            .as_ref()
+            .unwrap()
+            .contains("pkg:package"));
         assert!(wait_result.omml.as_ref().unwrap().contains("m:oMath"));
     }
 
@@ -1399,7 +1447,8 @@ mod tests {
         );
         let resp_emf = send_raw_http(addr, &emf_req);
         assert_eq!(resp_emf.status, 200);
-        let emf_res: ConvertSnippetResponse = serde_json::from_str(&resp_emf.body).expect("json parse");
+        let emf_res: ConvertSnippetResponse =
+            serde_json::from_str(&resp_emf.body).expect("json parse");
         assert_eq!(emf_res.status, "ok");
         assert!(!emf_res.result.is_empty());
 
@@ -1412,7 +1461,8 @@ mod tests {
         );
         let resp_png = send_raw_http(addr, &png_req);
         assert_eq!(resp_png.status, 200);
-        let png_res: ConvertSnippetResponse = serde_json::from_str(&resp_png.body).expect("json parse");
+        let png_res: ConvertSnippetResponse =
+            serde_json::from_str(&resp_png.body).expect("json parse");
         assert_eq!(png_res.status, "ok");
         assert!(!png_res.result.is_empty());
     }
@@ -1441,32 +1491,46 @@ mod tests {
         let addr = server_handle.addr();
 
         // 1. Word Add-in files
-        let req = format!("GET /word-addin/manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let req = format!(
+            "GET /word-addin/manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        );
         let resp = send_raw_http(addr, &req);
         assert_eq!(resp.status, 200);
         assert!(resp.body.contains("Math Editor"));
         assert!(resp.body.contains("OfficeApp"));
-        assert_eq!(resp.headers.get("content-type").map(|s| s.as_str()), Some("application/xml; charset=utf-8"));
+        assert_eq!(
+            resp.headers.get("content-type").map(|s| s.as_str()),
+            Some("application/xml; charset=utf-8")
+        );
 
-        let req2 = format!("GET /word-addin/commands.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let req2 = format!(
+            "GET /word-addin/commands.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        );
         let resp2 = send_raw_http(addr, &req2);
         assert_eq!(resp2.status, 200);
         assert!(resp2.body.contains("insertEquation"));
-        assert_eq!(resp2.headers.get("content-type").map(|s| s.as_str()), Some("application/javascript; charset=utf-8"));
+        assert_eq!(
+            resp2.headers.get("content-type").map(|s| s.as_str()),
+            Some("application/javascript; charset=utf-8")
+        );
 
-        let req3 = format!("GET /manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let req3 =
+            format!("GET /manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         let resp3 = send_raw_http(addr, &req3);
         assert_eq!(resp3.status, 200);
         assert!(resp3.body.contains("EqnTide"));
 
         // 2. WPS Add-in files
-        let req_wps = format!("GET /wps-addin/ribbon.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let req_wps = format!(
+            "GET /wps-addin/ribbon.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        );
         let resp_wps = send_raw_http(addr, &req_wps);
         assert_eq!(resp_wps.status, 200);
         assert!(resp_wps.body.contains("TabEqnTide"));
         assert!(resp_wps.body.contains("btnInsertEquation"));
 
-        let req_wps_js = format!("GET /wps-addin/main.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let req_wps_js =
+            format!("GET /wps-addin/main.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         let resp_wps_js = send_raw_http(addr, &req_wps_js);
         assert_eq!(resp_wps_js.status, 200);
         assert!(resp_wps_js.body.contains("InsertEquation"));

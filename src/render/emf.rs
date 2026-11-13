@@ -62,7 +62,10 @@ struct Writer {
 
 impl Writer {
     fn new() -> Self {
-        Writer { buf: Vec::new(), records: 0 }
+        Writer {
+            buf: Vec::new(),
+            records: 0,
+        }
     }
 
     /// Append one record: `kind`, then `body` (padded to a multiple of 4 bytes).
@@ -113,7 +116,10 @@ pub fn render_emf_with_mtef(
     let left_extra = (-min_x).max(0.0);
     let right_extra = (max_x - b.w).max(0.0);
     let (pad_x, pad_y) = (2.0f32, 2.0f32);
-    let (w, h) = (b.w + left_extra + right_extra + 2.0 * pad_x, asc + desc + 2.0 * pad_y);
+    let (w, h) = (
+        b.w + left_extra + right_extra + 2.0 * pad_x,
+        asc + desc + 2.0 * pad_y,
+    );
     let (ox, oy) = (pad_x + left_extra, pad_y + asc);
 
     let (wpt, hpt) = (w / PX_PER_PT, h / PX_PER_PT);
@@ -174,8 +180,16 @@ pub fn render_emf_with_mtef(
 
     for it in &b.items {
         match it {
-            Item::Glyph { ch, face, em, x, y, ssty } => {
-                let Some(segs) = f.glyph_segments_styled(*face, *ch, *em, ox + x, oy + y, *ssty) else {
+            Item::Glyph {
+                ch,
+                face,
+                em,
+                x,
+                y,
+                ssty,
+            } => {
+                let Some(segs) = f.glyph_segments_styled(*face, *ch, *em, ox + x, oy + y, *ssty)
+                else {
                     continue;
                 };
                 fill(&mut out, &|o| write_segs(o, &segs, &l, [0, 0, wl, hl]));
@@ -187,7 +201,11 @@ pub fn render_emf_with_mtef(
                 let mut segs = Vec::with_capacity(pts.len() + 1);
                 for (i, (x, y)) in pts.iter().enumerate() {
                     let (x, y) = (ox + x, oy + y);
-                    segs.push(if i == 0 { Seg::Move(x, y) } else { Seg::Line(x, y) });
+                    segs.push(if i == 0 {
+                        Seg::Move(x, y)
+                    } else {
+                        Seg::Line(x, y)
+                    });
                 }
                 segs.push(Seg::Close);
                 fill(&mut out, &|o| write_segs(o, &segs, &l, [0, 0, wl, hl]));
@@ -218,7 +236,12 @@ pub fn render_emf_with_mtef(
     emf.extend_from_slice(&out.buf);
     debug_assert_eq!(emf.len() as u32, total);
 
-    Ok(EmfPreview { emf, width_pt: wpt, height_pt: hpt, depth_pt: (desc + pad_y) / PX_PER_PT })
+    Ok(EmfPreview {
+        emf,
+        width_pt: wpt,
+        height_pt: hpt,
+        depth_pt: (desc + pad_y) / PX_PER_PT,
+    })
 }
 
 /// Write contour commands as `MOVETOEX` / `LINETO` / `POLYBEZIERTO` / `CLOSEFIGURE`.
@@ -244,7 +267,10 @@ fn write_segs(o: &mut Writer, segs: &[Seg], l: &dyn Fn(f32) -> i32, bounds: [i32
             }
             Seg::Quad(cx, cy, x, y) => {
                 // quadratic -> cubic: both controls move 2/3 of the way to the quad control
-                let c1 = (cur.0 + 2.0 / 3.0 * (cx - cur.0), cur.1 + 2.0 / 3.0 * (cy - cur.1));
+                let c1 = (
+                    cur.0 + 2.0 / 3.0 * (cx - cur.0),
+                    cur.1 + 2.0 / 3.0 * (cy - cur.1),
+                );
                 let c2 = (x + 2.0 / 3.0 * (cx - x), y + 2.0 / 3.0 * (cy - y));
                 bezier(o, &[c1, c2, (x, y)]);
                 cur = (x, y);
@@ -269,7 +295,10 @@ mod tests {
         let preview = render_emf(&node, 12.0).expect("renders emf");
         assert!(!preview.emf.is_empty());
         let extracted = crate::ole::extract_mtef_from_emf(&preview.emf);
-        assert!(extracted.is_some(), "MTEF must be extracted from EMF comment");
+        assert!(
+            extracted.is_some(),
+            "MTEF must be extracted from EMF comment"
+        );
         let mtef = extracted.unwrap();
         assert_eq!(mtef[0], 5, "Must be MTEF 5.0");
     }

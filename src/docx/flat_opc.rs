@@ -28,17 +28,14 @@ use crate::xml::{self, Element, Node};
 
 use super::consts::*;
 use super::ole_xml::make_object_run;
-use super::to_omml::{
-    build_rel_map, collect_imagedata_rids,
-};
+use super::to_omml::{build_rel_map, collect_imagedata_rids};
 
 /// Open Packaging Conventions (Flat OPC) XML namespace.
 pub const NS_PKG: &str = "http://schemas.microsoft.com/office/2006/xmlPackage";
 pub const NS_PKG_LEGACY: &str = "http://schemas.microsoft.com/office/2006/xml/packaging";
 
 /// Content type for package relationships XML.
-pub const CT_RELATIONSHIPS: &str =
-    "application/vnd.openxmlformats-package.relationships+xml";
+pub const CT_RELATIONSHIPS: &str = "application/vnd.openxmlformats-package.relationships+xml";
 
 /// Content type for main document XML.
 pub const CT_DOCUMENT: &str =
@@ -176,8 +173,8 @@ fn make_binary_part(name: &str, content_type: &str, data: &[u8]) -> Element {
 }
 
 fn build_root_rels() -> Element {
-    let mut rels = Element::new(Some(NS_PKG_REL), None, "Relationships")
-        .with_nsdecl(None, NS_PKG_REL);
+    let mut rels =
+        Element::new(Some(NS_PKG_REL), None, "Relationships").with_nsdecl(None, NS_PKG_REL);
     let mut rel = Element::new(Some(NS_PKG_REL), None, "Relationship");
     rel.set_attr(None, None, "Id", "rId1");
     rel.set_attr(None, None, "Type", REL_OFFICE_DOCUMENT);
@@ -193,8 +190,8 @@ fn build_document_rels(
     ole_target: &str,
     img_target: &str,
 ) -> Element {
-    let mut rels = Element::new(Some(NS_PKG_REL), None, "Relationships")
-        .with_nsdecl(None, NS_PKG_REL);
+    let mut rels =
+        Element::new(Some(NS_PKG_REL), None, "Relationships").with_nsdecl(None, NS_PKG_REL);
     if mode == FlatOpcMode::ModernMathtypeOleEmf {
         let mut rel1 = Element::new(Some(NS_PKG_REL), None, "Relationship");
         rel1.set_attr(None, None, "Id", ole_rid);
@@ -226,7 +223,6 @@ fn build_document_xml(mode: FlatOpcMode, content_element: Element) -> Element {
     // Place inline equation directly inside <w:p>
     p.push(content_element);
 
-
     body.push(p);
     doc.push(body);
     doc
@@ -238,8 +234,8 @@ fn build_document_xml(mode: FlatOpcMode, content_element: Element) -> Element {
 /// * `mode`: Packaging mode ([`FlatOpcMode::ModernOmml`] or [`FlatOpcMode::ModernMathtypeOleEmf`]).
 /// * `font_pt`: Point size used for rendering vector EMF dimensions (e.g. `12.0`).
 pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> Result<String> {
-    let mut pkg = Element::new(Some(NS_PKG), Some("pkg"), "package")
-        .with_nsdecl(Some("pkg"), NS_PKG);
+    let mut pkg =
+        Element::new(Some(NS_PKG), Some("pkg"), "package").with_nsdecl(Some("pkg"), NS_PKG);
 
     // 1. /_rels/.rels
     pkg.push(make_xml_part(
@@ -307,16 +303,8 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             let doc_el = build_document_xml(mode, obj_run);
             pkg.push(make_xml_part("/word/document.xml", CT_DOCUMENT, doc_el));
 
-            pkg.push(make_binary_part(
-                &bin_part_name,
-                CT_OLEOBJECT,
-                &ole_bin,
-            ));
-            pkg.push(make_binary_part(
-                &img_part_name,
-                CT_EMF,
-                &emf_pic.emf,
-            ));
+            pkg.push(make_binary_part(&bin_part_name, CT_OLEOBJECT, &ole_bin));
+            pkg.push(make_binary_part(&img_part_name, CT_EMF, &emf_pic.emf));
         }
     }
 
@@ -414,13 +402,23 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
 
     // Attempt 1: Document XML traversal (completely case-insensitive)
     let doc_part = parts.get("word/document.xml").or_else(|| {
-        parts.iter().find(|(k, _)| k.ends_with("word/document.xml") || k.ends_with("/document.xml") || k.ends_with("document.xml")).map(|(_, v)| v)
+        parts
+            .iter()
+            .find(|(k, _)| {
+                k.ends_with("word/document.xml")
+                    || k.ends_with("/document.xml")
+                    || k.ends_with("document.xml")
+            })
+            .map(|(_, v)| v)
     });
     if let Some(doc_part) = doc_part {
         if let Some(ref doc_el) = doc_part.xml_data {
             // Build rel_map from word/_rels/document.xml.rels
             let rels_part = parts.get("word/_rels/document.xml.rels").or_else(|| {
-                parts.iter().find(|(k, _)| k.ends_with("document.xml.rels")).map(|(_, v)| v)
+                parts
+                    .iter()
+                    .find(|(k, _)| k.ends_with("document.xml.rels"))
+                    .map(|(_, v)| v)
             });
             let rel_map = rels_part
                 .and_then(|p| p.xml_data.as_ref())
@@ -436,7 +434,12 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
                 if is_candidate {
                     let rid = el
                         .attr(Some(NS_R), "id")
-                        .or_else(|| el.attrs.iter().find(|a| a.local == "id").map(|a| a.value.as_str()))
+                        .or_else(|| {
+                            el.attrs
+                                .iter()
+                                .find(|a| a.local == "id")
+                                .map(|a| a.value.as_str())
+                        })
                         .or_else(|| el.attr(None, "id"));
                     if let Some(rid) = rid {
                         if let Some(target) = rel_map.get(rid) {
@@ -469,8 +472,8 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
                     let norm_target = normalize_part_name(target).to_ascii_lowercase();
                     if let Some(target_part) = parts.get(&norm_target) {
                         if let Some(ref data) = target_part.binary_data {
-                            if let Some(mtef) = extract_mtef_from_emf(data)
-                                .or_else(|| extract_mtef_from_wmf(data))
+                            if let Some(mtef) =
+                                extract_mtef_from_emf(data).or_else(|| extract_mtef_from_wmf(data))
                             {
                                 if let Some(math) = mtef_to_mathml(&mtef) {
                                     return Ok(math);
@@ -488,7 +491,10 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
         let name_lower = name.to_ascii_lowercase();
         let ct_lower = part.content_type.to_ascii_lowercase();
         if let Some(ref bin) = part.binary_data {
-            if name_lower.contains("oleobject") || name_lower.ends_with(".bin") || ct_lower.contains("oleobject") {
+            if name_lower.contains("oleobject")
+                || name_lower.ends_with(".bin")
+                || ct_lower.contains("oleobject")
+            {
                 if let Some(math) = ole_to_mathml(bin) {
                     return Ok(math);
                 }
@@ -556,7 +562,9 @@ fn extract_from_raw_snippet(root: &Element) -> Result<MathNode> {
                     if let Some(math) = ole_to_mathml(&bin) {
                         return Ok(math);
                     }
-                    if let Some(mtef) = extract_mtef_from_emf(&bin).or_else(|| extract_mtef_from_wmf(&bin)) {
+                    if let Some(mtef) =
+                        extract_mtef_from_emf(&bin).or_else(|| extract_mtef_from_wmf(&bin))
+                    {
                         if let Some(math) = mtef_to_mathml(&mtef) {
                             return Ok(math);
                         }
@@ -576,7 +584,9 @@ fn extract_from_raw_snippet(root: &Element) -> Result<MathNode> {
                         if let Some(math) = ole_to_mathml(&bin) {
                             return Ok(math);
                         }
-                        if let Some(mtef) = extract_mtef_from_emf(&bin).or_else(|| extract_mtef_from_wmf(&bin)) {
+                        if let Some(mtef) =
+                            extract_mtef_from_emf(&bin).or_else(|| extract_mtef_from_wmf(&bin))
+                        {
                             if let Some(math) = mtef_to_mathml(&mtef) {
                                 return Ok(math);
                             }
@@ -656,7 +666,9 @@ mod tests {
 
     #[test]
     fn test_flat_opc_roundtrip_mathtype_ole() {
-        let math = MathNode::parse("<math><mi>y</mi><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
+        let math =
+            MathNode::parse("<math><mi>y</mi><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup></math>")
+                .unwrap();
 
         let opc_xml = mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0)
             .expect("package MathType flat OPC");
@@ -696,31 +708,42 @@ mod tests {
     fn test_raw_snippet_fallback() {
         let raw_omml = r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:oMath><m:r><m:t>E=mc</m:t></m:r></m:oMath></w:p>"#;
         let recovered = flat_opc_to_mathml(raw_omml).expect("parse raw snippet");
-        let text_found = recovered.iter().into_iter().any(|n| n.text.contains("E=mc"));
+        let text_found = recovered
+            .iter()
+            .into_iter()
+            .any(|n| n.text.contains("E=mc"));
         assert!(text_found);
     }
     #[test]
     fn test_wps_xmlpackage_namespace() {
         let math = MathNode::parse("<math><mi>x</mi><mo>+</mo><mn>1</mn></math>").unwrap();
         let opc_xml = mathml_to_flat_opc(&math, FlatOpcMode::ModernOmml, 12.0).unwrap();
-        let wps_opc = opc_xml.replace("http://schemas.microsoft.com/office/2006/xml/packaging", "http://schemas.microsoft.com/office/2006/xmlPackage");
+        let wps_opc = opc_xml.replace(
+            "http://schemas.microsoft.com/office/2006/xml/packaging",
+            "http://schemas.microsoft.com/office/2006/xmlPackage",
+        );
         let recovered = flat_opc_to_mathml(&wps_opc).expect("should parse WPS xmlPackage");
         assert_eq!(recovered.find_all("mi")[0].text, "x");
     }
     #[test]
     fn test_wps_xmlpackage_mathtype_ole() {
-        let math = MathNode::parse("<math><mi>y</mi><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
+        let math =
+            MathNode::parse("<math><mi>y</mi><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup></math>")
+                .unwrap();
         let opc_xml = mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0).unwrap();
-        let wps_opc = opc_xml.replace("http://schemas.microsoft.com/office/2006/xml/packaging", "http://schemas.microsoft.com/office/2006/xmlPackage");
+        let wps_opc = opc_xml.replace(
+            "http://schemas.microsoft.com/office/2006/xml/packaging",
+            "http://schemas.microsoft.com/office/2006/xmlPackage",
+        );
         let recovered = flat_opc_to_mathml(&wps_opc).expect("should parse WPS MathType xmlPackage");
         assert!(recovered.find_all("mi").iter().any(|n| n.text == "y"));
         assert!(recovered.find_all("mi").iter().any(|n| n.text == "x"));
         assert!(recovered.find_all("mn").iter().any(|n| n.text == "2"));
     }
 
-#[test]
-fn test_bridge_decode_xmlpackage_omml() {
-    let xml = r#"<?xml version="1.0" standalone="yes"?>
+    #[test]
+    fn test_bridge_decode_xmlpackage_omml() {
+        let xml = r#"<?xml version="1.0" standalone="yes"?>
 <?mso-application progid="Word.Document"?>
 <pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">
   <pkg:part pkg:name="/word/document.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml">
@@ -735,7 +758,7 @@ fn test_bridge_decode_xmlpackage_omml() {
     </pkg:xmlData>
   </pkg:part>
 </pkg:package>"#;
-    let m = crate::docx::flat_opc_to_mathml(xml).expect("decode xmlpackage");
-    assert_eq!(m.to_latex(), "x+1");
-}
+        let m = crate::docx::flat_opc_to_mathml(xml).expect("decode xmlpackage");
+        assert_eq!(m.to_latex(), "x+1");
+    }
 }

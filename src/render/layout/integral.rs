@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 /// Glyph pieces that make up a tall integral sign.
 struct AssemblyRecipe {
     top: char,
@@ -15,14 +14,14 @@ struct AssemblyRecipe {
 impl Layout {
     /// Glyph assembly of the integral signs (delimiters live in delimiter.rs).
     pub(super) fn integral_without_limits(&self, c: char, target_h: f32, em: f32) -> Option<LBox> {
-
         let face = Face::Symbol;
         let recipe = match c {
-            '\u{222B}' | '\u{222C}' | '\u{222D}' | '\u{222E}' | '\u{222F}' | '\u{2230}' | '\u{2232}' | '\u{2233}' => AssemblyRecipe {
+            '\u{222B}' | '\u{222C}' | '\u{222D}' | '\u{222E}' | '\u{222F}' | '\u{2230}'
+            | '\u{2232}' | '\u{2233}' => AssemblyRecipe {
                 top: '\u{2320}',
                 ext: '\u{23AE}',
                 mid: None,
-                bot: '\u{2321}'
+                bot: '\u{2321}',
             },
             _ => return None,
         };
@@ -122,10 +121,12 @@ impl Layout {
             let rx = 0.3 * eff_em * ellipse_w;
             let ry = 0.3 * eff_em;
             let n_pts = 24;
-            let ellipse_pts: Vec<(f32, f32)> = (0..=n_pts).map(|i| {
-                let a = i as f32 / n_pts as f32 * std::f32::consts::TAU;
-                (xc + rx * a.cos(), y_mid + ry * a.sin())
-            }).collect();
+            let ellipse_pts: Vec<(f32, f32)> = (0..=n_pts)
+                .map(|i| {
+                    let a = i as f32 / n_pts as f32 * std::f32::consts::TAU;
+                    (xc + rx * a.cos(), y_mid + ry * a.sin())
+                })
+                .collect();
             for q in stroke(&ellipse_pts, 0.045 * eff_em) {
                 b.items.push(Item::Poly(q));
             }
@@ -150,9 +151,17 @@ impl Layout {
         let sup_em = em * sup_ctx.scale(constants);
 
         // Use the hand-built glyph assembly
-        let base = self.integral_without_limits(c, 1.45 * em, em).unwrap_or_else(|| self.glyph(display_char(c), Face::Symbol, em));
-        let sub = match under_n { Some(u) => Some(self.node(u, sub_em, sub_ctx)?), None => None };
-        let sup = match over_n { Some(o) => Some(self.node(o, sup_em, sup_ctx)?), None => None };
+        let base = self
+            .integral_without_limits(c, 1.45 * em, em)
+            .unwrap_or_else(|| self.glyph(display_char(c), Face::Symbol, em));
+        let sub = match under_n {
+            Some(u) => Some(self.node(u, sub_em, sub_ctx)?),
+            None => None,
+        };
+        let sup = match over_n {
+            Some(o) => Some(self.node(o, sup_em, sup_ctx)?),
+            None => None,
+        };
 
         let mut b = LBox::default();
         let w_base = base.w;

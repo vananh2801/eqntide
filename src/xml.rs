@@ -86,7 +86,8 @@ impl Element {
 
     /// Builder-style `xmlns[:prefix]="uri"` declaration on this element.
     pub fn with_nsdecl(mut self, prefix: Option<&str>, uri: &str) -> Self {
-        self.nsdecls.push((prefix.map(str::to_owned), uri.to_owned()));
+        self.nsdecls
+            .push((prefix.map(str::to_owned), uri.to_owned()));
         self
     }
 
@@ -273,7 +274,9 @@ fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: usize) -
         Some(p) => Some(
             lookup(scope, Some(p))
                 .ok_or_else(|| {
-                    Error::Xml(format!("unbound namespace prefix '{p}' (byte offset {pos})"))
+                    Error::Xml(format!(
+                        "unbound namespace prefix '{p}' (byte offset {pos})"
+                    ))
                 })?
                 .to_owned(),
         ),
@@ -287,7 +290,9 @@ fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: usize) -
             Some(p) => Some(
                 lookup(scope, Some(p))
                     .ok_or_else(|| {
-                        Error::Xml(format!("unbound namespace prefix '{p}' (byte offset {pos})"))
+                        Error::Xml(format!(
+                            "unbound namespace prefix '{p}' (byte offset {pos})"
+                        ))
                     })?
                     .to_owned(),
             ),
@@ -342,7 +347,9 @@ pub fn parse(data: &[u8]) -> Result<Element> {
             *root = Some(el);
             Ok(())
         } else {
-            Err(Error::Xml("extra content at the end of the document".into()))
+            Err(Error::Xml(
+                "extra content at the end of the document".into(),
+            ))
         }
     }
 
@@ -357,7 +364,9 @@ pub fn parse(data: &[u8]) -> Result<Element> {
                     )));
                 }
                 if stack.is_empty() && root.is_some() {
-                    return Err(Error::Xml("extra content at the end of the document".into()));
+                    return Err(Error::Xml(
+                        "extra content at the end of the document".into(),
+                    ));
                 }
                 marks.push(scope.len());
                 let el = element_from_start(&e, &mut scope, pos)?;
@@ -418,7 +427,9 @@ pub fn parse(data: &[u8]) -> Result<Element> {
     }
 
     if !stack.is_empty() {
-        return Err(Error::Xml("unexpected end of document (unclosed element)".into()));
+        return Err(Error::Xml(
+            "unexpected end of document (unclosed element)".into(),
+        ));
     }
     root.ok_or_else(|| Error::Xml("document is empty".into()))
 }

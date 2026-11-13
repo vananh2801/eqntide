@@ -112,10 +112,7 @@ pub fn upgrade_legacy_mathtype_bytes_with(
         let mut doc_root = xml::parse(xml_bytes)?;
 
         let rels_path = rels_path_for_part(&xml_path);
-        let rels_opt = pkg
-            .get(&rels_path)
-            .map(xml::parse)
-            .transpose()?;
+        let rels_opt = pkg.get(&rels_path).map(xml::parse).transpose()?;
         let rel_map = rels_opt
             .as_ref()
             .map(|r| build_rel_map(r, &xml_path))
@@ -162,9 +159,9 @@ pub fn upgrade_legacy_mathtype_bytes_with(
                     }
                 }
                 rels_root.children.retain(|n| match n {
-                    Node::Element(e) if e.local == "Relationship" => e
-                        .attr(None, "Id")
-                        .is_none_or(|id| !dead_rids.contains(id)),
+                    Node::Element(e) if e.local == "Relationship" => {
+                        e.attr(None, "Id").is_none_or(|id| !dead_rids.contains(id))
+                    }
                     _ => true,
                 });
             }
@@ -336,9 +333,9 @@ fn upgrade_element(
                         ole_index,
                         img_index,
                     ),
-                    None => {
-                        Err(Error::InvalidMtef("failed to decode AlternateContent formula".into()))
-                    }
+                    None => Err(Error::InvalidMtef(
+                        "failed to decode AlternateContent formula".into(),
+                    )),
                 };
 
                 match modern_run_res {
@@ -348,7 +345,9 @@ fn upgrade_element(
                         }
                         converted_rids.extend(img_rids);
                         summary.converted += 1;
-                        log::info!("Equation {eq_num}: upgraded AlternateContent → Equation.DSMT4 OLE");
+                        log::info!(
+                            "Equation {eq_num}: upgraded AlternateContent → Equation.DSMT4 OLE"
+                        );
                         new_children.push(Node::Element(modern_run));
                         continue;
                     }
@@ -600,15 +599,15 @@ mod tests {
         w.write_all(doc_xml.as_bytes()).unwrap();
         w.start_file("word/_rels/document.xml.rels", opts).unwrap();
         w.write_all(rels_xml.as_bytes()).unwrap();
-        w.start_file("word/media/legacy_equation.emf", opts).unwrap();
+        w.start_file("word/media/legacy_equation.emf", opts)
+            .unwrap();
         w.write_all(preview_emf).unwrap();
         w.finish().unwrap().into_inner()
     }
 
     #[test]
     fn test_upgrade_legacy_wmf_to_modern_mathtype() {
-        let node =
-            MathNode::with_children("math", vec![MathNode::leaf("mi", "x")]);
+        let node = MathNode::with_children("math", vec![MathNode::leaf("mi", "x")]);
         let preview = crate::render::emf::render_emf(&node, 12.0).unwrap();
         let src_docx = make_legacy_wmf_docx(&preview.emf);
 
@@ -632,14 +631,14 @@ mod tests {
 
         // Verify the generated EMF contains valid embedded MTEF
         let new_emf = pkg.get("word/media/equation1.emf").unwrap();
-        let extracted_mtef = extract_mtef_from_emf(new_emf).expect("extract MTEF from upgraded EMF");
+        let extracted_mtef =
+            extract_mtef_from_emf(new_emf).expect("extract MTEF from upgraded EMF");
         assert_eq!(extracted_mtef[0], 5);
     }
 
     #[test]
     fn test_upgrade_legacy_wmf_to_modern_omml() {
-        let node =
-            MathNode::with_children("math", vec![MathNode::leaf("mi", "y")]);
+        let node = MathNode::with_children("math", vec![MathNode::leaf("mi", "y")]);
         let preview = crate::render::emf::render_emf(&node, 12.0).unwrap();
         let src_docx = make_legacy_wmf_docx(&preview.emf);
 
@@ -660,7 +659,11 @@ mod tests {
 
         let pkg = Package::read(&upgraded_docx).unwrap();
         let doc_el = xml::parse(pkg.get("word/document.xml").unwrap()).unwrap();
-        let omaths: Vec<_> = doc_el.iter().into_iter().filter(|e| e.is(NS_M, "oMath")).collect();
+        let omaths: Vec<_> = doc_el
+            .iter()
+            .into_iter()
+            .filter(|e| e.is(NS_M, "oMath"))
+            .collect();
         assert_eq!(omaths.len(), 1);
     }
 
@@ -680,11 +683,13 @@ mod tests {
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 </Types>"#).unwrap();
             zip.start_file("word/document.xml", opts).unwrap();
-            let doc_xml = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            let doc_xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
             xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
   <w:body><w:p>{omml}</w:p></w:body>
-</w:document>"#);
+</w:document>"#
+            );
             zip.write_all(doc_xml.as_bytes()).unwrap();
             zip.finish().unwrap();
         }

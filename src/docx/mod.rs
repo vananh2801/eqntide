@@ -30,9 +30,14 @@ mod pipeline;
 mod to_omml;
 mod upgrade;
 
-pub use flat_opc::{base64_decode, base64_encode, flat_opc_to_mathml, mathml_to_flat_opc, FlatOpcMode};
+pub use flat_opc::{
+    base64_decode, base64_encode, flat_opc_to_mathml, mathml_to_flat_opc, FlatOpcMode,
+};
 pub use ole_xml::{make_object_run, make_ole_xml, make_reset_run, sanitize_document_baselines};
-pub use options::{ConversionSummary, EmbedMode, Options, PreviewFormat, ToOmmlOptions, UpgradeOptions, UpgradeTarget};
+pub use options::{
+    ConversionSummary, EmbedMode, Options, PreviewFormat, ToOmmlOptions, UpgradeOptions,
+    UpgradeTarget,
+};
 pub use package::{add_relationship, ensure_content_type, ensure_default_extension};
 pub use pipeline::{convert, convert_bytes, convert_bytes_with, convert_with};
 pub use to_omml::{

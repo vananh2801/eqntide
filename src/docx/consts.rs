@@ -23,4 +23,5 @@ pub(super) const CT_PATH: &str = "[Content_Types].xml";
 
 pub(super) const EMPTY_RELS: &[u8] = br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#;
 
-pub(super) const REL_IMAGE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+pub(super) const REL_IMAGE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
