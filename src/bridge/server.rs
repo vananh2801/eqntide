@@ -247,6 +247,56 @@ fn is_cors_preflight(method: &Method) -> bool {
     *method == Method::Options
 }
 
+fn respond(req: Request, response: HttpResponse) {
+    let _ = req.respond(response);
+}
+
+fn health_response(origin: Option<&str>) -> HttpResponse {
+    json_response(
+        200,
+        &HealthResponse {
+            status: "ok".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            server: "eqntide-bridge".into(),
+        },
+        origin,
+    )
+}
+
+fn handle_window_show(
+    req: &mut Request,
+    session_mgr: &SessionManager,
+    window_cb: Option<&WindowCallback>,
+    origin: Option<&str>,
+) -> HttpResponse {
+    let body = read_body(req);
+    let show_req: WindowShowRequest = serde_json::from_str(&body).unwrap_or_default();
+    let session_id = show_req
+        .session_id
+        .filter(|id| !id.is_empty())
+        .unwrap_or_default();
+    eprintln!("POST /window/show for session_id='{session_id}'");
+
+    let (mathml, latex, font_pt) = if session_id.is_empty() {
+        (None, None, None)
+    } else {
+        session_mgr
+            .get_session(&session_id)
+            .map(|(mathml, latex, font_pt)| (Some(mathml), latex, font_pt))
+            .unwrap_or((None, None, None))
+    };
+    if let Some(callback) = window_cb {
+        callback(&session_id, mathml.as_deref(), latex.as_deref(), font_pt);
+    } else {
+        spawn_desktop_editor(&session_id);
+    }
+    json_response(
+        200,
+        &serde_json::json!({ "status": "ok", "session_id": session_id }),
+        origin,
+    )
+}
+
 /// Serve static files for Office Word/WPS Add-ins directly from the bridge server.
 fn serve_addin_file(folder: &str, rel_path: &str, origin: Option<&str>) -> Option<HttpResponse> {
     if rel_path.contains("..") || rel_path.starts_with('/') || rel_path.starts_with('\\') {
@@ -434,53 +484,11 @@ fn handle_http_request(
 
     // 4. Routing
     match (method, path) {
-        (Method::Get, "/health") => {
-            let resp = json_response(
-                200,
-                &HealthResponse {
-                    status: "ok".into(),
-                    version: env!("CARGO_PKG_VERSION").into(),
-                    server: "eqntide-bridge".into(),
-                },
-                origin,
-            );
-            let _ = req.respond(resp);
-        }
+        (Method::Get, "/health") => respond(req, health_response(origin)),
 
         (Method::Post, "/window/show") => {
-            let body = read_body(&mut req);
-            let show_req: WindowShowRequest = serde_json::from_str(&body).unwrap_or_default();
-            let sid = show_req
-                .session_id
-                .filter(|s| !s.is_empty())
-                // do not revive stale session
-                .unwrap_or_default();
-            eprintln!("POST /window/show for session_id='{}'", sid);
-
-            let (m, l, f) = if !sid.is_empty() {
-                session_mgr
-                    .get_session(&sid)
-                    .map(|(m, l, f)| (Some(m), l, f))
-                    .unwrap_or((None, None, None))
-            } else {
-                (None, None, None)
-            };
-
-            if let Some(ref cb) = window_cb {
-                cb(&sid, m.as_deref(), l.as_deref(), f);
-            } else {
-                spawn_desktop_editor(&sid);
-            }
-
-            let resp = json_response(
-                200,
-                &serde_json::json!({
-                    "status": "ok",
-                    "session_id": sid
-                }),
-                origin,
-            );
-            let _ = req.respond(resp);
+            let response = handle_window_show(&mut req, &session_mgr, window_cb.as_ref(), origin);
+            respond(req, response)
         }
 
         (Method::Get, p)
