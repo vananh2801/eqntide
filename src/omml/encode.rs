@@ -562,6 +562,10 @@ struct MathmlEncoder {
 }
 
 impl MathmlEncoder {
+    fn new() -> Self {
+        Self { depth: 0 }
+    }
+
     fn encode_root(&mut self, mathml: &MathNode) -> Result<Element> {
         let norm = normalize_mathml(mathml);
         let mut omath = m_el("oMath").with_nsdecl(Some("m"), NS_M);
@@ -1463,7 +1467,7 @@ fn build_delimiter(
 // ── Public API ───────────────────────────────────────────────────────────────
 
 fn encode_mathml_root(mathml: &MathNode) -> Result<Element> {
-    MathmlEncoder { depth: 0 }.encode_root(mathml)
+    MathmlEncoder::new().encode_root(mathml)
 }
 
 /// Convert a MathML [`MathNode`] tree into an OMML `<m:oMath>` [`Element`].
