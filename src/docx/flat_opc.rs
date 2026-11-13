@@ -264,6 +264,14 @@ fn make_mathtype_part_names() -> MathTypePartNames {
     }
 }
 
+fn serialize_flat_opc_package(pkg: &Element) -> String {
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<?mso-application progid=\"Word.Document\"?>\n",
+    );
+    out.push_str(&xml::to_string(pkg));
+    out
+}
+
 /// Package a single equation (`MathNode`) into a complete Flat OPC (`pkg:package`) XML string.
 ///
 /// * `math`: The MathML intermediate tree representation of the equation.
@@ -332,11 +340,7 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
         }
     }
 
-    let mut out = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<?mso-application progid=\"Word.Document\"?>\n",
-    );
-    out.push_str(&xml::to_string(&pkg));
-    Ok(out)
+    Ok(serialize_flat_opc_package(&pkg))
 }
 
 // ── Flat OPC Parsing / Extraction ──────────────────────────────────────────────
