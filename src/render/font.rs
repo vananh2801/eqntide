@@ -189,12 +189,15 @@ fn load_bundled_font(data: &'static [u8]) -> FontRef<'static> {
     FontRef::try_from_slice(data).expect("bundled font is valid")
 }
 
+fn parse_math_face() -> ttf_parser::Face<'static> {
+    ttf_parser::Face::parse(FONT_MATH, 0).expect("bundled STIX Two Math font is valid")
+}
+
 /// Access the lazily-loaded font set.
 pub fn fonts() -> &'static Fonts {
     static F: OnceLock<Fonts> = OnceLock::new();
     F.get_or_init(|| {
-        let math_face =
-            ttf_parser::Face::parse(FONT_MATH, 0).expect("bundled STIX Two Math font is valid");
+        let math_face = parse_math_face();
         let upem = math_face.units_per_em() as f32;
         let constants = if let Some(math) = math_face.tables().math {
             if let Some(c) = math.constants {
