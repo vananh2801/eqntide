@@ -7,9 +7,11 @@ use std::path::PathBuf;
 use clap::Parser;
 
 mod conversion;
+mod dispatch;
 mod paths;
 
 use conversion::convert_single_file;
+use dispatch::run_conversion;
 use paths::{collect_docx_files_recursive, default_dir_output, default_file_output, is_docx_file};
 
 /// Convert equations in a .docx file or directory between OMML and MathType OLE objects.
@@ -190,185 +192,7 @@ where
         }
     }
 
-    let Some(ref inp) = args.input else {
-        let _ = writeln!(err, "Error: missing input file or directory");
-        return 2;
-    };
-    if !inp.exists() {
-        let _ = writeln!(err, "Error: path not found: {}", inp.display());
-        return 1;
-    }
-
-    // ── Single-file mode ─────────────────────────────────────────────────────
-    if inp.is_file() {
-        if !is_docx_file(inp) {
-            let _ = writeln!(err, "Error: expected a .docx file, got: {}", inp.display());
-            return 1;
-        }
-
-        let out_path = match &args.output {
-            Some(o) => {
-                let s = o.as_os_str().to_string_lossy();
-                if o.is_dir() || s.ends_with('/') || s.ends_with('\\') {
-                    o.join(inp.file_name().unwrap_or_default())
-                } else {
-                    o.clone()
-                }
-            }
-            None => default_file_output(inp, args.to_omml, args.upgrade, args.upgrade_target),
-        };
-
-        let summary = match convert_single_file(inp, &out_path, &args) {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = writeln!(err, "Error: {e}");
-                return 1;
-            }
-        };
-
-        let _ = writeln!(
-            out,
-            "Converted {}/{} equation(s) → {}",
-            summary.converted,
-            summary.found,
-            out_path.display()
-        );
-        if summary.skipped > 0 {
-            let _ = writeln!(
-                err,
-                "  {} skipped (empty or unsupported content)",
-                summary.skipped
-            );
-        }
-        if summary.errors > 0 {
-            let _ = writeln!(err, "  {} failed — see messages above", summary.errors);
-            return 1;
-        }
-        return 0;
-    }
-
-    // ── Directory batch mode (recursive, preserving folder hierarchy) ────────
-    if inp.is_dir() {
-        let out_dir = args.output.clone().unwrap_or_else(|| {
-            default_dir_output(inp, args.to_omml, args.upgrade, args.upgrade_target)
-        });
-
-        // Avoid scanning `out_dir` if it is a subdirectory of `inp` (unless in-place `out_dir == inp`).
-        let same_dir = *inp == out_dir
-            || (inp.canonicalize().ok().is_some()
-                && inp.canonicalize().ok() == out_dir.canonicalize().ok());
-        let exclude_dir = if same_dir {
-            None
-        } else {
-            Some(out_dir.as_path())
-        };
-
-        let mut docx_files = Vec::new();
-        if let Err(e) = collect_docx_files_recursive(inp, exclude_dir, &mut docx_files) {
-            let _ = writeln!(
-                err,
-                "Error: failed to scan directory {}: {e}",
-                inp.display()
-            );
-            return 1;
-        }
-
-        if docx_files.is_empty() {
-            let _ = writeln!(
-                err,
-                "Error: no .docx files found in directory: {}",
-                inp.display()
-            );
-            return 1;
-        }
-
-        let total_files = docx_files.len();
-        let mut files_succeeded = 0usize;
-        let mut files_failed = 0usize;
-        let mut total_found = 0usize;
-        let mut total_converted = 0usize;
-        let mut total_skipped = 0usize;
-        let mut total_errors = 0usize;
-
-        for (idx, src_file) in docx_files.iter().enumerate() {
-            let rel = src_file.strip_prefix(inp).unwrap_or(src_file.as_path());
-            let dst_file = out_dir.join(rel);
-
-            if !args.quiet {
-                let _ = writeln!(
-                    out,
-                    "[{}/{}] Processing: {}",
-                    idx + 1,
-                    total_files,
-                    rel.display()
-                );
-            }
-
-            match convert_single_file(src_file, &dst_file, &args) {
-                Ok(summary) => {
-                    total_found += summary.found;
-                    total_converted += summary.converted;
-                    total_skipped += summary.skipped;
-                    total_errors += summary.errors;
-
-                    if summary.errors == 0 {
-                        files_succeeded += 1;
-                    } else {
-                        files_failed += 1;
-                    }
-
-                    if !args.quiet {
-                        let _ = writeln!(
-                            out,
-                            "  Converted {}/{} equation(s) → {}",
-                            summary.converted,
-                            summary.found,
-                            dst_file.display()
-                        );
-                    }
-                    if summary.skipped > 0 {
-                        let _ = writeln!(
-                            err,
-                            "  {} skipped (empty or unsupported content)",
-                            summary.skipped
-                        );
-                    }
-                    if summary.errors > 0 {
-                        let _ = writeln!(
-                            err,
-                            "  {} failed in {} — see messages above",
-                            summary.errors,
-                            rel.display()
-                        );
-                    }
-                }
-                Err(e) => {
-                    files_failed += 1;
-                    let _ = writeln!(err, "  Error ({}): {e}", rel.display());
-                }
-            }
-        }
-
-        let _ = writeln!(
-            out,
-            "Batch complete: {}/{} file(s) succeeded, {}/{} equation(s) converted → {}",
-            files_succeeded,
-            total_files,
-            total_converted,
-            total_found,
-            out_dir.display()
-        );
-        if total_skipped > 0 {
-            let _ = writeln!(err, "  {total_skipped} total equation(s) skipped");
-        }
-        if files_failed > 0 || total_errors > 0 {
-            return 1;
-        }
-        return 0;
-    }
-
-    let _ = writeln!(err, "Error: unsupported input path: {}", inp.display());
-    1
+    run_conversion(&args, out, err)
 }
 
 #[cfg(test)]
