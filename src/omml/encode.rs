@@ -10,6 +10,10 @@ use crate::omml::decode::NS_M;
 use crate::symbols::{is_prime_char, prime_order};
 use crate::xml::{Element, Node};
 
+mod fences;
+
+use fences::{classify_fence_char, is_stretchy_fence_mo, FenceKind};
+
 const MAX_DEPTH: usize = 256;
 
 const NS_W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -220,32 +224,6 @@ fn is_arrow_mo(node: &MathNode) -> bool {
                 | "⟹"
                 | "⟺"
         )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FenceKind {
-    Open,
-    Close,
-    Neutral,
-}
-
-fn classify_fence_char(s: &str) -> Option<FenceKind> {
-    match s {
-        "(" | "[" | "{" | "\u{2308}" | "\u{230A}" | "\u{2329}" | "\u{27E8}" | "\u{301A}" => {
-            Some(FenceKind::Open)
-        }
-        ")" | "]" | "}" | "\u{2309}" | "\u{230B}" | "\u{232A}" | "\u{27E9}" | "\u{301B}" => {
-            Some(FenceKind::Close)
-        }
-        "|" | "\u{2016}" | "\u{2223}" | "\u{2225}" => Some(FenceKind::Neutral),
-        _ => None,
-    }
-}
-
-fn is_stretchy_fence_mo(node: &MathNode) -> bool {
-    node.tag == "mo"
-        && node.attr("stretchy") != Some("false")
-        && classify_fence_char(node.text.trim()).is_some()
 }
 
 fn is_bar_char(s: &str) -> bool {
