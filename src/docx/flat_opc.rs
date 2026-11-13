@@ -243,6 +243,27 @@ fn build_omml_package_parts(pkg: &mut Element, math: &MathNode) -> Result<()> {
     Ok(())
 }
 
+struct MathTypePartNames {
+    shape_id: String,
+    object_id: String,
+    ole_target: String,
+    image_target: String,
+}
+
+fn make_mathtype_part_names() -> MathTypePartNames {
+    let now_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_else(|_| uuid::Uuid::new_v4().as_u128());
+    let uid_num = (now_millis % 1_000_000_000_000) as u64;
+    MathTypePartNames {
+        shape_id: format!("_x0000_i{}", 1025 + (uid_num % 100_000)),
+        object_id: format!("_{}", 1_000_000_000u64 + (uid_num % 9_000_000_000u64)),
+        ole_target: format!("embeddings/oleObject{uid_num}.bin"),
+        image_target: format!("media/equation{uid_num}.emf"),
+    }
+}
+
 /// Package a single equation (`MathNode`) into a complete Flat OPC (`pkg:package`) XML string.
 ///
 /// * `math`: The MathML intermediate tree representation of the equation.
@@ -265,30 +286,25 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             build_omml_package_parts(&mut pkg, math)?;
         }
         FlatOpcMode::ModernMathtypeOleEmf => {
-            // Generate unique numeric identifiers compatible with both MathType and naive regex tools
-            let now_millis = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or_else(|_| uuid::Uuid::new_v4().as_u128());
-            let uid_num = (now_millis % 1_000_000_000_000) as u64;
-
-            let shape_id = format!("_x0000_i{}", 1025 + (uid_num % 100_000));
-            let obj_id = format!("_{}", 1_000_000_000u64 + (uid_num % 9_000_000_000u64));
+            let names = make_mathtype_part_names();
 
             // Local relationship IDs inside Flat OPC snippet (Word/WPS remaps them into document.xml.rels)
             let ole_rid = "rId1".to_string();
             let img_rid = "rId2".to_string();
 
-            let ole_target = format!("embeddings/oleObject{uid_num}.bin");
-            let img_target = format!("media/equation{uid_num}.emf");
-
-            let bin_part_name = format!("/word/{ole_target}");
-            let img_part_name = format!("/word/{img_target}");
+            let bin_part_name = format!("/word/{}", names.ole_target);
+            let img_part_name = format!("/word/{}", names.image_target);
 
             pkg.push(make_xml_part(
                 "/word/_rels/document.xml.rels",
                 CT_RELATIONSHIPS,
-                build_document_rels(mode, &ole_rid, &img_rid, &ole_target, &img_target),
+                build_document_rels(
+                    mode,
+                    &ole_rid,
+                    &img_rid,
+                    &names.ole_target,
+                    &names.image_target,
+                ),
             ));
 
             let mtef_bytes = mathml_to_mtef_bytes(math)?;
@@ -302,8 +318,8 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             let obj_run = make_object_run(
                 &ole_rid,
                 &img_rid,
-                &shape_id,
-                &obj_id,
+                &names.shape_id,
+                &names.object_id,
                 emf_pic.width_pt,
                 emf_pic.height_pt,
                 emf_pic.depth_pt,
