@@ -2,9 +2,7 @@
 
 use crate::mathml::MathNode;
 
-use super::{
-    apply_mover_to_list, convert_objs, parse_v3_object_list, parse_v5_equation, ByteStream, MtefObj,
-};
+use super::{apply_mover_to_list, convert_objs, parse, parse_v5_equation, ByteStream, MtefObj};
 
 fn skip_stream_header(stream: &mut ByteStream<'_>, version: u8) {
     let _ = stream.uint8();
@@ -28,7 +26,7 @@ fn parse_with_version(data: &[u8], version: u8) -> Option<Vec<MtefObj>> {
     let objects = if version == 5 {
         parse_v5_equation(&mut stream)
     } else {
-        parse_v3_object_list(&mut stream, 0)
+        parse::parse_v3_object_list(&mut stream, 0)
     };
     (!objects.is_empty()).then_some(objects)
 }

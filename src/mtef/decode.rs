@@ -14,6 +14,7 @@ use super::typeface::{
 
 mod characters;
 mod entry;
+mod parse;
 
 // ── Record type constants (MTEF v5 / v3) ─────────────────────────────────────
 
@@ -566,26 +567,7 @@ fn rescan_for_equation_body(stream: &mut ByteStream<'_>) {
     stream.nibble = None;
 }
 
-fn parse_v5_object_list(stream: &mut ByteStream<'_>, depth: usize) -> Vec<MtefObj> {
-    if depth > 64 {
-        return Vec::new();
-    }
-    let mut objs = Vec::new();
-    while stream.remaining() > 0 {
-        let Some(rt) = stream.uint8() else {
-            break;
-        };
-        if rt == REC_END {
-            break;
-        }
-        if let Some(obj) = parse_v5_record(stream, rt, false, depth + 1) {
-            objs.push(obj);
-        }
-    }
-    objs
-}
-
-fn parse_v5_record(
+pub(super) fn parse_v5_record(
     stream: &mut ByteStream<'_>,
     rt: u8,
     is_top_line: bool,
@@ -605,7 +587,7 @@ fn parse_v5_record(
             }
             let is_null = (opts & OPT_LINE_NULL) != 0;
             let objects = if !is_null || is_top_line {
-                parse_v5_object_list(stream, depth)
+                parse::parse_v5_object_list(stream, depth)
             } else {
                 Vec::new()
             };
@@ -631,7 +613,7 @@ fn parse_v5_record(
             let is_textmode = matches!(typeface, TF_TEXT | TF_USER1 | TF_USER2);
             let mut embells = Vec::new();
             if (opts & OPT_CHAR_EMBELL) != 0 {
-                for obj in parse_v5_object_list(stream, depth) {
+                for obj in parse::parse_v5_object_list(stream, depth) {
                     if let MtefObj::Char {
                         mt_code: e_code, ..
                     } = obj
@@ -663,7 +645,7 @@ fn parse_v5_record(
             };
             let variations = resolve_v5_variations(sel_idx, var_code);
             let _tmpl_opts = stream.uint8()?;
-            let subobjects = parse_v5_object_list(stream, depth);
+            let subobjects = parse::parse_v5_object_list(stream, depth);
             Some(MtefObj::Tmpl {
                 selector,
                 variations,
@@ -680,7 +662,7 @@ fn parse_v5_record(
             if (opts & OPT_LP_RULER) != 0 {
                 parse_ruler(stream);
             }
-            let lines = parse_v5_object_list(stream, depth);
+            let lines = parse::parse_v5_object_list(stream, depth);
             Some(MtefObj::Pile { halign, lines })
         }
         REC_MATRIX => {
@@ -701,7 +683,7 @@ fn parse_v5_record(
             for _ in 0..n_col_bytes {
                 let _ = stream.uint8();
             }
-            let cells = parse_v5_object_list(stream, depth);
+            let cells = parse::parse_v5_object_list(stream, depth);
             Some(MtefObj::Matrix {
                 rows: n_rows,
                 cols: n_cols,
@@ -827,7 +809,7 @@ pub(super) fn parse_v5_equation(stream: &mut ByteStream<'_>) -> Vec<MtefObj> {
                 if let Some(MtefObj::Line { objects, .. }) =
                     parse_v5_record(stream, REC_LINE, true, 0)
                 {
-                    if objects.iter().any(is_math_obj) {
+                    if objects.iter().any(parse::is_math_obj) {
                         return objects;
                     }
                 }
@@ -845,28 +827,12 @@ pub(super) fn parse_v5_equation(stream: &mut ByteStream<'_>) -> Vec<MtefObj> {
     Vec::new()
 }
 
-pub(super) fn parse_v3_object_list(stream: &mut ByteStream<'_>, depth: usize) -> Vec<MtefObj> {
-    if depth > 64 {
-        return Vec::new();
-    }
-    let mut objs = Vec::new();
-    while stream.remaining() > 0 {
-        let Some(tag) = stream.uint8() else {
-            break;
-        };
-        let rt = tag & 0x0F;
-        let opts = (tag >> 4) & 0x0F;
-        if rt == REC_END {
-            break;
-        }
-        if let Some(obj) = parse_v3_record(stream, rt, opts, depth + 1) {
-            objs.push(obj);
-        }
-    }
-    objs
-}
-
-fn parse_v3_record(stream: &mut ByteStream<'_>, rt: u8, opts: u8, depth: usize) -> Option<MtefObj> {
+pub(super) fn parse_v3_record(
+    stream: &mut ByteStream<'_>,
+    rt: u8,
+    opts: u8,
+    depth: usize,
+) -> Option<MtefObj> {
     match rt {
         REC_LINE => {
             if (opts & OPT_NUDGE) != 0 {
@@ -880,7 +846,7 @@ fn parse_v3_record(stream: &mut ByteStream<'_>, rt: u8, opts: u8, depth: usize) 
             }
             let is_null = (opts & OPT_LINE_NULL) != 0;
             let objects = if !is_null {
-                parse_v3_object_list(stream, depth)
+                parse::parse_v3_object_list(stream, depth)
             } else {
                 Vec::new()
             };
@@ -896,7 +862,7 @@ fn parse_v3_record(stream: &mut ByteStream<'_>, rt: u8, opts: u8, depth: usize) 
             let is_textmode = matches!(typeface, TF_TEXT | TF_USER1 | TF_USER2);
             let mut embells = Vec::new();
             if (opts & OPT_CHAR_EMBELL) != 0 {
-                for obj in parse_v3_object_list(stream, depth) {
+                for obj in parse::parse_v3_object_list(stream, depth) {
                     if let MtefObj::Char {
                         mt_code: e_code, ..
                     } = obj
@@ -921,7 +887,7 @@ fn parse_v3_record(stream: &mut ByteStream<'_>, rt: u8, opts: u8, depth: usize) 
             let selector = v3_selector_name(sel_idx, var_code);
             let variations = resolve_v3_variations(sel_idx, var_code);
             let _tmpl_opts = stream.uint8()?;
-            let subobjects = parse_v3_object_list(stream, depth);
+            let subobjects = parse::parse_v3_object_list(stream, depth);
             Some(MtefObj::Tmpl {
                 selector,
                 variations,
@@ -937,7 +903,7 @@ fn parse_v3_record(stream: &mut ByteStream<'_>, rt: u8, opts: u8, depth: usize) 
             if (opts & OPT_LP_RULER) != 0 {
                 parse_ruler(stream);
             }
-            let lines = parse_v3_object_list(stream, depth);
+            let lines = parse::parse_v3_object_list(stream, depth);
             Some(MtefObj::Pile { halign, lines })
         }
         REC_MATRIX => {
@@ -961,7 +927,7 @@ fn parse_v3_record(stream: &mut ByteStream<'_>, rt: u8, opts: u8, depth: usize) 
             if !((n_cols + 1) * 2).is_multiple_of(8) {
                 stream.align_byte();
             }
-            let cells = parse_v3_object_list(stream, depth);
+            let cells = parse::parse_v3_object_list(stream, depth);
             Some(MtefObj::Matrix {
                 rows: n_rows,
                 cols: n_cols,
@@ -1004,13 +970,6 @@ fn parse_v3_record(stream: &mut ByteStream<'_>, rt: u8, opts: u8, depth: usize) 
         }
         _ => None,
     }
-}
-
-fn is_math_obj(obj: &MtefObj) -> bool {
-    matches!(
-        obj,
-        MtefObj::Char { .. } | MtefObj::Tmpl { .. } | MtefObj::Pile { .. } | MtefObj::Matrix { .. }
-    )
 }
 
 // ── Slot Grouping & Sub/Sup Mover ────────────────────────────────────────────
@@ -1072,7 +1031,7 @@ fn extract_template_slots(
                 for l in lines {
                     if let MtefObj::Line { objects, .. } = l {
                         pile_lines.push(objects.clone());
-                    } else if is_math_obj(l) {
+                    } else if parse::is_math_obj(l) {
                         pile_lines.push(vec![l.clone()]);
                     }
                 }
@@ -1752,7 +1711,7 @@ fn convert_obj(obj: &MtefObj) -> Option<MathNode> {
             for l in lines {
                 if let MtefObj::Line { objects, .. } = l {
                     pile_lines.push(objects.clone());
-                } else if is_math_obj(l) {
+                } else if parse::is_math_obj(l) {
                     pile_lines.push(vec![l.clone()]);
                 }
             }
