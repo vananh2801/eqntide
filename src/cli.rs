@@ -120,16 +120,20 @@ impl log::Log for StderrLogger {
 
 static LOGGER: StderrLogger = StderrLogger;
 
-fn configure_logging(verbose: bool, quiet: bool) {
-    // set_logger fails if already installed (e.g. repeated calls in tests); fine.
-    let _ = log::set_logger(&LOGGER);
-    log::set_max_level(if quiet {
+fn log_level(verbose: bool, quiet: bool) -> log::LevelFilter {
+    if quiet {
         log::LevelFilter::Error
     } else if verbose {
         log::LevelFilter::Info
     } else {
         log::LevelFilter::Warn
-    });
+    }
+}
+
+fn configure_logging(verbose: bool, quiet: bool) {
+    // set_logger fails if already installed (e.g. repeated calls in tests); fine.
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log_level(verbose, quiet));
 }
 
 fn default_file_output(
