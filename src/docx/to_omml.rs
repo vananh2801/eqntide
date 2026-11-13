@@ -45,49 +45,13 @@ pub fn convert_bytes_to_omml_with(
     let mut candidate_files_to_remove: HashSet<String> = HashSet::new();
 
     for xml_path in content_parts {
-        let Some(xml_bytes) = pkg.get(&xml_path) else {
-            continue;
-        };
-        let mut doc_root = xml::parse(xml_bytes)?;
-
-        let rels_path = rels_path_for_part(&xml_path);
-        let (rels_opt, rel_map) = read_part_relationships(&pkg, &xml_path, &rels_path)?;
-
-        let mut converted_rids: HashSet<String> = HashSet::new();
-        let before_converted = summary.converted;
-
-        rewrite_element(
-            &mut doc_root,
-            &pkg,
-            &rel_map,
+        convert_content_part(
+            &mut pkg,
+            &xml_path,
             opts,
             &mut summary,
-            &mut converted_rids,
-        );
-
-        if summary.converted > before_converted {
-            ensure_math_namespace(&mut doc_root);
-            pkg.set(&xml_path, xml::to_bytes(&doc_root));
-
-            if let Some(mut rels_root) = rels_opt {
-                let dead_rids = obsolete_relationship_ids(&doc_root, converted_rids);
-
-                if !dead_rids.is_empty() {
-                    for rid in &dead_rids {
-                        if let Some(target_zip_path) = rel_map.get(rid) {
-                            candidate_files_to_remove.insert(target_zip_path.clone());
-                        }
-                    }
-                    rels_root.children.retain(|n| match n {
-                        Node::Element(e) if e.local == "Relationship" => {
-                            e.attr(None, "Id").is_none_or(|id| !dead_rids.contains(id))
-                        }
-                        _ => true,
-                    });
-                    pkg.set(&rels_path, xml::to_bytes(&rels_root));
-                }
-            }
-        }
+            &mut candidate_files_to_remove,
+        )?;
     }
 
     if !candidate_files_to_remove.is_empty() {
@@ -95,6 +59,75 @@ pub fn convert_bytes_to_omml_with(
     }
 
     Ok((pkg.write()?, summary))
+}
+
+fn convert_content_part(
+    pkg: &mut Package,
+    xml_path: &str,
+    opts: &ToOmmlOptions,
+    summary: &mut ConversionSummary,
+    candidate_files_to_remove: &mut HashSet<String>,
+) -> Result<()> {
+    let Some(xml_bytes) = pkg.get(xml_path) else {
+        return Ok(());
+    };
+    let mut doc_root = xml::parse(xml_bytes)?;
+    let rels_path = rels_path_for_part(xml_path);
+    let (rels_opt, rel_map) = read_part_relationships(pkg, xml_path, &rels_path)?;
+    let mut converted_rids = HashSet::new();
+    let before_converted = summary.converted;
+
+    rewrite_element(
+        &mut doc_root,
+        pkg,
+        &rel_map,
+        opts,
+        summary,
+        &mut converted_rids,
+    );
+    if summary.converted == before_converted {
+        return Ok(());
+    }
+
+    ensure_math_namespace(&mut doc_root);
+    pkg.set(xml_path, xml::to_bytes(&doc_root));
+    if let Some(mut rels_root) = rels_opt {
+        if remove_obsolete_relationships(
+            &mut rels_root,
+            &doc_root,
+            converted_rids,
+            &rel_map,
+            candidate_files_to_remove,
+        ) {
+            pkg.set(&rels_path, xml::to_bytes(&rels_root));
+        }
+    }
+    Ok(())
+}
+
+fn remove_obsolete_relationships(
+    rels_root: &mut Element,
+    doc_root: &Element,
+    converted_rids: HashSet<String>,
+    rel_map: &HashMap<String, String>,
+    candidate_files_to_remove: &mut HashSet<String>,
+) -> bool {
+    let dead_rids = obsolete_relationship_ids(doc_root, converted_rids);
+    if dead_rids.is_empty() {
+        return false;
+    }
+    for rid in &dead_rids {
+        if let Some(target_zip_path) = rel_map.get(rid) {
+            candidate_files_to_remove.insert(target_zip_path.clone());
+        }
+    }
+    rels_root.children.retain(|node| match node {
+        Node::Element(element) if element.local == "Relationship" => element
+            .attr(None, "Id")
+            .is_none_or(|id| !dead_rids.contains(id)),
+        _ => true,
+    });
+    true
 }
 
 /// Convert every MathType equation in `input_path` to OMML and write `output_path`.
