@@ -12,6 +12,8 @@ use super::typeface::{
     TF_USER2, TF_VARIABLE, TF_VECTOR,
 };
 
+mod entry;
+
 // ── Record type constants (MTEF v5 / v3) ─────────────────────────────────────
 
 const REC_END: u8 = 0;
@@ -52,14 +54,14 @@ const OPT_COLOR_NAME: u8 = 0x04;
 // ── ByteStream ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct ByteStream<'a> {
+pub(super) struct ByteStream<'a> {
     data: &'a [u8],
     pos: usize,
     nibble: Option<u8>,
 }
 
 impl<'a> ByteStream<'a> {
-    fn new(data: &'a [u8]) -> Self {
+    pub(super) fn new(data: &'a [u8]) -> Self {
         Self {
             data,
             pos: 0,
@@ -71,7 +73,7 @@ impl<'a> ByteStream<'a> {
         self.data.len().saturating_sub(self.pos)
     }
 
-    fn uint8(&mut self) -> Option<u8> {
+    pub(super) fn uint8(&mut self) -> Option<u8> {
         if let Some(low) = self.nibble.take() {
             let high = *self.data.get(self.pos)?;
             self.pos += 1;
@@ -131,7 +133,7 @@ impl<'a> ByteStream<'a> {
 // ── Parsed MTEF Record AST ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-enum MtefObj {
+pub(super) enum MtefObj {
     Char {
         typeface: u8,
         mt_code: u16,
@@ -790,7 +792,7 @@ fn parse_v5_record(
     }
 }
 
-fn parse_v5_equation(stream: &mut ByteStream<'_>) -> Vec<MtefObj> {
+pub(super) fn parse_v5_equation(stream: &mut ByteStream<'_>) -> Vec<MtefObj> {
     while stream.remaining() > 0 {
         let Some(rt) = stream.uint8() else {
             break;
@@ -842,7 +844,7 @@ fn parse_v5_equation(stream: &mut ByteStream<'_>) -> Vec<MtefObj> {
     Vec::new()
 }
 
-fn parse_v3_object_list(stream: &mut ByteStream<'_>, depth: usize) -> Vec<MtefObj> {
+pub(super) fn parse_v3_object_list(stream: &mut ByteStream<'_>, depth: usize) -> Vec<MtefObj> {
     if depth > 64 {
         return Vec::new();
     }
@@ -1198,7 +1200,7 @@ fn is_suitable_base(obj: &MtefObj) -> bool {
 }
 
 /// Apply the sub/sup base mover recursively across an object list.
-fn apply_mover_to_list(objects: &mut Vec<MtefObj>) {
+pub(super) fn apply_mover_to_list(objects: &mut Vec<MtefObj>) {
     // 1. Strip 0xEF01 (MT Zero Space) and recurse into children first
     objects.retain(|o| {
         !matches!(
@@ -1748,7 +1750,7 @@ fn build_pile_node(halign: &str, lines: &[Vec<MtefObj>]) -> MathNode {
     mtable
 }
 
-fn convert_objs(objs: &[MtefObj]) -> Vec<MathNode> {
+pub(super) fn convert_objs(objs: &[MtefObj]) -> Vec<MathNode> {
     let mut out = Vec::new();
     for obj in objs {
         if let Some(n) = convert_obj(obj) {
@@ -2394,72 +2396,35 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
     }
 }
 
-// ── Public Entry Points ──────────────────────────────────────────────────────
-
-fn skip_stream_header(stream: &mut ByteStream<'_>, ver: u8) {
-    let _ = stream.uint8(); // version
-    let _ = stream.uint8(); // platform
-    let _ = stream.uint8(); // product
-    let _ = stream.uint8(); // product_version
-    let _ = stream.uint8(); // product_subversion
-    if ver == 5 {
-        for _ in 0..64 {
-            if stream.uint8().unwrap_or(0) == 0 {
-                break;
-            }
-        }
-        let _ = stream.uint8(); // equation_options
-    }
-}
-
-fn parse_mtef_with_version(mtef_data: &[u8], ver: u8) -> Option<Vec<MtefObj>> {
-    let mut stream = ByteStream::new(mtef_data);
-    skip_stream_header(&mut stream, ver);
-    let objs = if ver == 5 {
-        parse_v5_equation(&mut stream)
-    } else {
-        parse_v3_object_list(&mut stream, 0)
-    };
-    if objs.is_empty() {
-        None
-    } else {
-        Some(objs)
-    }
-}
-
-fn stream_version(mtef_data: &[u8]) -> Option<u8> {
-    let ver = *mtef_data.first()?;
-    matches!(ver, 3 | 5).then_some(ver)
-}
-
-fn mathml_from_objects(mut objs: Vec<MtefObj>) -> MathNode {
-    apply_mover_to_list(&mut objs);
-    let children = convert_objs(&objs);
-    let root_child = if objs.len() == 1 && matches!(objs[0], MtefObj::Pile { .. }) {
-        children
-    } else {
-        vec![MathNode::with_children("mrow", children)]
-    };
-    let mut math = MathNode::with_children("math", root_child);
-    math.set_attr("display", "block");
-    math
-}
-
 /// Convert raw MTEF bytes (after stripping the 28-byte OLE header, or extracted
 /// from a WMF comment) into a [`MathNode`] `<math>` tree.
 pub fn mtef_to_mathml(mtef_data: &[u8]) -> Option<MathNode> {
-    if mtef_data.len() < 2 {
-        return None;
-    }
-    let ver = stream_version(mtef_data)?;
-
-    let objs = parse_mtef_with_version(mtef_data, ver)
-        .or_else(|| parse_mtef_with_version(mtef_data, if ver == 5 { 3 } else { 5 }))?;
-    Some(mathml_from_objects(objs))
+    entry::decode_to_mathml(mtef_data)
 }
 
 /// Extract MTEF from a MathType OLE binary (`.bin`) and decode it into a [`MathNode`] tree.
 pub fn ole_to_mathml(ole_data: &[u8]) -> Option<MathNode> {
     let mtef = extract_mtef_from_ole(ole_data)?;
     mtef_to_mathml(&mtef)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_encoder_output_to_a_math_root() {
+        let source = MathNode::parse(
+            r#"<math><mrow><mi>x</mi><mo>+</mo><mfrac><mn>1</mn><mi>y</mi></mfrac></mrow></math>"#,
+        )
+        .unwrap();
+        let records = super::super::encode::mathml_to_mtef_bytes(&source).unwrap();
+        let bytes = super::super::build_mtef(&records);
+
+        let decoded = mtef_to_mathml(&bytes).unwrap();
+        let xml = decoded.to_xml();
+        assert!(xml.starts_with("<math"));
+        assert!(xml.contains("<mi>x</mi>"));
+        assert!(xml.contains("<mfrac>"));
+    }
 }
