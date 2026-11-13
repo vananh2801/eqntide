@@ -413,6 +413,19 @@ fn parse_package_part(child: &Element) -> Option<(String, PartData)> {
     ))
 }
 
+fn find_package_part<'a>(
+    parts: &'a HashMap<String, PartData>,
+    canonical_name: &str,
+    suffix: &str,
+) -> Option<&'a PartData> {
+    parts.get(canonical_name).or_else(|| {
+        parts
+            .iter()
+            .find(|(name, _)| name.ends_with(suffix))
+            .map(|(_, part)| part)
+    })
+}
+
 fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
     let mut parts: HashMap<String, PartData> = HashMap::new();
 
@@ -423,25 +436,12 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
     }
 
     // Attempt 1: Document XML traversal (completely case-insensitive)
-    let doc_part = parts.get("word/document.xml").or_else(|| {
-        parts
-            .iter()
-            .find(|(k, _)| {
-                k.ends_with("word/document.xml")
-                    || k.ends_with("/document.xml")
-                    || k.ends_with("document.xml")
-            })
-            .map(|(_, v)| v)
-    });
+    let doc_part = find_package_part(&parts, "word/document.xml", "document.xml");
     if let Some(doc_part) = doc_part {
         if let Some(ref doc_el) = doc_part.xml_data {
             // Build rel_map from word/_rels/document.xml.rels
-            let rels_part = parts.get("word/_rels/document.xml.rels").or_else(|| {
-                parts
-                    .iter()
-                    .find(|(k, _)| k.ends_with("document.xml.rels"))
-                    .map(|(_, v)| v)
-            });
+            let rels_part =
+                find_package_part(&parts, "word/_rels/document.xml.rels", "document.xml.rels");
             let rel_map = rels_part
                 .and_then(|p| p.xml_data.as_ref())
                 .map(|rels| build_rel_map(rels, "word/document.xml"))
