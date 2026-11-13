@@ -12,6 +12,7 @@ use super::typeface::{
     TF_USER2, TF_VARIABLE, TF_VECTOR,
 };
 
+mod characters;
 mod entry;
 
 // ── Record type constants (MTEF v5 / v3) ─────────────────────────────────────
@@ -1617,15 +1618,6 @@ fn map_pua_char(mt_code: u16, is_textmode: bool) -> Option<MathNode> {
     }
 }
 
-fn append_prime(mut node: MathNode, prime_str: &str) -> MathNode {
-    if node.tag == "mrow" {
-        node.children.push(MathNode::leaf("mo", prime_str));
-        node
-    } else {
-        MathNode::with_children("mrow", vec![node, MathNode::leaf("mo", prime_str)])
-    }
-}
-
 fn wrap_embellishments(mut node: MathNode, embells: &[u8]) -> MathNode {
     for &code in embells {
         node = match code {
@@ -1646,9 +1638,9 @@ fn wrap_embellishments(mut node: MathNode, embells: &[u8]) -> MathNode {
             20 => mover_accent(node, "\u{2323}"),
 
             // Primes
-            5 => append_prime(node, "'"),
-            6 => append_prime(node, "''"),
-            18 => append_prime(node, "'''"),
+            5 => characters::append_prime(node, "'"),
+            6 => characters::append_prime(node, "''"),
+            18 => characters::append_prime(node, "'''"),
             7 => MathNode::with_children(
                 "mmultiscripts",
                 vec![
@@ -1691,27 +1683,11 @@ fn mover_accent(base: MathNode, mo_str: &str) -> MathNode {
     m
 }
 
-fn mover_stretchy_accent(base: MathNode, mo_str: &str) -> MathNode {
-    let mut mo = MathNode::leaf("mo", mo_str);
-    mo.set_attr("stretchy", "true");
-    let mut m = MathNode::with_children("mover", vec![base, mo]);
-    m.set_attr("accent", "true");
-    m
-}
-
 fn munder(base: MathNode, mo_str: &str, accentunder: bool) -> MathNode {
     let mut m = MathNode::with_children("munder", vec![base, MathNode::leaf("mo", mo_str)]);
     if accentunder {
         m.set_attr("accentunder", "true");
     }
-    m
-}
-
-fn munder_stretchy_accent(base: MathNode, mo_str: &str) -> MathNode {
-    let mut mo = MathNode::leaf("mo", mo_str);
-    mo.set_attr("stretchy", "true");
-    let mut m = MathNode::with_children("munder", vec![base, mo]);
-    m.set_attr("accentunder", "true");
     m
 }
 
@@ -2068,33 +2044,36 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
         }
 
         // ── Long embellishments (bars, vec, hat, tilde, arc, strike, box, ldiv)
-        "tmTILDE" => Some(mover_stretchy_accent(
+        "tmTILDE" => Some(characters::mover_stretchy_accent(
             slot_to_node(slots.first()),
             "\u{02DC}",
         )),
-        "tmARC" => Some(mover_stretchy_accent(
+        "tmARC" => Some(characters::mover_stretchy_accent(
             slot_to_node(slots.first()),
             "\u{2322}",
         )),
-        "tmHAT" => Some(mover_stretchy_accent(slot_to_node(slots.first()), "^")),
-        "tmJSTATUS" => Some(mover_stretchy_accent(
+        "tmHAT" => Some(characters::mover_stretchy_accent(
+            slot_to_node(slots.first()),
+            "^",
+        )),
+        "tmJSTATUS" => Some(characters::mover_stretchy_accent(
             slot_to_node(slots.first()),
             "\u{FE39}",
         )),
         "tmOBAR" => {
             let base = slot_to_node(slots.first());
-            let first = mover_stretchy_accent(base, "\u{00AF}");
+            let first = characters::mover_stretchy_accent(base, "\u{00AF}");
             if has_var("tvBAR_DOUBLE") {
-                Some(mover_stretchy_accent(first, "\u{00AF}"))
+                Some(characters::mover_stretchy_accent(first, "\u{00AF}"))
             } else {
                 Some(first)
             }
         }
         "tmUBAR" => {
             let base = slot_to_node(slots.first());
-            let first = munder_stretchy_accent(base, "_");
+            let first = characters::munder_stretchy_accent(base, "_");
             if has_var("tvBAR_DOUBLE") {
-                Some(munder_stretchy_accent(first, "_"))
+                Some(characters::munder_stretchy_accent(first, "_"))
             } else {
                 Some(first)
             }
@@ -2119,9 +2098,9 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
                 "\u{2192}"
             };
             if is_under {
-                Some(munder_stretchy_accent(base, arrow))
+                Some(characters::munder_stretchy_accent(base, arrow))
             } else {
-                Some(mover_stretchy_accent(base, arrow))
+                Some(characters::mover_stretchy_accent(base, arrow))
             }
         }
         "tmSTRIKE" => {
@@ -2196,9 +2175,12 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
         "tmLIM" => {
             let mut s0 = slot_to_node(slots.first());
             if has_var("tvSUBAR") {
-                s0 = munder_stretchy_accent(s0, "\u{00AF}");
+                s0 = characters::munder_stretchy_accent(s0, "\u{00AF}");
             } else if has_var("tvDUBAR") {
-                s0 = munder_stretchy_accent(munder_stretchy_accent(s0, "\u{00AF}"), "\u{00AF}");
+                s0 = characters::munder_stretchy_accent(
+                    characters::munder_stretchy_accent(s0, "\u{00AF}"),
+                    "\u{00AF}",
+                );
             }
             let lower = has_var("tvBO_LOWER");
             let upper = has_var("tvBO_UPPER");
