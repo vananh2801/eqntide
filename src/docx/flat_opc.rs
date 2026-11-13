@@ -228,6 +228,21 @@ fn build_document_xml(mode: FlatOpcMode, content_element: Element) -> Element {
     doc
 }
 
+fn build_omml_package_parts(pkg: &mut Element, math: &MathNode) -> Result<()> {
+    pkg.push(make_xml_part(
+        "/word/_rels/document.xml.rels",
+        CT_RELATIONSHIPS,
+        build_document_rels(FlatOpcMode::ModernOmml, "", "", "", ""),
+    ));
+    let omml_el = mathml_to_omml(math)?;
+    pkg.push(make_xml_part(
+        "/word/document.xml",
+        CT_DOCUMENT,
+        build_document_xml(FlatOpcMode::ModernOmml, omml_el),
+    ));
+    Ok(())
+}
+
 /// Package a single equation (`MathNode`) into a complete Flat OPC (`pkg:package`) XML string.
 ///
 /// * `math`: The MathML intermediate tree representation of the equation.
@@ -247,14 +262,7 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
     // 2. /word/_rels/document.xml.rels & 3. /word/document.xml + binary parts
     match mode {
         FlatOpcMode::ModernOmml => {
-            pkg.push(make_xml_part(
-                "/word/_rels/document.xml.rels",
-                CT_RELATIONSHIPS,
-                build_document_rels(mode, "", "", "", ""),
-            ));
-            let omml_el = mathml_to_omml(math)?;
-            let doc_el = build_document_xml(mode, omml_el);
-            pkg.push(make_xml_part("/word/document.xml", CT_DOCUMENT, doc_el));
+            build_omml_package_parts(&mut pkg, math)?;
         }
         FlatOpcMode::ModernMathtypeOleEmf => {
             // Generate unique numeric identifiers compatible with both MathType and naive regex tools
