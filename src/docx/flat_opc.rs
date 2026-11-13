@@ -372,60 +372,54 @@ fn normalize_part_name(name: &str) -> String {
     name.strip_prefix('/').unwrap_or(name).to_owned()
 }
 
+fn parse_package_part(child: &Element) -> Option<(String, PartData)> {
+    if !child.is(NS_PKG, "part") && !child.is(NS_PKG_LEGACY, "part") && child.local != "part" {
+        return None;
+    }
+    let name = child
+        .attrs
+        .iter()
+        .find(|a| a.local == "name")
+        .map(|a| a.value.as_str())
+        .or_else(|| child.attr(Some(NS_PKG), "name"))
+        .or_else(|| child.attr(Some(NS_PKG_LEGACY), "name"))
+        .or_else(|| child.attr(None, "name"))?;
+    let content_type = child
+        .attrs
+        .iter()
+        .find(|a| a.local.eq_ignore_ascii_case("contenttype"))
+        .map(|a| a.value.as_str())
+        .or_else(|| child.attr(Some(NS_PKG), "contentType"))
+        .or_else(|| child.attr(Some(NS_PKG_LEGACY), "contentType"))
+        .or_else(|| child.attr(None, "contentType"))
+        .unwrap_or("")
+        .to_owned();
+    let mut xml_data = None;
+    let mut binary_data = None;
+    for sub in child.elements() {
+        if sub.local.eq_ignore_ascii_case("xmldata") {
+            xml_data = sub.elements().next().cloned();
+        } else if sub.local.eq_ignore_ascii_case("binarydata") {
+            binary_data = base64_decode(&all_text(sub));
+        }
+    }
+    Some((
+        normalize_part_name(name).to_ascii_lowercase(),
+        PartData {
+            content_type,
+            xml_data,
+            binary_data,
+        },
+    ))
+}
+
 fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
     let mut parts: HashMap<String, PartData> = HashMap::new();
 
     for child in pkg_el.elements() {
-        if !child.is(NS_PKG, "part") && !child.is(NS_PKG_LEGACY, "part") && child.local != "part" {
-            continue;
+        if let Some((name, part)) = parse_package_part(child) {
+            parts.insert(name, part);
         }
-        let Some(name) = child
-            .attrs
-            .iter()
-            .find(|a| a.local == "name")
-            .map(|a| a.value.as_str())
-            .or_else(|| child.attr(Some(NS_PKG), "name"))
-            .or_else(|| child.attr(Some(NS_PKG_LEGACY), "name"))
-            .or_else(|| child.attr(None, "name"))
-        else {
-            continue;
-        };
-        let content_type = child
-            .attrs
-            .iter()
-            .find(|a| a.local.eq_ignore_ascii_case("contenttype"))
-            .map(|a| a.value.as_str())
-            .or_else(|| child.attr(Some(NS_PKG), "contentType"))
-            .or_else(|| child.attr(Some(NS_PKG_LEGACY), "contentType"))
-            .or_else(|| child.attr(None, "contentType"))
-            .unwrap_or("")
-            .to_owned();
-
-        let mut xml_data: Option<Element> = None;
-        let mut binary_data: Option<Vec<u8>> = None;
-
-        for sub in child.elements() {
-            if sub.local.eq_ignore_ascii_case("xmldata") {
-                if let Some(first_el) = sub.elements().next() {
-                    xml_data = Some(first_el.clone());
-                }
-            } else if sub.local.eq_ignore_ascii_case("binarydata") {
-                let text = all_text(sub);
-                if let Some(decoded) = base64_decode(&text) {
-                    binary_data = Some(decoded);
-                }
-            }
-        }
-
-        let norm_name = normalize_part_name(name).to_ascii_lowercase();
-        parts.insert(
-            norm_name,
-            PartData {
-                content_type,
-                xml_data,
-                binary_data,
-            },
-        );
     }
 
     // Attempt 1: Document XML traversal (completely case-insensitive)
