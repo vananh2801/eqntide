@@ -70,11 +70,7 @@ pub fn convert_bytes_to_omml_with(
             pkg.set(&xml_path, xml::to_bytes(&doc_root));
 
             if let Some(mut rels_root) = rels_opt {
-                let remaining_rids = collect_referenced_rids(&doc_root);
-                let dead_rids: HashSet<String> = converted_rids
-                    .into_iter()
-                    .filter(|rid| !remaining_rids.contains(rid))
-                    .collect();
+                let dead_rids = obsolete_relationship_ids(&doc_root, converted_rids);
 
                 if !dead_rids.is_empty() {
                     for rid in &dead_rids {
@@ -208,6 +204,14 @@ fn ensure_math_namespace(root: &mut Element) {
     {
         root.nsdecls.push((Some("m".to_owned()), NS_M.to_owned()));
     }
+}
+
+fn obsolete_relationship_ids(root: &Element, converted: HashSet<String>) -> HashSet<String> {
+    let remaining = collect_referenced_rids(root);
+    converted
+        .into_iter()
+        .filter(|rid| !remaining.contains(rid))
+        .collect()
 }
 
 pub(crate) fn is_mathtype_prog_id(prog_id: &str) -> bool {
