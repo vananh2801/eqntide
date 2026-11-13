@@ -332,106 +332,135 @@ pub fn parse(data: &[u8]) -> Result<Element> {
     let data = data.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(data);
     let text = std::str::from_utf8(data).map_err(|e| Error::Xml(format!("invalid UTF-8: {e}")))?;
 
-    let mut reader = Reader::from_str(text);
-    let mut stack: Vec<Element> = Vec::new();
-    let mut marks: Vec<usize> = Vec::new(); // scope length before each open element
-    let mut scope: Vec<NsDecl> = Vec::new();
-    let mut root: Option<Element> = None;
+    XmlParser::new(text).parse()
+}
 
-    // Attach a finished element to its parent, or make it the root.
-    fn attach(stack: &mut [Element], root: &mut Option<Element>, el: Element) -> Result<()> {
-        if let Some(parent) = stack.last_mut() {
-            parent.children.push(Node::Element(el));
-            Ok(())
-        } else if root.is_none() {
-            *root = Some(el);
-            Ok(())
-        } else {
-            Err(Error::Xml(
-                "extra content at the end of the document".into(),
-            ))
+/// Stateful parser context for one XML document.
+///
+/// Namespace scope follows the open-element stack, while `marks` records where
+/// each element's declarations begin so closing an element restores its parent.
+struct XmlParser<'a> {
+    reader: Reader<&'a [u8]>,
+    stack: Vec<Element>,
+    marks: Vec<usize>,
+    scope: Vec<NsDecl>,
+    root: Option<Element>,
+}
+
+impl<'a> XmlParser<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            reader: Reader::from_str(text),
+            stack: Vec::new(),
+            marks: Vec::new(),
+            scope: Vec::new(),
+            root: None,
         }
     }
 
-    loop {
-        let pos = reader.buffer_position();
-        match reader.read_event().map_err(|e| xml_err(e, pos))? {
-            Event::Eof => break,
-            Event::Start(e) => {
-                if stack.len() >= MAX_DEPTH {
-                    return Err(Error::Xml(format!(
-                        "excessive depth in document: {MAX_DEPTH} (byte offset {pos})"
-                    )));
-                }
-                if stack.is_empty() && root.is_some() {
-                    return Err(Error::Xml(
-                        "extra content at the end of the document".into(),
-                    ));
-                }
-                marks.push(scope.len());
-                let el = element_from_start(&e, &mut scope, pos)?;
-                stack.push(el);
+    fn parse(mut self) -> Result<Element> {
+        let mut reader = self.reader;
+        let stack = &mut self.stack;
+        let marks = &mut self.marks;
+        let scope = &mut self.scope;
+        let root = &mut self.root;
+
+        // Attach a finished element to its parent, or make it the root.
+        fn attach(stack: &mut [Element], root: &mut Option<Element>, el: Element) -> Result<()> {
+            if let Some(parent) = stack.last_mut() {
+                parent.children.push(Node::Element(el));
+                Ok(())
+            } else if root.is_none() {
+                *root = Some(el);
+                Ok(())
+            } else {
+                Err(Error::Xml(
+                    "extra content at the end of the document".into(),
+                ))
             }
-            Event::Empty(e) => {
-                if stack.len() >= MAX_DEPTH {
-                    return Err(Error::Xml(format!(
-                        "excessive depth in document: {MAX_DEPTH} (byte offset {pos})"
-                    )));
+        }
+
+        loop {
+            let pos = reader.buffer_position();
+            match reader.read_event().map_err(|e| xml_err(e, pos))? {
+                Event::Eof => break,
+                Event::Start(e) => {
+                    if stack.len() >= MAX_DEPTH {
+                        return Err(Error::Xml(format!(
+                            "excessive depth in document: {MAX_DEPTH} (byte offset {pos})"
+                        )));
+                    }
+                    if stack.is_empty() && root.is_some() {
+                        return Err(Error::Xml(
+                            "extra content at the end of the document".into(),
+                        ));
+                    }
+                    marks.push(scope.len());
+                    let el = element_from_start(&e, scope, pos)?;
+                    stack.push(el);
                 }
-                let mark = scope.len();
-                let el = element_from_start(&e, &mut scope, pos)?;
-                scope.truncate(mark);
-                attach(&mut stack, &mut root, el)?;
-            }
-            Event::End(_) => {
-                let el = stack
-                    .pop()
-                    .ok_or_else(|| xml_err("unexpected closing tag", pos))?;
-                scope.truncate(marks.pop().unwrap_or(0));
-                attach(&mut stack, &mut root, el)?;
-            }
-            Event::Text(t) => {
-                let raw = std::str::from_utf8(&t).map_err(|e| xml_err(e, pos))?;
-                let raw = normalize_newlines(raw);
-                let txt = quick_xml::escape::unescape(&raw)
-                    .map_err(|e| xml_err(e, pos))?
-                    .into_owned();
-                match stack.last_mut() {
-                    Some(parent) => push_text(parent, txt),
-                    None if txt.trim().is_empty() => {}
-                    None => return Err(xml_err("text outside the root element", pos)),
+                Event::Empty(e) => {
+                    if stack.len() >= MAX_DEPTH {
+                        return Err(Error::Xml(format!(
+                            "excessive depth in document: {MAX_DEPTH} (byte offset {pos})"
+                        )));
+                    }
+                    let mark = scope.len();
+                    let el = element_from_start(&e, scope, pos)?;
+                    scope.truncate(mark);
+                    attach(stack, root, el)?;
                 }
-            }
-            Event::CData(c) => {
-                let raw = std::str::from_utf8(&c).map_err(|e| xml_err(e, pos))?;
-                let txt = normalize_newlines(raw);
-                match stack.last_mut() {
-                    Some(parent) => push_text(parent, txt),
-                    None => return Err(xml_err("CDATA outside the root element", pos)),
+                Event::End(_) => {
+                    let el = stack
+                        .pop()
+                        .ok_or_else(|| xml_err("unexpected closing tag", pos))?;
+                    scope.truncate(marks.pop().unwrap_or(0));
+                    attach(stack, root, el)?;
                 }
-            }
-            Event::Comment(c) => {
-                if let Some(parent) = stack.last_mut() {
+                Event::Text(t) => {
+                    let raw = std::str::from_utf8(&t).map_err(|e| xml_err(e, pos))?;
+                    let raw = normalize_newlines(raw);
+                    let txt = quick_xml::escape::unescape(&raw)
+                        .map_err(|e| xml_err(e, pos))?
+                        .into_owned();
+                    match stack.last_mut() {
+                        Some(parent) => push_text(parent, txt),
+                        None if txt.trim().is_empty() => {}
+                        None => return Err(xml_err("text outside the root element", pos)),
+                    }
+                }
+                Event::CData(c) => {
                     let raw = std::str::from_utf8(&c).map_err(|e| xml_err(e, pos))?;
-                    parent.children.push(Node::Comment(raw.to_owned()));
+                    let txt = normalize_newlines(raw);
+                    match stack.last_mut() {
+                        Some(parent) => push_text(parent, txt),
+                        None => return Err(xml_err("CDATA outside the root element", pos)),
+                    }
                 }
-            }
-            Event::PI(p) => {
-                if let Some(parent) = stack.last_mut() {
-                    let raw = std::str::from_utf8(&p).map_err(|e| xml_err(e, pos))?;
-                    parent.children.push(Node::Pi(raw.to_owned()));
+                Event::Comment(c) => {
+                    if let Some(parent) = stack.last_mut() {
+                        let raw = std::str::from_utf8(&c).map_err(|e| xml_err(e, pos))?;
+                        parent.children.push(Node::Comment(raw.to_owned()));
+                    }
                 }
+                Event::PI(p) => {
+                    if let Some(parent) = stack.last_mut() {
+                        let raw = std::str::from_utf8(&p).map_err(|e| xml_err(e, pos))?;
+                        parent.children.push(Node::Pi(raw.to_owned()));
+                    }
+                }
+                Event::Decl(_) | Event::DocType(_) => {}
             }
-            Event::Decl(_) | Event::DocType(_) => {}
         }
-    }
 
-    if !stack.is_empty() {
-        return Err(Error::Xml(
-            "unexpected end of document (unclosed element)".into(),
-        ));
+        if !stack.is_empty() {
+            return Err(Error::Xml(
+                "unexpected end of document (unclosed element)".into(),
+            ));
+        }
+        root.take()
+            .ok_or_else(|| Error::Xml("document is empty".into()))
     }
-    root.ok_or_else(|| Error::Xml("document is empty".into()))
 }
 
 // ── Serialisation ─────────────────────────────────────────────────────────────
