@@ -30,6 +30,16 @@ pub const FATSECT: u32 = 0xFFFF_FFFD;
 pub const DIFSECT: u32 = 0xFFFF_FFFC;
 /// Streams smaller than this live in the mini-stream.
 pub const MINI_CUTOFF: usize = 4096;
+/// [MS-CFB] v3 header size, which is also one regular sector.
+const CFB_V3_HEADER_SIZE: usize = 512;
+/// [MS-CFB] v3 directory-entry size.
+const CFB_DIRECTORY_ENTRY_SIZE: usize = 128;
+/// [MS-CFB] header DIFAT capacity before DIFAT sectors are required.
+const CFB_HEADER_DIFAT_ENTRIES: usize = 109;
+/// [MS-CFB] v3 sector-shift value for 512-byte regular sectors.
+const CFB_V3_SECTOR_SHIFT: u16 = 9;
+/// [MS-CFB] mini-sector-shift value for 64-byte mini sectors.
+const CFB_MINI_SECTOR_SHIFT: u16 = 6;
 /// ProgID MathType registers for its equation objects.
 pub const PROG_ID: &str = "Equation.DSMT4";
 
@@ -125,6 +135,11 @@ struct Placed {
 /// [`Error::EquationTooLarge`] when the stream would need more than the 109
 /// FAT sectors that fit in the CFB header (about 7 MB).
 pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
+    write_mathtype_cfb(equation_native)
+}
+
+/// Write the fixed-layout CFB v3 container used by MathType equation objects.
+fn write_mathtype_cfb(equation_native: &[u8]) -> Result<Vec<u8>> {
     // Directory order mirrors MathType: index 1..=4 are the root's children.
     let streams: [(&str, &[u8]); 4] = [
         ("\u{1}Ole", OLE_STREAM),
@@ -174,7 +189,7 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
     while n_fat * (SECTOR / 4) < n_fat + others {
         n_fat += 1;
     }
-    if n_fat > 109 {
+    if n_fat > CFB_HEADER_DIFAT_ENTRIES {
         return Err(Error::EquationTooLarge {
             stream_len: equation_native.len(),
         });
@@ -215,13 +230,13 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
     }
 
     // ── Header ──────────────────────────────────────────────────────────────
-    let mut header = [0u8; SECTOR];
+    let mut header = [0u8; CFB_V3_HEADER_SIZE];
     header[0..8].copy_from_slice(&MAGIC);
     put_u16(&mut header, 24, 0x003E); // minor version
     put_u16(&mut header, 26, 0x0003); // major version (v3)
     put_u16(&mut header, 28, 0xFFFE); // little-endian
-    put_u16(&mut header, 30, 9); // sector size 2^9
-    put_u16(&mut header, 32, 6); // mini sector size 2^6
+    put_u16(&mut header, 30, CFB_V3_SECTOR_SHIFT);
+    put_u16(&mut header, 32, CFB_MINI_SECTOR_SHIFT);
     put_u32(&mut header, 44, n_fat as u32); // NumFATSectors
     put_u32(&mut header, 48, dir_first as u32); // FirstDirectorySector
     put_u32(&mut header, 56, MINI_CUTOFF as u32);
@@ -237,7 +252,7 @@ pub fn make_ole(equation_native: &[u8]) -> Result<Vec<u8>> {
     put_u32(&mut header, 64, n_minifat as u32);
     put_u32(&mut header, 68, ENDOFCHAIN); // no DIFAT sectors
     put_u32(&mut header, 72, 0);
-    for i in 0..109 {
+    for i in 0..CFB_HEADER_DIFAT_ENTRIES {
         put_u32(
             &mut header,
             76 + i * 4,
@@ -420,7 +435,7 @@ pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
     // 3. Read Directory stream
     let dir_bytes = read_chain(data, sector_size, &fat, first_dir_sect, None);
     let mut entries = Vec::new();
-    for entry in dir_bytes.as_chunks::<128>().0 {
+    for entry in dir_bytes.as_chunks::<CFB_DIRECTORY_ENTRY_SIZE>().0 {
         let name_len = get_u16(entry, 64).unwrap_or(0) as usize;
         let entry_type = entry[66];
         if entry_type == 0 || !(2..=64).contains(&name_len) {
