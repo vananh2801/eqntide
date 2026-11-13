@@ -36,6 +36,10 @@ struct MathmlEncoder {
 }
 
 impl MathmlEncoder {
+    fn new() -> Self {
+        Self { depth: 0 }
+    }
+
     fn encode_children(&mut self, node: &MathNode) -> Result<Vec<u8>> {
         if node.tag == "mrow" && node.attr("data-omml-d") == Some("true") {
             if let Some(delim_bytes) = self.try_encode_omml_delimiter(node)? {
@@ -1399,7 +1403,7 @@ fn enc_mtext(node: &MathNode) -> Vec<u8> {
 }
 
 fn encode_mathml_children(math_el: &MathNode) -> Result<Vec<u8>> {
-    MathmlEncoder { depth: 0 }.encode_children(math_el)
+    MathmlEncoder::new().encode_children(math_el)
 }
 
 /// Convert a MathML `<math>` tree to MTEF equation content bytes.
