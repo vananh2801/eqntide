@@ -12,6 +12,10 @@ use crate::docx::{
 };
 use crate::error::Result as ConvResult;
 
+mod paths;
+
+use paths::{collect_docx_files_recursive, default_dir_output, default_file_output, is_docx_file};
+
 /// Convert equations in a .docx file or directory between OMML and MathType OLE objects.
 #[derive(Parser, Debug)]
 #[command(
@@ -134,103 +138,6 @@ fn configure_logging(verbose: bool, quiet: bool) {
     // set_logger fails if already installed (e.g. repeated calls in tests); fine.
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(log_level(verbose, quiet));
-}
-
-fn default_file_output(
-    input: &Path,
-    to_omml: bool,
-    upgrade: bool,
-    upgrade_target: UpgradeTargetArg,
-) -> PathBuf {
-    let stem = input
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let suffix = if upgrade {
-        match upgrade_target {
-            UpgradeTargetArg::Omml => "upgraded_omml",
-            UpgradeTargetArg::Mathtype => "upgraded_mathtype",
-        }
-    } else if to_omml {
-        "omml"
-    } else {
-        "mathtype"
-    };
-    input.with_file_name(format!("{stem}_{suffix}.docx"))
-}
-
-fn default_dir_output(
-    input: &Path,
-    to_omml: bool,
-    upgrade: bool,
-    upgrade_target: UpgradeTargetArg,
-) -> PathBuf {
-    let suffix = if upgrade {
-        match upgrade_target {
-            UpgradeTargetArg::Omml => "upgraded_omml",
-            UpgradeTargetArg::Mathtype => "upgraded_mathtype",
-        }
-    } else if to_omml {
-        "omml"
-    } else {
-        "mathtype"
-    };
-    // Resolve trailing slashes or `.` if needed
-    let resolved = if input.file_name().is_some() {
-        input.to_path_buf()
-    } else {
-        input.canonicalize().unwrap_or_else(|_| input.to_path_buf())
-    };
-    let name = resolved
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "output".to_owned());
-    resolved.with_file_name(format!("{name}_{suffix}"))
-}
-
-fn is_docx_file(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("docx"))
-}
-
-fn is_ignored_name(path: &Path) -> bool {
-    path.file_name()
-        .map(|n| n.to_string_lossy())
-        .is_some_and(|name| name.starts_with("~$") || name.starts_with('.'))
-}
-
-fn collect_docx_files_recursive(
-    dir: &Path,
-    exclude_dir: Option<&Path>,
-    out: &mut Vec<PathBuf>,
-) -> std::io::Result<()> {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .collect();
-    entries.sort();
-
-    for path in entries {
-        if is_ignored_name(&path) {
-            continue;
-        }
-        if let Some(ex) = exclude_dir {
-            if path == ex {
-                continue;
-            }
-            if let (Ok(canon_p), Ok(canon_ex)) = (path.canonicalize(), ex.canonicalize()) {
-                if canon_p == canon_ex {
-                    continue;
-                }
-            }
-        }
-        if path.is_dir() {
-            collect_docx_files_recursive(&path, exclude_dir, out)?;
-        } else if path.is_file() && is_docx_file(&path) {
-            out.push(path);
-        }
-    }
-    Ok(())
 }
 
 fn convert_single_file(src: &Path, dst: &Path, args: &Args) -> ConvResult<ConversionSummary> {
