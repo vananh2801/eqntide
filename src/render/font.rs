@@ -9,6 +9,7 @@ use super::canvas::Canvas;
 
 mod geometry;
 mod metadata;
+mod selection;
 
 use geometry::{outline_to_segments, segments_to_polys};
 
@@ -512,33 +513,14 @@ impl Fonts {
             }
         }
 
-        let mut ch = ch;
-        if style == MathStyle::LcGreek && ('\u{03B1}'..='\u{03C9}').contains(&ch) {
-            ch = std::char::from_u32(ch as u32 + 0x1D34B).unwrap_or(ch);
-        }
-
-        let primary = match style {
-            MathStyle::Text | MathStyle::Function | MathStyle::Number => &self.regular,
-            MathStyle::Variable => &self.italic,
-            MathStyle::VectorMatrix => &self.bold,
-            MathStyle::LcGreek | MathStyle::UcGreek => &self.math,
-            MathStyle::Symbol | MathStyle::ExtraMath => &self.math,
-        };
-
-        let fallback_chain = match style {
-            MathStyle::LcGreek => [primary, &self.math, &self.regular],
-            MathStyle::Symbol | MathStyle::ExtraMath => [primary, &self.regular, &self.italic],
-            _ => [primary, &self.math, &self.regular],
-        };
-
-        for f in fallback_chain {
-            let id = f.glyph_id(ch);
-            if id.0 != 0 {
-                return (f, id);
-            }
-        }
-
-        (primary, primary.glyph_id(ch))
+        selection::pick_glyph(
+            style,
+            ch,
+            &self.regular,
+            &self.italic,
+            &self.bold,
+            &self.math,
+        )
     }
 
     fn scale_for(font: &FontRef<'static>, em_px: f32) -> PxScale {
