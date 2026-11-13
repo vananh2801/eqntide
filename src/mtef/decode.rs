@@ -2427,6 +2427,19 @@ fn parse_mtef_with_version(mtef_data: &[u8], ver: u8) -> Option<Vec<MtefObj>> {
     }
 }
 
+fn mathml_from_objects(mut objs: Vec<MtefObj>) -> MathNode {
+    apply_mover_to_list(&mut objs);
+    let children = convert_objs(&objs);
+    let root_child = if objs.len() == 1 && matches!(objs[0], MtefObj::Pile { .. }) {
+        children
+    } else {
+        vec![MathNode::with_children("mrow", children)]
+    };
+    let mut math = MathNode::with_children("math", root_child);
+    math.set_attr("display", "block");
+    math
+}
+
 /// Convert raw MTEF bytes (after stripping the 28-byte OLE header, or extracted
 /// from a WMF comment) into a [`MathNode`] `<math>` tree.
 pub fn mtef_to_mathml(mtef_data: &[u8]) -> Option<MathNode> {
@@ -2438,21 +2451,9 @@ pub fn mtef_to_mathml(mtef_data: &[u8]) -> Option<MathNode> {
         return None;
     }
 
-    let mut objs = parse_mtef_with_version(mtef_data, ver)
+    let objs = parse_mtef_with_version(mtef_data, ver)
         .or_else(|| parse_mtef_with_version(mtef_data, if ver == 5 { 3 } else { 5 }))?;
-
-    apply_mover_to_list(&mut objs);
-
-    let children = convert_objs(&objs);
-    let root_child = if objs.len() == 1 && matches!(objs[0], MtefObj::Pile { .. }) {
-        children
-    } else {
-        vec![MathNode::with_children("mrow", children)]
-    };
-
-    let mut math = MathNode::with_children("math", root_child);
-    math.set_attr("display", "block");
-    Some(math)
+    Some(mathml_from_objects(objs))
 }
 
 /// Extract MTEF from a MathType OLE binary (`.bin`) and decode it into a [`MathNode`] tree.
