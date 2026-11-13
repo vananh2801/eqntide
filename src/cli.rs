@@ -2,18 +2,14 @@
 
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::docx::{
-    convert_to_omml_with, convert_with, upgrade_legacy_mathtype_docx_with, ConversionSummary,
-    EmbedMode, Options, PreviewFormat, ToOmmlOptions, UpgradeOptions, UpgradeTarget,
-};
-use crate::error::Result as ConvResult;
-
+mod conversion;
 mod paths;
 
+use conversion::convert_single_file;
 use paths::{collect_docx_files_recursive, default_dir_output, default_file_output, is_docx_file};
 
 /// Convert equations in a .docx file or directory between OMML and MathType OLE objects.
@@ -23,7 +19,7 @@ use paths::{collect_docx_files_recursive, default_dir_output, default_file_outpu
     version,
     about = "Convert equations in a .docx file or directory (recursively) between OMML and MathType OLE objects."
 )]
-struct Args {
+pub(super) struct Args {
     /// Input .docx file or directory containing .docx files (scanned recursively)
     #[arg(required_unless_present = "server")]
     input: Option<PathBuf>,
@@ -94,7 +90,7 @@ pub enum UpgradeTargetArg {
 
 /// `--preview` values.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
-enum PreviewArg {
+pub(super) enum PreviewArg {
     Emf,
     Png,
 }
@@ -138,44 +134,6 @@ fn configure_logging(verbose: bool, quiet: bool) {
     // set_logger fails if already installed (e.g. repeated calls in tests); fine.
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(log_level(verbose, quiet));
-}
-
-fn convert_single_file(src: &Path, dst: &Path, args: &Args) -> ConvResult<ConversionSummary> {
-    if let Some(parent) = dst.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-    if args.upgrade {
-        let opts = UpgradeOptions {
-            target: match args.upgrade_target {
-                UpgradeTargetArg::Omml => UpgradeTarget::ModernOmml,
-                UpgradeTargetArg::Mathtype => UpgradeTarget::ModernMathType,
-            },
-            font_pt: args.font_size,
-            math_font: args.math_font.clone(),
-        };
-        upgrade_legacy_mathtype_docx_with(src, dst, &opts)
-    } else if args.to_omml {
-        let opts = ToOmmlOptions {
-            math_font: args.math_font.clone(),
-        };
-        convert_to_omml_with(src, dst, &opts)
-    } else {
-        let opts = Options {
-            mode: if args.omml_fallback {
-                EmbedMode::OmmlFallback
-            } else {
-                EmbedMode::Preview
-            },
-            font_pt: args.font_size,
-            preview: match args.preview {
-                PreviewArg::Emf => PreviewFormat::Emf,
-                PreviewArg::Png => PreviewFormat::Png,
-            },
-        };
-        convert_with(src, dst, &opts)
-    }
 }
 
 /// Run the CLI with the process's real stdout / stderr. Returns the exit code.
