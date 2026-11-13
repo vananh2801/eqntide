@@ -686,6 +686,25 @@ mod tests {
     }
 
     #[test]
+    fn package_keeps_relationships_and_media_parts_linked() {
+        let math = MathNode::parse("<math><mi>x</mi></math>").unwrap();
+        let opc = mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0).unwrap();
+        let root = xml::parse(opc.as_bytes()).unwrap();
+        let parts: Vec<_> = root.elements().collect();
+
+        assert!(opc.contains("Id=\"rId1\""));
+        assert!(opc.contains("Id=\"rId2\""));
+        assert!(parts.iter().any(|part| {
+            part.attr(Some(NS_PKG), "name")
+                .is_some_and(|name| name.starts_with("/word/embeddings/oleObject"))
+        }));
+        assert!(parts.iter().any(|part| {
+            part.attr(Some(NS_PKG), "name")
+                .is_some_and(|name| name.starts_with("/word/media/equation"))
+        }));
+    }
+
+    #[test]
     fn test_flat_opc_emf_mtef_fallback() {
         let math = MathNode::parse("<math><mi>a</mi><mo>+</mo><mi>b</mi></math>").unwrap();
 
