@@ -496,140 +496,179 @@ fn escape_attr(s: &str, out: &mut String) {
 ///
 /// `hint` is the prefix the element/attribute would like to have. Returns the
 /// prefix to write (`None` = default namespace).
-fn pick_prefix(
-    scope: &mut Vec<NsDecl>,
-    decls: &mut Vec<NsDecl>,
-    hint: Option<&str>,
-    uri: &str,
-    is_attr: bool,
-    counter: &mut usize,
-) -> Option<String> {
-    // 1. The hinted prefix already means `uri` here.
-    match hint {
-        Some(h) if lookup(scope, Some(h)) == Some(uri) => return Some(h.to_owned()),
-        None if !is_attr && lookup(scope, None) == Some(uri) => return None,
-        _ => {}
-    }
-    // 2. Some other (visible) prefix already means `uri`.
-    let candidate = scope
-        .iter()
-        .rev()
-        .filter(|(p, u)| p.is_some() && u == uri)
-        .map(|(p, _)| p.clone())
-        .find(|p| lookup(scope, p.as_deref()) == Some(uri));
-    if let Some(Some(p)) = candidate {
-        return Some(p);
-    }
-    // 3. Declare it here.
-    let (prefix, decl): (Option<String>, NsDecl) = match hint {
-        Some(h) if lookup(scope, Some(h)).is_none() => {
-            (Some(h.to_owned()), (Some(h.to_owned()), uri.to_owned()))
-        }
-        None if !is_attr => (None, (None, uri.to_owned())),
-        _ => {
-            let mut p;
-            loop {
-                *counter += 1;
-                p = format!("ns{counter}");
-                if lookup(scope, Some(&p)).is_none() {
-                    break;
-                }
-            }
-            (Some(p.clone()), (Some(p), uri.to_owned()))
-        }
-    };
-    scope.push(decl.clone());
-    decls.push(decl);
-    prefix
+struct XmlSerializer {
+    scope: Vec<NsDecl>,
+    prefix_counter: usize,
+    out: String,
 }
 
-fn write_element(e: &Element, scope: &mut Vec<NsDecl>, counter: &mut usize, out: &mut String) {
-    let mark = scope.len();
-    let mut decls: Vec<NsDecl> = e.nsdecls.clone();
-    scope.extend(e.nsdecls.iter().cloned());
-
-    // Element name.
-    let eprefix = match e.ns.as_deref() {
-        Some(uri) => pick_prefix(scope, &mut decls, e.prefix.as_deref(), uri, false, counter),
-        None => {
-            // No namespace: make sure no default namespace leaks in.
-            if lookup(scope, None).is_some() {
-                let d: NsDecl = (None, String::new());
-                scope.push(d.clone());
-                decls.push(d);
-            }
-            None
+impl XmlSerializer {
+    fn new() -> Self {
+        Self {
+            scope: Vec::new(),
+            prefix_counter: 0,
+            out: String::new(),
         }
-    };
+    }
 
-    // Attribute names (may add declarations too).
-    let mut attr_names: Vec<String> = Vec::with_capacity(e.attrs.len());
-    for a in &e.attrs {
-        let name = match a.ns.as_deref() {
-            Some(uri) => {
-                match pick_prefix(scope, &mut decls, a.prefix.as_deref(), uri, true, counter) {
-                    Some(p) => format!("{p}:{}", a.local),
-                    None => a.local.clone(), // unreachable for attributes, kept defensive
-                }
+    fn into_string(self) -> String {
+        self.out
+    }
+
+    fn pick_prefix(
+        &mut self,
+        decls: &mut Vec<NsDecl>,
+        hint: Option<&str>,
+        uri: &str,
+        is_attr: bool,
+    ) -> Option<String> {
+        // 1. The hinted prefix already means `uri` here.
+        match hint {
+            Some(h) if lookup(&self.scope, Some(h)) == Some(uri) => return Some(h.to_owned()),
+            None if !is_attr && lookup(&self.scope, None) == Some(uri) => return None,
+            _ => {}
+        }
+        // 2. Some other (visible) prefix already means `uri`.
+        let candidate = self
+            .scope
+            .iter()
+            .rev()
+            .filter(|(p, u)| p.is_some() && u == uri)
+            .map(|(p, _)| p.clone())
+            .find(|p| lookup(&self.scope, p.as_deref()) == Some(uri));
+        if let Some(Some(p)) = candidate {
+            return Some(p);
+        }
+        // 3. Declare it here.
+        let (prefix, decl): (Option<String>, NsDecl) = match hint {
+            Some(h) if lookup(&self.scope, Some(h)).is_none() => {
+                (Some(h.to_owned()), (Some(h.to_owned()), uri.to_owned()))
             }
-            None => a.local.clone(),
+            None if !is_attr => (None, (None, uri.to_owned())),
+            _ => {
+                let mut p;
+                loop {
+                    self.prefix_counter += 1;
+                    p = format!("ns{}", self.prefix_counter);
+                    if lookup(&self.scope, Some(&p)).is_none() {
+                        break;
+                    }
+                }
+                (Some(p.clone()), (Some(p), uri.to_owned()))
+            }
         };
-        attr_names.push(name);
+        self.scope.push(decl.clone());
+        decls.push(decl);
+        prefix
     }
 
-    let qname = match &eprefix {
-        Some(p) => format!("{p}:{}", e.local),
-        None => e.local.clone(),
-    };
-
-    out.push('<');
-    out.push_str(&qname);
-    for (p, u) in &decls {
-        match p {
-            Some(p) => write!(out, " xmlns:{p}=\"").unwrap(),
-            None => out.push_str(" xmlns=\""),
-        }
-        escape_attr(u, out);
-        out.push('"');
-    }
-    for (a, name) in e.attrs.iter().zip(&attr_names) {
-        write!(out, " {name}=\"").unwrap();
-        escape_attr(&a.value, out);
-        out.push('"');
-    }
-
-    if e.children.is_empty() {
-        out.push_str("/>");
-    } else {
-        out.push('>');
-        for n in &e.children {
-            match n {
-                Node::Element(c) => write_element(c, scope, counter, out),
-                Node::Text(t) => escape_text(t, out),
-                Node::Comment(c) => {
-                    out.push_str("<!--");
-                    out.push_str(c);
-                    out.push_str("-->");
+    fn qualified_name(&mut self, e: &Element, decls: &mut Vec<NsDecl>) -> String {
+        // Element name.
+        let eprefix = match e.ns.as_deref() {
+            Some(uri) => self.pick_prefix(decls, e.prefix.as_deref(), uri, false),
+            None => {
+                // No namespace: make sure no default namespace leaks in.
+                if lookup(&self.scope, None).is_some() {
+                    let d: NsDecl = (None, String::new());
+                    self.scope.push(d.clone());
+                    decls.push(d);
                 }
-                Node::Pi(p) => {
-                    out.push_str("<?");
-                    out.push_str(p);
-                    out.push_str("?>");
+                None
+            }
+        };
+
+        match eprefix {
+            Some(p) => format!("{p}:{}", e.local),
+            None => e.local.clone(),
+        }
+    }
+
+    fn attribute_names(&mut self, e: &Element, decls: &mut Vec<NsDecl>) -> Vec<String> {
+        let mut attr_names: Vec<String> = Vec::with_capacity(e.attrs.len());
+        for a in &e.attrs {
+            let name = match a.ns.as_deref() {
+                Some(uri) => {
+                    match self.pick_prefix(decls, a.prefix.as_deref(), uri, true) {
+                        Some(p) => format!("{p}:{}", a.local),
+                        None => a.local.clone(), // unreachable for attributes, kept defensive
+                    }
+                }
+                None => a.local.clone(),
+            };
+            attr_names.push(name);
+        }
+
+        attr_names
+    }
+
+    fn write_declarations(&mut self, decls: &[NsDecl]) {
+        for (p, u) in decls {
+            match p {
+                Some(p) => write!(self.out, " xmlns:{p}=\"").unwrap(),
+                None => self.out.push_str(" xmlns=\""),
+            }
+            escape_attr(u, &mut self.out);
+            self.out.push('\"');
+        }
+    }
+
+    fn write_attributes(&mut self, attrs: &[Attr], names: &[String]) {
+        for (a, name) in attrs.iter().zip(names) {
+            write!(self.out, " {name}=\"").unwrap();
+            escape_attr(&a.value, &mut self.out);
+            self.out.push('\"');
+        }
+    }
+
+    fn write_children(&mut self, children: &[Node]) {
+        for node in children {
+            match node {
+                Node::Element(child) => self.write_element(child),
+                Node::Text(text) => escape_text(text, &mut self.out),
+                Node::Comment(comment) => {
+                    self.out.push_str("<!--");
+                    self.out.push_str(comment);
+                    self.out.push_str("-->");
+                }
+                Node::Pi(pi) => {
+                    self.out.push_str("<?");
+                    self.out.push_str(pi);
+                    self.out.push_str("?>");
                 }
             }
         }
-        out.push_str("</");
-        out.push_str(&qname);
-        out.push('>');
     }
-    scope.truncate(mark);
+
+    fn write_element(&mut self, e: &Element) {
+        let mark = self.scope.len();
+        let mut decls = e.nsdecls.clone();
+        self.scope.extend(e.nsdecls.iter().cloned());
+        let qname = self.qualified_name(e, &mut decls);
+        let attr_names = self.attribute_names(e, &mut decls);
+
+        self.out.push('<');
+        self.out.push_str(&qname);
+        self.write_declarations(&decls);
+        self.write_attributes(&e.attrs, &attr_names);
+
+        if e.children.is_empty() {
+            self.out.push_str("/>");
+        } else {
+            self.out.push('>');
+            self.write_children(&e.children);
+            self.out.push_str("</");
+            self.out.push_str(&qname);
+            self.out.push('>');
+        }
+        self.scope.truncate(mark);
+    }
 }
 
 /// Serialise `root` without an XML declaration.
 pub fn to_string(root: &Element) -> String {
-    let mut out = String::new();
-    write_element(root, &mut Vec::new(), &mut 0, &mut out);
-    out
+    let mut serializer = XmlSerializer::new();
+    serializer.write_element(root);
+    serializer.into_string()
 }
 
 /// Serialise `root` as a standalone UTF-8 document, with an XML declaration
@@ -637,9 +676,12 @@ pub fn to_string(root: &Element) -> String {
 /// `lxml.etree.tostring(root, xml_declaration=True, encoding="UTF-8",
 /// standalone=True)`.
 pub fn to_bytes(root: &Element) -> Vec<u8> {
-    let mut out = String::from("<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n");
-    write_element(root, &mut Vec::new(), &mut 0, &mut out);
-    out.into_bytes()
+    let mut serializer = XmlSerializer::new();
+    serializer
+        .out
+        .push_str("<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n");
+    serializer.write_element(root);
+    serializer.into_string().into_bytes()
 }
 
 #[cfg(test)]
