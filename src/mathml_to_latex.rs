@@ -120,7 +120,9 @@ fn format_node(node: &MathNode, out: &mut String) {
             // Prime shortcut: x' or x'' instead of x^{\prime}
             if let Some(s) = sup {
                 let st = s.text.trim();
-                if s.tag == "mo" && (st == "'" || st == "\u{2032}" || st == "\u{2033}" || st == "′" || st == "″") {
+                if s.tag == "mo"
+                    && (st == "'" || st == "\u{2032}" || st == "\u{2033}" || st == "′" || st == "″")
+                {
                     out.push_str(st);
                     return;
                 }
@@ -373,7 +375,11 @@ fn map_accent(s: &str) -> Option<&'static str> {
 fn map_fence_delimiter(delim: &str, is_open: bool) -> String {
     let d = delim.trim();
     if d.is_empty() {
-        return if is_open { "\\left.".into() } else { "\\right.".into() };
+        return if is_open {
+            "\\left.".into()
+        } else {
+            "\\right.".into()
+        };
     }
     let p = match d {
         "{" => "\\{",
@@ -573,14 +579,16 @@ fn clean_latex_output(s: &str) -> String {
 mod tests {
     use super::*;
 
+    fn serialize(mathml: &str) -> String {
+        let node = MathNode::parse(mathml).expect("test MathML is valid");
+        mathml_to_latex(&node)
+    }
+
     #[test]
     fn test_fraction_to_latex() {
         let node = MathNode::with_children(
             "mfrac",
-            vec![
-                MathNode::leaf("mi", "x"),
-                MathNode::leaf("mn", "2"),
-            ],
+            vec![MathNode::leaf("mi", "x"), MathNode::leaf("mn", "2")],
         );
         assert_eq!(mathml_to_latex(&node), "\\frac{x}{2}");
     }
@@ -593,10 +601,7 @@ mod tests {
             vec![
                 MathNode::with_children(
                     "msup",
-                    vec![
-                        MathNode::leaf("mi", "b"),
-                        MathNode::leaf("mn", "2"),
-                    ],
+                    vec![MathNode::leaf("mi", "b"), MathNode::leaf("mn", "2")],
                 ),
                 MathNode::leaf("mo", "-"),
                 MathNode::leaf("mn", "4"),
@@ -617,20 +622,13 @@ mod tests {
 
         let den = MathNode::with_children(
             "mrow",
-            vec![
-                MathNode::leaf("mn", "2"),
-                MathNode::leaf("mi", "a"),
-            ],
+            vec![MathNode::leaf("mn", "2"), MathNode::leaf("mi", "a")],
         );
 
         let frac = MathNode::with_children("mfrac", vec![num, den]);
         let eq = MathNode::with_children(
             "mrow",
-            vec![
-                MathNode::leaf("mi", "x"),
-                MathNode::leaf("mo", "="),
-                frac,
-            ],
+            vec![MathNode::leaf("mi", "x"), MathNode::leaf("mo", "="), frac],
         );
 
         let tex = mathml_to_latex(&eq);
@@ -649,5 +647,46 @@ mod tests {
         );
         let tex = mathml_to_latex(&node);
         assert_eq!(tex, "\\alpha_{1}^{2}");
+    }
+
+    #[test]
+    fn serializes_named_functions_text_and_invisible_operators() {
+        let latex = serialize(
+            "<math><mi>sin</mi><mo>\u{2062}</mo><mi>x</mi><mtext>price_&amp;{tax}</mtext></math>",
+        );
+
+        assert_eq!(latex, "\\sin x\\text{price\\_\\&\\{tax\\}}");
+    }
+
+    #[test]
+    fn serializes_binomials_and_indexed_roots() {
+        let binomial = serialize("<mfrac linethickness=\"0\"><mi>n</mi><mi>k</mi></mfrac>");
+        let indexed_root = serialize("<mroot><mi>x</mi><mn>3</mn></mroot>");
+
+        assert_eq!(binomial, "\\binom{n}{k}");
+        assert_eq!(indexed_root, "\\sqrt[3]{x}");
+    }
+
+    #[test]
+    fn serializes_fences_and_matrices_with_current_spacing() {
+        let fenced = serialize("<mfenced open=\"{\" close=\"}\"><mi>x</mi><mi>y</mi></mfenced>");
+        let matrix = serialize(
+            "<mtable><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd><mi>c</mi></mtd><mtd><mi>d</mi></mtd></mtr></mtable>",
+        );
+
+        assert_eq!(fenced, "\\left\\{ x, y \\right\\}");
+        assert_eq!(matrix, "\\begin{matrix} a & b \\\\ c & d \\end{matrix}");
+    }
+
+    #[test]
+    fn serializes_accents_large_operator_limits_and_enclosures() {
+        let accent = serialize("<mover><mi>x</mi><mo>^</mo></mover>");
+        let limits = serialize("<munderover><mo>∑</mo><mi>i</mi><mi>n</mi></munderover>");
+        let enclosure =
+            serialize("<menclose notation=\"box\"><mi>x</mi><mo>+</mo><mi>y</mi></menclose>");
+
+        assert_eq!(accent, "\\hat{x}");
+        assert_eq!(limits, "\\sum_{i}^{n}");
+        assert_eq!(enclosure, "\\boxed{x+y}");
     }
 }
