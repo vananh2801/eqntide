@@ -6,22 +6,20 @@
 use crate::error::{Error, Result};
 use crate::mathml::MathNode;
 use crate::mtef::{
-    big_operator, boxed, char_record, dirac, double_overbar, double_underbar, embell_record,
+    big_operator, char_record, dirac, double_overbar, double_underbar, embell_record,
     extensible_arrow, fence, fraction, harpoon_arrow, integral, interval, joint_status,
-    long_division, map_char_with_variant, matrix, nroot_radical, over_arc, over_hat, over_tilde,
-    overbar, overbrace, overbracket, overscript, pile, presubscript, presubsuperscript,
-    presuperscript, slash_fraction, sqrt_radical, strike_through, subscript, subsuperscript,
+    long_division, map_char_with_variant, nroot_radical, over_arc, over_hat, over_tilde, overbar,
+    overbrace, overbracket, overscript, slash_fraction, sqrt_radical, subscript, subsuperscript,
     superscript, under_harpoon_arrow, under_overscript, under_vector_arrow, underbar, underbrace,
     underbracket, underscript, vector_arrow, EMB_1DOT, EMB_1PRIME, EMB_2DOT, EMB_2PRIME, EMB_3DOT,
     EMB_3PRIME, EMB_4DOT, EMB_BARROW, EMB_BPRIME, EMB_FROWN, EMB_HAT, EMB_L1ARROW, EMB_LARROW,
     EMB_MBAR, EMB_NOT, EMB_OBAR, EMB_R1ARROW, EMB_RARROW, EMB_SMILE, EMB_TILDE, EMB_U_1DOT,
     EMB_U_2DOT, EMB_U_3DOT, EMB_U_4DOT, EMB_U_BAR, EMB_U_BARROW, EMB_U_FROWN, EMB_U_L1ARROW,
-    EMB_U_LARROW, EMB_U_R1ARROW, EMB_U_RARROW, EMB_U_SMILE, EMB_U_TILDE, END, HALIGN_CENTER,
-    HALIGN_LEFT, TF_FUNCTION, TF_NUMBER, TF_SYMBOL, TF_TEXT, TF_VARIABLE, TF_VECTOR, TM_ANGLE,
-    TM_BAR, TM_BRACE, TM_BRACK, TM_CEILING, TM_COPROD, TM_DBAR, TM_FLOOR, TM_INTER, TM_OBRACK,
-    TM_PAREN, TM_PROD, TM_SUM, TM_SUMOP, TM_UNION, TV_BO_SUM, TV_INT_1, TV_INT_2, TV_INT_3,
-    TV_INT_CCW_LOOP, TV_INT_CW_LOOP, TV_INT_LOOP, TV_ST_DOWN, TV_ST_HORIZ, TV_ST_UP,
-    VALIGN_CENTER_BASELINE,
+    EMB_U_LARROW, EMB_U_R1ARROW, EMB_U_RARROW, EMB_U_SMILE, EMB_U_TILDE, END, TF_FUNCTION,
+    TF_NUMBER, TF_SYMBOL, TF_TEXT, TF_VARIABLE, TF_VECTOR, TM_ANGLE, TM_BAR, TM_BRACE, TM_BRACK,
+    TM_CEILING, TM_COPROD, TM_DBAR, TM_FLOOR, TM_INTER, TM_OBRACK, TM_PAREN, TM_PROD, TM_SUM,
+    TM_SUMOP, TM_UNION, TV_BO_SUM, TV_INT_1, TV_INT_2, TV_INT_3, TV_INT_CCW_LOOP, TV_INT_CW_LOOP,
+    TV_INT_LOOP,
 };
 use crate::symbols::{has_foreign_letters, is_function, is_prime_char, prime_order};
 
@@ -30,12 +28,13 @@ const MAX_DEPTH: usize = 256;
 use crate::symbols::operators::ascii_operator_spelling as op_map;
 
 mod records;
+mod structural;
 
 use records::{attach_embell, is_single_char_record};
 
 type ScriptedCloseFence = (usize, Vec<u8>, Vec<u8>);
 
-struct MathmlEncoder {
+pub(super) struct MathmlEncoder {
     depth: usize,
 }
 
@@ -44,7 +43,7 @@ impl MathmlEncoder {
         Self { depth: 0 }
     }
 
-    fn encode_children(&mut self, node: &MathNode) -> Result<Vec<u8>> {
+    pub(super) fn encode_children(&mut self, node: &MathNode) -> Result<Vec<u8>> {
         if node.tag == "mrow" && node.attr("data-omml-d") == Some("true") {
             if let Some(delim_bytes) = self.try_encode_omml_delimiter(node)? {
                 return Ok(delim_bytes);
@@ -292,7 +291,7 @@ impl MathmlEncoder {
         }
     }
 
-    fn dispatch(&mut self, node: &MathNode) -> Result<Vec<u8>> {
+    pub(super) fn dispatch(&mut self, node: &MathNode) -> Result<Vec<u8>> {
         if self.depth >= MAX_DEPTH {
             return Err(Error::TooDeep);
         }
@@ -303,7 +302,7 @@ impl MathmlEncoder {
     }
 
     /// Encode child `idx` of `node`, or nothing when it does not exist.
-    fn nth(&mut self, node: &MathNode, idx: usize) -> Result<Vec<u8>> {
+    pub(super) fn nth(&mut self, node: &MathNode, idx: usize) -> Result<Vec<u8>> {
         match node.children.get(idx) {
             Some(c) => self.dispatch(c),
             None => Ok(Vec::new()),
@@ -736,180 +735,6 @@ impl MathmlEncoder {
             // math / mrow / mtr / mtd / mstyle / anything unknown: recurse into children.
             _ => self.encode_children(node),
         }
-    }
-
-    fn encode_mmultiscripts(&mut self, node: &MathNode) -> Result<Vec<u8>> {
-        let base = self.nth(node, 0)?;
-        if let Some(prescripts_pos) = node.children.iter().position(|c| c.tag == "mprescripts") {
-            let presub_node = node.children.get(prescripts_pos + 1);
-            let presup_node = node.children.get(prescripts_pos + 2);
-            let presub = match presub_node {
-                Some(n) if n.tag != "none" => self.dispatch(n)?,
-                _ => Vec::new(),
-            };
-            let presup = match presup_node {
-                Some(n) if n.tag != "none" => self.dispatch(n)?,
-                _ => Vec::new(),
-            };
-            let mut out = match (!presub.is_empty(), !presup.is_empty()) {
-                (true, true) => presubsuperscript(&base, &presub, &presup),
-                (true, false) => presubscript(&base, &presub),
-                (false, true) => presuperscript(&base, &presup),
-                (false, false) => base,
-            };
-            // Also encode any postscripts that appeared before <mprescripts/>
-            if prescripts_pos > 1 {
-                let post_sub = match node.children.get(1) {
-                    Some(n) if n.tag != "none" => self.dispatch(n)?,
-                    _ => Vec::new(),
-                };
-                let post_sup = match node.children.get(2) {
-                    Some(n) if prescripts_pos > 2 && n.tag != "none" => self.dispatch(n)?,
-                    _ => Vec::new(),
-                };
-                match (!post_sub.is_empty(), !post_sup.is_empty()) {
-                    (true, true) => out.extend(subsuperscript(&post_sub, &post_sup)),
-                    (true, false) => out.extend(subscript(&post_sub)),
-                    (false, true) => out.extend(superscript(&post_sup)),
-                    (false, false) => {}
-                }
-            }
-            return Ok(out);
-        }
-
-        // No <mprescripts/>: treat like <msubsup>
-        let mut out = base;
-        let sub = match node.children.get(1) {
-            Some(n) if n.tag != "none" => self.dispatch(n)?,
-            _ => Vec::new(),
-        };
-        let sup = match node.children.get(2) {
-            Some(n) if n.tag != "none" => self.dispatch(n)?,
-            _ => Vec::new(),
-        };
-        match (!sub.is_empty(), !sup.is_empty()) {
-            (true, true) => out.extend(subsuperscript(&sub, &sup)),
-            (true, false) => out.extend(subscript(&sub)),
-            (false, true) => out.extend(superscript(&sup)),
-            (false, false) => {}
-        }
-        Ok(out)
-    }
-
-    fn encode_menclose(&mut self, node: &MathNode) -> Result<Vec<u8>> {
-        let inner = self.encode_children(node)?;
-        let notation = node.attr("notation").unwrap_or("box");
-        if notation.contains("longdiv") {
-            return Ok(long_division(&inner, None));
-        }
-
-        let mut strike_bits = 0u8;
-        if notation.contains("horizontalstrike") {
-            strike_bits |= TV_ST_HORIZ;
-        }
-        if notation.contains("updiagonalstrike") {
-            strike_bits |= TV_ST_UP;
-        }
-        if notation.contains("downdiagonalstrike") {
-            strike_bits |= TV_ST_DOWN;
-        }
-        if strike_bits != 0 {
-            return Ok(strike_through(&inner, strike_bits));
-        }
-
-        let rounded = notation.contains("roundedbox");
-        let all_sides = notation.contains("box") || rounded;
-        let actuarial = notation.contains("actuarial");
-        let left = all_sides || notation.contains("left");
-        let right = all_sides || actuarial || notation.contains("right");
-        let top = all_sides || actuarial || notation.contains("top");
-        let bottom = all_sides || actuarial || notation.contains("bottom");
-        Ok(boxed(&inner, rounded, left, right, top, bottom))
-    }
-
-    fn encode_mtable(&mut self, node: &MathNode) -> Result<Vec<u8>> {
-        let nrows = node.children.len();
-        if nrows == 0 {
-            return Ok(Vec::new());
-        }
-        let ncols = node
-            .children
-            .iter()
-            .map(|mtr| mtr.children.len())
-            .max()
-            .unwrap_or(0);
-
-        // Single-column stack (e.g. from <m:eqArr>, <pile>, or long division with quotient).
-        if ncols <= 1 {
-            // Check for 2-row long division with quotient (`tmLDIV` with `tvLD_UPPER` decoded by `mtef/decode.rs`)
-            if nrows == 2 {
-                let row1_cell = node.children[1]
-                    .children
-                    .first()
-                    .unwrap_or(&node.children[1]);
-                if row1_cell.children.len() == 1
-                    && row1_cell.children[0].tag == "menclose"
-                    && row1_cell.children[0]
-                        .attr("notation")
-                        .unwrap_or("")
-                        .contains("longdiv")
-                {
-                    let row0_cell = node.children[0]
-                        .children
-                        .first()
-                        .unwrap_or(&node.children[0]);
-                    let quotient = self.encode_children(row0_cell)?;
-                    let dividend = self.encode_children(&row1_cell.children[0])?;
-                    return Ok(long_division(
-                        &dividend,
-                        (!quotient.is_empty()).then_some(quotient.as_slice()),
-                    ));
-                }
-            }
-
-            let mut encoded_rows: Vec<Vec<u8>> = Vec::with_capacity(nrows);
-            for mtr in &node.children {
-                let row_bytes = match mtr.children.first() {
-                    Some(mtd) => self.encode_children(mtd)?,
-                    None => self.encode_children(mtr)?,
-                };
-                encoded_rows.push(row_bytes);
-            }
-            if nrows == 1 {
-                return Ok(encoded_rows.pop().unwrap_or_default());
-            }
-            let row_refs: Vec<&[u8]> = encoded_rows.iter().map(Vec::as_slice).collect();
-            let halign = match node.attr("columnalign") {
-                Some("center") => HALIGN_CENTER,
-                _ => HALIGN_LEFT,
-            };
-            return Ok(pile(halign, VALIGN_CENTER_BASELINE, &row_refs));
-        }
-
-        // Multi-column grid (e.g. from <m:m>): encode as MTEF MATRIX.
-        let mut encoded_cells: Vec<Vec<u8>> = Vec::with_capacity(nrows * ncols);
-        for mtr in &node.children {
-            for col_idx in 0..ncols {
-                let cell_bytes = match mtr.children.get(col_idx) {
-                    Some(mtd) => self.encode_children(mtd)?,
-                    None => Vec::new(),
-                };
-                encoded_cells.push(cell_bytes);
-            }
-        }
-        let cell_refs: Vec<&[u8]> = encoded_cells.iter().map(Vec::as_slice).collect();
-        let h_just = match node.attr("columnalign") {
-            Some("left") => HALIGN_LEFT,
-            _ => HALIGN_CENTER,
-        };
-        Ok(matrix(
-            VALIGN_CENTER_BASELINE,
-            h_just,
-            VALIGN_CENTER_BASELINE,
-            nrows.min(u8::MAX as usize) as u8,
-            ncols.min(u8::MAX as usize) as u8,
-            &cell_refs,
-        ))
     }
 }
 
