@@ -66,16 +66,7 @@ pub fn convert_bytes_to_omml_with(
         );
 
         if summary.converted > before_converted {
-            // Ensure xmlns:m is declared on the root element for clean serialization
-            if !doc_root
-                .nsdecls
-                .iter()
-                .any(|(p, u)| p.as_deref() == Some("m") || u == NS_M)
-            {
-                doc_root
-                    .nsdecls
-                    .push((Some("m".to_owned()), NS_M.to_owned()));
-            }
+            ensure_math_namespace(&mut doc_root);
             pkg.set(&xml_path, xml::to_bytes(&doc_root));
 
             if let Some(mut rels_root) = rels_opt {
@@ -208,6 +199,16 @@ pub(crate) fn build_rel_map(rels_root: &Element, xml_path: &str) -> HashMap<Stri
 }
 
 // ── XML Tree Rewriting ───────────────────────────────────────────────────────
+
+fn ensure_math_namespace(root: &mut Element) {
+    if !root
+        .nsdecls
+        .iter()
+        .any(|(prefix, uri)| prefix.as_deref() == Some("m") || uri == NS_M)
+    {
+        root.nsdecls.push((Some("m".to_owned()), NS_M.to_owned()));
+    }
+}
 
 pub(crate) fn is_mathtype_prog_id(prog_id: &str) -> bool {
     matches!(prog_id, "Equation.DSMT4" | "Equation.3" | "Equation.2")
