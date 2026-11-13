@@ -612,3 +612,62 @@ pub fn to_bytes(root: &Element) -> Vec<u8> {
     write_element(root, &mut Vec::new(), &mut 0, &mut out);
     out.into_bytes()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_namespace_scopes_and_retains_entity_derived_newlines() {
+        let root = parse(
+            br#"<w:root xmlns:w="urn:word" xmlns="urn:default" w:role="editor"><child>one&#13;&#10;two</child></w:root>"#,
+        )
+        .expect("test XML is valid");
+
+        assert!(root.is("urn:word", "root"));
+        assert_eq!(root.attr(Some("urn:word"), "role"), Some("editor"));
+        let child = root
+            .find("urn:default", "child")
+            .expect("default namespace child");
+        assert_eq!(child.text(), "one\r\ntwo");
+    }
+
+    #[test]
+    fn serializes_namespace_hints_and_escaped_content() {
+        let mut root =
+            Element::new(Some("urn:word"), Some("w"), "root").with_nsdecl(Some("w"), "urn:word");
+        root.set_attr(None, None, "plain", "<&\"\n\t\r");
+
+        let mut math = Element::new(Some("urn:math"), Some("m"), "math");
+        math.children.push(Node::Text("x<y & z".into()));
+        root.push(math);
+
+        assert_eq!(
+            to_string(&root),
+            "<w:root xmlns:w=\"urn:word\" plain=\"&lt;&amp;&quot;&#10;&#9;&#13;\"><ns1:math xmlns:ns1=\"urn:math\">x&lt;y &amp; z</ns1:math></w:root>"
+        );
+        assert_eq!(
+            to_bytes(&root),
+            b"<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n<w:root xmlns:w=\"urn:word\" plain=\"&lt;&amp;&quot;&#10;&#9;&#13;\"><ns1:math xmlns:ns1=\"urn:math\">x&lt;y &amp; z</ns1:math></w:root>"
+        );
+    }
+
+    #[test]
+    fn preserves_comments_and_processing_instructions_in_elements() {
+        let root =
+            parse(b"<root><!--note--><?target value?><child/></root>").expect("test XML is valid");
+
+        assert_eq!(
+            root.children,
+            vec![
+                Node::Comment("note".into()),
+                Node::Pi("target value".into()),
+                Node::Element(Element::new(None, None, "child")),
+            ]
+        );
+        assert_eq!(
+            to_string(&root),
+            "<root><!--note--><?target value?><child/></root>"
+        );
+    }
+}
