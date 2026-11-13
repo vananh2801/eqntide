@@ -426,6 +426,13 @@ fn find_package_part<'a>(
     })
 }
 
+fn document_relationships(parts: &HashMap<String, PartData>) -> HashMap<String, String> {
+    find_package_part(parts, "word/_rels/document.xml.rels", "document.xml.rels")
+        .and_then(|part| part.xml_data.as_ref())
+        .map(|rels| build_rel_map(rels, "word/document.xml"))
+        .unwrap_or_default()
+}
+
 fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
     let mut parts: HashMap<String, PartData> = HashMap::new();
 
@@ -439,13 +446,7 @@ fn extract_from_package(pkg_el: &Element) -> Result<MathNode> {
     let doc_part = find_package_part(&parts, "word/document.xml", "document.xml");
     if let Some(doc_part) = doc_part {
         if let Some(ref doc_el) = doc_part.xml_data {
-            // Build rel_map from word/_rels/document.xml.rels
-            let rels_part =
-                find_package_part(&parts, "word/_rels/document.xml.rels", "document.xml.rels");
-            let rel_map = rels_part
-                .and_then(|p| p.xml_data.as_ref())
-                .map(|rels| build_rel_map(rels, "word/document.xml"))
-                .unwrap_or_default();
+            let rel_map = document_relationships(&parts);
 
             // 1a. MathType OLE object in document.xml
             for el in doc_el.iter() {
