@@ -107,7 +107,7 @@ pub fn upgrade_legacy_mathtype_bytes_with(
             .map(|r| build_rel_map(r, &xml_path))
             .unwrap_or_default();
 
-        let mut rels_root = rels_opt.unwrap_or_else(|| xml::parse(EMPTY_RELS).unwrap());
+        let mut rels_root = rels_opt.unwrap_or_else(default_relationships_root);
         let mut existing_ids: HashSet<String> = rels_root
             .elements()
             .filter_map(|c| c.attr(None, "Id").map(str::to_owned))
@@ -181,6 +181,10 @@ fn next_package_part_indices(pkg: &Package) -> (usize, usize) {
         img_index += 1;
     }
     (ole_index, img_index)
+}
+
+fn default_relationships_root() -> Element {
+    xml::parse(EMPTY_RELS).expect("built-in relationship XML is valid")
 }
 
 fn next_unique_id(existing: &mut HashSet<String>, prefix: &str) -> String {
