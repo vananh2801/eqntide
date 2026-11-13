@@ -8,9 +8,15 @@
 use super::records::*;
 use super::typeface::{TF_EXPAND, TF_MTEXTRA, TF_SYMBOL};
 
+mod basic;
 mod slots;
 
-use slots::{append_fraction_slot, append_line_slot, append_opt_line_slot, tmpl_header_u16};
+pub use basic::{
+    base_slash_fraction, fraction, fraction_variant, nroot_radical, presubscript,
+    presubsuperscript, presuperscript, script_template, slash_fraction, small_fraction,
+    sqrt_radical, subscript, subsuperscript, superscript,
+};
+use slots::{append_line_slot, append_opt_line_slot, tmpl_header_u16};
 
 // ── Additional size record constants (MTEF 5) ───────────────────────────────
 
@@ -330,208 +336,11 @@ pub fn hat_box_template(selector: u8, variation: u8, content: &[u8], mt_code: u3
     out
 }
 
-// ── Fractions & Radicals (selectors 10, 11) ─────────────────────────────────
-
-/// `tmFRACT` (selector 11, variation 0): standard full-size fraction with two
-/// slots (numerator / denominator).
-pub fn fraction(num: &[u8], den: &[u8]) -> Vec<u8> {
-    cat(&[
-        &tmpl_header(TM_FRACT, 0, 0),
-        &line(false),
-        num,
-        END,
-        &line(false),
-        den,
-        END,
-        END,
-    ])
-}
-
-/// `tmFRACT` (selector 11) variants: piece fraction (`TV_FR_SMALL = 0x01`),
-/// slash fraction (`TV_FR_SLASH = 0x02`), or baseline-aligned slash fraction
-/// (`TV_FR_SLASH | TV_FR_BASE = 0x06`).
-pub fn fraction_variant(num: &[u8], den: &[u8], variation: u8) -> Vec<u8> {
-    let mut out = tmpl_header(TM_FRACT, variation, 0);
-    let small = variation & TV_FR_SMALL != 0;
-    append_fraction_slot(&mut out, num, small);
-    append_fraction_slot(&mut out, den, small);
-    out.extend_from_slice(END);
-    out
-}
-
-/// Diagonal / bevelled fraction (`tmFRACT` with `tvFR_SLASH`).
-pub fn slash_fraction(num: &[u8], den: &[u8]) -> Vec<u8> {
-    fraction_variant(num, den, TV_FR_SLASH)
-}
-
-/// Piece / small fraction (`tmFRACT` with `tvFR_SMALL`).
-pub fn small_fraction(num: &[u8], den: &[u8]) -> Vec<u8> {
-    let mut out = fraction_variant(num, den, TV_FR_SMALL);
-    out.extend_from_slice(FULL);
-    out
-}
-
-/// Linear / baseline slash fraction (`tmFRACT` with `tvFR_SLASH | tvFR_BASE`).
-pub fn base_slash_fraction(num: &[u8], den: &[u8]) -> Vec<u8> {
-    fraction_variant(num, den, TV_FR_SLASH | TV_FR_BASE)
-}
-
-/// `tmROOT` (selector 10, variation `TV_ROOT_SQ = 0`): square root (radicand
-/// slot + null degree slot).
-pub fn sqrt_radical(rad: &[u8]) -> Vec<u8> {
-    cat(&[
-        &tmpl_header(TM_ROOT, TV_ROOT_SQ, 0),
-        &line(false),
-        rad,
-        END,
-        SUB,
-        &line(true),
-        END,
-        FULL,
-    ])
-}
-
-/// `tmROOT` (selector 10, variation `TV_ROOT_NTH = 1`): nth root (two slots:
-/// `slot[1]` = radicand, `slot[2]` = degree in `SUB` size).
-pub fn nroot_radical(rad: &[u8], deg: &[u8]) -> Vec<u8> {
-    cat(&[
-        &tmpl_header(TM_ROOT, TV_ROOT_NTH, 0),
-        &line(false),
-        rad,
-        END,
-        SUB,
-        &line(false),
-        deg,
-        END,
-        END,
-        FULL,
-    ])
-}
-
-// ── Subscripts & Superscripts (selectors 27, 28, 29) ────────────────────────
-//
-// In MTEF 5 (`ScrBoxClass`) and `mathtypejx` (`mover.py` + `subsup.xsl`):
-// - Without `tvSU_PRECEDES` (0x00), the base precedes the TMPL in the parent LINE.
-// - With `tvSU_PRECEDES` (0x01), the base follows the TMPL in the parent LINE.
-// - Inside the TMPL, there are ALWAYS 2 slots after `SUB`:
-//     1. Subscript slot (`line(true)` for `tmSUP`)
-//     2. Superscript slot (`line(true)` for `tmSUB`)
-//   When `mover.py` runs, it inserts the base at `slot[1]`, shifting the
-//   subscript to `slot[2]` and the superscript to `slot[3]`.
-
-/// `tmSUB` (selector 27): the base precedes this TMPL in the parent LINE;
-/// slot 1 is the subscript and slot 2 is a null slot.
-pub fn subscript(sub: &[u8]) -> Vec<u8> {
-    cat(&[
-        &tmpl_header(TM_SUB, 0, 0),
-        SUB,
-        &line(false),
-        sub,
-        END,
-        &line(true),
-        END,
-        FULL,
-    ])
-}
-
-/// `tmSUP` (selector 28): the base precedes this TMPL in the parent LINE;
-/// slot 1 is a null slot and slot 2 is the superscript.
-pub fn superscript(sup: &[u8]) -> Vec<u8> {
-    cat(&[
-        &tmpl_header(TM_SUP, 0, 0),
-        SUB,
-        &line(true),
-        &line(false),
-        sup,
-        END,
-        END,
-        FULL,
-    ])
-}
-
-/// `tmSUBSUP` (selector 29): the base precedes this TMPL in the parent LINE;
-/// slot 1 is the subscript and slot 2 is the superscript.
-pub fn subsuperscript(sub: &[u8], sup: &[u8]) -> Vec<u8> {
-    cat(&[
-        &tmpl_header(TM_SUBSUP, 0, 0),
-        SUB,
-        &line(false),
-        sub,
-        END,
-        &line(false),
-        sup,
-        END,
-        END,
-        FULL,
-    ])
-}
-
-/// General `tmSUB` / `tmSUP` / `tmSUBSUP` (selectors 27, 28, 29) builder.
-///
-/// Always emits both the subscript slot and the superscript slot (using a null
-/// `LINE` for the unused slot in `tmSUB` or `tmSUP`) so `mathtypejx`'s
-/// `mover.py` and `subsup.xsl` (`slot[2]` for sub, `slot[3]` for sup) work
-/// identically for postscripts (`precedes = false`) and prescripts
-/// (`precedes = true`, `tvSU_PRECEDES`).
-pub fn script_template(
-    selector: u8,
-    first: &[u8],
-    second: Option<&[u8]>,
-    precedes: bool,
-) -> Vec<u8> {
-    let variation = if precedes { TV_SU_PRECEDES } else { 0x00 };
-    let mut out = tmpl_header(selector, variation, 0);
-    out.extend_from_slice(SUB);
-    match selector {
-        TM_SUP => {
-            // For tmSUP, if `second` is None, `first` is the superscript and
-            // the subscript slot (slot 1) must be a null line.
-            if let Some(sup) = second {
-                append_line_slot(&mut out, first);
-                append_line_slot(&mut out, sup);
-            } else {
-                out.extend_from_slice(&line(true));
-                append_line_slot(&mut out, first);
-            }
-        }
-        TM_SUB => {
-            append_line_slot(&mut out, first);
-            append_opt_line_slot(&mut out, second);
-        }
-        _ => {
-            // TM_SUBSUP
-            append_line_slot(&mut out, first);
-            append_opt_line_slot(&mut out, second);
-        }
-    }
-    out.extend_from_slice(END);
-    out.extend_from_slice(FULL);
-    out
-}
-
-/// Prescript subscript (`tmSUB` with `tvSU_PRECEDES`): the template precedes
-/// `base` in the parent `LINE`.
-pub fn presubscript(base: &[u8], sub: &[u8]) -> Vec<u8> {
-    let tmpl = script_template(TM_SUB, sub, None, true);
-    cat(&[&tmpl, base])
-}
-
-/// Prescript superscript (`tmSUP` with `tvSU_PRECEDES`): the template precedes
-/// `base` in the parent `LINE`.
-pub fn presuperscript(base: &[u8], sup: &[u8]) -> Vec<u8> {
-    let tmpl = script_template(TM_SUP, sup, None, true);
-    cat(&[&tmpl, base])
-}
-
-/// Prescript sub+superscript (`tmSUBSUP` with `tvSU_PRECEDES`): the template
-/// precedes `base` in the parent `LINE`.
-pub fn presubsuperscript(base: &[u8], sub: &[u8], sup: &[u8]) -> Vec<u8> {
-    let tmpl = script_template(TM_SUBSUP, sub, Some(sup), true);
-    cat(&[&tmpl, base])
-}
+// Fraction/radical/script constructors live in `basic.rs`.
 
 // ── Over / Under Bars, Vectors, Hats, Arcs & Extensible Arrows ──────────────
 
+#[allow(clippy::empty_line_after_doc_comments)]
 /// `tmOBAR` (selector 13, variation 0): single overbar over characters.
 pub fn overbar(base: &[u8]) -> Vec<u8> {
     one_slot_template(TM_OBAR, 0, base)
