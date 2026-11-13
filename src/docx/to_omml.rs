@@ -272,6 +272,16 @@ fn convert_ole_rid_to_omml(
     Ok(omml)
 }
 
+fn mtef_from_metafile(path: &str, bytes: &[u8]) -> Option<Vec<u8>> {
+    if path.to_ascii_lowercase().ends_with(".wmf") {
+        extract_mtef_from_wmf(bytes).or_else(|| extract_mtef_from_emf(bytes))
+    } else if path.to_ascii_lowercase().ends_with(".emf") {
+        extract_mtef_from_emf(bytes).or_else(|| extract_mtef_from_wmf(bytes))
+    } else {
+        None
+    }
+}
+
 fn rewrite_element(
     parent: &mut Element,
     pkg: &Package,
@@ -476,11 +486,7 @@ fn try_convert_metafile_run(
         let Some(img_bytes) = pkg.get(target_path) else {
             continue;
         };
-        let mtef_bytes = if is_wmf {
-            extract_mtef_from_wmf(img_bytes).or_else(|| extract_mtef_from_emf(img_bytes))
-        } else {
-            extract_mtef_from_emf(img_bytes).or_else(|| extract_mtef_from_wmf(img_bytes))
-        };
+        let mtef_bytes = mtef_from_metafile(target_path, img_bytes);
         let Some(mtef_bytes) = mtef_bytes else {
             continue;
         };
