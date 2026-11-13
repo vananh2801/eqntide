@@ -185,11 +185,14 @@ pub struct Fonts {
     ssty_map: HashMap<u16, (u16, u16)>,
 }
 
+fn load_bundled_font(data: &'static [u8]) -> FontRef<'static> {
+    FontRef::try_from_slice(data).expect("bundled font is valid")
+}
+
 /// Access the lazily-loaded font set.
 pub fn fonts() -> &'static Fonts {
     static F: OnceLock<Fonts> = OnceLock::new();
     F.get_or_init(|| {
-        let load = |d: &'static [u8]| FontRef::try_from_slice(d).expect("bundled font is valid");
         let math_face =
             ttf_parser::Face::parse(FONT_MATH, 0).expect("bundled STIX Two Math font is valid");
         let upem = math_face.units_per_em() as f32;
@@ -354,10 +357,10 @@ pub fn fonts() -> &'static Fonts {
         let ssty_map = parse_ssty_map(&math_face);
 
         Fonts {
-            regular: load(FONT_REGULAR),
-            italic: load(FONT_ITALIC),
-            bold: load(FONT_BOLD),
-            math: load(FONT_MATH),
+            regular: load_bundled_font(FONT_REGULAR),
+            italic: load_bundled_font(FONT_ITALIC),
+            bold: load_bundled_font(FONT_BOLD),
+            math: load_bundled_font(FONT_MATH),
             math_face,
             constants,
             radical_info,
