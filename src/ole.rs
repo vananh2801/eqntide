@@ -401,6 +401,34 @@ fn read_mini_chain(
     Some(out)
 }
 
+fn parse_directory_entries(dir_bytes: &[u8]) -> Vec<DirItem> {
+    let mut entries = Vec::new();
+    for entry in dir_bytes.as_chunks::<CFB_DIRECTORY_ENTRY_SIZE>().0 {
+        let name_len = get_u16(entry, 64).unwrap_or(0) as usize;
+        let entry_type = entry[66];
+        if entry_type == 0 || !(2..=64).contains(&name_len) {
+            continue;
+        }
+        let u16_count = (name_len / 2).saturating_sub(1);
+        let mut utf16 = Vec::with_capacity(u16_count);
+        for i in 0..u16_count {
+            if let Some(ch) = get_u16(entry, i * 2) {
+                if ch == 0 {
+                    break;
+                }
+                utf16.push(ch);
+            }
+        }
+        entries.push(DirItem {
+            name: String::from_utf16_lossy(&utf16),
+            entry_type,
+            start_sect: get_u32(entry, 116).unwrap_or(ENDOFCHAIN),
+            size: get_u32(entry, 120).unwrap_or(0) as usize,
+        });
+    }
+    entries
+}
+
 /// Extract a named stream from an OLE2 Compound File Binary (`data`).
 pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
     if data.len() < SECTOR || data.get(0..8)? != MAGIC {
@@ -460,33 +488,7 @@ pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
 
     // 3. Read Directory stream
     let dir_bytes = read_chain(data, sector_size, &fat, first_dir_sect, None);
-    let mut entries = Vec::new();
-    for entry in dir_bytes.as_chunks::<CFB_DIRECTORY_ENTRY_SIZE>().0 {
-        let name_len = get_u16(entry, 64).unwrap_or(0) as usize;
-        let entry_type = entry[66];
-        if entry_type == 0 || !(2..=64).contains(&name_len) {
-            continue;
-        }
-        let u16_count = (name_len / 2).saturating_sub(1);
-        let mut utf16 = Vec::with_capacity(u16_count);
-        for i in 0..u16_count {
-            if let Some(ch) = get_u16(entry, i * 2) {
-                if ch == 0 {
-                    break;
-                }
-                utf16.push(ch);
-            }
-        }
-        let name = String::from_utf16_lossy(&utf16);
-        let start_sect = get_u32(entry, 116).unwrap_or(ENDOFCHAIN);
-        let size = get_u32(entry, 120).unwrap_or(0) as usize;
-        entries.push(DirItem {
-            name,
-            entry_type,
-            start_sect,
-            size,
-        });
-    }
+    let entries = parse_directory_entries(&dir_bytes);
 
     let root = entries.iter().find(|e| e.entry_type == 5)?;
     let target = target_names.iter().find_map(|&cand| {
