@@ -7,12 +7,14 @@
 use crate::error::{Error, Result};
 use crate::mathml::MathNode;
 use crate::omml::decode::NS_M;
-use crate::symbols::{is_prime_char, prime_order};
+use crate::symbols::prime_order;
 use crate::xml::{Element, Node};
 
 mod fences;
+mod normalization;
 
 use fences::{classify_fence_char, is_stretchy_fence_mo, FenceKind};
+use normalization::{collect_text, normalize_mathml};
 
 const MAX_DEPTH: usize = 256;
 
@@ -20,7 +22,7 @@ const NS_W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main
 
 /// Known multi-letter mathematical function names that MathType stores as
 /// individual `<mi>` character records.
-const KNOWN_FUNCTIONS: &[&str] = &[
+pub(super) const KNOWN_FUNCTIONS: &[&str] = &[
     "arcsin", "arccos", "arctan", "arccot", "arcsec", "arccsc", "arsinh", "arcosh", "artanh",
     "arcoth", "sinh", "cosh", "tanh", "coth", "sech", "csch", "cotg", "cosec", "sin", "cos", "tan",
     "cot", "sec", "csc", "tg", "ctg", "log", "ln", "lg", "exp", "lim", "limsup", "liminf", "max",
@@ -49,7 +51,7 @@ fn m_val_el(local: &str, val: &str) -> Element {
 
 // ── Classification Helpers ───────────────────────────────────────────────────
 
-fn is_empty_node(node: &MathNode) -> bool {
+pub(super) fn is_empty_node(node: &MathNode) -> bool {
     if !node.text.trim().is_empty() {
         return false;
     }
@@ -281,249 +283,6 @@ fn map_accent_char(s: &str) -> Option<&'static str> {
         "\u{0311}" => Some("\u{0311}"),
         "\u{033F}" | "==" | "═" => Some("\u{033F}"),
         _ => None,
-    }
-}
-
-// ── Pre-Normalization of MathML Tree ─────────────────────────────────────────
-
-fn is_single_ascii_letter_mi(node: &MathNode) -> Option<char> {
-    if node.tag != "mi" || node.attr("mathvariant") == Some("normal") {
-        return None;
-    }
-    let mut chars = node.text.chars();
-    let ch = chars.next()?;
-    if chars.next().is_none() && ch.is_ascii_alphabetic() {
-        Some(ch)
-    } else {
-        None
-    }
-}
-
-fn merge_function_names_in_list(children: Vec<MathNode>) -> Vec<MathNode> {
-    let mut out = Vec::with_capacity(children.len());
-    let mut i = 0;
-    while i < children.len() {
-        if is_single_ascii_letter_mi(&children[i]).is_some() {
-            let mut j = i;
-            let mut combined = String::new();
-            while j < children.len() {
-                if let Some(ch) = is_single_ascii_letter_mi(&children[j]) {
-                    combined.push(ch);
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
-
-            // Case 1: The run of <mi> letters + the base of the immediately following
-            // script/limit element forms a known function name (e.g. s-i-n^2, l-i-m_{x->0}).
-            if j < children.len()
-                && matches!(
-                    children[j].tag.as_str(),
-                    "msup" | "msub" | "msubsup" | "munder" | "mover" | "munderover"
-                )
-                && !children[j].children.is_empty()
-            {
-                if let Some(base_ch) = is_single_ascii_letter_mi(&children[j].children[0]) {
-                    let mut with_base = combined.clone();
-                    with_base.push(base_ch);
-                    if KNOWN_FUNCTIONS.contains(&with_base.as_str()) {
-                        let mut script_node = children[j].clone();
-                        let mut fn_mi = MathNode::leaf("mi", &with_base);
-                        fn_mi.set_attr("mathvariant", "normal");
-                        script_node.children[0] = fn_mi;
-                        out.push(script_node);
-                        i = j + 1;
-                        continue;
-                    }
-                }
-            }
-
-            // Case 2: The run of <mi> letters itself is a known function name.
-            if combined.len() >= 2 && KNOWN_FUNCTIONS.contains(&combined.as_str()) {
-                let mut fn_mi = MathNode::leaf("mi", &combined);
-                fn_mi.set_attr("mathvariant", "normal");
-                out.push(fn_mi);
-                i = j;
-                continue;
-            }
-
-            // Case 3: A known function prefix followed by a single variable letter (e.g. "sinx").
-            let mut matched_prefix = None;
-            if combined.len() >= 3 {
-                let split_at = combined.len() - 1;
-                let prefix = &combined[..split_at];
-                if KNOWN_FUNCTIONS.contains(&prefix) {
-                    matched_prefix = Some((prefix.to_owned(), j - 1));
-                }
-            }
-            if let Some((fn_name, next_idx)) = matched_prefix {
-                let mut fn_mi = MathNode::leaf("mi", &fn_name);
-                fn_mi.set_attr("mathvariant", "normal");
-                out.push(fn_mi);
-                i = next_idx;
-                continue;
-            }
-        }
-
-        out.push(children[i].clone());
-        i += 1;
-    }
-    out
-}
-
-fn collect_text(node: &MathNode) -> String {
-    let mut s = String::new();
-    if !node.text.is_empty() {
-        s.push_str(&node.text);
-    }
-    for c in &node.children {
-        s.push_str(&collect_text(c));
-    }
-    s
-}
-
-fn normalize_mathml(node: &MathNode) -> MathNode {
-    let mut normalized_children: Vec<MathNode> =
-        node.children.iter().map(normalize_mathml).collect();
-
-    // <msup> with prime mark as root -> direct row
-    if node.tag == "msup" && normalized_children.len() == 2 {
-        let sup_text = collect_text(&normalized_children[1]);
-        if let Some(order) = prime_order(&sup_text) {
-            let prime_str = match order {
-                1 => "'",
-                2 => "''",
-                3.. => "'''",
-                0 => unreachable!(),
-            };
-            let mut row = Vec::new();
-            let base = normalized_children.remove(0);
-            if base.tag == "mrow" {
-                row.extend(base.children);
-            } else if !is_empty_node(&base) {
-                row.push(base);
-            }
-            row.push(MathNode::leaf("mo", prime_str));
-            return MathNode::with_children("mrow", row);
-        }
-    }
-
-    // <mroot> with empty degree -> <msqrt>
-    if node.tag == "mroot"
-        && normalized_children.len() == 2
-        && is_empty_node(&normalized_children[1])
-    {
-        return MathNode::with_children("msqrt", vec![normalized_children.remove(0)]);
-    }
-
-    // <mmultiscripts> with empty base and a single non-empty script -> unwrap
-    if node.tag == "mmultiscripts"
-        && !normalized_children.is_empty()
-        && is_empty_node(&normalized_children[0])
-    {
-        let non_empty: Vec<&MathNode> = normalized_children[1..]
-            .iter()
-            .filter(|c| c.tag != "mprescripts" && c.tag != "none" && !is_empty_node(c))
-            .collect();
-        if non_empty.len() == 1 {
-            return non_empty[0].clone();
-        }
-    }
-
-    // Clean empty scripts inside row-like containers
-    let mut cleaned_children = Vec::with_capacity(normalized_children.len());
-    for child in normalized_children {
-        // Unwrap <msup> with prime mark into direct base + prime
-        if child.tag == "msup" && child.children.len() == 2 {
-            let sup_text = collect_text(&child.children[1]);
-            if let Some(order) = prime_order(&sup_text) {
-                let prime_str = match order {
-                    1 => "'",
-                    2 => "''",
-                    3.. => "'''",
-                    0 => unreachable!(),
-                };
-                let base = child.children.into_iter().next().unwrap();
-                if base.tag == "mrow" {
-                    cleaned_children.extend(base.children);
-                } else if !is_empty_node(&base) {
-                    cleaned_children.push(base);
-                }
-                cleaned_children.push(MathNode::leaf("mo", prime_str));
-                continue;
-            }
-        }
-
-        // Unwrap <msubsup> with prime in sup into <msub> with primed base
-        if child.tag == "msubsup" && child.children.len() == 3 {
-            let sup_text = collect_text(&child.children[2]);
-            if let Some(order) = prime_order(&sup_text) {
-                let prime_str = match order {
-                    1 => "'",
-                    2 => "''",
-                    3.. => "'''",
-                    0 => unreachable!(),
-                };
-                let mut iter = child.children.into_iter();
-                let base = iter.next().unwrap();
-                let sub = iter.next().unwrap();
-                let primed_base =
-                    MathNode::with_children("mrow", vec![base, MathNode::leaf("mo", prime_str)]);
-                cleaned_children.push(MathNode::with_children("msub", vec![primed_base, sub]));
-                continue;
-            }
-        }
-
-        // Split <mi> ending with prime marks into base <mi> + prime <mo>
-        if child.tag == "mi" {
-            let t = child.text.trim();
-            if let Some(prime_idx) = t.find(|c: char| is_prime_char(c)) {
-                if prime_idx > 0 {
-                    let (name, prime_part) = t.split_at(prime_idx);
-                    if let Some(order) = prime_order(prime_part) {
-                        let prime_str = match order {
-                            1 => "'",
-                            2 => "''",
-                            3.. => "'''",
-                            0 => unreachable!(),
-                        };
-                        let mut mi_base = MathNode::leaf("mi", name);
-                        mi_base.attrs = child.attrs.clone();
-                        cleaned_children.push(mi_base);
-                        cleaned_children.push(MathNode::leaf("mo", prime_str));
-                        continue;
-                    }
-                }
-            }
-        }
-        if matches!(
-            child.tag.as_str(),
-            "msub" | "msup" | "msubsup" | "munder" | "mover" | "munderover"
-        ) && child.children.len() >= 2
-            && child.children[1..].iter().all(is_empty_node)
-        {
-            let mut iter = child.children.into_iter();
-            if let Some(base) = iter.next() {
-                if !is_empty_node(&base) {
-                    cleaned_children.push(base);
-                }
-            }
-            let mut sp = MathNode::leaf("mi", "\u{00A0}");
-            sp.set_attr("mathvariant", "normal");
-            cleaned_children.push(sp);
-        } else {
-            cleaned_children.push(child);
-        }
-    }
-
-    let final_children = merge_function_names_in_list(cleaned_children);
-
-    MathNode {
-        tag: node.tag.clone(),
-        text: node.text.clone(),
-        attrs: node.attrs.clone(),
-        children: final_children,
     }
 }
 
