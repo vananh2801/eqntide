@@ -375,6 +375,32 @@ fn read_chain(
     out
 }
 
+fn read_mini_chain(
+    mini_stream: &[u8],
+    mini_sector_size: usize,
+    minifat: &[u32],
+    target: &DirItem,
+) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(target.size);
+    let mut cur = target.start_sect;
+    let max_steps = minifat.len().max(1024);
+    let mut steps = 0;
+    while cur < DIFSECT && steps < max_steps && out.len() < target.size {
+        let off = (cur as usize).checked_mul(mini_sector_size)?;
+        let end = (off + mini_sector_size).min(mini_stream.len());
+        if off >= mini_stream.len() {
+            break;
+        }
+        out.extend_from_slice(&mini_stream[off..end]);
+        cur = minifat.get(cur as usize).copied().unwrap_or(ENDOFCHAIN);
+        steps += 1;
+    }
+    if out.len() > target.size {
+        out.truncate(target.size);
+    }
+    Some(out)
+}
+
 /// Extract a named stream from an OLE2 Compound File Binary (`data`).
 pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
     if data.len() < SECTOR || data.get(0..8)? != MAGIC {
@@ -501,24 +527,7 @@ pub fn read_ole_stream(data: &[u8], target_names: &[&str]) -> Option<Vec<u8>> {
         minifat.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
 
-    let mut out = Vec::with_capacity(target.size);
-    let mut cur = target.start_sect;
-    let max_steps = minifat.len().max(1024);
-    let mut steps = 0;
-    while cur < DIFSECT && steps < max_steps && out.len() < target.size {
-        let off = (cur as usize).checked_mul(mini_sector_size)?;
-        let end = (off + mini_sector_size).min(mini_stream.len());
-        if off >= mini_stream.len() {
-            break;
-        }
-        out.extend_from_slice(&mini_stream[off..end]);
-        cur = minifat.get(cur as usize).copied().unwrap_or(ENDOFCHAIN);
-        steps += 1;
-    }
-    if out.len() > target.size {
-        out.truncate(target.size);
-    }
-    Some(out)
+    read_mini_chain(&mini_stream, mini_sector_size, &minifat, target)
 }
 
 /// Strip the 28-byte `EQNOLEFILEHDR` prefix from a raw `Equation Native` stream
