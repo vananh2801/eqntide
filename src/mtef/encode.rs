@@ -29,6 +29,10 @@ const MAX_DEPTH: usize = 256;
 
 use crate::symbols::operators::ascii_operator_spelling as op_map;
 
+mod records;
+
+use records::{attach_embell, is_single_char_record};
+
 type ScriptedCloseFence = (usize, Vec<u8>, Vec<u8>);
 
 struct MathmlEncoder {
@@ -1132,19 +1136,6 @@ fn is_underbar_str(s: &str) -> bool {
     )
 }
 
-fn is_single_char_record(bytes: &[u8]) -> bool {
-    bytes.len() == 5 && bytes[0] == 0x02 && bytes[1] == 0x00
-}
-
-fn attach_embell(mut char_bytes: Vec<u8>, embell_code: u8) -> Vec<u8> {
-    if is_single_char_record(&char_bytes) {
-        char_bytes[1] |= 0x01; // OPT_CHAR_EMBELL
-        char_bytes.extend_from_slice(&embell_record(embell_code));
-        char_bytes.extend_from_slice(END);
-    }
-    char_bytes
-}
-
 /// Map a Unicode combining mark (or inline prime) to its MTEF `EMB_*` code.
 fn combining_mark_to_embell(c: char) -> Option<u8> {
     match c {
@@ -1216,7 +1207,7 @@ fn emit_char_with_combining_marks(
             break;
         }
     }
-    if !embells.is_empty() && rec.len() == 5 && rec[0] == 0x02 {
+    if !embells.is_empty() && records::is_single_char_record(&rec) {
         rec[1] |= 0x01; // OPT_CHAR_EMBELL
         for emb in embells {
             rec.extend_from_slice(&embell_record(emb));
@@ -1411,4 +1402,23 @@ fn encode_mathml_children(math_el: &MathNode) -> Result<Vec<u8>> {
 /// An empty result means the equation has nothing to encode.
 pub fn mathml_to_mtef_bytes(math_el: &MathNode) -> Result<Vec<u8>> {
     encode_mathml_children(math_el)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emits_stable_leaf_character_records() {
+        let math = MathNode::parse("<math><mi>x</mi><mo>+</mo><mn>2</mn></math>").unwrap();
+        assert_eq!(
+            mathml_to_mtef_bytes(&math).unwrap(),
+            [
+                char_record(TF_VARIABLE, 'x' as u32),
+                char_record(TF_SYMBOL, '+' as u32),
+                char_record(TF_NUMBER, '2' as u32),
+            ]
+            .concat()
+        );
+    }
 }
