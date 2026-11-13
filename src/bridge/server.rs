@@ -309,6 +309,24 @@ fn serve_addin_file(folder: &str, rel_path: &str, origin: Option<&str>) -> Optio
     Some(resp)
 }
 
+fn serve_addin_route(path: &str, origin: Option<&str>) -> Option<HttpResponse> {
+    let (folder, rel_path) = match path {
+        "/manifest.xml" => ("word-addin", "manifest.xml"),
+        path if path.starts_with("/word-addin/") => (
+            "word-addin",
+            path.strip_prefix("/word-addin/").unwrap_or(""),
+        ),
+        path if path.starts_with("/wps-addin/") => {
+            ("wps-addin", path.strip_prefix("/wps-addin/").unwrap_or(""))
+        }
+        _ => return None,
+    };
+    Some(
+        serve_addin_file(folder, rel_path, origin)
+            .unwrap_or_else(|| error_response(404, "file not found", origin)),
+    )
+}
+
 /// Start the local HTTP bridge server on `addr` (e.g. `"127.0.0.1:17890"`).
 pub fn start_bridge_server(addr: &str) -> crate::error::Result<ServerHandle> {
     start_bridge_server_with_callback(addr, None)
@@ -407,6 +425,13 @@ fn handle_http_request(
         return;
     }
 
+    if method == Method::Get {
+        if let Some(resp) = serve_addin_route(path, origin) {
+            let _ = req.respond(resp);
+            return;
+        }
+    }
+
     // 4. Routing
     match (method, path) {
         (Method::Get, "/health") => {
@@ -420,32 +445,6 @@ fn handle_http_request(
                 origin,
             );
             let _ = req.respond(resp);
-        }
-
-        (Method::Get, "/manifest.xml") => {
-            if let Some(resp) = serve_addin_file("word-addin", "manifest.xml", origin) {
-                let _ = req.respond(resp);
-            } else {
-                let _ = req.respond(error_response(404, "file not found", origin));
-            }
-        }
-
-        (Method::Get, p) if p.starts_with("/word-addin/") => {
-            let rel_path = p.strip_prefix("/word-addin/").unwrap_or("");
-            if let Some(resp) = serve_addin_file("word-addin", rel_path, origin) {
-                let _ = req.respond(resp);
-            } else {
-                let _ = req.respond(error_response(404, "file not found", origin));
-            }
-        }
-
-        (Method::Get, p) if p.starts_with("/wps-addin/") => {
-            let rel_path = p.strip_prefix("/wps-addin/").unwrap_or("");
-            if let Some(resp) = serve_addin_file("wps-addin", rel_path, origin) {
-                let _ = req.respond(resp);
-            } else {
-                let _ = req.respond(error_response(404, "file not found", origin));
-            }
         }
 
         (Method::Post, "/window/show") => {
