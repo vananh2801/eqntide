@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+type HttpResponse = Response<std::io::Cursor<Vec<u8>>>;
+
 use crate::docx::{
     base64_decode, base64_encode, convert_to_omml_with, convert_with, flat_opc_to_mathml,
     mathml_to_flat_opc, upgrade_legacy_mathtype_docx_with, FlatOpcMode, Options, PreviewFormat,
@@ -163,7 +165,7 @@ fn get_header<'a>(req: &'a Request, name: &str) -> Option<&'a str> {
 }
 
 /// Attach standard CORS headers and Private Network Access (PNA) header to a response.
-fn add_cors_headers(response: &mut Response<std::io::Cursor<Vec<u8>>>, origin: Option<&str>) {
+fn add_cors_headers(response: &mut HttpResponse, origin: Option<&str>) {
     let allow_origin = match origin {
         Some(o) if !o.is_empty() && o != "null" => o,
         _ => "*",
@@ -194,7 +196,7 @@ fn json_response<T: serde::Serialize>(
     status_code: u16,
     data: &T,
     origin: Option<&str>,
-) -> Response<std::io::Cursor<Vec<u8>>> {
+) -> HttpResponse {
     let body = serde_json::to_vec(data).unwrap_or_default();
     let mut resp = Response::from_data(body).with_status_code(StatusCode(status_code));
     if let Ok(h) = Header::from_bytes(
@@ -207,11 +209,7 @@ fn json_response<T: serde::Serialize>(
     resp
 }
 
-fn error_response(
-    status_code: u16,
-    msg: &str,
-    origin: Option<&str>,
-) -> Response<std::io::Cursor<Vec<u8>>> {
+fn error_response(status_code: u16, msg: &str, origin: Option<&str>) -> HttpResponse {
     json_response(
         status_code,
         &ErrorResponse {
@@ -222,10 +220,7 @@ fn error_response(
     )
 }
 
-fn empty_cors_response(
-    status_code: u16,
-    origin: Option<&str>,
-) -> Response<std::io::Cursor<Vec<u8>>> {
+fn empty_cors_response(status_code: u16, origin: Option<&str>) -> HttpResponse {
     let mut resp = Response::from_data(Vec::new()).with_status_code(StatusCode(status_code));
     add_cors_headers(&mut resp, origin);
     resp
@@ -249,11 +244,7 @@ fn parse_query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// Serve static files for Office Word/WPS Add-ins directly from the bridge server.
-fn serve_addin_file(
-    folder: &str,
-    rel_path: &str,
-    origin: Option<&str>,
-) -> Option<Response<std::io::Cursor<Vec<u8>>>> {
+fn serve_addin_file(folder: &str, rel_path: &str, origin: Option<&str>) -> Option<HttpResponse> {
     if rel_path.contains("..") || rel_path.starts_with('/') || rel_path.starts_with('\\') {
         return None;
     }
