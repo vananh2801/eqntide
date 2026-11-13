@@ -334,6 +334,13 @@ fn append_opt_line_slot(out: &mut Vec<u8>, content: Option<&[u8]>) {
     }
 }
 
+fn append_fraction_slot(out: &mut Vec<u8>, content: &[u8], small: bool) {
+    if small {
+        out.extend_from_slice(SUB);
+    }
+    append_line_slot(out, content);
+}
+
 /// Encode a `TMPL` header whose variation may use 1 or 2 bytes (MTEF 5).
 fn tmpl_header_u16(selector: u8, variation: u16, tmpl_opts: u8) -> Vec<u8> {
     let mut out = vec![0x03, 0x00, selector];
@@ -388,14 +395,9 @@ pub fn fraction(num: &[u8], den: &[u8]) -> Vec<u8> {
 /// (`TV_FR_SLASH | TV_FR_BASE = 0x06`).
 pub fn fraction_variant(num: &[u8], den: &[u8], variation: u8) -> Vec<u8> {
     let mut out = tmpl_header(TM_FRACT, variation, 0);
-    if variation & TV_FR_SMALL != 0 {
-        out.extend_from_slice(SUB);
-    }
-    append_line_slot(&mut out, num);
-    if variation & TV_FR_SMALL != 0 {
-        out.extend_from_slice(SUB);
-    }
-    append_line_slot(&mut out, den);
+    let small = variation & TV_FR_SMALL != 0;
+    append_fraction_slot(&mut out, num, small);
+    append_fraction_slot(&mut out, den, small);
     out.extend_from_slice(END);
     out
 }
