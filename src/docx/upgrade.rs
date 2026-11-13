@@ -561,6 +561,13 @@ mod tests {
     use super::*;
     use std::io::{Cursor, Write};
 
+    #[test]
+    fn allocates_the_first_available_relationship_id() {
+        let mut existing = HashSet::from(["rId1".to_owned(), "rId3".to_owned()]);
+        assert_eq!(next_unique_id(&mut existing, "rId"), "rId2");
+        assert_eq!(next_unique_id(&mut existing, "rId"), "rId4");
+    }
+
     fn make_legacy_wmf_docx(preview_emf: &[u8]) -> Vec<u8> {
         let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
