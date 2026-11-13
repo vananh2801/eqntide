@@ -95,63 +95,16 @@ pub fn upgrade_legacy_mathtype_bytes_with(
     let mut candidate_files_to_remove: HashSet<String> = HashSet::new();
 
     for xml_path in content_parts {
-        let Some(xml_bytes) = pkg.get(&xml_path) else {
-            continue;
-        };
-        let mut doc_root = xml::parse(xml_bytes)?;
-
-        let rels_path = rels_path_for_part(&xml_path);
-        let rels_opt = pkg.get(&rels_path).map(xml::parse).transpose()?;
-        let rel_map = rels_opt
-            .as_ref()
-            .map(|r| build_rel_map(r, &xml_path))
-            .unwrap_or_default();
-
-        let mut rels_root = rels_opt.unwrap_or_else(default_relationships_root);
-        let mut existing_ids: HashSet<String> = rels_root
-            .elements()
-            .filter_map(|c| c.attr(None, "Id").map(str::to_owned))
-            .collect();
-
-        let mut converted_rids: HashSet<String> = HashSet::new();
-        let before_converted = summary.converted;
-
-        upgrade_element(
-            &mut doc_root,
+        upgrade_content_part(
             &mut pkg,
-            &mut rels_root,
+            &xml_path,
             &mut ct_root,
-            &rel_map,
-            &mut existing_ids,
             &mut ole_index,
             &mut img_index,
             opts,
             &mut summary,
-            &mut converted_rids,
+            &mut candidate_files_to_remove,
         )?;
-
-        sanitize_document_baselines(&mut doc_root);
-
-        if summary.converted > before_converted {
-            pkg.set(&xml_path, xml::to_bytes(&doc_root));
-
-            let dead_rids = obsolete_relationship_ids(&doc_root, converted_rids);
-
-            if !dead_rids.is_empty() {
-                for rid in &dead_rids {
-                    if let Some(target_zip_path) = rel_map.get(rid) {
-                        candidate_files_to_remove.insert(target_zip_path.clone());
-                    }
-                }
-                rels_root.children.retain(|n| match n {
-                    Node::Element(e) if e.local == "Relationship" => {
-                        e.attr(None, "Id").is_none_or(|id| !dead_rids.contains(id))
-                    }
-                    _ => true,
-                });
-            }
-            pkg.set(&rels_path, xml::to_bytes(&rels_root));
-        }
     }
 
     if !candidate_files_to_remove.is_empty() {
@@ -160,6 +113,72 @@ pub fn upgrade_legacy_mathtype_bytes_with(
 
     pkg.set(CT_PATH, xml::to_bytes(&ct_root));
     Ok((pkg.write()?, summary))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn upgrade_content_part(
+    pkg: &mut Package,
+    xml_path: &str,
+    ct_root: &mut Element,
+    ole_index: &mut usize,
+    img_index: &mut usize,
+    opts: &UpgradeOptions,
+    summary: &mut ConversionSummary,
+    candidate_files_to_remove: &mut HashSet<String>,
+) -> Result<()> {
+    let Some(xml_bytes) = pkg.get(xml_path) else {
+        return Ok(());
+    };
+    let mut doc_root = xml::parse(xml_bytes)?;
+    let rels_path = rels_path_for_part(xml_path);
+    let rels_opt = pkg.get(&rels_path).map(xml::parse).transpose()?;
+    let rel_map = rels_opt
+        .as_ref()
+        .map(|rels| build_rel_map(rels, xml_path))
+        .unwrap_or_default();
+    let mut rels_root = rels_opt.unwrap_or_else(default_relationships_root);
+    let mut existing_ids = rels_root
+        .elements()
+        .filter_map(|child| child.attr(None, "Id").map(str::to_owned))
+        .collect();
+    let mut converted_rids = HashSet::new();
+    let before_converted = summary.converted;
+
+    upgrade_element(
+        &mut doc_root,
+        pkg,
+        &mut rels_root,
+        ct_root,
+        &rel_map,
+        &mut existing_ids,
+        ole_index,
+        img_index,
+        opts,
+        summary,
+        &mut converted_rids,
+    )?;
+    sanitize_document_baselines(&mut doc_root);
+    if summary.converted == before_converted {
+        return Ok(());
+    }
+
+    pkg.set(xml_path, xml::to_bytes(&doc_root));
+    let dead_rids = obsolete_relationship_ids(&doc_root, converted_rids);
+    for rid in &dead_rids {
+        if let Some(target_zip_path) = rel_map.get(rid) {
+            candidate_files_to_remove.insert(target_zip_path.clone());
+        }
+    }
+    if !dead_rids.is_empty() {
+        rels_root.children.retain(|node| match node {
+            Node::Element(element) if element.local == "Relationship" => element
+                .attr(None, "Id")
+                .is_none_or(|id| !dead_rids.contains(id)),
+            _ => true,
+        });
+    }
+    pkg.set(&rels_path, xml::to_bytes(&rels_root));
+    Ok(())
 }
 
 // ── XML Tree Rewriting ───────────────────────────────────────────────────────
