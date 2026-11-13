@@ -22,65 +22,9 @@ fn format_node(node: &MathNode, out: &mut String) {
         "mfrac" => format_fraction(node, out),
         "msqrt" => format_square_root(node, out),
         "mroot" => format_indexed_root(node, out),
-        "msup" => {
-            let base = node.children.first();
-            let sup = node.children.get(1);
-
-            if let Some(b) = base {
-                format_wrapped(b, out);
-            }
-
-            // Prime shortcut: x' or x'' instead of x^{\prime}
-            if let Some(s) = sup {
-                let st = s.text.trim();
-                if s.tag == "mo"
-                    && (st == "'" || st == "\u{2032}" || st == "\u{2033}" || st == "′" || st == "″")
-                {
-                    out.push_str(st);
-                    return;
-                }
-            }
-
-            trim_trailing_whitespace(out);
-            out.push_str("^{");
-            if let Some(s) = sup {
-                format_node(s, out);
-            }
-            out.push('}');
-        }
-        "msub" => {
-            let base = node.children.first();
-            let sub = node.children.get(1);
-
-            if let Some(b) = base {
-                format_wrapped(b, out);
-            }
-            trim_trailing_whitespace(out);
-            out.push_str("_{");
-            if let Some(s) = sub {
-                format_node(s, out);
-            }
-            out.push('}');
-        }
-        "msubsup" => {
-            let base = node.children.first();
-            let sub = node.children.get(1);
-            let sup = node.children.get(2);
-
-            if let Some(b) = base {
-                format_wrapped(b, out);
-            }
-            trim_trailing_whitespace(out);
-            out.push_str("_{");
-            if let Some(s) = sub {
-                format_node(s, out);
-            }
-            out.push_str("}^{");
-            if let Some(s) = sup {
-                format_node(s, out);
-            }
-            out.push('}');
-        }
+        "msup" => format_superscript(node, out),
+        "msub" => format_subscript(node, out),
+        "msubsup" => format_subsuperscript(node, out),
         "munder" => {
             let base = node.children.first();
             let under = node.children.get(1);
@@ -310,6 +254,49 @@ fn format_optional_node(node: Option<&MathNode>, out: &mut String) {
     if let Some(node) = node {
         format_node(node, out);
     }
+}
+
+fn format_superscript(node: &MathNode, out: &mut String) {
+    let base = node.children.first();
+    let superscript = node.children.get(1);
+    format_optional_wrapped_node(base, out);
+
+    if let Some(prime) = prime_shortcut(superscript) {
+        out.push_str(prime);
+        return;
+    }
+
+    format_script(superscript, "^{", out);
+}
+
+fn prime_shortcut(node: Option<&MathNode>) -> Option<&str> {
+    let node = node?;
+    let text = node.text.trim();
+    (node.tag == "mo" && matches!(text, "'" | "\u{2032}" | "\u{2033}")).then_some(text)
+}
+
+fn format_subscript(node: &MathNode, out: &mut String) {
+    format_optional_wrapped_node(node.children.first(), out);
+    format_script(node.children.get(1), "_{", out);
+}
+
+fn format_subsuperscript(node: &MathNode, out: &mut String) {
+    format_optional_wrapped_node(node.children.first(), out);
+    format_script(node.children.get(1), "_{", out);
+    format_script(node.children.get(2), "^{", out);
+}
+
+fn format_optional_wrapped_node(node: Option<&MathNode>, out: &mut String) {
+    if let Some(node) = node {
+        format_wrapped(node, out);
+    }
+}
+
+fn format_script(node: Option<&MathNode>, prefix: &str, out: &mut String) {
+    trim_trailing_whitespace(out);
+    out.push_str(prefix);
+    format_optional_node(node, out);
+    out.push('}');
 }
 
 fn trim_trailing_whitespace(s: &mut String) {
