@@ -34,17 +34,23 @@ install_linux_wps() {
 
   for TARGET_BASE in "${DIRS[@]}"; do
     local TARGET_DIR="${TARGET_BASE}/EqnTide"
+    local TARGET_VERSION_DIR="${TARGET_BASE}/EqnTide_1.0.0"
+    local LEGACY_DIR="${TARGET_BASE}/MathEditor"
+    local LEGACY_VERSION_DIR="${TARGET_BASE}/MathEditor_1.0.0"
 
     if [[ "${ACTION}" == "uninstall" ]]; then
-      if [[ -d "${TARGET_DIR}" ]]; then
-        echo "--> Removing WPS Add-in from ${TARGET_DIR}..."
-        rm -rf "${TARGET_DIR}"
-        echo "✓ WPS Add-in successfully uninstalled."
-      fi
+      for ADDIN_DIR in "${TARGET_DIR}" "${TARGET_VERSION_DIR}" "${LEGACY_DIR}" "${LEGACY_VERSION_DIR}"; do
+        if [[ -e "${ADDIN_DIR}" ]]; then
+          echo "--> Removing WPS Add-in from ${ADDIN_DIR}..."
+          rm -rf "${ADDIN_DIR}"
+        fi
+      done
+      echo "✓ EqnTide and legacy MathEditor WPS add-ins removed."
       continue
     fi
 
     echo "--> Registering WPS Office JS Add-in into ${TARGET_BASE}..."
+    rm -rf "${LEGACY_DIR}" "${LEGACY_VERSION_DIR}"
     mkdir -p "${TARGET_DIR}"
     ln -sfn EqnTide "${TARGET_BASE}/EqnTide_1.0.0"
     cp -r "${WPS_ADDIN_DIR}"/* "${TARGET_DIR}/"
@@ -113,9 +119,11 @@ install_macos_word() {
   local WPS_MAC_DIR="${HOME}/Library/Containers/com.kingsoft.wpsoffice.mac/Data/.kingsoft/wps/jsaddons"
   if [[ -d "$(dirname "${WPS_MAC_DIR}")" ]]; then
     if [[ "${ACTION}" == "uninstall" ]]; then
-      rm -rf "${WPS_MAC_DIR}/EqnTide"
+      rm -rf "${WPS_MAC_DIR}/EqnTide" "${WPS_MAC_DIR}/EqnTide_1.0.0" \
+        "${WPS_MAC_DIR}/MathEditor" "${WPS_MAC_DIR}/MathEditor_1.0.0"
     else
       echo "--> Registering WPS Office JS Add-in for Mac..."
+      rm -rf "${WPS_MAC_DIR}/MathEditor" "${WPS_MAC_DIR}/MathEditor_1.0.0"
       mkdir -p "${WPS_MAC_DIR}/EqnTide"
       cp -r "${WPS_ADDIN_DIR}"/* "${WPS_MAC_DIR}/EqnTide_1.0.0/"
       cat << 'EOF' > "${WPS_MAC_DIR}/publish.xml"

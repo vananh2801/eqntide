@@ -38,7 +38,7 @@ def analyze_docx_xml(docx_path):
 def analyze_docx_visual(docx_path, out_png=None):
     print(f"\n--- [Visual Rendering] {docx_path} ---")
     base = os.path.splitext(os.path.basename(docx_path))[0]
-    outdir = "/tmp/matheditor_check"
+    outdir = "/tmp/eqntide_check"
     os.makedirs(outdir, exist_ok=True)
     pdf_path = os.path.join(outdir, f"{base}.pdf")
     png_prefix = os.path.join(outdir, f"{base}_page")

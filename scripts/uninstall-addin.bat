@@ -24,8 +24,12 @@ echo.
 echo [3/3] Removing WPS Office Add-in files...
 set "WPS_DIR=%APPDATA%\Kingsoft\wps\jsaddons\EqnTide"
 set "WPS_VER_DIR=%APPDATA%\Kingsoft\wps\jsaddons\EqnTide_1.0.0"
+set "LEGACY_WPS_DIR=%APPDATA%\Kingsoft\wps\jsaddons\MathEditor"
+set "LEGACY_WPS_VER_DIR=%APPDATA%\Kingsoft\wps\jsaddons\MathEditor_1.0.0"
 if exist "%WPS_DIR%" rd /s /q "%WPS_DIR%" >nul 2>&1
 if exist "%WPS_VER_DIR%" rd /s /q "%WPS_VER_DIR%" >nul 2>&1
+if exist "%LEGACY_WPS_DIR%" rd /s /q "%LEGACY_WPS_DIR%" >nul 2>&1
+if exist "%LEGACY_WPS_VER_DIR%" rd /s /q "%LEGACY_WPS_VER_DIR%" >nul 2>&1
 echo [+] WPS Add-in files removed.
 
 echo.

@@ -15,10 +15,10 @@ function ensureBridgeRunning(callback) {
           if (s === 200) {
             clearInterval(poll);
             callback();
-          } else if (attempts >= 10) {
+          } else if (attempts >= 30) {
             clearInterval(poll);
             setTimeout(function () {
-              alert("Math Editor is currently not running.\n\nPlease launch Math Editor from your application menu, then try again.");
+              alert("EqnTide is currently not running.\n\nPlease launch EqnTide from your application menu, then try again.");
             }, 50);
           }
         });
@@ -29,7 +29,7 @@ function ensureBridgeRunning(callback) {
 
 // WPS Office JS Add-in: Main Controller & Ribbon Handlers
 // Compatible with WPS Office Writer on Windows, Linux, and macOS
-// Connected to OMML Converter Local Bridge (http://127.0.0.1:17890)
+// Connected to the EqnTide local bridge (http://127.0.0.1:17890)
 
 var BRIDGE_URL = "http://127.0.0.1:17890";
 var g_ribbonUI = null;
@@ -239,7 +239,7 @@ function initAppEventListeners() {
  */
 function OnAddinLoad(ribbonUI) {
   g_ribbonUI = ribbonUI;
-  console.log("Math Editor WPS JS Add-in loaded successfully.");
+  console.log("EqnTide WPS JS Add-in loaded successfully.");
   initAppEventListeners();
 }
 
@@ -633,7 +633,7 @@ function EditEquation() {
           wpsLog("EditEquation: /session/open response (" + status + "): " + responseText);
           if (status !== 200) {
             console.error("Bridge error (" + status + "): " + responseText);
-            alert("Lỗi kết nối tới Math Editor (" + status + ")");
+            alert("Lỗi kết nối tới EqnTide (" + status + ")");
             return;
           }
 
@@ -1562,16 +1562,30 @@ function LaunchDesktopEditor(param) {
  * Helper: Cold-start desktop editor if bridge daemon is not running.
  */
 function ColdStartDesktopEditor() {
-  var binPath = "/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/omml-editor-desktop";
-  var uri = "matheditor://open";
+  // The Fedora/RPM package installs the desktop application at this stable path.
+  // Once it starts, ensureBridgeRunning retries the original bridge request.
+  var binPath = "/usr/bin/eqntide-desktop";
+  var uri = "eqntide://open";
 
-  if (wps.OAAssist && typeof wps.OAAssist.ShellExecute === "function") {
+  // WPS exposes OAAssist on Application in some Linux builds, rather than
+  // directly on wps. Resolve each supported application object separately.
+  var assistants = [];
+  try { assistants.push(wps.OAAssist); } catch (_) {}
+  try { assistants.push(wps.Application.OAAssist); } catch (_) {}
+  try { assistants.push(window.Application.OAAssist); } catch (_) {}
+  try { assistants.push(wps.WpsApplication().OAAssist); } catch (_) {}
+  for (var i = 0; i < assistants.length; i++) {
     try {
-      wps.OAAssist.ShellExecute(binPath, uri);
-      return;
+      if (assistants[i] && typeof assistants[i].ShellExecute === "function") {
+        assistants[i].ShellExecute(binPath, "");
+        assistants[i].ShellExecute("/usr/bin/xdg-open", uri);
+        break;
+      }
     } catch (_) {}
   }
 
+  // WPS may silently ignore ShellExecute on Linux. Always invoke the registered
+  // URI handler too; Tauri's single-instance plugin prevents a duplicate window.
   try {
     var a = document.createElement("a");
     a.href = uri;

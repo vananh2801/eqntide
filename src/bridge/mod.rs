@@ -10,7 +10,7 @@
 //! * **Session Lifecycle Management:** Manages active equation sessions with
 //!   long-polling synchronization (`Condvar`) between the Add-in and Desktop GUI.
 //! * **Instant Stateless Conversions:** Rapid snippet and batch document conversion.
-//! * **Custom URI Handler:** Parses `matheditor://open?...` URLs for launching
+//! * **Custom URI Handler:** Parses `eqntide://open?...` URLs for launching
 //!   the editor when the server is in cold state.
 
 pub mod protocol;

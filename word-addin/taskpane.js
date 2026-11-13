@@ -46,7 +46,7 @@ async function checkBridgeHealth() {
 btnOpenDesktopBatch.addEventListener("click", () => {
   const iframe = document.createElement("iframe");
   iframe.style.display = "none";
-  iframe.src = "matheditor://open?tab=batch";
+  iframe.src = "eqntide://open?tab=batch";
   document.body.appendChild(iframe);
   setTimeout(() => {
     try {

@@ -234,7 +234,7 @@ fn main() {
                 let _ = window.set_always_on_top(true);
                 let _ = window.set_focus();
                 let _ = window.set_always_on_top(false);
-                // Pass command line arguments (e.g. custom URI matheditor://open?...)
+                // Pass command line arguments (e.g. custom URI eqntide://open?...)
                 let _ = window.emit("single-instance-launch", argv);
             }
         }))

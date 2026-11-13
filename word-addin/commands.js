@@ -233,10 +233,10 @@ function openBatchConverter(event) {
 }
 
 /**
- * Helper to launch the desktop application via custom URI scheme or iframe ping
+ * Helper to launch the EqnTide desktop application through its registered URI scheme.
  */
 function launchDesktopEditor(param) {
-  const uri = `matheditor://open?${typeof param === "string" && param === "batch" ? "tab=batch" : `session_id=${param}`}`;
+  const uri = `eqntide://open?${typeof param === "string" && param === "batch" ? "tab=batch" : `session_id=${param}`}`;
   const iframe = document.createElement("iframe");
   iframe.style.display = "none";
   iframe.src = uri;

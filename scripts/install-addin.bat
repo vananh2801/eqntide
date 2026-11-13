@@ -39,8 +39,12 @@ echo.
 echo [3/4] Installing WPS Office Add-in (if WPS is used)...
 set "WPS_DIR=%APPDATA%\Kingsoft\wps\jsaddons\EqnTide"
 set "WPS_VER_DIR=%APPDATA%\Kingsoft\wps\jsaddons\EqnTide_1.0.0"
+set "LEGACY_WPS_DIR=%APPDATA%\Kingsoft\wps\jsaddons\MathEditor"
+set "LEGACY_WPS_VER_DIR=%APPDATA%\Kingsoft\wps\jsaddons\MathEditor_1.0.0"
 if exist "%SCRIPT_DIR%wps-addin" (
     if not exist "%APPDATA%\Kingsoft\wps\jsaddons" mkdir "%APPDATA%\Kingsoft\wps\jsaddons" >nul 2>&1
+    if exist "%LEGACY_WPS_DIR%" rd /s /q "%LEGACY_WPS_DIR%" >nul 2>&1
+    if exist "%LEGACY_WPS_VER_DIR%" rd /s /q "%LEGACY_WPS_VER_DIR%" >nul 2>&1
     if not exist "%WPS_DIR%" mkdir "%WPS_DIR%" >nul 2>&1
     if not exist "%WPS_VER_DIR%" mkdir "%WPS_VER_DIR%" >nul 2>&1
     xcopy /y /e /q "%SCRIPT_DIR%wps-addin\*" "%WPS_DIR%\" >nul 2>&1

@@ -793,7 +793,7 @@ fn handle_session_update(
     let mtef = mathml_to_mtef_bytes(&math).ok();
     let picture = render_emf_with_mtef(&math, update.font_pt, mtef.as_deref()).ok();
     let (emf_path, width_pt, height_pt, depth_pt) = if let Some(picture) = picture {
-        let path = format!("/tmp/matheditor_{session_id}.emf");
+        let path = format!("/tmp/eqntide_{session_id}.emf");
         let _ = std::fs::write(&path, &picture.emf);
         (
             Some(path),
@@ -909,7 +909,7 @@ fn handle_snippet_conversion(mut req: Request, origin: Option<&str>) {
         "flat_opc_mathtype" | "mathtype" => {
             let mtef_bytes = mathml_to_mtef_bytes(&math).ok();
             if let Ok(pic) = render_emf_with_mtef(&math, snip_req.font_pt, mtef_bytes.as_deref()) {
-                let path = format!("/tmp/matheditor_snippet_{}.emf", uuid::Uuid::new_v4());
+                let path = format!("/tmp/eqntide_snippet_{}.emf", uuid::Uuid::new_v4());
                 let _ = std::fs::write(&path, &pic.emf);
                 emf_path = Some(path);
                 width_pt = Some(pic.width_pt);
@@ -1150,21 +1150,21 @@ fn decode_input_to_mathml(data: &str, format: &str) -> crate::error::Result<Math
 
 pub(crate) fn spawn_desktop_editor(session_id: &str) {
     let mut candidates = Vec::new();
-    if let Ok(env_path) = std::env::var("MATH_EDITOR_UI_BIN") {
+    if let Ok(env_path) = std::env::var("EQNTIDE_DESKTOP_BIN") {
         candidates.push(std::path::PathBuf::from(env_path));
     }
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(dir) = current_exe.parent() {
-            candidates.push(dir.join("EqnTide"));
-            candidates.push(dir.join("EqnTide.exe"));
-            candidates.push(dir.join("Math Equation Editor.app/Contents/MacOS/EqnTide"));
+            candidates.push(dir.join("eqntide-desktop"));
+            candidates.push(dir.join("eqntide-desktop.exe"));
+            candidates.push(dir.join("EqnTide.app/Contents/MacOS/eqntide-desktop"));
         }
     }
     #[cfg(target_os = "windows")]
-    candidates.push(std::path::PathBuf::from("EqnTide.exe"));
+    candidates.push(std::path::PathBuf::from("eqntide-desktop.exe"));
     #[cfg(not(target_os = "windows"))]
-    candidates.push(std::path::PathBuf::from("/home/vananh2801/Documents/mathtype-convert/omml-converter-rust/src-tauri/target/release/EqnTide"));
-    candidates.push(std::path::PathBuf::from("EqnTide"));
+    candidates.push(std::path::PathBuf::from("/usr/bin/eqntide-desktop"));
+    candidates.push(std::path::PathBuf::from("eqntide-desktop"));
 
     for path in &candidates {
         if path.is_absolute() && !path.exists() {
@@ -1172,7 +1172,7 @@ pub(crate) fn spawn_desktop_editor(session_id: &str) {
         }
         let mut cmd = std::process::Command::new(path);
         if !session_id.is_empty() {
-            cmd.arg(format!("matheditor://open?session_id={session_id}"));
+            cmd.arg(format!("eqntide://open?session_id={session_id}"));
         }
         match cmd.spawn() {
             Ok(child) => {
@@ -1458,7 +1458,7 @@ mod tests {
         );
         let resp = send_raw_http(addr, &req);
         assert_eq!(resp.status, 200);
-        assert!(resp.body.contains("Math Editor"));
+        assert!(resp.body.contains("EqnTide"));
         assert!(resp.body.contains("OfficeApp"));
         assert_eq!(
             resp.headers.get("content-type").map(|s| s.as_str()),

@@ -29,20 +29,25 @@ Write-Host "==========================================================" -Foregro
 # 1. WPS Office JS Add-in Installation
 $WpsBasePath = Join-Path $env:APPDATA "Kingsoft\wps\jsaddons"
 $WpsTargetPath = Join-Path $WpsBasePath "EqnTide"
+$WpsVersionPath = Join-Path $WpsBasePath "EqnTide_1.0.0"
+$LegacyWpsTargetPath = Join-Path $WpsBasePath "MathEditor"
+$LegacyWpsVersionPath = Join-Path $WpsBasePath "MathEditor_1.0.0"
 
 if ($Uninstall) {
-    if (Test-Path $WpsTargetPath) {
-        Write-Host "--> Removing WPS Office Add-in from $WpsTargetPath..." -ForegroundColor Yellow
-        Remove-Item -Recurse -Force $WpsTargetPath
-        Write-Host "[+] WPS Add-in uninstalled." -ForegroundColor Green
+    foreach ($Path in @($WpsTargetPath, $WpsVersionPath, $LegacyWpsTargetPath, $LegacyWpsVersionPath)) {
+        if (Test-Path $Path) {
+            Write-Host "--> Removing WPS Office Add-in from $Path..." -ForegroundColor Yellow
+            Remove-Item -Recurse -Force $Path
+        }
     }
+    Write-Host "[+] EqnTide and legacy MathEditor WPS add-ins removed." -ForegroundColor Green
 } else {
     Write-Host "--> Installing WPS Office JS Add-in..." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force $LegacyWpsTargetPath, $LegacyWpsVersionPath -ErrorAction SilentlyContinue
     if (!(Test-Path $WpsTargetPath)) {
         New-Item -ItemType Directory -Path $WpsTargetPath -Force | Out-Null
     }
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsTargetPath -Recurse -Force
-    $WpsVersionPath = Join-Path $WpsBasePath "EqnTide_1.0.0"
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsVersionPath -Recurse -Force
 
     $PublishXml = Join-Path $WpsBasePath "publish.xml"

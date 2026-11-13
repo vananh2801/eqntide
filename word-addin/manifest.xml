@@ -49,7 +49,7 @@
         <!-- Function file for executing ribbon button actions headless without showing taskpane -->
         <FunctionFile resid="Commands.Url"/>
 
-        <!-- Custom Ribbon Tab: "Math Editor" -->
+        <!-- Custom Ribbon Tab: "EqnTide" -->
         <ExtensionPoint xsi:type="PrimaryCommandSurface">
           <CustomTab id="TabEqnTide">
             <Label resid="TabEqnTide.Label"/>

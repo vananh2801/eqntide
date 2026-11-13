@@ -1,12 +1,12 @@
-//! Custom URI scheme parser and generator (`matheditor://open?...`).
+//! Custom URI scheme parser and generator (`eqntide://open?...`).
 //!
-//! Enables Word/WPS Add-ins to launch or focus the desktop math editor directly
-//! via system URL handlers (`window.location.href = "matheditor://open?..."`)
+//! Enables Word/WPS Add-ins to launch or focus EqnTide directly
+//! via system URL handlers (`window.location.href = "eqntide://open?..."`)
 //! when the local bridge server is not yet running.
 
 use std::fmt::Write;
 
-/// Represents an action parsed from a `matheditor://` URI.
+/// Represents an action parsed from an `eqntide://` URI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomUriAction {
     pub command: String,
@@ -16,16 +16,16 @@ pub struct CustomUriAction {
     pub target_mode: Option<String>,
 }
 
-/// Parse a `matheditor://` URI string into a [`CustomUriAction`].
+/// Parse an `eqntide://` URI string into a [`CustomUriAction`].
 ///
 /// Supported formats:
-/// * `matheditor://open`
-/// * `matheditor://open?session_id=123&data=...&format=mathml&mode=omml`
+/// * `eqntide://open`
+/// * `eqntide://open?session_id=123&data=...&format=mathml&mode=omml`
 pub fn parse_custom_uri(uri: &str) -> Result<CustomUriAction, &'static str> {
     let remainder = uri
-        .strip_prefix("matheditor://")
-        .or_else(|| uri.strip_prefix("matheditor:"))
-        .ok_or("invalid URI scheme, expected matheditor://")?;
+        .strip_prefix("eqntide://")
+        .or_else(|| uri.strip_prefix("eqntide:"))
+        .ok_or("invalid URI scheme, expected eqntide://")?;
 
     let (command, query) = match remainder.split_once('?') {
         Some((cmd, q)) => (cmd.trim_matches('/'), Some(q)),
@@ -66,9 +66,9 @@ pub fn parse_custom_uri(uri: &str) -> Result<CustomUriAction, &'static str> {
     })
 }
 
-/// Format a [`CustomUriAction`] into a standard `matheditor://` URI string.
+/// Format a [`CustomUriAction`] into a standard `eqntide://` URI string.
 pub fn format_custom_uri(action: &CustomUriAction) -> String {
-    let mut out = format!("matheditor://{}", action.command);
+    let mut out = format!("eqntide://{}", action.command);
     let mut has_param = false;
 
     let mut append_param = |key: &str, val: &str| {
@@ -168,9 +168,10 @@ mod tests {
         };
 
         let uri = format_custom_uri(&action);
-        assert!(uri.starts_with("matheditor://open?"));
+        assert!(uri.starts_with("eqntide://open?"));
 
         let parsed = parse_custom_uri(&uri).expect("valid parse");
         assert_eq!(parsed, action);
+        assert!(parse_custom_uri("matheditor://open").is_err());
     }
 }
