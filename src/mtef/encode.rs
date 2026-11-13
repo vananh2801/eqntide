@@ -1398,9 +1398,13 @@ fn enc_mtext(node: &MathNode) -> Vec<u8> {
     out
 }
 
+fn encode_mathml_children(math_el: &MathNode) -> Result<Vec<u8>> {
+    MathmlEncoder { depth: 0 }.encode_children(math_el)
+}
+
 /// Convert a MathML `<math>` tree to MTEF equation content bytes.
 ///
 /// An empty result means the equation has nothing to encode.
 pub fn mathml_to_mtef_bytes(math_el: &MathNode) -> Result<Vec<u8>> {
-    MathmlEncoder { depth: 0 }.encode_children(math_el)
+    encode_mathml_children(math_el)
 }
