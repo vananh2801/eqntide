@@ -2427,6 +2427,11 @@ fn parse_mtef_with_version(mtef_data: &[u8], ver: u8) -> Option<Vec<MtefObj>> {
     }
 }
 
+fn stream_version(mtef_data: &[u8]) -> Option<u8> {
+    let ver = *mtef_data.first()?;
+    matches!(ver, 3 | 5).then_some(ver)
+}
+
 fn mathml_from_objects(mut objs: Vec<MtefObj>) -> MathNode {
     apply_mover_to_list(&mut objs);
     let children = convert_objs(&objs);
@@ -2446,10 +2451,7 @@ pub fn mtef_to_mathml(mtef_data: &[u8]) -> Option<MathNode> {
     if mtef_data.len() < 2 {
         return None;
     }
-    let ver = mtef_data[0];
-    if ver != 3 && ver != 5 {
-        return None;
-    }
+    let ver = stream_version(mtef_data)?;
 
     let objs = parse_mtef_with_version(mtef_data, ver)
         .or_else(|| parse_mtef_with_version(mtef_data, if ver == 5 { 3 } else { 5 }))?;
