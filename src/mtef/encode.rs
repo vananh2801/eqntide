@@ -3,7 +3,7 @@
 //! These bytes are the "inner" equation records (CHAR, TMPL, PILE, MATRIX, …)
 //! that [`mtef::build_mtef`](crate::mtef::build_mtef) wraps in the full MTEF stream.
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::mathml::MathNode;
 use crate::mtef::{
     big_operator, char_record, dirac, double_overbar, double_underbar, embell_record,
@@ -27,6 +27,7 @@ const MAX_DEPTH: usize = 256;
 
 use crate::symbols::operators::ascii_operator_spelling as op_map;
 
+mod dispatch;
 mod records;
 mod structural;
 
@@ -288,24 +289,6 @@ impl MathmlEncoder {
                 Ok(Some(fence(r_sel, false, true, &inner_bytes, &[], &[])))
             }
             _ => Ok(None),
-        }
-    }
-
-    pub(super) fn dispatch(&mut self, node: &MathNode) -> Result<Vec<u8>> {
-        if self.depth >= MAX_DEPTH {
-            return Err(Error::TooDeep);
-        }
-        self.depth += 1;
-        let r = self.dispatch_inner(node);
-        self.depth -= 1;
-        r
-    }
-
-    /// Encode child `idx` of `node`, or nothing when it does not exist.
-    pub(super) fn nth(&mut self, node: &MathNode, idx: usize) -> Result<Vec<u8>> {
-        match node.children.get(idx) {
-            Some(c) => self.dispatch(c),
-            None => Ok(Vec::new()),
         }
     }
 
