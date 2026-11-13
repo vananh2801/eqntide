@@ -88,18 +88,7 @@ pub fn upgrade_legacy_mathtype_bytes_with(
             .ok_or_else(|| Error::MissingPart(CT_PATH.into()))?,
     )?;
 
-    // Scan existing embeddings and media indices to avoid name collisions
-    let mut ole_index = 1;
-    while pkg.contains(&format!("word/embeddings/oleObject{ole_index}.bin")) {
-        ole_index += 1;
-    }
-    let mut img_index = 1;
-    while pkg.contains(&format!("word/media/equation{img_index}.emf"))
-        || pkg.contains(&format!("word/media/equation{img_index}.wmf"))
-        || pkg.contains(&format!("word/media/equation{img_index}.png"))
-    {
-        img_index += 1;
-    }
+    let (mut ole_index, mut img_index) = next_package_part_indices(&pkg);
 
     let content_parts = discover_content_parts(&pkg);
     let mut summary = ConversionSummary::default();
@@ -178,6 +167,21 @@ pub fn upgrade_legacy_mathtype_bytes_with(
 }
 
 // ── XML Tree Rewriting ───────────────────────────────────────────────────────
+
+fn next_package_part_indices(pkg: &Package) -> (usize, usize) {
+    let mut ole_index = 1;
+    while pkg.contains(&format!("word/embeddings/oleObject{ole_index}.bin")) {
+        ole_index += 1;
+    }
+    let mut img_index = 1;
+    while pkg.contains(&format!("word/media/equation{img_index}.emf"))
+        || pkg.contains(&format!("word/media/equation{img_index}.wmf"))
+        || pkg.contains(&format!("word/media/equation{img_index}.png"))
+    {
+        img_index += 1;
+    }
+    (ole_index, img_index)
+}
 
 fn next_unique_id(existing: &mut HashSet<String>, prefix: &str) -> String {
     let mut i = 1;
