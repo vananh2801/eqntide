@@ -12,6 +12,7 @@ use crate::xml::{Element, Node};
 
 mod fences;
 mod normalization;
+mod scripts;
 
 use fences::{classify_fence_char, is_stretchy_fence_mo, FenceKind};
 use normalization::{collect_text, normalize_mathml};
@@ -31,11 +32,11 @@ pub(super) const KNOWN_FUNCTIONS: &[&str] = &[
 
 // ── XML Element Helpers ──────────────────────────────────────────────────────
 
-fn m_el(local: &str) -> Element {
+pub(super) fn m_el(local: &str) -> Element {
     Element::new(Some(NS_M), Some("m"), local)
 }
 
-fn m_el_children(local: &str, children: Vec<Element>) -> Element {
+pub(super) fn m_el_children(local: &str, children: Vec<Element>) -> Element {
     let mut el = m_el(local);
     for c in children {
         el.push(c);
@@ -124,7 +125,7 @@ fn normalize_nary_chr(s: &str, has_scripts_or_big_style: bool) -> Option<&str> {
 /// Extract `(chr, lim_loc, sub_node, sup_node)` if `node` represents an N-ary operator
 /// (either a bare `<mo>` with a large operator character, or a script/underover node
 /// whose base is such an `<mo>`).
-fn as_nary_op(
+pub(super) fn as_nary_op(
     node: &MathNode,
 ) -> Option<(&str, &'static str, Option<&MathNode>, Option<&MathNode>)> {
     if let Some((mo, big_style)) = unwrap_single_mo(node) {
@@ -294,7 +295,7 @@ enum MixedItem<'a> {
     Built(Element),
 }
 
-struct MathmlEncoder {
+pub(super) struct MathmlEncoder {
     depth: usize,
 }
 
@@ -317,7 +318,7 @@ impl MathmlEncoder {
         Ok(omath)
     }
 
-    fn encode_node(&mut self, node: &MathNode) -> Result<Vec<Element>> {
+    pub(super) fn encode_node(&mut self, node: &MathNode) -> Result<Vec<Element>> {
         if self.depth >= MAX_DEPTH {
             return Err(Error::TooDeep);
         }
@@ -593,7 +594,7 @@ impl MathmlEncoder {
         Ok(out)
     }
 
-    fn build_nary(
+    pub(super) fn build_nary(
         &mut self,
         chr: &str,
         lim_loc: &str,
@@ -747,156 +748,6 @@ impl MathmlEncoder {
         rad.push(m_el_children("deg", deg_els));
         rad.push(m_el_children("e", body_els));
         Ok(rad)
-    }
-
-    // ── Subscripts, Superscripts & Prescripts ────────────────────────────────
-
-    fn encode_msub(&mut self, node: &MathNode) -> Result<Element> {
-        if let Some((chr, lim_loc, sub_opt, sup_opt)) = as_nary_op(node) {
-            return self.build_nary(chr, lim_loc, sub_opt, sup_opt, Vec::new());
-        }
-        let base_els = match node.children.first() {
-            Some(c) => self.encode_node(c)?,
-            None => Vec::new(),
-        };
-        let sub_els = match node.children.get(1) {
-            Some(c) => self.encode_node(c)?,
-            None => Vec::new(),
-        };
-        let mut s_sub = m_el("sSub");
-        s_sub.push(m_el_children("e", base_els));
-        s_sub.push(m_el_children("sub", sub_els));
-        Ok(s_sub)
-    }
-
-    fn encode_msup(&mut self, node: &MathNode) -> Result<Element> {
-        if let Some((chr, lim_loc, sub_opt, sup_opt)) = as_nary_op(node) {
-            return self.build_nary(chr, lim_loc, sub_opt, sup_opt, Vec::new());
-        }
-        let base_els = match node.children.first() {
-            Some(c) => self.encode_node(c)?,
-            None => Vec::new(),
-        };
-        let sup_els = match node.children.get(1) {
-            Some(c) => self.encode_node(c)?,
-            None => Vec::new(),
-        };
-        let mut s_sup = m_el("sSup");
-        s_sup.push(m_el_children("e", base_els));
-        s_sup.push(m_el_children("sup", sup_els));
-        Ok(s_sup)
-    }
-
-    fn encode_msubsup(&mut self, node: &MathNode) -> Result<Element> {
-        if let Some((chr, lim_loc, sub_opt, sup_opt)) = as_nary_op(node) {
-            return self.build_nary(chr, lim_loc, sub_opt, sup_opt, Vec::new());
-        }
-        let base_els = match node.children.first() {
-            Some(c) => self.encode_node(c)?,
-            None => Vec::new(),
-        };
-        let sub_els = match node.children.get(1) {
-            Some(c) => self.encode_node(c)?,
-            None => Vec::new(),
-        };
-        let sup_els = match node.children.get(2) {
-            Some(c) => self.encode_node(c)?,
-            None => Vec::new(),
-        };
-        let mut s_subsup = m_el("sSubSup");
-        s_subsup.push(m_el_children("e", base_els));
-        s_subsup.push(m_el_children("sub", sub_els));
-        s_subsup.push(m_el_children("sup", sup_els));
-        Ok(s_subsup)
-    }
-
-    fn encode_mmultiscripts(&mut self, node: &MathNode) -> Result<Vec<Element>> {
-        if node.children.is_empty() {
-            return Ok(Vec::new());
-        }
-        let base = &node.children[0];
-        let mut post_pairs: Vec<(&MathNode, &MathNode)> = Vec::new();
-        let mut pre_pairs: Vec<(&MathNode, &MathNode)> = Vec::new();
-        let mut in_pre = false;
-        let mut i = 1;
-        while i < node.children.len() {
-            if node.children[i].tag == "mprescripts" {
-                in_pre = true;
-                i += 1;
-                continue;
-            }
-            if i + 1 < node.children.len() {
-                if in_pre {
-                    pre_pairs.push((&node.children[i], &node.children[i + 1]));
-                } else {
-                    post_pairs.push((&node.children[i], &node.children[i + 1]));
-                }
-                i += 2;
-            } else {
-                break;
-            }
-        }
-
-        let mut current_els = self.encode_node(base)?;
-
-        // Wrap prescripts in `<m:sPre>`
-        for (sub_node, sup_node) in pre_pairs {
-            let sub_els = if sub_node.tag == "none" || is_empty_node(sub_node) {
-                Vec::new()
-            } else {
-                self.encode_node(sub_node)?
-            };
-            let sup_els = if sup_node.tag == "none" || is_empty_node(sup_node) {
-                Vec::new()
-            } else {
-                self.encode_node(sup_node)?
-            };
-            if !sub_els.is_empty() || !sup_els.is_empty() {
-                let mut s_pre = m_el("sPre");
-                s_pre.push(m_el_children("sub", sub_els));
-                s_pre.push(m_el_children("sup", sup_els));
-                s_pre.push(m_el_children("e", current_els));
-                current_els = vec![s_pre];
-            }
-        }
-
-        // Wrap postscripts in `<m:sSub>` / `<m:sSup>` / `<m:sSubSup>`
-        for (sub_node, sup_node) in post_pairs {
-            let sub_els = if sub_node.tag == "none" || is_empty_node(sub_node) {
-                Vec::new()
-            } else {
-                self.encode_node(sub_node)?
-            };
-            let sup_els = if sup_node.tag == "none" || is_empty_node(sup_node) {
-                Vec::new()
-            } else {
-                self.encode_node(sup_node)?
-            };
-            match (!sub_els.is_empty(), !sup_els.is_empty()) {
-                (true, true) => {
-                    let mut el = m_el("sSubSup");
-                    el.push(m_el_children("e", current_els));
-                    el.push(m_el_children("sub", sub_els));
-                    el.push(m_el_children("sup", sup_els));
-                    current_els = vec![el];
-                }
-                (true, false) => {
-                    let mut el = m_el("sSub");
-                    el.push(m_el_children("e", current_els));
-                    el.push(m_el_children("sub", sub_els));
-                    current_els = vec![el];
-                }
-                (false, true) => {
-                    let mut el = m_el("sSup");
-                    el.push(m_el_children("e", current_els));
-                    el.push(m_el_children("sup", sup_els));
-                    current_els = vec![el];
-                }
-                (false, false) => {}
-            }
-        }
-
-        Ok(current_els)
     }
 
     // ── Under / Over / Accents / Bars / GroupChr ─────────────────────────────
