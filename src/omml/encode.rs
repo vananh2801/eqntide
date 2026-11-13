@@ -1462,9 +1462,13 @@ fn build_delimiter(
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+fn encode_mathml_root(mathml: &MathNode) -> Result<Element> {
+    MathmlEncoder { depth: 0 }.encode_root(mathml)
+}
+
 /// Convert a MathML [`MathNode`] tree into an OMML `<m:oMath>` [`Element`].
 pub fn mathml_to_omml(mathml: &MathNode) -> Result<Element> {
-    MathmlEncoder { depth: 0 }.encode_root(mathml)
+    encode_mathml_root(mathml)
 }
 
 /// Convert a MathML [`MathNode`] tree into an OMML `<m:oMath>` XML string.
