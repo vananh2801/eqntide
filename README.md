@@ -681,7 +681,8 @@ package but opting out of automatic session setup.
 
 ### GitHub build workflows
 
-CI runs on pushes and pull requests to `main`, plus manual dispatch. Linux and
+CI runs on matching pull requests to `main` or manual dispatch; ordinary pushes
+do not trigger it. Linux and
 Windows jobs run workspace tests, Clippy, packaging checks, WPS JavaScript syntax
 and Windows PowerShell syntax checks. After checks pass, the reusable
 `build-native.yml` workflow rebuilds the Word template, compiles release binaries,

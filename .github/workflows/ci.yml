@@ -1,25 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'deny.toml'
-      - 'src/**'
-      - 'crates/**'
-      - 'desktop/**'
-      - 'assets/**'
-      - 'scripts/**'
-      - 'wps-addin/**'
-      - 'word-template/**'
-      - '.github/workflows/**'
-      - '.cargo/**'
-      - 'docs/**'
-      - 'README.md'
-      - 'NOTICE'
-      - 'LICENSE'
   pull_request:
     branches: [main]
     paths:

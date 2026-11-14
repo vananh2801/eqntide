@@ -159,8 +159,9 @@ custom output root without changing previous artifacts. NSIS compiled into the
 version directory using mock executables. Linux portable/RPM were regenerated
 under `dist/linux/0.3.0/`; package installation paths remain unchanged.
 
-CI now runs on `main` pushes and pull requests and uses the shared native-package
-workflow after tests/license checks. Both CI and release builds use the same
+CI runs on matching pull requests to `main` or manual dispatch and uses the
+shared native-package workflow after tests/license checks. Ordinary pushes do
+not trigger CI. Both CI and release builds use the same
 Word-template rebuild, locked Cargo release build, host executable smoke commands,
 versioned packaging and artifact upload. Windows installer scripts are parsed
 with Windows PowerShell in CI, and Linux-only symlink layout tests are skipped
