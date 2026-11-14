@@ -244,6 +244,7 @@ fn build_omml_package_parts(pkg: &mut Element, math: &MathNode) -> Result<()> {
 }
 
 struct MathTypePartNames {
+    uid: String,
     shape_id: String,
     object_id: String,
     ole_target: String,
@@ -251,16 +252,14 @@ struct MathTypePartNames {
 }
 
 fn make_mathtype_part_names() -> MathTypePartNames {
-    let now_millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or_else(|_| uuid::Uuid::new_v4().as_u128());
-    let uid_num = (now_millis % 1_000_000_000_000) as u64;
+    let id = uuid::Uuid::new_v4();
+    let uid = id.simple().to_string();
     MathTypePartNames {
-        shape_id: format!("_x0000_i{}", 1025 + (uid_num % 100_000)),
-        object_id: format!("_{}", 1_000_000_000u64 + (uid_num % 9_000_000_000u64)),
-        ole_target: format!("embeddings/oleObject{uid_num}.bin"),
-        image_target: format!("media/equation{uid_num}.emf"),
+        ole_target: format!("embeddings/oleObject{uid}.bin"),
+        image_target: format!("media/equation{uid}.emf"),
+        shape_id: format!("_x0000_i{uid}"),
+        object_id: format!("_{}", id.as_u128()),
+        uid,
     }
 }
 
@@ -297,8 +296,8 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             let names = make_mathtype_part_names();
 
             // Local relationship IDs inside Flat OPC snippet (Word/WPS remaps them into document.xml.rels)
-            let ole_rid = "rId1".to_string();
-            let img_rid = "rId2".to_string();
+            let ole_rid = format!("rIdOle{}", names.uid);
+            let img_rid = format!("rIdImage{}", names.uid);
 
             let bin_part_name = format!("/word/{}", names.ole_target);
             let img_part_name = format!("/word/{}", names.image_target);
@@ -442,7 +441,7 @@ fn mathml_from_metafile(data: &[u8]) -> Option<MathNode> {
 }
 
 fn mathml_from_binary(data: &[u8]) -> Option<MathNode> {
-    ole_to_mathml(data).or_else(|| mathml_from_metafile(data))
+    mathml_from_metafile(data).or_else(|| ole_to_mathml(data))
 }
 
 fn first_omml_math(root: &Element) -> Option<MathNode> {
@@ -495,10 +494,22 @@ fn metafile_math_in_document(
     parts: &HashMap<String, PartData>,
     relationships: &HashMap<String, String>,
 ) -> Option<MathNode> {
+    let ole = document.iter().into_iter().find_map(|element| {
+        if element.local != "OLEObject" {
+            return None;
+        }
+        let id = element
+            .attr(Some(NS_R), "id")
+            .or_else(|| element.attr(None, "id"))?;
+        related_binary(parts, relationships, id)
+    });
     collect_imagedata_rids(document)
         .into_iter()
         .find_map(|relationship_id| {
-            related_binary(parts, relationships, &relationship_id).and_then(mathml_from_metafile)
+            let data = related_binary(parts, relationships, &relationship_id)?;
+            let mtef = extract_mtef_from_emf(data).or_else(|| extract_mtef_from_wmf(data))?;
+            let mtef = crate::ole::repair_legacy_metafile_mtef(mtef, ole);
+            mtef_to_mathml(&mtef)
         })
 }
 
@@ -507,16 +518,20 @@ fn document_math(parts: &HashMap<String, PartData>) -> Option<MathNode> {
         .xml_data
         .as_ref()?;
     let relationships = document_relationships(parts);
-    ole_math_in_document(document, parts, &relationships)
+    metafile_math_in_document(document, parts, &relationships)
+        .or_else(|| ole_math_in_document(document, parts, &relationships))
         .or_else(|| first_omml_math(document))
-        .or_else(|| metafile_math_in_document(document, parts, &relationships))
 }
 
 fn fallback_binary_math(parts: &HashMap<String, PartData>) -> Option<MathNode> {
-    parts
+    let binaries: Vec<_> = parts
         .values()
         .filter_map(|part| part.binary_data.as_deref())
-        .find_map(mathml_from_binary)
+        .collect();
+    binaries
+        .iter()
+        .find_map(|data| mathml_from_metafile(data))
+        .or_else(|| binaries.iter().find_map(|data| ole_to_mathml(data)))
 }
 
 fn fallback_xml_math(parts: &HashMap<String, PartData>) -> Option<MathNode> {
@@ -552,35 +567,31 @@ fn extract_from_raw_snippet(root: &Element) -> Result<MathNode> {
         return Ok(math);
     }
 
-    // 2. Base64 embedded binary data (<w:binData>, <pkg:binaryData>, etc.)
+    let mut binaries = Vec::new();
     for el in root.iter() {
         if el.local == "binData" || el.local == "binaryData" {
-            let text = all_text(el);
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                if let Some(bin) = base64_decode(trimmed) {
-                    if let Some(math) = mathml_from_binary(&bin) {
-                        return Ok(math);
-                    }
-                }
+            if let Some(data) = base64_decode(all_text(el).trim()) {
+                binaries.push(data);
             }
-        }
-    }
-
-    // 3. Scan all large text nodes for base64 MTEF / OLE payload
-    for el in root.iter() {
-        for child in &el.children {
-            if let Node::Text(ref text) = child {
-                let trimmed = text.trim();
-                if trimmed.len() > 100 {
-                    if let Some(bin) = base64_decode(trimmed) {
-                        if let Some(math) = mathml_from_binary(&bin) {
-                            return Ok(math);
+        } else {
+            for child in &el.children {
+                if let Node::Text(text) = child {
+                    if text.trim().len() > 100 {
+                        if let Some(data) = base64_decode(text.trim()) {
+                            binaries.push(data);
                         }
                     }
                 }
             }
         }
+    }
+    // The order of binary parts in a selection must not decide which copy wins.
+    if let Some(math) = binaries
+        .iter()
+        .find_map(|data| mathml_from_metafile(data))
+        .or_else(|| binaries.iter().find_map(|data| mathml_from_binary(data)))
+    {
+        return Ok(math);
     }
 
     Err(Error::Xml(
@@ -672,14 +683,126 @@ mod tests {
     }
 
     #[test]
+    fn ole_and_emf_embed_identical_independently_readable_mtef() {
+        for source in [
+            "<math><mi>x</mi><mo>+</mo><mn>1</mn></math>",
+            "<math><mfrac><mi>π</mi><mn>3</mn></mfrac><mo>+</mo><mn>1</mn></math>",
+            "<math><mtable><mtr><mtd><mi>x</mi></mtd><mtd><mn>2</mn></mtd></mtr></mtable></math>",
+        ] {
+            let math = MathNode::parse(source).unwrap();
+            let expected = crate::mtef::build_mtef(&mathml_to_mtef_bytes(&math).unwrap());
+            let package =
+                mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0).unwrap();
+            let root = xml::parse(package.as_bytes()).unwrap();
+            let mut ole_mtef = None;
+            let mut emf_mtef = None;
+            for part in root.elements() {
+                let Some(binary) = part.find(NS_PKG, "binaryData") else {
+                    continue;
+                };
+                let bytes = base64_decode(&binary.text()).unwrap();
+                match part.attr(Some(NS_PKG), "contentType") {
+                    Some(CT_OLEOBJECT) => ole_mtef = crate::ole::extract_mtef_from_ole(&bytes),
+                    Some(CT_EMF) => emf_mtef = extract_mtef_from_emf(&bytes),
+                    _ => {}
+                }
+            }
+            let ole = ole_mtef.expect("OLE must contain MTEF");
+            let emf = emf_mtef.expect("EMF preview must also contain MTEF");
+            assert_eq!(ole, expected);
+            assert_eq!(emf, expected);
+            let from_ole = mtef_to_mathml(&ole).expect("decode OLE without its EMF preview");
+            let from_emf = mtef_to_mathml(&emf).expect("decode EMF without its OLE object");
+            assert_eq!(from_ole.to_xml(), from_emf.to_xml());
+        }
+    }
+
+    #[test]
+    fn legacy_headerless_preview_is_recovered_only_when_ole_matches() {
+        let math = MathNode::parse("<math><mfrac><mi>π</mi><mn>3</mn></mfrac></math>").unwrap();
+        let raw = mathml_to_mtef_bytes(&math).unwrap();
+        assert_eq!(raw[0], 3); // Template tag was mistaken for MTEF v3.
+        let complete = crate::mtef::build_mtef(&raw);
+        let ole = make_ole(&make_equation_native(&raw)).unwrap();
+        assert_eq!(
+            crate::ole::repair_legacy_metafile_mtef(raw.clone(), Some(&ole)),
+            complete
+        );
+        assert_eq!(
+            crate::ole::repair_legacy_metafile_mtef(raw.clone(), None),
+            raw
+        );
+        let package = mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0).unwrap();
+        let root = xml::parse(package.as_bytes()).unwrap();
+        let preview = root
+            .elements()
+            .find(|part| part.attr(Some(NS_PKG), "contentType") == Some(CT_EMF))
+            .unwrap();
+        let original = preview.find(NS_PKG, "binaryData").unwrap().text();
+        let legacy = render_emf_with_mtef(&math, 12.0, Some(&raw)).unwrap();
+        let package = package.replace(&original, &base64_encode(&legacy.emf));
+        let recovered = flat_opc_to_mathml(&package).unwrap();
+        assert_eq!(recovered.to_latex(), r"\frac{\pi}{3}");
+    }
+
+    #[test]
+    fn prefer_emf_mtef_and_fall_back_to_ole_when_preview_is_unreadable() {
+        let old = MathNode::parse("<math><mi>x</mi></math>").unwrap();
+        let new = MathNode::parse("<math><mi>y</mi></math>").unwrap();
+        let package = mathml_to_flat_opc(&old, FlatOpcMode::ModernMathtypeOleEmf, 12.0).unwrap();
+        let root = xml::parse(package.as_bytes()).unwrap();
+        let preview = root
+            .elements()
+            .find(|part| part.attr(Some(NS_PKG), "contentType") == Some(CT_EMF))
+            .unwrap();
+        let original = preview.find(NS_PKG, "binaryData").unwrap().text();
+        let replacement = crate::render_emf(&new, 12.0).unwrap();
+        let updated = package.replace(&original, &base64_encode(&replacement.emf));
+        assert_eq!(flat_opc_to_mathml(&updated).unwrap().to_latex(), "y");
+        let damaged = package.replace(&original, &base64_encode(b"damaged EMF"));
+        assert_eq!(flat_opc_to_mathml(&damaged).unwrap().to_latex(), "x");
+    }
+
+    #[test]
+    fn repeated_imports_have_distinct_parts_shapes_and_relationships() {
+        let math = MathNode::parse("<math><mi>x</mi></math>").unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..16 {
+            let names = make_mathtype_part_names();
+            for id in [
+                names.shape_id,
+                names.object_id,
+                names.ole_target,
+                names.image_target,
+                names.uid,
+            ] {
+                assert!(seen.insert(id));
+            }
+            let package =
+                mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0).unwrap();
+            let root = xml::parse(package.as_bytes()).unwrap();
+            let rels = root
+                .elements()
+                .find(|part| {
+                    part.attr(Some(NS_PKG), "name") == Some("/word/_rels/document.xml.rels")
+                })
+                .unwrap();
+            let data = rels.find(NS_PKG, "xmlData").unwrap();
+            for relationship in data.elements().flat_map(|r| r.elements()) {
+                assert!(seen.insert(relationship.attr(None, "Id").unwrap().to_owned()));
+            }
+        }
+    }
+
+    #[test]
     fn package_keeps_relationships_and_media_parts_linked() {
         let math = MathNode::parse("<math><mi>x</mi></math>").unwrap();
         let opc = mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0).unwrap();
         let root = xml::parse(opc.as_bytes()).unwrap();
         let parts: Vec<_> = root.elements().collect();
 
-        assert!(opc.contains("Id=\"rId1\""));
-        assert!(opc.contains("Id=\"rId2\""));
+        assert!(opc.contains("Id=\"rIdOle"));
+        assert!(opc.contains("Id=\"rIdImage"));
         assert!(parts.iter().any(|part| {
             part.attr(Some(NS_PKG), "name")
                 .is_some_and(|name| name.starts_with("/word/embeddings/oleObject"))

@@ -150,7 +150,8 @@ impl Job {
                     }
                 }
                 PreviewFormat::Emf => {
-                    let p = render_emf_with_mtef(&mathml, self.opts.font_pt, Some(&eq_bytes))?;
+                    let complete_mtef = crate::mtef::build_mtef(&eq_bytes);
+                    let p = render_emf_with_mtef(&mathml, self.opts.font_pt, Some(&complete_mtef))?;
                     Picture {
                         data: p.emf,
                         ext: "emf",

@@ -16,6 +16,7 @@ use crate::ole::{extract_mtef_from_emf, extract_mtef_from_wmf};
 use crate::omml::decode::NS_M;
 use crate::omml::encode::{apply_math_font, mathml_to_omml};
 use crate::xml::{self, Element, Node};
+use crate::MathNode;
 
 use super::consts::*;
 use super::options::{ConversionSummary, ToOmmlOptions};
@@ -284,20 +285,41 @@ pub(crate) fn collect_imagedata_rids(el: &Element) -> Vec<String> {
     out
 }
 
+pub(crate) fn preferred_metafile_math(
+    image_ids: &[String],
+    ole_id: &str,
+    pkg: &Package,
+    rel_map: &HashMap<String, String>,
+) -> Option<MathNode> {
+    image_ids.iter().find_map(|id| {
+        let path = rel_map.get(id)?;
+        let ole = rel_map.get(ole_id).and_then(|path| pkg.get(path));
+        let mtef =
+            crate::ole::repair_legacy_metafile_mtef(mtef_from_metafile(path, pkg.get(path)?)?, ole);
+        mtef_to_mathml(&mtef)
+    })
+}
+
 fn convert_ole_rid_to_omml(
     rid: &str,
+    image_ids: &[String],
     pkg: &Package,
     rel_map: &HashMap<String, String>,
     opts: &ToOmmlOptions,
 ) -> Result<Element> {
-    let target_path = rel_map
-        .get(rid)
-        .ok_or_else(|| Error::InvalidOle(format!("missing relationship target for {rid}")))?;
-    let ole_bytes = pkg
-        .get(target_path)
-        .ok_or_else(|| Error::MissingPart(target_path.clone()))?;
-    let mathml = ole_to_mathml(ole_bytes)
-        .ok_or_else(|| Error::InvalidMtef(format!("failed to decode MTEF from {target_path}")))?;
+    let mathml = if let Some(math) = preferred_metafile_math(image_ids, rid, pkg, rel_map) {
+        math
+    } else {
+        let target_path = rel_map
+            .get(rid)
+            .ok_or_else(|| Error::InvalidOle(format!("missing relationship target for {rid}")))?;
+        let ole_bytes = pkg
+            .get(target_path)
+            .ok_or_else(|| Error::MissingPart(target_path.clone()))?;
+        ole_to_mathml(ole_bytes).ok_or_else(|| {
+            Error::InvalidMtef(format!("failed to decode MTEF from {target_path}"))
+        })?
+    };
     let mut omml = mathml_to_omml(&mathml)?;
     if let Some(ref font) = opts.math_font {
         apply_math_font(&mut omml, font);
@@ -343,7 +365,7 @@ fn rewrite_element(
                 let img_rids = collect_imagedata_rids(&el);
 
                 let converted_omml = match ole_rid {
-                    Some(rid) => convert_ole_rid_to_omml(rid, pkg, rel_map, opts).ok(),
+                    Some(rid) => convert_ole_rid_to_omml(rid, &img_rids, pkg, rel_map, opts).ok(),
                     None => None,
                 }
                 .or_else(|| {
@@ -442,7 +464,7 @@ fn convert_ole_run(
             match ole_rid
                 .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
                 .and_then(|rid| {
-                    let omml = convert_ole_rid_to_omml(rid, pkg, rel_map, opts)?;
+                    let omml = convert_ole_rid_to_omml(rid, &img_rids, pkg, rel_map, opts)?;
                     Ok((rid, omml))
                 }) {
                 Ok((rid, omml)) => {
@@ -477,7 +499,7 @@ fn convert_ole_run(
     match ole_rid
         .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
         .and_then(|rid| {
-            let omml = convert_ole_rid_to_omml(rid, pkg, rel_map, opts)?;
+            let omml = convert_ole_rid_to_omml(rid, &img_rids, pkg, rel_map, opts)?;
             Ok((rid, omml))
         }) {
         Ok((rid, omml)) => {

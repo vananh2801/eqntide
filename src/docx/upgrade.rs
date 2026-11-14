@@ -224,9 +224,13 @@ fn next_unique_id(existing: &mut HashSet<String>, prefix: &str) -> String {
 
 fn convert_ole_rid_to_mathml(
     rid: &str,
+    image_ids: &[String],
     pkg: &Package,
     rel_map: &HashMap<String, String>,
 ) -> Result<MathNode> {
+    if let Some(math) = super::to_omml::preferred_metafile_math(image_ids, rid, pkg, rel_map) {
+        return Ok(math);
+    }
     let target_path = rel_map
         .get(rid)
         .ok_or_else(|| Error::InvalidOle(format!("missing relationship target for {rid}")))?;
@@ -270,7 +274,8 @@ fn build_modern_ole_run(
     let ole_bin = make_ole(&native_stream)?;
 
     // 3. Render vector EMF preview with embedded MTEF in EMR_COMMENT
-    let pv = render_emf_with_mtef(mathml, font_pt, Some(&eq_bytes))?;
+    let complete_mtef = crate::mtef::build_mtef(&eq_bytes);
+    let pv = render_emf_with_mtef(mathml, font_pt, Some(&complete_mtef))?;
 
     // 4. Save into docx package
     let mut bin_name = format!("word/embeddings/oleObject{ole_index}.bin");
@@ -353,7 +358,7 @@ fn upgrade_element(
                 let img_rids = collect_imagedata_rids(&el);
 
                 let mathml_opt = match ole_rid {
-                    Some(rid) => convert_ole_rid_to_mathml(rid, pkg, rel_map).ok(),
+                    Some(rid) => convert_ole_rid_to_mathml(rid, &img_rids, pkg, rel_map).ok(),
                     None => None,
                 }
                 .or_else(|| {
@@ -486,7 +491,7 @@ fn upgrade_ole_run(
     let img_rids = collect_imagedata_rids(run_el);
 
     let mathml_res = match ole_rid {
-        Some(rid) => convert_ole_rid_to_mathml(rid, pkg, rel_map),
+        Some(rid) => convert_ole_rid_to_mathml(rid, &img_rids, pkg, rel_map),
         None => Err(Error::InvalidOle("OLEObject missing r:id".into())),
     };
 

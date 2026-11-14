@@ -624,6 +624,50 @@ pub fn extract_mtef_from_ole(ole_data: &[u8]) -> Option<Vec<u8>> {
     strip_eqn_ole_header(&raw).map(|s| s.to_vec())
 }
 
+/// Older EqnTide previews sometimes stored bare v5 records whose first tag
+/// (3=template or 5=matrix) was mistaken for a stream version. Only repair when
+/// wrapping those exact records reproduces the paired OLE's complete MTEF.
+pub(crate) fn repair_legacy_metafile_mtef(mtef: Vec<u8>, ole: Option<&[u8]>) -> Vec<u8> {
+    if let Some(reference) = ole.and_then(extract_mtef_from_ole) {
+        let complete = crate::mtef::build_mtef(&mtef);
+        if complete == reference {
+            return complete;
+        }
+    }
+    mtef
+}
+
+#[cfg(test)]
+mod legacy_preview_tests {
+    use super::*;
+
+    #[test]
+    fn real_upgrade_samples_recover_the_original_equation() {
+        for (ole, emf) in [
+            (
+                &include_bytes!("../tests/fixtures/legacy_preview/angle.ole")[..],
+                &include_bytes!("../tests/fixtures/legacy_preview/angle.emf")[..],
+            ),
+            (
+                &include_bytes!("../tests/fixtures/legacy_preview/fraction.ole")[..],
+                &include_bytes!("../tests/fixtures/legacy_preview/fraction.emf")[..],
+            ),
+            (
+                &include_bytes!("../tests/fixtures/legacy_preview/system.ole")[..],
+                &include_bytes!("../tests/fixtures/legacy_preview/system.emf")[..],
+            ),
+        ] {
+            let original = extract_mtef_from_ole(ole).unwrap();
+            let broken = extract_mtef_from_emf(emf).unwrap();
+            assert_ne!(broken, original);
+            let repaired = repair_legacy_metafile_mtef(broken.clone(), Some(ole));
+            assert_eq!(repaired, original);
+            assert!(crate::mtef::decode::mtef_to_mathml(&repaired).is_some());
+            assert_eq!(repair_legacy_metafile_mtef(broken.clone(), None), broken);
+        }
+    }
+}
+
 const WMF_PLACEABLE: [u8; 4] = [0xD7, 0xCD, 0xC6, 0x9A];
 pub const WMF_SIGNATURE: &[u8] = b"Design Science, Inc.\x00";
 
