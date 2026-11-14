@@ -1,0 +1,3 @@
+-r requirements.txt
+# Independent VBA/CFB reader for validating the generated template.
+oletools==0.60.2

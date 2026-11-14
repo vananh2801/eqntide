@@ -36,14 +36,30 @@ os.makedirs(TMP_DIR, exist_ok=True)
 # 1. Generate vbaProject.bin using ms_ovba with patched compressor
 proj = VbaProject()
 proj.project_id = "{29F9E300-746A-4D92-BF39-382903C5D610}"
-mod = StdModule("EqnTide")
-# normalize_file appends to .new; use a clean temporary source for every build.
-# Reusing the repository .new file would embed duplicate modules on rebuild.
-module_source = os.path.abspath(os.path.join(TMP_DIR, "EqnTide.bas"))
-shutil.copyfile(BAS_PATH, module_source)
-mod.add_file(module_source)
-mod.normalize_file()
-proj.add_module(mod)
+class EventClassModule(StdModule):
+    """VBA class: non-procedural MODULETYPE (0x22), PROJECT Class= entry.
+
+    ms-ovba 0.0.1 only exposes StdModule/DocModule; reuse its non-procedural
+    record writer without declaring this event sink as a host document module.
+    """
+    def __init__(self, name):
+        super().__init__(name)
+        self.type = "Document"  # ModuleBase.pack emits MODULETYPE 0x22.
+
+    def to_project_module_string(self):
+        return "Class=" + self.name
+
+
+for module, source in [
+    (StdModule("EqnTide"), BAS_PATH),
+    (EventClassModule("EqnTideEvents"), "word-template/EqnTideEvents.cls"),
+]:
+    # normalize_file appends to .new; always use fresh temporary source files.
+    module_source = os.path.abspath(os.path.join(TMP_DIR, os.path.basename(source)))
+    shutil.copyfile(source, module_source)
+    module.add_file(module_source)
+    module.normalize_file()
+    proj.add_module(module)
 
 vba_bin_path = os.path.join(TMP_DIR, "vbaProject.bin")
 cur_cwd = os.getcwd()
@@ -92,7 +108,7 @@ settings_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 styles_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"""
 
-customui14_xml = r"""<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+customui14_xml = r"""<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="RibbonOnLoad">
   <ribbon>
     <tabs>
       <tab id="EqnTideTab" label="EqnTide">

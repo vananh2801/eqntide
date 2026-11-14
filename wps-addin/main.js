@@ -115,7 +115,72 @@ function cancelPendingSession() {
 
 var g_eventListenerRegistered = false;
 
+var g_equationTabTimer = null;
+var g_lastEquationTabSelection = null;
+var g_activatingEquationTab = false;
+function selectedEquationPicture(selection) {
+  if (!selection || selection.Start === selection.End) return false;
+  var shapes = selection.InlineShapes;
+  if (!shapes || shapes.Count === 0) shapes = selection.Range && selection.Range.InlineShapes;
+  if (!shapes || shapes.Count !== 1) return false;
+  var picture = shapes.Item(1);
+  if (!picture || !picture.Range || selection.Start !== picture.Range.Start ||
+      selection.End !== picture.Range.End) return false;
+  try { if (picture.AlternativeText === "EqnTide equation") return true; } catch (_) {}
+  try {
+    if (/^(Equation\.|MathType)/i.test(picture.OLEFormat.ProgID)) return true;
+  } catch (_) {}
+  var xml = picture.Range.WordOpenXML || "";
+  if (/ProgID\s*=\s*["'](?:Equation\.|MathType)/i.test(xml)) return true;
+  // Existing AddPicture equations have no OLE object: identify their embedded
+  // MathType comment. Do not treat every EMF or every drawing as an equation.
+  var binary = /<(?:[\w.-]+:)?binaryData\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?binaryData\s*>/g;
+  var match;
+  while ((match = binary.exec(xml)) !== null) {
+    try {
+      if (atob(match[1].replace(/\s/g, "")).indexOf("AppsMFCC") >= 0) return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+function equationTabSelectionKey(app, selection) {
+  var doc = app.ActiveDocument;
+  if (!doc || !selection) return null;
+  return String(doc.FullName || doc.Name) + ":" + selection.Start + ":" + selection.End;
+}
+
+function scheduleEquationTab(selection) {
+  if (g_activatingEquationTab) return;
+  if (g_equationTabTimer !== null) clearTimeout(g_equationTabTimer);
+  g_equationTabTimer = null;
+  try {
+    var app = wps.Application;
+    selection = selection || app.Selection;
+    var key = equationTabSelectionKey(app, selection);
+    if (key !== g_lastEquationTabSelection) g_lastEquationTabSelection = null;
+    if (!key || !selection || selection.Start === selection.End) return;
+    if (key === g_lastEquationTabSelection) return;
+    g_equationTabTimer = setTimeout(function () {
+      g_equationTabTimer = null;
+      try {
+        var currentApp = wps.Application;
+        var current = currentApp.Selection;
+        if (equationTabSelectionKey(currentApp, current) !== key ||
+            !selectedEquationPicture(current)) return;
+        var ribbon = g_ribbonUI || currentApp.ribbonUI;
+        if (!ribbon || typeof ribbon.ActivateTab !== "function") return;
+        g_lastEquationTabSelection = key;
+        g_activatingEquationTab = true;
+        try { ribbon.ActivateTab("TabEqnTide"); }
+        finally { g_activatingEquationTab = false; }
+      } catch (_) { g_lastEquationTabSelection = null; }
+    }, 60);
+  } catch (_) {}
+}
+
 function onWindowSelectionChange(Sel) {
+  scheduleEquationTab(Sel);
   try {
     if (!Sel) {
       Sel = (wps.Application && wps.Application.Selection) ? wps.Application.Selection : null;
@@ -241,6 +306,7 @@ function OnAddinLoad(ribbonUI) {
   g_ribbonUI = ribbonUI;
   console.log("EqnTide WPS JS Add-in loaded successfully.");
   initAppEventListeners();
+  scheduleEquationTab();
 }
 
 try {
@@ -682,6 +748,7 @@ function insertEmfAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
     return null;
   }
   if (!pic) return null;
+  try { pic.AlternativeText = "EqnTide equation"; } catch (_) {}
 
   try {
     if (typeof waitData.width_pt === "number" && waitData.width_pt > 0) {

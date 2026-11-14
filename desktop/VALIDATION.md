@@ -44,9 +44,20 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   source preservation, stale-result rejection, invalid drafts, reverting while a
   parse is in flight, clearing the source, and undo to imported attributes.
 - Workspace Clippy and cargo-deny license/source/bans checks.
+- WPS ribbon tests cover always-on equation-tab activation (ignoring old disabled settings), recognition
+  of tagged pictures, MathType OLE and embedded EMF comments, ordinary picture
+  exclusions, stale selections/document switches and recursive event protection.
+  Switching uses WPS RibbonUI.ActivateTab after a deferred selection event;
+  actual contextual-tab timing on WPS Linux/Windows still requires manual checks.
 - Bridge-launched desktop processes are waited on by background reaper threads.
   A Linux test launches and reaps eight real child processes and verifies their
   `/proc` entries disappear, covering zombie accumulation after repeated closes.
+- Word's rebuilt DOTM contains the always-on WindowSelectionChange event sink
+  and Ribbon onLoad callback. Install `word-template/test-requirements.txt` then
+  run `python -m unittest discover -s scripts -p test_word_ribbon.py` to verify
+  the event class's non-procedural VBA metadata, packaged source and Ribbon wiring
+  with an independent CFB/VBA reader. These checks do not compile VBA or test
+  contextual-tab timing in Word; Windows runtime validation remains pending.
 
 ## Local smoke checks
 

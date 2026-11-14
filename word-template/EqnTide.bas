@@ -4,6 +4,86 @@ Option Explicit
 Private Const BRIDGE_ROOT As String = "http://127.0.0.1:17890"
 Private Const BRIDGE_URL As String = "http://127.0.0.1:17890/convert/snippet"
 
+Private mRibbon As IRibbonUI
+Private mWordEvents As EqnTideEvents
+Private mHandlingSelection As Boolean
+Private mLastEquationDoc As Word.Document
+Private mLastEquationStart As Long
+Private mLastEquationEnd As Long
+
+Public Sub RibbonOnLoad(ByVal ribbon As IRibbonUI)
+    Set mRibbon = ribbon
+    InitEquationEvents
+    If Application.Documents.Count > 0 Then HandleEquationSelection Application.Selection
+End Sub
+
+Private Sub InitEquationEvents()
+    If mWordEvents Is Nothing Then Set mWordEvents = New EqnTideEvents
+    Set mWordEvents.App = Application
+End Sub
+
+Public Sub HandleEquationSelection(ByVal Sel As Word.Selection)
+    If mHandlingSelection Then Exit Sub
+    On Error GoTo SelectionFailed
+    If mRibbon Is Nothing Then Exit Sub
+    If Sel.InlineShapes.Count <> 1 Then GoTo NotEquation
+    Dim picture As Word.InlineShape
+    Set picture = Sel.InlineShapes(1)
+    If Sel.Start <> picture.Range.Start Or Sel.End <> picture.Range.End Then GoTo NotEquation
+    If Not IsEquationPicture(picture) Then GoTo NotEquation
+    If Not mLastEquationDoc Is Nothing Then
+        If mLastEquationDoc Is Sel.Document Then
+            If mLastEquationStart = Sel.Start And mLastEquationEnd = Sel.End Then Exit Sub
+        End If
+    End If
+    Set mLastEquationDoc = Sel.Document
+    mLastEquationStart = Sel.Start
+    mLastEquationEnd = Sel.End
+    mHandlingSelection = True
+    mRibbon.ActivateTab "EqnTideTab"
+    mHandlingSelection = False
+    Exit Sub
+NotEquation:
+    Set mLastEquationDoc = Nothing
+    Exit Sub
+SelectionFailed:
+    mHandlingSelection = False
+    Set mLastEquationDoc = Nothing
+End Sub
+
+Private Function IsEquationPicture(ByVal picture As Word.InlineShape) As Boolean
+    On Error GoTo NotEquation
+    If picture.AlternativeText = "EqnTide equation" Then
+        IsEquationPicture = True
+        Exit Function
+    End If
+    Dim progId As String
+    On Error Resume Next
+    progId = picture.OLEFormat.ProgID
+    Err.Clear
+    On Error GoTo NotEquation
+    If LCase$(Left$(progId, 9)) = "equation." Or LCase$(Left$(progId, 8)) = "mathtype" Then
+        IsEquationPicture = True
+        Exit Function
+    End If
+    ' Standalone EMF equations have no OLE object. Recognize the embedded
+    ' MathType comment, not the image extension or generic drawing markup.
+    Dim xml As Object, binary As Object, payload As String
+    Set xml = CreateObject("MSXML2.DOMDocument.6.0")
+    xml.async = False
+    xml.resolveExternals = False
+    If Not xml.LoadXML(picture.Range.WordOpenXML) Then Exit Function
+    For Each binary In xml.SelectNodes("//*[local-name()='binaryData']")
+        binary.DataType = "bin.base64"
+        payload = StrConv(binary.nodeTypedValue, vbUnicode)
+        If InStr(1, payload, "AppsMFCC", vbBinaryCompare) > 0 Then
+            IsEquationPicture = True
+            Exit Function
+        End If
+    Next binary
+NotEquation:
+End Function
+
 ' =========================================================================
 ' Ribbon Callbacks
 ' =========================================================================
@@ -30,6 +110,7 @@ End Sub
 
 Public Sub AutoExec()
     On Error Resume Next
+    InitEquationEvents
     CustomizationContext = NormalTemplate
     KeyBindings.Add KeyCode:=BuildKeyCode(wdKeyAlt, wdKeyBackslash), _
                     KeyCategory:=wdKeyCategoryMacro, _

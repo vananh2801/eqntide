@@ -347,6 +347,17 @@ curl http://127.0.0.1:17890/health
 Expect `enabled`, `active (running)` and a JSON response with `"status":"ok"`.
 Restart WPS and select **EqnTide → Insert Equation** to test native editing.
 
+Selecting a single recognized MathType/EqnTide picture automatically switches
+back to the EqnTide ribbon after WPS opens Picture Tools. This behavior is always
+on while the WPS add-in is loaded and is not stored in the DOCX. Ordinary
+pictures, native OMML and paragraph selections are left alone. Some WPS versions
+may briefly show Picture Tools before switching back.
+
+The Word `EqnTide.dotm` template also switches to its EqnTide tab when a single
+recognized MathType/EqnTide picture is selected. This is always enabled while
+the template is loaded and macros are allowed; ordinary images and native OMML
+are left alone. After upgrading the template, fully close and reopen Word.
+
 ```bash
 journalctl --user -u eqntide.service -n 80 --no-pager
 systemctl --user restart eqntide.service
