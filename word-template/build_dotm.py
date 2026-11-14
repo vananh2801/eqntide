@@ -5,6 +5,9 @@ import shutil
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_press import CompressedVBA
+from filetime_compat import patch_filetime
+
+patch_filetime()
 
 from ms_ovba.vbaProject import VbaProject
 from ms_ovba.Models.Entities.std_module import StdModule
