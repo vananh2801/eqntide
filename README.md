@@ -86,13 +86,14 @@ sudo dnf install gcc gcc-c++ pkgconf-pkg-config libX11-devel libXi-devel \
 ```
 
 At runtime, provide OpenGL, X11 or Wayland, and a working XDG Desktop Portal
-backend plus `zenity` for file dialogs. Windows uses the MSVC toolchain; macOS
-uses Xcode Command Line Tools. Native UI libraries still use OS APIs and graphics
+backend plus `zenity` for file dialogs. Windows uses the MSVC toolchain.
+macOS support is temporarily suspended because no test hardware is available;
+CI and releases target Linux and Windows only. Native UI libraries still use OS APIs and graphics
 drivers; a Rust UI does not imply a binary without system dependencies.
 
 Click the equation canvas to type, use **Ctrl+F** for a fraction, **Ctrl+R** for a
 root, **Ctrl+H/L/J** for scripts, **Tab/Shift+Tab** for placeholders, and
-**Ctrl+Z/Y** for undo/redo (Command on macOS where applicable). Templates wrap a
+**Ctrl+Z/Y** for undo/redo. Templates wrap a
 selection. Matrix controls add/remove rows and columns. Imported MathML is the
 source of truth: opening and saving it does not round-trip through LaTeX.
 Unsupported elements are retained as atomic blocks. Typing in the LaTeX source
@@ -133,18 +134,67 @@ DEB requires `dpkg-deb`; RPM requires `rpmbuild`. Packages include the add-ins,
 Word template and font licenses. The portable Linux package includes
 `install-user.sh` to register the URI handler. Windows release CI stages the
 portable ZIP and builds `scripts/installer.nsi`, which registers the current-user
-URI handler. macOS packages include an app bundle, but macOS URL dispatch and
-Office integration still need platform qualification.
+URI handler. macOS packaging is disabled.
 
 This remains a **native preview**. The legacy Tauri implementation is retained
 for comparison and rollback until the manual platform/Office matrix passes.
 See [implementation plan](plan.md) and [validation status](desktop/VALIDATION.md).
 
+### Native desktop integration and add-in setup
+
+Close the old EqnTide desktop and Office before upgrading. Native Linux packages
+replace the legacy `eqn-tide` package and retain its desktop-file URI association;
+the Windows installer asks you to close a locked legacy executable. Package
+installation configures the login bridge and restarts it with the installed binaries.
+
+Linux URI/add-in setup helpers require Python 3; the desktop/CLI binaries do not.
+
+All current launchers, package scripts and release jobs target `eqntide-desktop`
+and `eqntide-cli`. Tauri stays in `src-tauri` solely as a development/rollback
+implementation; it is not needed by the native installers or add-ins.
+
+- **Windows installer:** installs the native binaries, registers `eqntide://`,
+  and runs the shared PowerShell add-in installer for Word/WPS and the Word
+  template. It also enables the hidden login bridge. Close Office first. The
+  Start Menu offers a manual bridge launcher.
+- **Windows portable:** extract the complete ZIP and run `install-addins.bat` to
+  register the URI and add-ins. `start-server.bat` starts the optional external
+  bridge using the sibling native desktop. Add-ins can also use the bridge hosted
+  by the desktop itself.
+- **Linux portable:** keep the extracted folder in a stable location, run
+  `./install-user.sh` for URI registration, then
+  `bash scripts/install-addin.sh` for WPS. Optional login bridge:
+  `bash scripts/install-bridge-service.sh`. Preview its unit without installing
+  using `--print-unit`. The service resolves binaries from the installed bundle,
+  the repository release directory, or PATH; overrides are
+  `EQNTIDE_CLI_BIN` and `EQNTIDE_DESKTOP_BIN`.
+- **Linux DEB/RPM:** executables/resources live under `/usr/lib/eqntide` with
+  launchers in `/usr/bin`. Package hooks configure WPS add-ins and the login
+  bridge for logged-in users, with setup at next login as fallback. Repair
+  scripts are available under `/usr/lib/eqntide/scripts/`.
+
+Word's rebuilt VBA template now uses `/session/open` → native editing →
+`/session/:id/wait`, inserts the returned Flat OPC into the captured range and
+leaves the document untouched on cancellation. Its batch command opens the
+native Batch tab. The legacy `/convert` bridge route remains an alias for old
+installed templates. Rebuild the `.dotm` after source changes with:
+
+```bash
+python -m pip install -r word-template/requirements.txt
+python word-template/build_dotm.py
+```
+
+WPS launchers use the registered native URI, including an `xdg-open` fallback on
+Linux. Add-in installers merge their WPS registrations rather than replacing
+other add-ins' configuration. The bridge serves packaged resources beside its
+executable before development fallbacks, so installed bundles work outside the
+repository. Windows Office and installer runtime qualification remains in
+[the validation matrix](desktop/VALIDATION.md).
+
 ### Legacy Tauri prerequisites
 
 - A current stable [Rust toolchain](https://rustup.rs/) with Cargo.
 - **Windows**: 64-bit Windows 10/11 and Microsoft Visual Studio C++ Build Tools with the Windows SDK.
-- **macOS**: macOS 10.15 or later and Xcode Command Line Tools (`xcode-select --install`).
 - **Linux**: GTK3, WebKit2GTK 4.1, and the other Tauri system libraries.
 
   On Ubuntu/Debian:
@@ -181,7 +231,7 @@ cargo build --release --bin eqntide-cli
 
 The release binary is written to:
 
-- Linux/macOS: `target/release/eqntide-cli`
+- Linux: `target/release/eqntide-cli`
 - Windows: `target\release\eqntide-cli.exe`
 
 Verify the build with:
@@ -216,8 +266,8 @@ cargo tauri build
 
 Build outputs are placed under `src-tauri/target/release/`:
 
-- Raw executable: `eqntide-desktop` on Linux/macOS or `eqntide-desktop.exe` on Windows.
-- Installers/packages: `src-tauri/target/release/bundle/` (for example NSIS on Windows, DEB/AppImage on Linux, and app/DMG bundles on macOS when supported by the host platform).
+- Raw executable: `eqntide-desktop` on Linux or `eqntide-desktop.exe` on Windows.
+- Installers/packages: `src-tauri/target/release/bundle/` (for example NSIS on Windows, DEB/AppImage on Linux).
 
 If only the raw desktop executable is needed, without generating a Tauri installer, run this from the repository root:
 
@@ -371,6 +421,24 @@ The desktop application starts the same bridge automatically. Confirm it is avai
 curl http://127.0.0.1:17890/health
 ```
 
+Packaged installers register bundled add-ins and enable the background bridge
+automatically. Linux uses a per-user `eqntide.service` (starts at graphical login,
+restarts on failure); Windows uses a hidden per-user Startup supervisor (starts
+at login and restarts the CLI bridge if it exits). Installation starts the bridge
+immediately when a user session is available. Upgrades restart it; uninstall
+removes startup configuration and stops the owned bridge. Linux package removal
+also cleans tracked offline profiles. The server remains bound to localhost;
+no administrator service or boot-before-login server is installed.
+
+Packaged installers register bundled add-ins automatically. Windows Setup installs
+Word/WPS add-ins for the installing user. Linux RPM/DEB installs WPS add-ins for
+logged-in users, dropping root privileges before touching their profiles; when
+no user session is available, setup runs at the next desktop login through XDG
+autostart. Add-in files are copied again only when the bundled add-in changes or
+its files are missing; each login also ensures the background service is enabled. Restart Word/WPS after installation. Office security or organization
+policies may still require enabling the add-in. Source/portable setups can use
+the manual commands below.
+
 #### Windows: Word and WPS Office
 
 Run the PowerShell registration script from the repository root, then restart Word or WPS Office:
@@ -399,14 +467,6 @@ This installs the static files under the current user's Kingsoft/WPS `jsaddons` 
 ./scripts/install-addin.sh --uninstall
 ```
 
-#### macOS: Word and WPS Office
-
-```bash
-./scripts/install-addin.sh
-```
-
-The script sideloads the Word manifest into Word's `wef` directory and installs the WPS add-in when a WPS container is present. Restart the Office application after registration.
-
 ### Manual Add-in Sideloading
 
 Use these steps when the registration scripts are unavailable or when you need to inspect the installation manually. Start the EqnTide desktop application or CLI bridge before opening an add-in.
@@ -423,16 +483,6 @@ Set-ItemProperty -Path "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer" `
 ```
 
 Restart Word, then open **Insert → My Add-ins → Developer Add-ins** and select **EqnTide**.
-
-#### Microsoft Word on macOS
-
-```bash
-mkdir -p ~/Library/Containers/com.microsoft.Word/Data/Documents/wef
-cp word-addin/manifest.xml \
-  ~/Library/Containers/com.microsoft.Word/Data/Documents/wef/manifest-eqntide.xml
-```
-
-Restart Word, then activate EqnTide from **Insert → Add-ins → Developer Add-ins**.
 
 #### Microsoft Word on the Web
 
@@ -668,3 +718,17 @@ Detailed attribution and copyright information are documented in [NOTICE](NOTICE
 - Source code is licensed under the [MIT License](LICENSE).
 - Bundled STIX fonts (`assets/fonts/stixfonts-2.13b171/`) are licensed under the [SIL Open Font License 1.1](assets/fonts/stixfonts-2.13b171/OFL.txt).
 - Comprehensive copyright and third-party notices are available in [NOTICE](NOTICE).
+
+Background bridge diagnostics after native installation:
+
+```bash
+systemctl --user status eqntide.service
+journalctl --user -u eqntide.service -n 50
+```
+
+On Windows, bridge logs are under `%LOCALAPPDATA%\EqnTide\logs`. Run
+`scripts\install-bridge-startup.ps1` to repair startup or pass `-Uninstall` to
+stop the owned bridge and remove its Startup entry. On Linux, the equivalent
+manual opt-out is `scripts/install-bridge-service.sh --uninstall`; remove or
+disable the `eqntide-addins.desktop` XDG autostart entry too if retaining the
+package but opting out of automatic session setup.
