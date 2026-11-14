@@ -67,3 +67,13 @@ arboard (MIT OR Apache-2.0), interprocess (0BSD OR Apache-2.0), fs2
 (MIT OR Apache-2.0), together with their platform dependencies.
 Cargo.lock records resolved versions; cargo-deny checks the workspace license
 policy. Bundled STIX fonts retain the SIL Open Font License attribution above.
+
+Nunito (desktop interface)
+Copyright 2014 The Nunito Project Authors (https://github.com/googlefonts/nunito)
+License: SIL Open Font License, Version 1.1
+License Location: assets/fonts/Nunito/OFL.txt
+
+JetBrains Mono (desktop LaTeX source)
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+License: SIL Open Font License, Version 1.1
+License Location: assets/fonts/JetBrainsMono-2.304/OFL.txt

@@ -84,6 +84,28 @@ impl App {
         tx.attach(cc.egui_ctx.clone());
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
+            "nunito".into(),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../../assets/fonts/Nunito/Nunito-Regular.ttf"
+            ))),
+        );
+        fonts.font_data.insert(
+            "jetbrains-mono".into(),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../../assets/fonts/JetBrainsMono-2.304/JetBrainsMono-Regular.ttf"
+            ))),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "nunito".into());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .insert(0, "jetbrains-mono".into());
+        fonts.font_data.insert(
             "stix-text".into(),
             Arc::new(egui::FontData::from_static(include_bytes!(
                 "../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Regular.ttf"
