@@ -108,8 +108,8 @@ source of truth: opening and saving it does not round-trip through LaTeX.
 Unsupported elements are retained as atomic blocks. Typing in the LaTeX source
 updates the canvas automatically after a short pause (180 ms); no Apply button is
 needed. Source formatting and the text cursor stay intact. Invalid or incomplete
-LaTeX keeps the last valid formula visible and shows an inline error; revert to
-the canvas to discard that draft. Each successful source update can be undone,
+LaTeX keeps the last valid formula visible and shows an inline error until
+the source is corrected. Each successful source update can be undone,
 including restoring the attributes of an imported equation. The shared LaTeX parser supports the existing palette, including cases and multiline tables;
 it is not a complete TeX engine, and invalid drafts leave the equation intact.
 Integral limits entered through LaTeX/palettes use the editor's above/below layout;
@@ -136,9 +136,8 @@ eqntide-desktop 'eqntide://open?session_id=SESSION_ID'
 Batch outputs use a suffix by default and existing copies are not overwritten.
 The explicit **Overwrite original documents** option enables replacement; the
 worker first completes a temporary sibling file before committing it. Stop waits
-for the current file to finish. Clipboard actions include LaTeX, MathML, Flat OPC,
-and PNG. EMF is available through **Export EMF** rather than an unverified native
-clipboard format.
+for the current file to finish. Standard canvas copy/cut shortcuts copy the
+selected formula as LaTeX text.
 
 Create portable or Linux distribution packages from the release build:
 

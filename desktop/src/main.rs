@@ -56,8 +56,6 @@ pub enum Event {
     Latex(u64, Result<eqntide::MathNode, String>),
     Session(String, Result<serde_json::Value, String>),
     Finished(Result<(), String>),
-    Copied(Result<String, String>),
-    Image(arboard::ImageData<'static>),
     Paths(Vec<std::path::PathBuf>),
     Batch(
         usize,

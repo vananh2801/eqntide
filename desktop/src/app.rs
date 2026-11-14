@@ -68,8 +68,6 @@ pub struct App {
     batch_completed: usize,
     batch_running: bool,
     stop: Arc<AtomicBool>,
-    copy_format: usize,
-    clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -178,8 +176,6 @@ impl App {
             batch_completed: 0,
             batch_running: false,
             stop: Arc::new(AtomicBool::new(false)),
-            copy_format: 0,
-            clipboard: None,
         }
     }
     fn dirty(&self) -> bool {
@@ -507,32 +503,6 @@ impl App {
                         }
                     }
                 }
-                Event::Copied(result) => match result {
-                    Ok(text) => {
-                        if !text.is_empty() {
-                            ctx.copy_text(text);
-                        }
-                        self.status = "Done.".into();
-                    }
-                    Err(e) => self.status = e,
-                },
-                Event::Image(image) => {
-                    let result = (|| {
-                        if self.clipboard.is_none() {
-                            self.clipboard =
-                                Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
-                        }
-                        self.clipboard
-                            .as_mut()
-                            .unwrap()
-                            .set_image(image)
-                            .map_err(|e| e.to_string())
-                    })();
-                    self.status = match result {
-                        Ok(()) => "PNG copied.".into(),
-                        Err(e) => e,
-                    };
-                }
                 Event::Paths(paths) => self.add_files(paths),
                 Event::Batch(i, result) => {
                     self.batch_completed += 1;
@@ -658,8 +628,7 @@ impl App {
             return;
         }
         if save && self.draft_dirty {
-            self.status =
-                "Wait for valid LaTeX, or revert to the current canvas before saving.".into();
+            self.status = "Wait for valid LaTeX before saving.".into();
             return;
         }
         if self.session.is_none() && save {
@@ -757,70 +726,8 @@ impl App {
             MathNode::with_children("math", vec![math])
         }
     }
-    fn copy(&mut self, format: usize, ctx: &egui::Context) {
-        let math = self.selected_equation();
-        if format == 0 {
-            ctx.copy_text(math.to_latex());
-            return;
-        }
-        if format == 1 {
-            ctx.copy_text(math.to_xml());
-            return;
-        }
-        let font = self.font_pt;
-        let mode = self.target.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            if format == 3 {
-                let result = (|| {
-                    let png = eqntide::render_preview(&math, font).map_err(|e| e.to_string())?;
-                    let image = image::load_from_memory(&png.png)
-                        .map_err(|e| e.to_string())?
-                        .to_rgba8();
-                    tx.send(Event::Image(arboard::ImageData {
-                        width: image.width() as usize,
-                        height: image.height() as usize,
-                        bytes: std::borrow::Cow::Owned(image.into_raw()),
-                    }))
-                    .map_err(|e| e.to_string())?;
-                    Ok(String::new())
-                })();
-                let _ = tx.send(Event::Copied(result));
-            } else {
-                let target = if mode == "mathtype" {
-                    "flat_opc_mathtype"
-                } else {
-                    "flat_opc_omml"
-                };
-                let result =
-                    eqntide::service::convert_snippet(&eqntide::bridge::ConvertSnippetRequest {
-                        data: math.to_xml(),
-                        from: "mathml".into(),
-                        to: target.into(),
-                        font_pt: font,
-                    })
-                    .map(|r| r.result)
-                    .map_err(|e| e.to_string());
-                let _ = tx.send(Event::Copied(result));
-            }
-        });
-    }
-    fn export_emf(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("EMF", &["emf"])
-            .set_file_name("equation.emf")
-            .save_file()
-        {
-            let math = self.editor.math();
-            let font = self.font_pt;
-            let tx = self.tx.clone();
-            std::thread::spawn(move || {
-                let result = eqntide::render_emf(&math, font)
-                    .map_err(|e| e.to_string())
-                    .and_then(|p| std::fs::write(path, p.emf).map_err(|e| e.to_string()));
-                let _ = tx.send(Event::Copied(result.map(|_| String::new())));
-            });
-        }
+    fn copy(&self, ctx: &egui::Context) {
+        ctx.copy_text(self.selected_equation().to_latex());
     }
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -896,7 +803,6 @@ impl App {
         })
     }
     fn editor_ui(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
         ui.add_enabled_ui(!self.draft_dirty, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Size (pt)");
@@ -978,24 +884,6 @@ impl App {
             });
             self.canvas(ui);
         });
-        ui.add_enabled_ui(!self.draft_dirty, |ui| {
-            ui.horizontal(|ui| {
-                let labels = ["LaTeX", "MathML", "Flat OPC", "PNG image"];
-                egui::ComboBox::from_id_salt("copy-format")
-                    .selected_text(labels[self.copy_format])
-                    .show_ui(ui, |ui| {
-                        for (i, label) in labels.iter().enumerate() {
-                            ui.selectable_value(&mut self.copy_format, i, *label);
-                        }
-                    });
-                if ui.button("Copy").clicked() {
-                    self.copy(self.copy_format, &ctx);
-                }
-                if ui.button("Export EMF…").clicked() {
-                    self.export_emf();
-                }
-            });
-        });
         ui.label("LaTeX source — live preview");
         if ui
             .add(
@@ -1010,12 +898,6 @@ impl App {
             self.source_changed(Instant::now());
         }
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(self.draft_dirty, egui::Button::new("Revert to canvas"))
-                .clicked()
-            {
-                self.changed();
-            }
             if let Some(error) = &self.latex_error {
                 ui.colored_label(ui.visuals().error_fg_color, format!("LaTeX error: {error}"));
             } else if self.draft_dirty {
@@ -1407,10 +1289,10 @@ impl App {
         let before = self.editor.revision;
         for event in events {
             match event {
-                egui::Event::Copy => self.copy(0, ui.ctx()),
+                egui::Event::Copy => self.copy(ui.ctx()),
                 egui::Event::Cut => {
                     if self.editor.selected_math().is_some() {
-                        self.copy(0, ui.ctx());
+                        self.copy(ui.ctx());
                         self.editor.delete(true);
                     }
                 }
@@ -2200,7 +2082,7 @@ mod tests {
         assert!(a.latex_error.is_some());
     }
     #[test]
-    fn reverting_source_invalidates_its_inflight_parse() {
+    fn canvas_change_invalidates_its_inflight_source_parse() {
         let mut a = app();
         a.load_math("<math><mi>x</mi></math>", None, None);
         let before = a.editor.math();

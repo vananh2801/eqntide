@@ -41,7 +41,7 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   EMF positioning retains the WPS calibration from commit `9165468`: rendered
   depth plus 0.045 times the font size, rounded to tenths of a point. These mocks do not qualify actual WPS paragraph layout.
 - Live LaTeX preview is debounced by 180 ms and parsed on a worker. Tests cover
-  source preservation, stale-result rejection, invalid drafts, reverting while a
+  source preservation, stale-result rejection, invalid drafts, canvas changes while a
   parse is in flight, clearing the source, and undo to imported attributes.
 - Workspace Clippy and cargo-deny license/source/bans checks.
 - WPS ribbon tests cover always-on equation-tab activation (ignoring old disabled settings), recognition
@@ -84,7 +84,7 @@ Do not extrapolate release behavior on other OSes from a Linux build.
 | --- | --- | --- | --- |
 | Window/render/basic editing | Isolated smoke checked | Pending | Pending |
 | Vietnamese IME and text selection | Pending actual IME | Pending | Pending |
-| Clipboard PNG/Flat OPC, large formula, DPI changes | Pending | Pending | Pending |
+| Clipboard LaTeX, large formula, DPI changes | Pending | Pending | Pending |
 | URI cold/warm launch and installed assets | Development IPC checked | Pending | Pending |
 | Word OMML/MathType insert and replace | N/A | N/A | Pending |
 | WPS OMML/MathType insert and replace | Pending | Pending | Pending |

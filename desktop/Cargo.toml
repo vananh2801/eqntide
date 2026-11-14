@@ -10,7 +10,6 @@ eqntide = { path = ".." }
 eqntide-editor = { path = "../crates/eqntide-editor" }
 eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "accesskit", "default_fonts"] }
 rfd = "0.18"
-arboard = { version = "3.7", features = ["wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 interprocess = "2.4"
 fs2 = "0.4"
