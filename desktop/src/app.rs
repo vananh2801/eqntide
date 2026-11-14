@@ -41,6 +41,7 @@ pub struct App {
     latex_parsing: Option<u64>,
     latex_error: Option<String>,
     session: Option<String>,
+    loading_session: Option<String>,
     queue: VecDeque<DesktopWindowRequest>,
     startup: Vec<String>,
     busy: bool,
@@ -128,6 +129,7 @@ impl App {
             latex_parsing: None,
             latex_error: None,
             session: None,
+            loading_session: None,
             queue: VecDeque::new(),
             startup: args,
             busy: false,
@@ -267,6 +269,7 @@ impl App {
         }
         if !request.session_id.is_empty()
             && (self.session.as_ref() == Some(&request.session_id)
+                || self.loading_session.as_ref() == Some(&request.session_id)
                 || self
                     .queue
                     .iter()
@@ -307,6 +310,7 @@ impl App {
             } else {
                 self.busy = true;
                 let id = request.session_id;
+                self.loading_session = Some(id.clone());
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
                     let result = runtime::get(&format!("/session/{id}"));
@@ -418,6 +422,10 @@ impl App {
                     }
                 }
                 Event::Session(id, result) => {
+                    if self.loading_session.as_ref() != Some(&id) {
+                        continue;
+                    }
+                    self.loading_session = None;
                     self.busy = false;
                     match result {
                         Ok(value) => {
@@ -814,7 +822,56 @@ impl App {
                 }
             }
         });
+        if self.tab == 0 || self.session.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                let label = if self.session.is_some() {
+                    "Lưu và trở về tài liệu (Ctrl+S)"
+                } else {
+                    "Lưu MathML (Ctrl+S)"
+                };
+                if ui
+                    .add_enabled(
+                        self.save_available() && !self.draft_dirty,
+                        egui::Button::new(label),
+                    )
+                    .clicked()
+                {
+                    self.finish(true);
+                }
+                if self.draft_dirty {
+                    if self.latex_error.is_some() {
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            "Sửa lỗi LaTeX trước khi lưu.",
+                        );
+                    } else {
+                        ui.label("Đang cập nhật LaTeX, vui lòng chờ trước khi lưu…");
+                    }
+                }
+            });
+        }
         ui.separator();
+    }
+    fn save_available(&self) -> bool {
+        !self.busy && !self.batch_running && self.pending.is_none() && !self.allow_close
+    }
+    fn take_save_shortcut(ctx: &egui::Context) -> bool {
+        // Consume before widgets see the events, but save after they apply this
+        // frame's edits. Ctrl+Shift+S remains the canvas's sum shortcut.
+        ctx.input_mut(|input| {
+            let mut save = false;
+            input.events.retain(|event| {
+                let matches = matches!(event, egui::Event::Key {
+                    key: egui::Key::S,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if modifiers.command && !modifiers.shift && !modifiers.alt);
+                save |= matches;
+                !matches
+            });
+            save
+        })
     }
     fn editor_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
@@ -842,9 +899,6 @@ impl App {
                 if ui.button("Redo").clicked() {
                     self.editor.redo();
                     self.changed();
-                }
-                if ui.button("Save / return").clicked() {
-                    self.finish(true);
                 }
             });
             ui.horizontal_wrapped(|ui| {
@@ -924,6 +978,7 @@ impl App {
         if ui
             .add(
                 egui::TextEdit::multiline(&mut self.latex)
+                    .id(egui::Id::unique("latex-source"))
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
                     .font(egui::TextStyle::Monospace),
@@ -1419,7 +1474,6 @@ impl App {
                                 "\\int #? \\, d#?"
                             }),
                             Key::S if modifiers.shift => self.insert_template("\\sum_{#?}^{#?} #?"),
-                            Key::S => self.finish(true),
                             Key::P if modifiers.shift => {
                                 self.insert_template("\\prod_{#?}^{#?} #?")
                             }
@@ -1595,6 +1649,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.events(&ctx);
+        let save_requested = Self::take_save_shortcut(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             if !self.dirty()
                 && self.session.is_none()
@@ -1637,6 +1692,9 @@ impl eframe::App for App {
                 ui.spinner();
             }
         });
+        if save_requested && self.save_available() {
+            self.finish(true);
+        }
         self.dialogs(&ctx);
         self.request_latex_parse(&ctx);
         self.drain_before_close(&ctx);
@@ -1679,6 +1737,187 @@ mod tests {
         a.window(request("session-two", None));
         assert_eq!(a.queue.len(), 2);
         assert!(a.session.is_none());
+    }
+    #[test]
+    fn duplicate_requests_during_loading_do_not_prompt_or_queue() {
+        let mut a = app();
+        a.busy = true;
+        a.loading_session = Some("office".into());
+        a.window(request("office", None));
+        // Both bridge callbacks and forwarded custom URIs reach window().
+        a.launch(
+            vec!["eqntide://open?session_id=office".into()],
+            &egui::Context::default(),
+        );
+        assert!(a.queue.is_empty());
+        assert!(a.pending.is_none());
+        a.tx.send(Event::Session(
+            "office".into(),
+            Ok(serde_json::json!({
+                "state": "waiting", "mathml": "<math><mi>x</mi></math>",
+                "font_pt": 14, "target_mode": "mathtype"
+            })),
+        ))
+        .unwrap();
+        a.events(&egui::Context::default());
+        assert_eq!(a.session.as_deref(), Some("office"));
+        assert!(a.loading_session.is_none());
+        assert!(!a.dirty());
+        a.window(request("office", None));
+        assert!(a.queue.is_empty());
+        assert!(a.pending.is_none());
+    }
+    #[test]
+    fn duplicate_queued_session_is_not_added_twice() {
+        let mut a = app();
+        a.session = Some("current".into());
+        a.window(request("next", None));
+        a.window(request("next", None));
+        assert_eq!(a.queue.len(), 1);
+        assert!(matches!(a.pending, Some(Intent::Next)));
+        assert_eq!(a.session.as_deref(), Some("current"));
+    }
+    #[test]
+    fn failed_session_load_clears_loading_marker_and_keeps_work() {
+        let mut a = app();
+        a.editor.insert_text("x");
+        let before = a.editor.math();
+        a.busy = true;
+        a.loading_session = Some("office".into());
+        a.tx.send(Event::Session("office".into(), Err("Unavailable".into())))
+            .unwrap();
+        a.events(&egui::Context::default());
+        assert!(a.loading_session.is_none());
+        assert!(!a.busy);
+        assert!(a.session.is_none());
+        assert_eq!(a.editor.math(), before);
+        assert!(a.status.contains("Unavailable"));
+    }
+    #[test]
+    fn successful_office_save_closes_the_window() {
+        let mut a = app();
+        a.editor.insert_text("x");
+        a.session = Some("office".into());
+        a.busy = true;
+        a.tx.send(Event::Finished(Ok(()))).unwrap();
+        a.events(&egui::Context::default());
+        assert!(a.session.is_none());
+        assert!(!a.dirty());
+        assert!(a.close_deadline.is_some());
+        a.close_deadline = Some(Instant::now());
+        a.drain_before_close(&egui::Context::default());
+        assert!(a.allow_close);
+    }
+    fn save_key(shift: bool) -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::S,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                command: true,
+                shift,
+                ..Default::default()
+            },
+        }
+    }
+    #[test]
+    fn save_shortcut_is_global_and_consumed_once_without_stealing_sum() {
+        for focus in [None, Some("equation-canvas"), Some("latex-source")] {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput {
+                events: vec![save_key(false), save_key(false), save_key(true)],
+                ..Default::default()
+            });
+            if let Some(id) = focus {
+                ctx.memory_mut(|m| m.request_focus(egui::Id::unique(id)));
+            }
+            assert!(App::take_save_shortcut(&ctx));
+            assert!(!App::take_save_shortcut(&ctx));
+            assert_eq!(ctx.input(|i| i.events.len()), 1);
+            assert!(ctx.input(|i| matches!(&i.events[0], egui::Event::Key {
+                key: egui::Key::S, modifiers, ..
+            } if modifiers.shift && modifiers.command)));
+            ctx.end_pass().textures_delta.clear();
+        }
+    }
+    #[test]
+    fn save_shortcut_with_a_latex_draft_keeps_the_last_valid_canvas() {
+        let mut a = app();
+        a.load_math("<math><mi>x</mi></math>", None, None);
+        let before = a.editor.math();
+        let ctx = egui::Context::default();
+        // Focus the real source widget, then type and save in the same frame.
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.memory_mut(|m| m.request_focus(egui::Id::unique("latex-source")));
+            a.editor_ui(ui);
+        })
+        .textures_delta
+        .clear();
+        ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Text("y".into()), save_key(false)],
+                ..Default::default()
+            },
+            |ui| {
+                let save = App::take_save_shortcut(&ctx);
+                a.editor_ui(ui);
+                if save && a.save_available() {
+                    a.finish(true);
+                }
+            },
+        )
+        .textures_delta
+        .clear();
+        assert_eq!(a.editor.math(), before);
+        assert!(a.latex.contains('y'));
+        assert!(a.draft_dirty);
+        assert!(!a.busy);
+        assert!(a.status.contains("valid LaTeX"));
+    }
+    #[test]
+    fn save_button_stays_visible_above_scrolled_editor_at_minimum_size() {
+        for office in [false, true] {
+            let mut previous_rect = None;
+            for offset in [0.0, 600.0] {
+                let mut a = app();
+                a.bridge_ready = true;
+                if office {
+                    a.session = Some("office".into());
+                }
+                let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 450.0));
+                let mut output = egui::Context::default().run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        a.toolbar(ui);
+                        egui::ScrollArea::vertical()
+                            .id_salt("editor-layout")
+                            .vertical_scroll_offset(offset)
+                            .show(ui, |ui| a.editor_ui(ui));
+                    },
+                );
+                output.textures_delta.clear();
+                let label = if office {
+                    "Lưu và trở về tài liệu (Ctrl+S)"
+                } else {
+                    "Lưu MathML (Ctrl+S)"
+                };
+                let shape = output.shapes.iter().find(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
+                }).expect("fixed save button must be rendered");
+                let rect = shape.shape.visual_bounding_rect();
+                assert!(screen.contains_rect(rect));
+                assert!(shape.clip_rect.contains_rect(rect));
+                if let Some(previous) = previous_rect {
+                    assert_eq!(rect, previous);
+                }
+                previous_rect = Some(rect);
+            }
+        }
     }
     #[test]
     fn invalid_import_keeps_existing_work_and_source() {

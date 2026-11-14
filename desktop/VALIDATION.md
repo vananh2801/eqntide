@@ -15,6 +15,9 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   STIX baseline tests remain covered.
 - App dirty-session queue, concurrent startup requests, failed imports, failed
   session save, and unapplied LaTeX drafts have regression tests.
+- Duplicate Office opens are ignored during loading, active editing and queuing.
+  Tests cover global Ctrl+S, source edits in the save frame, Office save/close,
+  and save-button visibility at 600×450 before and after scrolling the editor.
 - Live LaTeX preview is debounced by 180 ms and parsed on a worker. Tests cover
   source preservation, stale-result rejection, invalid drafts, reverting while a
   parse is in flight, clearing the source, and undo to imported attributes.
