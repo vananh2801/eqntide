@@ -30,6 +30,7 @@ pub struct SessionData {
     pub initial_mathml: String,
     pub initial_latex: Option<String>,
     pub initial_font_pt: Option<f32>,
+    pub target_mode: String,
     pub created_at: Instant,
     pub state: SessionState,
 }
@@ -77,6 +78,17 @@ impl SessionManager {
         initial_latex: Option<String>,
         initial_font_pt: Option<f32>,
     ) -> String {
+        self.create_session_with_target(initial_mathml, initial_latex, initial_font_pt, "omml")
+    }
+
+    /// Open a session while preserving the Office insertion target.
+    pub fn create_session_with_target(
+        &self,
+        initial_mathml: String,
+        initial_latex: Option<String>,
+        initial_font_pt: Option<f32>,
+        target_mode: &str,
+    ) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let entry = Arc::new(SessionEntry {
             data: Mutex::new(SessionData {
@@ -84,6 +96,7 @@ impl SessionManager {
                 initial_mathml,
                 initial_latex,
                 initial_font_pt,
+                target_mode: target_mode.to_owned(),
                 created_at: Instant::now(),
                 state: SessionState::Waiting,
             }),
@@ -113,6 +126,18 @@ impl SessionManager {
             data.initial_latex.clone(),
             data.initial_font_pt,
         ))
+    }
+
+    /// Target and lifecycle metadata used by native editors. Existing getters stay compatible.
+    pub fn metadata(&self, id: &str) -> Option<(String, &'static str)> {
+        let sessions = self.sessions.lock().unwrap();
+        let data = sessions.get(id)?.data.lock().unwrap();
+        let state = match data.state {
+            SessionState::Waiting => "waiting",
+            SessionState::Ready { .. } => "ready",
+            SessionState::Cancelled => "cancelled",
+        };
+        Some((data.target_mode.clone(), state))
     }
 
     /// Update a session with the newly generated equation payloads, notifying any waiting long-poll request.

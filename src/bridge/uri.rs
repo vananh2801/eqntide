@@ -10,6 +10,7 @@ use std::fmt::Write;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomUriAction {
     pub command: String,
+    pub tab: Option<String>,
     pub session_id: Option<String>,
     pub data: Option<String>,
     pub format: Option<String>,
@@ -32,6 +33,7 @@ pub fn parse_custom_uri(uri: &str) -> Result<CustomUriAction, &'static str> {
         None => (remainder.trim_matches('/'), None),
     };
 
+    let mut tab = None;
     let mut session_id = None;
     let mut data = None;
     let mut format = None;
@@ -48,6 +50,7 @@ pub fn parse_custom_uri(uri: &str) -> Result<CustomUriAction, &'static str> {
             };
             let decoded_value = url_decode(value);
             match key {
+                "tab" => tab = Some(decoded_value),
                 "session_id" | "id" => session_id = Some(decoded_value),
                 "data" => data = Some(decoded_value),
                 "format" => format = Some(decoded_value),
@@ -59,6 +62,7 @@ pub fn parse_custom_uri(uri: &str) -> Result<CustomUriAction, &'static str> {
 
     Ok(CustomUriAction {
         command: command.to_owned(),
+        tab,
         session_id,
         data,
         format,
@@ -83,6 +87,9 @@ pub fn format_custom_uri(action: &CustomUriAction) -> String {
         out.push_str(&url_encode(val));
     };
 
+    if let Some(ref tab) = action.tab {
+        append_param("tab", tab);
+    }
     if let Some(ref id) = action.session_id {
         append_param("session_id", id);
     }
@@ -161,6 +168,7 @@ mod tests {
     fn test_custom_uri_parse_and_format() {
         let action = CustomUriAction {
             command: "open".into(),
+            tab: Some("batch".into()),
             session_id: Some("sess-12345".into()),
             data: Some("<math><mi>x</mi></math>".into()),
             format: Some("mathml".into()),

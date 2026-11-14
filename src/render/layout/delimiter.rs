@@ -294,6 +294,7 @@ impl Layout {
             let w = self.f.advance(face, norm_c, em_x) + 2.0 * pad;
 
             return Some(LBox {
+                hits: Vec::new(),
                 w,
                 asc,
                 desc,
@@ -343,6 +344,7 @@ impl Layout {
             let w = self.f.advance(face, norm_c, em_x) + 2.0 * pad;
 
             return Some(LBox {
+                hits: Vec::new(),
                 w,
                 asc,
                 desc,
@@ -475,6 +477,7 @@ impl Layout {
             .fold(0.0f32, f32::max);
 
         Some(LBox {
+            hits: Vec::new(),
             w: width + 2.0 * pad,
             asc,
             desc,
@@ -550,6 +553,7 @@ impl Layout {
         }
 
         let mut out = LBox {
+            hits: Vec::new(),
             w: script_x
                 + sub
                     .as_ref()

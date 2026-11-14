@@ -55,6 +55,10 @@ pub fn measure(math: &MathNode, font_pt: f32) -> Result<(f32, f32, f32)> {
 /// Draw `math` (a `<math>` tree) at `font_pt` points per em.
 pub fn render_preview(math: &MathNode, font_pt: f32) -> Result<Preview> {
     let (b, em) = layout::layout_math(math, font_pt)?;
+    rasterize(&b, em)
+}
+
+fn rasterize(b: &layout::LBox, em: f32) -> Result<Preview> {
     let f = fonts();
     let (min_x, max_x, min_y, max_y) = b.ink_bounds(f);
     let asc = (-min_y).max(0.70 * em);
@@ -118,4 +122,124 @@ pub fn render_preview(math: &MathNode, font_pt: f32) -> Result<Preview> {
         height_pt: h_px as f32 / PX_PER_PT,
         depth_pt: (desc + pad_y) / PX_PER_PT,
     })
+}
+
+/// Region in typographic points, relative to the preview image's top-left.
+#[derive(Clone, Debug)]
+pub struct HitRegion {
+    /// Candidate token caret positions on the image x axis, in points.
+    pub carets: Vec<f32>,
+    pub path: Vec<usize>,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub baseline: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct InteractivePreview {
+    pub preview: Preview,
+    pub regions: Vec<HitRegion>,
+}
+
+/// Raster and hit geometry are generated from exactly the same layout.
+/// Metadata is separate from drawing primitives and cannot change EMF/PNG output.
+pub fn render_interactive(math: &MathNode, font_pt: f32) -> Result<InteractivePreview> {
+    let (b, em) = layout::layout_math(math, font_pt)?;
+    let preview = rasterize(&b, em)?;
+    let (min_x, _, min_y, _) = b.ink_bounds(fonts());
+    let ox = 2.0 + (-min_x).max(0.0);
+    let oy = 2.0 + (-min_y).max(0.70 * em);
+    let mut paths = std::collections::HashMap::new();
+    fn visit(
+        n: &MathNode,
+        path: &mut Vec<usize>,
+        paths: &mut std::collections::HashMap<usize, Vec<usize>>,
+    ) {
+        paths.insert(n as *const _ as usize, path.clone());
+        for (i, child) in n.children.iter().enumerate() {
+            path.push(i);
+            visit(child, path, paths);
+            path.pop();
+        }
+    }
+    visit(math, &mut vec![], &mut paths);
+    let mut regions: Vec<HitRegion> = vec![];
+    for hit in &b.hits {
+        let Some(path) = paths.get(&hit.key) else {
+            continue;
+        };
+        let x = (ox + hit.x) / PX_PER_PT;
+        let y = (oy + hit.y - hit.asc) / PX_PER_PT;
+        let right = x + hit.w / PX_PER_PT;
+        let bottom = y + (hit.asc + hit.desc) / PX_PER_PT;
+        if let Some(region) = regions.iter_mut().find(|r| &r.path == path) {
+            let r = (region.x + region.width).max(right);
+            let bot = (region.y + region.height).max(bottom);
+            region.x = region.x.min(x);
+            region.y = region.y.min(y);
+            region.width = r - region.x;
+            region.height = bot - region.y;
+            region
+                .carets
+                .extend(hit.carets.iter().map(|c| (ox + hit.x + c) / PX_PER_PT));
+        } else {
+            regions.push(HitRegion {
+                carets: hit
+                    .carets
+                    .iter()
+                    .map(|c| (ox + hit.x + c) / PX_PER_PT)
+                    .collect(),
+                path: path.clone(),
+                x,
+                y,
+                width: right - x,
+                height: bottom - y,
+                baseline: (oy + hit.y) / PX_PER_PT,
+            });
+        }
+    }
+    regions.push(HitRegion {
+        carets: vec![],
+        path: vec![],
+        x: ox / PX_PER_PT,
+        y: 2.0 / PX_PER_PT,
+        width: b.w / PX_PER_PT,
+        height: (b.asc + b.desc) / PX_PER_PT,
+        baseline: oy / PX_PER_PT,
+    });
+    for region in &mut regions {
+        region.carets.sort_by(f32::total_cmp);
+        region.carets.dedup_by(|a, b| (*a - *b).abs() < 0.001);
+    }
+    Ok(InteractivePreview { preview, regions })
+}
+
+#[cfg(test)]
+mod interactive_tests {
+    use super::*;
+    #[test]
+    fn fraction_hit_regions_share_the_raster_coordinate_system() {
+        let math = MathNode::parse(
+            "<math><mfrac><mi>a</mi><msup><mi>b</mi><mn>2</mn></msup></mfrac></math>",
+        )
+        .unwrap();
+        let p = render_interactive(&math, 12.0).unwrap();
+        assert_eq!(p.preview.png, render_preview(&math, 12.0).unwrap().png);
+        let numerator = p.regions.iter().find(|r| r.path == [0, 0]).unwrap();
+        let denominator = p.regions.iter().find(|r| r.path == [0, 1]).unwrap();
+        assert!(numerator.baseline < denominator.baseline);
+        for region in &p.regions {
+            assert!(region.x.is_finite() && region.y.is_finite());
+        }
+    }
+    #[test]
+    fn proportional_text_has_glyph_based_caret_positions() {
+        let math = MathNode::parse("<math><mtext>Wi</mtext></math>").unwrap();
+        let preview = render_interactive(&math, 12.0).unwrap();
+        let region = preview.regions.iter().find(|r| r.path == [0]).unwrap();
+        assert_eq!(region.carets.len(), 3);
+        assert!(region.carets[1] - region.carets[0] > region.carets[2] - region.carets[1]);
+    }
 }

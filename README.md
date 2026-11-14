@@ -4,7 +4,7 @@ A standalone, high-performance **bidirectional math equation converter and edito
 
 - **Forward (`OMML → MathType`)**: Converts Word native OMML equations into embedded MathType 5.0 OLE objects (`Equation.DSMT4`) with crisp vector EMF (or PNG) previews. Double-clicking any converted equation in Microsoft Word or WPS Office opens it directly in **MathType** for full visual editing.
 - **Reverse (`MathType → OMML`)**: Extracts MTEF v3 (Equation Editor 3.x) and MTEF v5 (MathType 4–7) binary streams from embedded OLE `.bin` containers or WMF (`MTra`) preview images, decodes them into MathML, and replaces the VML `<w:object>` elements with native Word `<m:oMath>` XML.
-- **Interactive Visual Editor (`EqnTide Desktop & Word/WPS Add-in`)**: Modern MathLive-based visual equation editor with two-way LaTeX editing, customizable fonts, baseline alignment, and single-click insertion/replacement into Word or WPS Office documents.
+- **Interactive Visual Editor (`EqnTide Desktop & Word/WPS Add-in`)**: Visual equation editing with the native Rust desktop preview or legacy MathLive UI, LaTeX source editing, customizable fonts, baseline alignment, and single-click insertion/replacement into Word or WPS Office documents.
 
 ---
 
@@ -13,7 +13,8 @@ A standalone, high-performance **bidirectional math equation converter and edito
 | Component | Location | Description |
 | --- | --- | --- |
 | Rust library and CLI | `src/`, root `Cargo.toml` | Pure Rust conversion engine and the `eqntide-cli` command-line application. |
-| Desktop application | `src-tauri/`, `src-ui/` | Tauri v2 desktop shell backed by the same Rust conversion engine. The frontend is a static, vendored MathLive UI. |
+| Native Rust desktop (preview) | `desktop/`, `crates/eqntide-editor/` | egui/eframe shell, structural equation editing, and the shared STIX renderer. No desktop WebView or JavaScript. |
+| Legacy desktop (comparison/rollback) | `src-tauri/`, `src-ui/` | Tauri v2 and vendored MathLive UI, retained until native platform and Office qualification is complete. |
 | Microsoft Word add-in | `word-addin/` | Static Office.js manifest, task pane, commands, and assets. It communicates with the local EqnTide bridge. |
 | WPS Office add-in | `wps-addin/` | Static WPS JavaScript add-in, ribbon definition, task pane, and assets. It communicates with the same bridge. |
 
@@ -54,7 +55,87 @@ The Word and WPS add-ins are not separate compiled applications. They are served
 
 ## Installation
 
-### Prerequisites
+### Native Rust Desktop (Preview)
+
+The new desktop uses **egui + eframe** with the existing Rust conversion engine.
+It supports structural equation editing (caret, selection, templates, undo/redo),
+explicit LaTeX Apply, Office editing sessions, and the four DOCX batch directions.
+The Word/WPS add-ins remain JavaScript/VBA integrations; they communicate through
+the same local bridge. The desktop itself does not load a WebView or MathLive.
+
+Build with the current stable Rust toolchain:
+
+```bash
+cargo run -p eqntide-desktop
+cargo build --workspace --release --locked
+```
+
+The executables are `target/release/eqntide-desktop` and
+`target/release/eqntide-cli` (add `.exe` on Windows). Running `cargo build` without
+`--workspace` continues to build only the core/CLI package.
+
+Native Linux build prerequisites, without WebKit:
+
+```bash
+# Ubuntu / Debian
+sudo apt-get install build-essential pkg-config libx11-dev libxi-dev \
+  libxrandr-dev libxkbcommon-dev libgl1-mesa-dev libwayland-dev
+# Fedora
+sudo dnf install gcc gcc-c++ pkgconf-pkg-config libX11-devel libXi-devel \
+  libXrandr-devel libxkbcommon-devel mesa-libGL-devel wayland-devel
+```
+
+At runtime, provide OpenGL, X11 or Wayland, and a working XDG Desktop Portal
+backend plus `zenity` for file dialogs. Windows uses the MSVC toolchain; macOS
+uses Xcode Command Line Tools. Native UI libraries still use OS APIs and graphics
+drivers; a Rust UI does not imply a binary without system dependencies.
+
+Click the equation canvas to type, use **Ctrl+F** for a fraction, **Ctrl+R** for a
+root, **Ctrl+H/L/J** for scripts, **Tab/Shift+Tab** for placeholders, and
+**Ctrl+Z/Y** for undo/redo (Command on macOS where applicable). Templates wrap a
+selection. Matrix controls add/remove rows and columns. Imported MathML is the
+source of truth: opening and saving it does not round-trip through LaTeX.
+Unsupported elements are retained as atomic blocks. Applying a LaTeX draft
+explicitly replaces the tree after confirmation and can be undone. The shared
+LaTeX parser supports the existing palette, including cases and multiline tables;
+it is not a complete TeX engine, and invalid drafts leave the equation intact.
+
+The desktop reuses a healthy CLI/service bridge or hosts one if port 17890 is
+free. Closing exits the desktop after save/discard handling; an external bridge
+continues running. Single-instance IPC is separate from that port. URI examples:
+
+```bash
+eqntide-desktop 'eqntide://open?tab=batch'
+eqntide-desktop 'eqntide://open?session_id=SESSION_ID'
+```
+
+Batch outputs use a suffix by default and existing copies are not overwritten.
+The explicit **Overwrite original documents** option enables replacement; the
+worker first completes a temporary sibling file before committing it. Stop waits
+for the current file to finish. Clipboard actions include LaTeX, MathML, Flat OPC,
+and PNG. EMF is available through **Export EMF** rather than an unverified native
+clipboard format.
+
+Create portable or Linux distribution packages from the release build:
+
+```bash
+python3 scripts/package_native.py --target x86_64-unknown-linux-gnu
+python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format deb
+python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format rpm
+```
+
+DEB requires `dpkg-deb`; RPM requires `rpmbuild`. Packages include the add-ins,
+Word template and font licenses. The portable Linux package includes
+`install-user.sh` to register the URI handler. Windows release CI stages the
+portable ZIP and builds `scripts/installer.nsi`, which registers the current-user
+URI handler. macOS packages include an app bundle, but macOS URL dispatch and
+Office integration still need platform qualification.
+
+This remains a **native preview**. The legacy Tauri implementation is retained
+for comparison and rollback until the manual platform/Office matrix passes.
+See [implementation plan](plan.md) and [validation status](desktop/VALIDATION.md).
+
+### Legacy Tauri prerequisites
 
 - A current stable [Rust toolchain](https://rustup.rs/) with Cargo.
 - **Windows**: 64-bit Windows 10/11 and Microsoft Visual Studio C++ Build Tools with the Windows SDK.
@@ -106,7 +187,7 @@ Verify the build with:
 
 On Windows PowerShell, use `./target/release/eqntide-cli.exe --version`.
 
-### Build the Tauri v2 Desktop Application
+### Build the Legacy Tauri v2 Desktop Application
 
 Install the Tauri v2 CLI once:
 

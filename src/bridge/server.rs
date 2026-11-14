@@ -10,21 +10,14 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 type HttpResponse = Response<std::io::Cursor<Vec<u8>>>;
 
-use crate::docx::{
-    base64_decode, base64_encode, convert_to_omml_with, convert_with, flat_opc_to_mathml,
-    mathml_to_flat_opc, upgrade_legacy_mathtype_docx_with, FlatOpcMode, Options, PreviewFormat,
-    ToOmmlOptions, UpgradeOptions, UpgradeTarget,
+use crate::{
+    mathml_to_flat_opc, mathml_to_mtef_bytes, mathml_to_omml_xml, render_emf_with_mtef,
+    FlatOpcMode, MathNode,
 };
-use crate::mathml::MathNode;
-use crate::mtef::decode::{mtef_to_mathml, ole_to_mathml};
-use crate::mtef::encode::mathml_to_mtef_bytes;
-use crate::ole::{extract_mtef_from_emf, extract_mtef_from_wmf};
-use crate::omml::encode::mathml_to_omml_xml;
-use crate::render::emf::{render_emf, render_emf_with_mtef};
-use crate::render::render_preview;
 
 use super::protocol::*;
 use super::session::{SessionManager, SessionState};
+use crate::service::{decode_input_to_mathml, parse_latex_to_mathml};
 
 /// Default bind port for the local bridge server.
 pub const DEFAULT_PORT: u16 = 17890;
@@ -36,6 +29,18 @@ pub const DEFAULT_HOST: &str = "127.0.0.1";
 /// Arguments: `(session_id, mathml, latex)`
 pub type WindowCallback =
     Arc<dyn Fn(&str, Option<&str>, Option<&str>, Option<f32>) + Send + Sync + 'static>;
+
+/// Window request including the tab, without changing the legacy callback API.
+#[derive(Clone, Debug)]
+pub struct DesktopWindowRequest {
+    pub session_id: String,
+    pub mathml: Option<String>,
+    pub latex: Option<String>,
+    pub font_pt: Option<f32>,
+    pub tab: Option<String>,
+    pub target_mode: Option<String>,
+}
+pub type WindowRequestCallback = Arc<dyn Fn(DesktopWindowRequest) + Send + Sync + 'static>;
 
 /// Handle to a running bridge server instance.
 pub struct ServerHandle {
@@ -266,7 +271,7 @@ fn health_response(origin: Option<&str>) -> HttpResponse {
 fn handle_window_show(
     req: &mut Request,
     session_mgr: &SessionManager,
-    window_cb: Option<&WindowCallback>,
+    window_cb: Option<&WindowRequestCallback>,
     origin: Option<&str>,
 ) -> HttpResponse {
     let body = read_body(req);
@@ -286,9 +291,16 @@ fn handle_window_show(
             .unwrap_or((None, None, None))
     };
     if let Some(callback) = window_cb {
-        callback(&session_id, mathml.as_deref(), latex.as_deref(), font_pt);
+        callback(DesktopWindowRequest {
+            session_id: session_id.clone(),
+            mathml,
+            latex,
+            font_pt,
+            tab: show_req.tab.clone(),
+            target_mode: session_mgr.metadata(&session_id).map(|m| m.0),
+        });
     } else {
-        spawn_desktop_editor(&session_id);
+        spawn_desktop_action(&session_id, show_req.tab.as_deref());
     }
     json_response(
         200,
@@ -387,6 +399,23 @@ pub fn start_bridge_server_with_callback(
     addr: &str,
     window_cb: Option<WindowCallback>,
 ) -> crate::error::Result<ServerHandle> {
+    let callback = window_cb.map(|old| {
+        Arc::new(move |r: DesktopWindowRequest| {
+            old(
+                &r.session_id,
+                r.mathml.as_deref(),
+                r.latex.as_deref(),
+                r.font_pt,
+            );
+        }) as WindowRequestCallback
+    });
+    start_bridge_server_with_window_requests(addr, callback)
+}
+
+pub fn start_bridge_server_with_window_requests(
+    addr: &str,
+    window_cb: Option<WindowRequestCallback>,
+) -> crate::error::Result<ServerHandle> {
     let server = Server::http(addr).map_err(|e| {
         crate::error::Error::Io(std::io::Error::other(format!(
             "failed to bind HTTP server to {addr}: {e}"
@@ -435,7 +464,7 @@ pub fn start_bridge_server_with_callback(
 fn handle_http_request(
     mut req: Request,
     session_mgr: SessionManager,
-    window_cb: Option<WindowCallback>,
+    window_cb: Option<WindowRequestCallback>,
 ) {
     let method = req.method().clone();
     let raw_url = req.url().to_owned();
@@ -556,7 +585,7 @@ fn handle_session_route(
     path: &str,
     query: Option<&str>,
     session_mgr: &SessionManager,
-    window_cb: Option<&WindowCallback>,
+    window_cb: Option<&WindowRequestCallback>,
     origin: Option<&str>,
 ) -> Option<HttpResponse> {
     match (method, path) {
@@ -576,6 +605,8 @@ fn handle_session_route(
                     &serde_json::json!({
                         "status": "ok", "session_id": sid, "mathml": mathml,
                         "latex": latex, "font_pt": font_pt,
+                        "target_mode": session_mgr.metadata(sid).map(|m|m.0),
+                        "state": session_mgr.metadata(sid).map(|m|m.1),
                     }),
                     origin,
                 ),
@@ -617,7 +648,7 @@ fn handle_session_route(
 fn handle_session_open(
     req: &mut Request,
     session_mgr: &SessionManager,
-    window_cb: Option<&WindowCallback>,
+    window_cb: Option<&WindowRequestCallback>,
     origin: Option<&str>,
 ) -> HttpResponse {
     let body = read_body(req);
@@ -668,14 +699,21 @@ fn handle_session_open(
             }
         }
     };
-    let session_id = session_mgr.create_session(mathml.clone(), latex.clone(), open_req.font_pt);
+    let session_id = session_mgr.create_session_with_target(
+        mathml.clone(),
+        latex.clone(),
+        open_req.font_pt,
+        &open_req.target_mode,
+    );
     if let Some(callback) = window_cb {
-        callback(
-            &session_id,
-            Some(&mathml),
-            latex.as_deref(),
-            open_req.font_pt,
-        );
+        callback(DesktopWindowRequest {
+            session_id: session_id.clone(),
+            mathml: Some(mathml.clone()),
+            latex: latex.clone(),
+            font_pt: open_req.font_pt,
+            tab: None,
+            target_mode: Some(open_req.target_mode.clone()),
+        });
     } else {
         spawn_desktop_editor(&session_id);
     }
@@ -793,8 +831,11 @@ fn handle_session_update(
     let mtef = mathml_to_mtef_bytes(&math).ok();
     let picture = render_emf_with_mtef(&math, update.font_pt, mtef.as_deref()).ok();
     let (emf_path, width_pt, height_pt, depth_pt) = if let Some(picture) = picture {
-        let path = format!("/tmp/eqntide_{session_id}.emf");
-        let _ = std::fs::write(&path, &picture.emf);
+        let path = std::env::temp_dir().join(format!("eqntide_{session_id}.emf"));
+        let path = path.to_string_lossy().into_owned();
+        if let Err(error) = std::fs::write(&path, &picture.emf) {
+            return error_response(500, &format!("failed to write EMF: {error}"), origin);
+        }
         (
             Some(path),
             Some(picture.width_pt),
@@ -877,278 +918,38 @@ fn handle_session_cancel(
 
 /// Convert one equation snippet without coupling conversion details to routing.
 fn handle_snippet_conversion(mut req: Request, origin: Option<&str>) {
-    let body = read_body(&mut req);
-    let snip_req: ConvertSnippetRequest = match serde_json::from_str(&body) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = req.respond(error_response(
-                400,
-                &format!("invalid JSON payload: {e}"),
-                origin,
-            ));
-            return;
-        }
-    };
-    let math = match decode_input_to_mathml(&snip_req.data, &snip_req.from) {
-        Ok(m) => m,
-        Err(e) => {
-            let _ = req.respond(error_response(
-                422,
-                &format!("failed to parse input equation: {e}"),
-                origin,
-            ));
-            return;
-        }
-    };
-    let mut emf_path = None;
-    let mut width_pt = None;
-    let mut height_pt = None;
-    let mut depth_pt = None;
-    let converted = match snip_req.to.as_str() {
-        "flat_opc_omml" => mathml_to_flat_opc(&math, FlatOpcMode::ModernOmml, snip_req.font_pt),
-        "flat_opc_mathtype" | "mathtype" => {
-            let mtef_bytes = mathml_to_mtef_bytes(&math).ok();
-            if let Ok(pic) = render_emf_with_mtef(&math, snip_req.font_pt, mtef_bytes.as_deref()) {
-                let path = format!("/tmp/eqntide_snippet_{}.emf", uuid::Uuid::new_v4());
-                let _ = std::fs::write(&path, &pic.emf);
-                emf_path = Some(path);
-                width_pt = Some(pic.width_pt);
-                height_pt = Some(pic.height_pt);
-                depth_pt = Some(pic.depth_pt);
-            }
-            mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, snip_req.font_pt)
-        }
-        "omml" => mathml_to_omml_xml(&math),
-        "mathml" => Ok(math.to_xml()),
-        "latex" => Ok(math.to_latex()),
-        "emf" | "emf_base64" => render_emf(&math, snip_req.font_pt)
-            .map(|p| base64_encode(&p.emf))
-            .map_err(|e| crate::error::Error::Xml(format!("EMF rendering error: {e}"))),
-        "png" | "png_base64" => render_preview(&math, snip_req.font_pt)
-            .map(|prev| base64_encode(&prev.png))
-            .map_err(|e| crate::error::Error::Xml(format!("PNG rendering error: {e}"))),
-        other => {
-            let _ = req.respond(error_response(
-                400,
-                &format!("unknown target format '{other}'"),
-                origin,
-            ));
-            return;
-        }
-    };
-    let response = match converted {
-        Ok(result) => json_response(
-            200,
-            &ConvertSnippetResponse {
-                status: "ok".into(),
-                result,
-                emf_path,
-                width_pt,
-                height_pt,
-                depth_pt,
-            },
-            origin,
-        ),
-        Err(e) => error_response(500, &format!("conversion failed: {e}"), origin),
-    };
-    let _ = req.respond(response);
-}
-
-/// Convert a document request, keeping filesystem validation and conversion policy together.
-fn handle_document_conversion(mut req: Request, origin: Option<&str>) {
-    let body = read_body(&mut req);
-    let doc_req: ConvertDocumentRequest = match serde_json::from_str(&body) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = req.respond(error_response(
-                400,
-                &format!("invalid JSON payload: {e}"),
-                origin,
-            ));
-            return;
-        }
-    };
-    let in_path = std::path::Path::new(&doc_req.input_path);
-    if !in_path.exists() {
-        let _ = req.respond(error_response(
-            404,
-            &format!("input file does not exist: {}", in_path.display()),
-            origin,
-        ));
-        return;
-    }
-    if !in_path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("docx"))
-    {
-        let _ = req.respond(error_response(
-            400,
-            "only .docx files are supported for document conversion",
-            origin,
-        ));
-        return;
-    }
-    let out_path = doc_req
-        .output_path
-        .as_deref()
-        .unwrap_or(&doc_req.input_path);
-    let preview_fmt = if doc_req.preview.eq_ignore_ascii_case("png") {
-        PreviewFormat::Png
-    } else {
-        PreviewFormat::Emf
-    };
-    let result = match doc_req.target.as_str() {
-        "omml" => convert_to_omml_with(in_path, out_path, &ToOmmlOptions::default()),
-        "mathtype" => convert_with(
-            in_path,
-            out_path,
-            &Options {
-                font_pt: doc_req.font_pt,
-                preview: preview_fmt,
-                ..Default::default()
-            },
-        ),
-        "upgrade_omml" => upgrade_legacy_mathtype_docx_with(
-            in_path,
-            out_path,
-            &UpgradeOptions {
-                target: UpgradeTarget::ModernOmml,
-                font_pt: doc_req.font_pt,
-                math_font: None,
-            },
-        ),
-        "upgrade_mathtype" => upgrade_legacy_mathtype_docx_with(
-            in_path,
-            out_path,
-            &UpgradeOptions {
-                target: UpgradeTarget::ModernMathType,
-                font_pt: doc_req.font_pt,
-                math_font: None,
-            },
-        ),
-        other => {
-            let _ = req.respond(error_response(
-                400,
-                &format!("unknown document target '{other}'"),
-                origin,
-            ));
-            return;
-        }
-    };
+    let result = serde_json::from_str::<ConvertSnippetRequest>(&read_body(&mut req));
     let response = match result {
-        Ok(summary) => json_response(
-            200,
-            &ConvertDocumentResponse {
-                status: "ok".into(),
-                found: summary.found,
-                converted: summary.converted,
-                skipped: summary.skipped,
-                errors: summary.errors,
-                output_path: out_path.to_owned(),
-            },
-            origin,
-        ),
-        Err(e) => error_response(500, &format!("document conversion error: {e}"), origin),
+        Ok(input) => match crate::service::convert_snippet(&input) {
+            Ok(output) => json_response(200, &output, origin),
+            Err(e) => error_response(e.status, &e.message, origin),
+        },
+        Err(e) => error_response(400, &format!("invalid JSON payload: {e}"), origin),
     };
     let _ = req.respond(response);
 }
 
-/// Parse a LaTeX math string into a [`MathNode`] via latex2mathml.
-fn parse_latex_to_mathml(latex_str: &str) -> crate::error::Result<MathNode> {
-    let mut clean = latex_str.trim();
-    if clean.starts_with("$$") && clean.ends_with("$$") && clean.len() >= 4 {
-        clean = clean[2..clean.len() - 2].trim();
-    } else if clean.starts_with('$') && clean.ends_with('$') && clean.len() >= 2 {
-        clean = clean[1..clean.len() - 1].trim();
-    } else if (clean.starts_with(r"\[") && clean.ends_with(r"\]")
-        || clean.starts_with(r"\(") && clean.ends_with(r"\)"))
-        && clean.len() >= 4
-    {
-        clean = clean[2..clean.len() - 2].trim();
-    }
-    let mml = latex2mathml::latex_to_mathml(clean, latex2mathml::DisplayStyle::Inline)
-        .map_err(|e| crate::error::Error::Xml(format!("LaTeX parsing error: {e}")))?;
-    MathNode::parse(&mml)
-}
-
-/// Helper to decode any supported equation input representation into [`MathNode`].
-fn decode_input_to_mathml(data: &str, format: &str) -> crate::error::Result<MathNode> {
-    let trimmed = data.trim();
-
-    if format == "latex"
-        || trimmed.starts_with('$')
-        || trimmed.starts_with(r"\[")
-        || trimmed.starts_with(r"\(")
-    {
-        return parse_latex_to_mathml(trimmed);
-    }
-
-    if format == "flat_opc" || trimmed.contains("<pkg:package") || trimmed.starts_with("<?xml") {
-        return flat_opc_to_mathml(trimmed);
-    }
-
-    if format == "omml"
-        || trimmed.contains("<m:oMath")
-        || trimmed.contains("<w:p")
-        || trimmed.contains("<w:wordDocument")
-        || trimmed.contains("<m:oMathPara")
-    {
-        return flat_opc_to_mathml(trimmed);
-    }
-
-    if format == "mathml" || trimmed.starts_with("<math") {
-        return MathNode::parse(trimmed);
-    }
-
-    if format == "ole_base64" {
-        let bin = base64_decode(trimmed).ok_or_else(|| {
-            crate::error::Error::Xml("invalid base64 encoding for OLE data".into())
-        })?;
-        return ole_to_mathml(&bin).ok_or_else(|| {
-            crate::error::Error::InvalidMtef("failed to decode MTEF from OLE data".into())
-        });
-    }
-
-    if format == "emf_base64" {
-        let bin = base64_decode(trimmed).ok_or_else(|| {
-            crate::error::Error::Xml("invalid base64 encoding for EMF data".into())
-        })?;
-        let mtef = extract_mtef_from_emf(&bin).ok_or_else(|| {
-            crate::error::Error::InvalidMtef("no embedded MTEF comment found in EMF".into())
-        })?;
-        return mtef_to_mathml(&mtef).ok_or_else(|| {
-            crate::error::Error::InvalidMtef("failed to decode MTEF from EMF comment".into())
-        });
-    }
-
-    if format == "wmf_base64" {
-        let bin = base64_decode(trimmed).ok_or_else(|| {
-            crate::error::Error::Xml("invalid base64 encoding for WMF data".into())
-        })?;
-        let mtef = extract_mtef_from_wmf(&bin).ok_or_else(|| {
-            crate::error::Error::InvalidMtef("no embedded MTEF found in WMF".into())
-        })?;
-        return mtef_to_mathml(&mtef).ok_or_else(|| {
-            crate::error::Error::InvalidMtef("failed to decode MTEF from WMF".into())
-        });
-    }
-
-    // Fallback: Attempt Flat OPC / XML parse
-    if let Ok(m) = flat_opc_to_mathml(trimmed) {
-        return Ok(m);
-    }
-
-    // Fallback: Attempt MathNode parse
-    if let Ok(m) = MathNode::parse(trimmed) {
-        return Ok(m);
-    }
-
-    Err(crate::error::Error::Xml(format!(
-        "unrecognized equation input format: '{format}'"
-    )))
+fn handle_document_conversion(mut req: Request, origin: Option<&str>) {
+    let result = serde_json::from_str::<ConvertDocumentRequest>(&read_body(&mut req));
+    let response = match result {
+        Ok(input) => match crate::service::convert_document(&input) {
+            Ok(output) => json_response(200, &output, origin),
+            Err(e) => error_response(e.status, &e.message, origin),
+        },
+        Err(e) => error_response(400, &format!("invalid JSON payload: {e}"), origin),
+    };
+    let _ = req.respond(response);
 }
 
 pub(crate) fn spawn_desktop_editor(session_id: &str) {
+    spawn_desktop_action(session_id, None);
+}
+
+fn spawn_desktop_action(session_id: &str, tab: Option<&str>) {
+    // Library tests must never open an installed desktop application.
+    if cfg!(test) {
+        return;
+    }
     let mut candidates = Vec::new();
     if let Ok(env_path) = std::env::var("EQNTIDE_DESKTOP_BIN") {
         candidates.push(std::path::PathBuf::from(env_path));
@@ -1171,9 +972,15 @@ pub(crate) fn spawn_desktop_editor(session_id: &str) {
             continue;
         }
         let mut cmd = std::process::Command::new(path);
-        if !session_id.is_empty() {
-            cmd.arg(format!("eqntide://open?session_id={session_id}"));
-        }
+        let action = super::uri::CustomUriAction {
+            command: "open".into(),
+            session_id: (!session_id.is_empty()).then(|| session_id.to_owned()),
+            tab: tab.map(str::to_owned),
+            data: None,
+            format: None,
+            target_mode: None,
+        };
+        cmd.arg(super::uri::format_custom_uri(&action));
         match cmd.spawn() {
             Ok(child) => {
                 log::info!(
@@ -1497,5 +1304,58 @@ mod tests {
         assert_eq!(resp_wps_js.status, 200);
         assert!(resp_wps_js.body.contains("InsertEquation"));
         assert!(resp_wps_js.body.contains("WordOpenXML"));
+    }
+    #[test]
+    fn native_callback_receives_batch_tab_and_legacy_callback_remains_compatible() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let callback: WindowRequestCallback = Arc::new(move |r| {
+            tx.send(r).unwrap();
+        });
+        let server =
+            start_bridge_server_with_window_requests("127.0.0.1:0", Some(callback)).unwrap();
+        let addr = server.addr();
+        let body = r#"{"tab":"batch"}"#;
+        let response=send_raw_http(addr,&format!("POST /window/show HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()));
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .tab
+                .as_deref(),
+            Some("batch")
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let callback: WindowCallback = Arc::new(move |id, _, _, _| {
+            tx.send(id.to_owned()).unwrap();
+        });
+        let legacy = start_bridge_server_with_callback("127.0.0.1:0", Some(callback)).unwrap();
+        let addr = legacy.addr();
+        let response=send_raw_http(addr,&format!("POST /window/show HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"));
+        assert_eq!(response.status, 200);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), "");
+    }
+    #[test]
+    fn session_get_preserves_target_and_reports_completed_state() {
+        let callback: WindowCallback = Arc::new(|_, _, _, _| {});
+        let server = start_bridge_server_with_callback("127.0.0.1:0", Some(callback)).unwrap();
+        let id = server.session_manager().create_session_with_target(
+            "<math><mi>x</mi></math>".into(),
+            None,
+            Some(14.0),
+            "mathtype",
+        );
+        let addr = server.addr();
+        let get = || {
+            send_raw_http(
+                addr,
+                &format!("GET /session/{id} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
+            )
+        };
+        let response: serde_json::Value = serde_json::from_str(&get().body).unwrap();
+        assert_eq!(response["target_mode"], "mathtype");
+        assert_eq!(response["state"], "waiting");
+        server.session_manager().cancel_session(&id).unwrap();
+        let response: serde_json::Value = serde_json::from_str(&get().body).unwrap();
+        assert_eq!(response["state"], "cancelled");
     }
 }

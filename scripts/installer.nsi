@@ -8,14 +8,14 @@ RequestExecutionLevel user
 
 ; Interface Settings
 !define MUI_ABORTWARNING
-!define MUI_ICON "..\src-tauri\icons\icon.ico"
-!define MUI_UNICON "..\src-tauri\icons\icon.ico"
+!define MUI_ICON "..\assets\icons\icon.ico"
+!define MUI_UNICON "..\assets\icons\icon.ico"
 
 ; Pages
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-!define MUI_FINISHPAGE_RUN "$INSTDIR\EqnTide.exe"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\eqntide-desktop.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Launch EqnTide now"
 !insertmacro MUI_PAGE_FINISH
 
@@ -26,19 +26,26 @@ RequestExecutionLevel user
 
 Section "MainSection" SEC01
     SetOutPath "$INSTDIR"
-    File "..\dist-package\EqnTide-windows-x64\EqnTide.exe"
-    File "..\dist-package\EqnTide-windows-x64\eqntide-cli.exe"
-    File "..\dist-package\EqnTide-windows-x64\start-server.bat"
-    File "..\dist-package\EqnTide-windows-x64\HUONG-DAN-SU-DUNG.txt"
+    File "..\dist\windows-stage\eqntide-desktop.exe"
+    File "..\dist\windows-stage\eqntide-cli.exe"
+    File "..\dist\windows-stage\start-server.bat"
+    File "..\dist\windows-stage\README.md"
+    File "..\dist\windows-stage\LICENSE"
+    File "..\dist\windows-stage\NOTICE"
+
+    SetOutPath "$INSTDIR\fonts"
+    File /r "..\dist\windows-stage\fonts\*.*"
+    SetOutPath "$INSTDIR\icons"
+    File /r "..\dist\windows-stage\icons\*.*"
 
     SetOutPath "$INSTDIR\word-addin"
-    File /r "..\dist-package\EqnTide-windows-x64\word-addin\*.*"
+    File /r "..\dist\windows-stage\word-addin\*.*"
 
     SetOutPath "$INSTDIR\wps-addin"
-    File /r "..\dist-package\EqnTide-windows-x64\wps-addin\*.*"
+    File /r "..\dist\windows-stage\wps-addin\*.*"
 
     SetOutPath "$INSTDIR\word-template"
-    File "..\dist-package\EqnTide-windows-x64\word-template\EqnTide.dotm"
+    File "..\dist\windows-stage\word-template\EqnTide.dotm"
 
     ; 1. Auto-install Word Template to Word STARTUP folder
     CreateDirectory "$APPDATA\Microsoft\Word\STARTUP"
@@ -65,18 +72,22 @@ Section "MainSection" SEC01
     ExecWait 'CheckNetIsolation.exe LoopbackExempt -a -n="Microsoft.Win32WebViewHost_cw5n1h2txyewy"'
     ExecWait 'CheckNetIsolation.exe LoopbackExempt -a -n="Microsoft.WindowsStore_8wekyb3d8bbwe"'
 
+    WriteRegStr HKCU "Software\Classes\eqntide" "" "URL:EqnTide Protocol"
+    WriteRegStr HKCU "Software\Classes\eqntide" "URL Protocol" ""
+    WriteRegStr HKCU "Software\Classes\eqntide\shell\open\command" "" '$\"$INSTDIR\eqntide-desktop.exe$\" $\"%1$\"'
+
     ; 5. Shortcuts
     CreateDirectory "$SMPROGRAMS\EqnTide"
-    CreateShortcut "$SMPROGRAMS\EqnTide\EqnTide.lnk" "$INSTDIR\EqnTide.exe"
+    CreateShortcut "$SMPROGRAMS\EqnTide\EqnTide.lnk" "$INSTDIR\eqntide-desktop.exe"
     CreateShortcut "$SMPROGRAMS\EqnTide\Start Bridge Server.lnk" "$INSTDIR\start-server.bat"
     CreateShortcut "$SMPROGRAMS\EqnTide\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
-    CreateShortcut "$DESKTOP\EqnTide.lnk" "$INSTDIR\EqnTide.exe"
+    CreateShortcut "$DESKTOP\EqnTide.lnk" "$INSTDIR\eqntide-desktop.exe"
 
     ; 6. Uninstaller registration
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayName" "EqnTide - Equation Editor & Converter"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayIcon" "$INSTDIR\EqnTide.exe"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayIcon" "$INSTDIR\eqntide-desktop.exe"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "Publisher" "EqnTide"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayVersion" "0.3.0"
 SectionEnd
@@ -96,16 +107,23 @@ Section "Uninstall"
     Delete "$DESKTOP\EqnTide.lnk"
     RMDir /r "$SMPROGRAMS\EqnTide"
 
+    RMDir /r "$INSTDIR\fonts"
+    RMDir /r "$INSTDIR\icons"
+
     ; Remove files
     RMDir /r "$INSTDIR\word-addin"
     RMDir /r "$INSTDIR\wps-addin"
     RMDir /r "$INSTDIR\word-template"
-    Delete "$INSTDIR\EqnTide.exe"
+    Delete "$INSTDIR\eqntide-desktop.exe"
     Delete "$INSTDIR\eqntide-cli.exe"
     Delete "$INSTDIR\start-server.bat"
-    Delete "$INSTDIR\HUONG-DAN-SU-DUNG.txt"
+    Delete "$INSTDIR\README.md"
+    Delete "$INSTDIR\LICENSE"
+    Delete "$INSTDIR\NOTICE"
     Delete "$INSTDIR\Uninstall.exe"
     RMDir "$INSTDIR"
+
+    DeleteRegKey HKCU "Software\Classes\eqntide"
 
     ; Remove uninstaller registry
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide"

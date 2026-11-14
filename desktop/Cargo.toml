@@ -1,0 +1,24 @@
+[package]
+name = "eqntide-desktop"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+eqntide = { path = ".." }
+eqntide-editor = { path = "../crates/eqntide-editor" }
+eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "accesskit", "default_fonts"] }
+rfd = "0.18"
+arboard = { version = "3.7", features = ["wayland-data-control"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+interprocess = "2.4"
+fs2 = "0.4"
+directories = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["json"] }
+tempfile = "3"
+
+[dev-dependencies]
+zip = { version = "0.6", default-features = false, features = ["deflate"] }

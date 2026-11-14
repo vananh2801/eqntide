@@ -57,6 +57,7 @@ impl Layout {
     pub(super) fn row(&mut self, kids: &[MathNode], em: f32, ctx: MathContext) -> Result<LBox> {
         let mut atoms: Vec<Atom> = Vec::new();
         for kid in kids {
+            let atom_start = atoms.len();
             // Ignore standalone spacing elements or empty token nodes.
             let text_clean: String = kid
                 .text
@@ -159,6 +160,16 @@ impl Layout {
                         delim: None,
                         is_table: kid.tag == "mtable",
                     });
+                }
+            }
+            for atom in &mut atoms[atom_start..] {
+                if !atom
+                    .b
+                    .hits
+                    .iter()
+                    .any(|h| h.key == kid as *const _ as usize)
+                {
+                    atom.b.mark(kid);
                 }
             }
         }

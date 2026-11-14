@@ -94,6 +94,7 @@ impl Layout {
         let total_w = (num_stems - 1) as f32 * stem_spacing + single_w;
 
         let mut b = LBox {
+            hits: Vec::new(),
             w: total_w,
             asc: -top_ink - shift,
             desc: bot_ink + shift,

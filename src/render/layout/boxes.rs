@@ -25,15 +25,57 @@ pub(crate) enum Item {
 /// A laid-out box: width, ascent, descent and the items to draw.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LBox {
+    pub(crate) hits: Vec<RawHit>,
     pub(crate) w: f32,
     pub(crate) asc: f32,
     pub(crate) desc: f32,
     pub(crate) items: Vec<Item>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct RawHit {
+    pub key: usize,
+    pub carets: Vec<f32>,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub asc: f32,
+    pub desc: f32,
+}
+
 impl LBox {
+    pub(crate) fn mark(&mut self, node: &crate::MathNode) {
+        let mut carets: Vec<f32> = self
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Glyph { x, .. } => Some(*x),
+                _ => None,
+            })
+            .collect();
+        if node.text.is_empty() {
+            carets.clear();
+        } else {
+            carets.push(self.w);
+        }
+        self.hits.push(RawHit {
+            carets,
+            key: node as *const _ as usize,
+            x: 0.0,
+            y: 0.0,
+            w: self.w,
+            asc: self.asc,
+            desc: self.desc,
+        });
+    }
+
     /// Put `o` into `self` with its origin at `(dx, dy)` (y down).
     pub(crate) fn place(&mut self, o: &LBox, dx: f32, dy: f32) {
+        self.hits.extend(o.hits.iter().map(|h| RawHit {
+            x: h.x + dx,
+            y: h.y + dy,
+            ..h.clone()
+        }));
         for it in &o.items {
             self.items.push(match it {
                 Item::Glyph {

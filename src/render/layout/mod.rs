@@ -265,6 +265,7 @@ impl Layout {
             }]
         };
         LBox {
+            hits: Vec::new(),
             w: self.f.advance_styled(face, ch, em, ssty),
             asc: a,
             desc: d,
@@ -355,7 +356,10 @@ impl Layout {
             return Err(Error::TooDeep);
         }
         self.depth += 1;
-        let r = self.node_inner(n, em, ctx);
+        let r = self.node_inner(n, em, ctx).map(|mut b| {
+            b.mark(n);
+            b
+        });
         self.depth -= 1;
         r
     }

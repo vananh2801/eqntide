@@ -13,7 +13,9 @@ impl Layout {
         for mtr in &n.children {
             let mut cells = Vec::new();
             for mtd in &mtr.children {
-                cells.push(self.row(&mtd.children, em, cell_ctx)?);
+                let mut cell = self.row(&mtd.children, em, cell_ctx)?;
+                cell.mark(mtd);
+                cells.push(cell);
             }
             rows.push(cells);
         }

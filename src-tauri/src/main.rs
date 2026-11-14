@@ -28,48 +28,14 @@ fn convert_equation(
     to_format: String,
     font_size_pt: Option<f32>,
 ) -> Result<String, String> {
-    let font_pt = font_size_pt.unwrap_or(12.0);
-    match (from_format.as_str(), to_format.as_str()) {
-        ("mathml", "flat_opc_omml") => {
-            let node =
-                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
-            eqntide::mathml_to_flat_opc(&node, eqntide::FlatOpcMode::ModernOmml, font_pt)
-                .map_err(|e| format!("flat opc pack failed: {e}"))
-        }
-        ("mathml", "flat_opc_mathtype") => {
-            let node =
-                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
-            eqntide::mathml_to_flat_opc(&node, eqntide::FlatOpcMode::ModernMathtypeOleEmf, font_pt)
-                .map_err(|e| format!("flat opc pack failed: {e}"))
-        }
-        ("flat_opc", "mathml") | ("omml", "mathml") => {
-            let node = eqntide::flat_opc_to_mathml(&data)
-                .map_err(|e| format!("extract mathml failed: {e}"))?;
-            Ok(node.to_xml())
-        }
-        ("mathml", "emf") | ("mathml", "emf_base64") => {
-            let node =
-                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
-            let p = eqntide::render_emf(&node, font_pt)
-                .map_err(|e| format!("render EMF failed: {e}"))?;
-            Ok(eqntide::base64_encode(&p.emf))
-        }
-        ("mathml", "png") | ("mathml", "png_base64") => {
-            let node =
-                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
-            let prev = eqntide::render_preview(&node, font_pt)
-                .map_err(|e| format!("render PNG failed: {e}"))?;
-            Ok(eqntide::base64_encode(&prev.png))
-        }
-        ("mathml", "omml") => {
-            let node =
-                eqntide::MathNode::parse(&data).map_err(|e| format!("parse MathML failed: {e}"))?;
-            eqntide::mathml_to_omml_xml(&node).map_err(|e| format!("render OMML failed: {e}"))
-        }
-        _ => Err(format!(
-            "unsupported conversion from '{from_format}' to '{to_format}'"
-        )),
-    }
+    eqntide::service::convert_snippet(&eqntide::bridge::ConvertSnippetRequest {
+        data,
+        from: from_format,
+        to: to_format,
+        font_pt: font_size_pt.unwrap_or(12.0),
+    })
+    .map(|response| response.result)
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -95,56 +61,12 @@ fn convert_document(
     direction: String,
     font_size_pt: Option<f32>,
 ) -> Result<serde_json::Value, String> {
-    let in_p = std::path::Path::new(&input_path);
-    if !in_p.exists() {
-        return Err(format!("Input file does not exist: {input_path}"));
-    }
-    let out_p = output_path.as_deref().unwrap_or(&input_path);
-    let font_pt = font_size_pt.unwrap_or(12.0);
-
-    let summary = match direction.as_str() {
-        "legacy_to_omml" | "upgrade_modern_omml" | "upgrade_omml" => {
-            let opts = eqntide::UpgradeOptions {
-                target: eqntide::UpgradeTarget::ModernOmml,
-                font_pt,
-                math_font: None,
-            };
-            eqntide::upgrade_legacy_mathtype_docx_with(in_p, out_p, &opts)
-                .map_err(|e| e.to_string())?
-        }
-        "legacy_to_mathtype" | "upgrade_modern_mathtype" | "upgrade_mathtype" => {
-            let opts = eqntide::UpgradeOptions {
-                target: eqntide::UpgradeTarget::ModernMathType,
-                font_pt,
-                math_font: None,
-            };
-            eqntide::upgrade_legacy_mathtype_docx_with(in_p, out_p, &opts)
-                .map_err(|e| e.to_string())?
-        }
-        "omml_to_mathtype" | "mathtype" => {
-            let opts = eqntide::Options {
-                font_pt,
-                preview: eqntide::PreviewFormat::Emf,
-                ..Default::default()
-            };
-            eqntide::convert_with(in_p, out_p, &opts).map_err(|e| e.to_string())?
-        }
-        "mathtype_to_omml" | "omml" => {
-            let opts = eqntide::ToOmmlOptions::default();
-            eqntide::convert_to_omml_with(in_p, out_p, &opts).map_err(|e| e.to_string())?
-        }
-        other => return Err(format!("unsupported conversion direction: {other}")),
-    };
-
-    Ok(serde_json::json!({
-        "status": "ok",
-        "input_path": input_path,
-        "output_path": out_p,
-        "found": summary.found,
-        "converted": summary.converted,
-        "skipped": summary.skipped,
-        "errors": summary.errors
-    }))
+    eqntide::service::convert_document(&eqntide::bridge::ConvertDocumentRequest {
+        input_path: input_path.clone(), output_path, target: direction, preview: "emf".into(), font_pt: font_size_pt.unwrap_or(12.0),
+    }).map(|response| serde_json::json!({
+        "status": response.status, "input_path": input_path, "output_path": response.output_path,
+        "found": response.found, "converted": response.converted, "skipped": response.skipped, "errors": response.errors,
+    })).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

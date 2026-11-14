@@ -54,6 +54,7 @@ pub mod mtef;
 pub mod ole;
 pub mod omml;
 pub mod render;
+pub mod service;
 pub mod symbols;
 pub mod xml;
 
