@@ -1,7 +1,7 @@
 //! Local HTTP bridge server implementation for Office/WPS Add-ins and Tauri GUI.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -47,11 +47,24 @@ pub struct ServerHandle {
     server: Arc<Server>,
     session_manager: SessionManager,
     running: Arc<AtomicBool>,
+    active_requests: Arc<AtomicUsize>,
     thread: Option<JoinHandle<()>>,
     addr: SocketAddr,
 }
 
+struct ActiveRequest(Arc<AtomicUsize>);
+impl Drop for ActiveRequest {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl ServerHandle {
+    /// Requests whose responses have not finished writing to the client yet.
+    pub fn pending_requests(&self) -> usize {
+        self.active_requests.load(Ordering::SeqCst)
+    }
+
     /// The actual bound address of the server.
     pub fn addr(&self) -> SocketAddr {
         self.addr
@@ -315,17 +328,20 @@ fn serve_addin_file(folder: &str, rel_path: &str, origin: Option<&str>) -> Optio
         return None;
     }
 
-    let mut candidates = vec![
-        std::path::PathBuf::from(folder).join(rel_path),
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join(folder)
-            .join(rel_path),
-    ];
+    // Installed resources belong to the binary's version, even on build hosts
+    // where the original repository path still exists.
+    let mut candidates = Vec::new();
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
             candidates.push(parent.join(folder).join(rel_path));
         }
     }
+    candidates.push(std::path::PathBuf::from(folder).join(rel_path));
+    candidates.push(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(folder)
+            .join(rel_path),
+    );
 
     let mut found_bytes = None;
     let mut resolved_path = None;
@@ -429,6 +445,8 @@ pub fn start_bridge_server_with_window_requests(
     let server_arc = Arc::new(server);
     let session_mgr = SessionManager::new();
     let running = Arc::new(AtomicBool::new(true));
+    let active_requests = Arc::new(AtomicUsize::new(0));
+    let active_for_server = Arc::clone(&active_requests);
 
     let server_clone = Arc::clone(&server_arc);
     let session_clone = session_mgr.clone();
@@ -446,7 +464,10 @@ pub fn start_bridge_server_with_window_requests(
 
             let session_for_worker = session_clone.clone();
             let window_cb_for_worker = window_cb.clone();
+            let active_for_worker = Arc::clone(&active_for_server);
+            active_for_worker.fetch_add(1, Ordering::SeqCst);
             std::thread::spawn(move || {
+                let _active = ActiveRequest(active_for_worker);
                 handle_http_request(request, session_for_worker, window_cb_for_worker);
             });
         }
@@ -456,6 +477,7 @@ pub fn start_bridge_server_with_window_requests(
         server: server_arc,
         session_manager: session_mgr,
         running,
+        active_requests,
         thread: Some(thread),
         addr: bound_addr,
     })
@@ -542,7 +564,8 @@ fn handle_http_request(
             let _ = req.respond(resp);
         }
 
-        (Method::Post, "/convert/snippet") => handle_snippet_conversion(req, origin),
+        // Compatibility for installed VBA templates using the original route.
+        (Method::Post, "/convert/snippet" | "/convert") => handle_snippet_conversion(req, origin),
 
         (Method::Post, "/convert/document") => handle_document_conversion(req, origin),
 
@@ -1357,5 +1380,38 @@ mod tests {
         server.session_manager().cancel_session(&id).unwrap();
         let response: serde_json::Value = serde_json::from_str(&get().body).unwrap();
         assert_eq!(response["state"], "cancelled");
+    }
+    #[test]
+    fn legacy_vba_convert_route_uses_the_native_snippet_service() {
+        let server = start_bridge_server("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let body = r#"{"data":"x+1","from":"latex","to":"omml"}"#;
+        let response=send_raw_http(addr,&format!("POST /convert HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()));
+        assert_eq!(response.status, 200);
+        let json: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+        assert!(json["result"].as_str().unwrap().contains("oMath"));
+    }
+    #[test]
+    fn bridge_tracks_longpoll_until_its_response_is_written() {
+        let server = start_bridge_server("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let id = server
+            .session_manager()
+            .create_session("<math/>".into(), None, None);
+        let sid = id.clone();
+        let request = std::thread::spawn(move || {
+            send_raw_http(addr,&format!("GET /session/{sid}/wait?timeout=5 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"))
+        });
+        let start = std::time::Instant::now();
+        while server.pending_requests() == 0 && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(server.pending_requests(), 1);
+        server.session_manager().cancel_session(&id).unwrap();
+        assert!(request.join().unwrap().body.contains("cancelled"));
+        while server.pending_requests() != 0 && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(server.pending_requests(), 0);
     }
 }

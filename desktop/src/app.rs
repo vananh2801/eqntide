@@ -46,6 +46,7 @@ pub struct App {
     busy: bool,
     pending: Option<Intent>,
     allow_close: bool,
+    close_deadline: Option<Instant>,
     font_pt: f32,
     target: String,
     zoom: f32,
@@ -132,6 +133,7 @@ impl App {
             busy: false,
             pending: None,
             allow_close: false,
+            close_deadline: None,
             font_pt: 12.0,
             target: "omml".into(),
             zoom: 2.0,
@@ -459,13 +461,11 @@ impl App {
                             self.draft_dirty = false;
                             let had_session = self.session.take().is_some();
                             if matches!(self.pending, Some(Intent::Close)) {
-                                self.allow_close = true;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                self.begin_close(ctx);
                             } else if !self.queue.is_empty() {
                                 self.load_next();
                             } else if had_session {
-                                self.allow_close = true;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                self.begin_close(ctx);
                             } else {
                                 self.pending = None;
                                 self.status = "Saved.".into();
@@ -687,6 +687,33 @@ impl App {
                 self.changed();
             }
             Err(e) => self.status = e,
+        }
+    }
+    fn begin_close(&mut self, ctx: &egui::Context) {
+        self.close_deadline = Some(Instant::now() + Duration::from_secs(3));
+        self.busy = true;
+        self.status = "Returning the result to Office…".into();
+        ctx.request_repaint();
+    }
+    fn drain_before_close(&mut self, ctx: &egui::Context) {
+        if let Some(deadline) = self.close_deadline {
+            let now = Instant::now();
+            // Give the client's next long-poll a brief chance to arrive, then
+            // wait for active response writes, with a bounded shutdown timeout.
+            let grace_elapsed = now >= deadline - Duration::from_millis(2500);
+            if grace_elapsed
+                && (self
+                    .bridge
+                    .as_ref()
+                    .is_none_or(|server| server.pending_requests() == 0)
+                    || now >= deadline)
+            {
+                self.close_deadline = None;
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(20));
+            }
         }
     }
     fn selected_equation(&self) -> MathNode {
@@ -1612,6 +1639,7 @@ impl eframe::App for App {
         });
         self.dialogs(&ctx);
         self.request_latex_parse(&ctx);
+        self.drain_before_close(&ctx);
     }
 }
 
