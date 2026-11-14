@@ -78,8 +78,8 @@ PNG/hit geometry above and below the integral, and explicit Office `subSup` /
 
 ## Native integration migration
 
-Native packages include shared Word/WPS add-in installers, the rebuilt Word VBA
-template, URI registration and bridge startup helpers. Installed assets take
+Native packages include the Word VBA template installer, WPS add-in installer,
+URI registration and bridge startup helpers. Installed assets take
 priority over repository fallbacks, and legacy `/convert` clients remain
 compatible. WPS registration preserves unrelated add-ins. The VBA builder uses
 a fresh source file to avoid duplicating modules on repeated builds.
@@ -132,3 +132,47 @@ Python integration tests passed. Workspace Clippy, formatting and diff checks
 also passed. The native desktop version smoke command remains available without
 legacy files. Historical desktop URI associations and the VBA conversion alias
 are retained for installed clients; Tauri-specific origin exceptions are removed.
+
+Word integration now ships only `word-template/EqnTide.dotm`. The Word Office.js
+frontend and HTTP asset routes have been removed. Windows installation removes
+EqnTide's old web catalog registration and leftover assets on upgrade, then copies
+the VBA template to Word STARTUP. Shared WebView exemptions and unrelated Office
+add-ins are left untouched. WPS and session/conversion endpoints remain available.
+Actual VBA compatibility and macro policy still need testing on each Word version.
+
+Word-template-only migration checks: 130 Rust workspace tests, 12 Python
+integration tests, Clippy and syntax checks passed. Tests verify Word web routes
+return 404, WPS assets remain served, the packaged DOTM retains VBA and ribbon
+parts, and re-staging Windows packages removes stale Word web assets. NSIS
+compiled with mock executables. Word's installed VBA template was not changed;
+actual Word loading and the PowerShell upgrade cleanup require Windows testing.
+Release binaries, portable archive and RPM were rebuilt for this migration.
+Both package inventories contain the Word DOTM and WPS payload, with no Word
+web directory; the release desktop version smoke check passed.
+
+Distribution output now uses `dist/<windows|linux>/<Cargo version>/`, including
+Windows staging, generated NSIS version config and Setup output. The old root
+`release/` directory is retired; its guide lives in `docs/`. The unversioned old Windows binaries have been
+removed before rebuilding the native Windows distribution.
+Thirteen Python tests passed, including multiple versions/platforms under a
+custom output root without changing previous artifacts. NSIS compiled into the
+version directory using mock executables. Linux portable/RPM were regenerated
+under `dist/linux/0.3.0/`; package installation paths remain unchanged.
+
+CI now runs on `main` pushes and pull requests and uses the shared native-package
+workflow after tests/license checks. Both CI and release builds use the same
+Word-template rebuild, locked Cargo release build, host executable smoke commands,
+versioned packaging and artifact upload. Windows installer scripts are parsed
+with Windows PowerShell in CI, and Linux-only symlink layout tests are skipped
+on Windows. All three workflows passed actionlint locally.
+
+The obsolete Windows Setup/ZIP were deleted and a real x64 MSVC release was
+cross-compiled locally with cargo-xwin. The local LLVM wrapper was broken; the
+build used Rust's bundled LLD via a temporary PATH override. Windows target CRT
+linking is now static in `.cargo/config.toml`; PE imports confirm neither binary
+requires VCRUNTIME140.dll. The cross SDK emits missing CRT debug-PDB warnings,
+which do not prevent the release build. Real NSIS Setup and ZIP were generated
+under `dist/windows/0.3.0/`. ZIP CRCs and executable hashes match the fresh build,
+with DOTM/WPS assets and no Word web payload. Windows execution/install/uninstall
+was not exercised locally (no Windows/Wine); GitHub's Windows build now performs
+executable smoke checks. Workflow edits were linted, not yet run remotely.

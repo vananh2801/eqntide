@@ -14,10 +14,10 @@ A standalone, high-performance **bidirectional math equation converter and edito
 | --- | --- | --- |
 | Rust library and CLI | `src/`, root `Cargo.toml` | Pure Rust conversion engine and the `eqntide-cli` command-line application. |
 | Native Rust desktop (preview) | `desktop/`, `crates/eqntide-editor/` | egui/eframe shell, structural equation editing, and the shared STIX renderer. No desktop WebView or JavaScript. |
-| Microsoft Word add-in | `word-addin/` | Static Office.js manifest, task pane, commands, and assets. It communicates with the local EqnTide bridge. |
+| Microsoft Word VBA template | `word-template/EqnTide.dotm` | Global VBA template loaded from Word STARTUP; opens native editing sessions through the local bridge. |
 | WPS Office add-in | `wps-addin/` | Static WPS JavaScript add-in, ribbon definition, task pane, and assets. It communicates with the same bridge. |
 
-The Word and WPS add-ins are not separate compiled applications. They are served or copied as static files and require either the desktop application or `eqntide-cli --server` to provide the local bridge at `http://127.0.0.1:17890`.
+Word uses only the `.dotm` VBA template; there is no Word web add-in or browser-based Word integration. WPS retains its JavaScript add-in. Both communicate with the local bridge at `http://127.0.0.1:17890`, provided by the background CLI or desktop.
 
 ---
 
@@ -59,15 +59,25 @@ The Word and WPS add-ins are not separate compiled applications. They are served
 The new desktop uses **egui + eframe** with the existing Rust conversion engine.
 It supports structural equation editing (caret, selection, templates, undo/redo),
 live LaTeX preview, Office editing sessions, and the four DOCX batch directions.
-The Word/WPS add-ins remain JavaScript/VBA integrations; they communicate through
+Word uses the VBA `.dotm` template and WPS uses its JavaScript add-in; they communicate through
 the same local bridge. The desktop itself does not load a WebView or MathLive.
 
-Build with the current stable Rust toolchain:
+On Linux, build with the current stable Rust toolchain:
 
 ```bash
 cargo run -p eqntide-desktop
 cargo build --workspace --release --locked
 ```
+
+On Windows, use an explicit MSVC target so static CRT flags apply to the target
+executables independently of host build scripts and procedural macros:
+
+```powershell
+cargo build --workspace --release --locked --target x86_64-pc-windows-msvc
+python scripts/package_native.py --target x86_64-pc-windows-msvc
+```
+
+Windows executables are under `target/x86_64-pc-windows-msvc/release/`.
 
 The executables are `target/release/eqntide-desktop` and
 `target/release/eqntide-cli` (add `.exe` on Windows). Running `cargo build` without
@@ -129,6 +139,41 @@ python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format deb
 python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format rpm
 ```
 
+All distribution files use one output root, grouped by platform and the version
+read from the root `Cargo.toml`:
+
+```text
+dist/
+  linux/0.3.0/
+    eqntide-native-preview-0.3.0-x86_64-unknown-linux-gnu.tar.gz
+    eqntide-native-preview-0.3.0-1.x86_64.rpm
+    eqntide-native-preview_0.3.0_amd64.deb
+  windows/0.3.0/
+    eqntide-native-preview-0.3.0-x86_64-pc-windows-msvc.zip
+    EqnTide-0.3.0-Setup.exe
+    README-WINDOWS.txt
+    installer-config.nsh
+    windows-stage/
+```
+
+Only requested formats are generated. A version bump creates a new directory;
+rebuilding the same version replaces its artifacts. `--output /some/path` changes
+the root while retaining `<platform>/<version>/`. `target/release/` remains
+Cargo's compiler output, separate from distributable packages. Old Windows installers have been removed; only freshly generated packages
+should be distributed.
+
+Windows packaging generates NSIS inputs inside its version directory. Compile
+Setup from the repository root after packaging the Windows binaries:
+
+```powershell
+$version = python scripts/package_native.py --print-version
+$packageDir = (Resolve-Path "dist/windows/$version").Path
+makensis "/DPACKAGE_DIR=$packageDir" scripts/installer.nsi
+```
+
+The generated configuration sets the installer's displayed version and output
+filename. The Windows release workflow runs these steps automatically.
+
 DEB requires `dpkg-deb`; RPM requires `rpmbuild`. Packages include the add-ins,
 Word template and font licenses. The portable Linux package includes
 `install-user.sh` to register the URI handler. Windows release CI stages the
@@ -146,15 +191,15 @@ replace the legacy `eqn-tide` package and retain its desktop-file URI associatio
 the Windows installer asks you to close a locked legacy executable. Package
 installation configures the login bridge and restarts it with the installed binaries.
 
-Linux URI/add-in setup helpers require Python 3; the desktop/CLI binaries do not.
+Packaging requires Python 3.11 or later; Linux URI/add-in setup helpers require Python 3; the desktop/CLI binaries do not.
 
 All current launchers, package scripts and release jobs target `eqntide-desktop`
 and `eqntide-cli`. The old Tauri desktop and web frontend have been removed;
 previous versions remain available in Git history.
 
 - **Windows installer:** installs the native binaries, registers `eqntide://`,
-  and runs the shared PowerShell add-in installer for Word/WPS and the Word
-  template. It also enables the hidden login bridge. Close Office first. The
+  and runs the shared PowerShell installer for the Word `.dotm` template
+  and WPS add-in. It also enables the hidden login bridge. Close Office first. The
   Start Menu offers a manual bridge launcher.
 - **Windows portable:** extract the complete ZIP and run `install-addins.bat` to
   register the URI and add-ins. `start-server.bat` starts the optional external
@@ -263,14 +308,14 @@ Fedora:
 
 ```bash
 python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format rpm
-sudo dnf install ./dist/eqntide-native-preview-0.3.0-1.x86_64.rpm
+sudo dnf install ./dist/linux/0.3.0/eqntide-native-preview-0.3.0-1.x86_64.rpm
 ```
 
 Ubuntu/Debian (not locally qualified):
 
 ```bash
 python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format deb
-sudo apt-get install ./dist/eqntide-native-preview_0.3.0_amd64.deb
+sudo apt-get install ./dist/linux/0.3.0/eqntide-native-preview_0.3.0_amd64.deb
 ```
 
 For an already installed RPM with the same version, use `sudo dnf reinstall`
@@ -302,16 +347,16 @@ For source/portable installs or repairs, use the add-in/service helpers describe
 above. The service runs at graphical login; do not start another bridge while
 it owns port `17890`.
 
-### Prepare and Install the Word/WPS Add-ins
+### Prepare and Install the Word Template and WPS Add-in
 
-There is no npm, Cargo, or bundling step for either add-in. Keep each directory intact:
+Distribute the prebuilt Word template and the complete WPS directory:
 
 ```text
-word-addin/   # Microsoft Word Office.js add-in
-wps-addin/    # WPS Office JavaScript add-in
+word-template/EqnTide.dotm  # Microsoft Word VBA template
+wps-addin/                 # WPS Office JavaScript add-in
 ```
 
-When making a portable distribution, copy both directories beside `eqntide-cli[.exe]` so the bridge can serve `/word-addin/*` and `/wps-addin/*`. When running from a source checkout, start the bridge from the repository root:
+Keep these paths beside `eqntide-cli[.exe]` in portable distributions. The bridge serves `/wps-addin/*`; Word calls the conversion/session API directly from VBA. When running from a source checkout, start the bridge from the repository root:
 
 ```bash
 ./target/release/eqntide-cli --server
@@ -337,8 +382,8 @@ Word/WPS add-ins for the installing user. Linux RPM/DEB installs WPS add-ins for
 logged-in users, dropping root privileges before touching their profiles; when
 no user session is available, setup runs at the next desktop login through XDG
 autostart. Add-in files are copied again only when the bundled add-in changes or
-its files are missing; each login also ensures the background service is enabled. Restart Word/WPS after installation. Office security or organization
-policies may still require enabling the add-in. Source/portable setups can use
+its files are missing; each login also ensures the background service is enabled. Restart Word/WPS after installation. Word macro security or organization
+policies may still require enabling the VBA template. Source/portable setups can use
 the manual commands below.
 
 #### Windows: Word and WPS Office
@@ -349,7 +394,7 @@ Run the PowerShell registration script from the repository root, then restart Wo
 .\scripts\install-addin.ps1
 ```
 
-The script registers `word-addin/manifest.xml` in the current user's Word developer catalog and copies `wps-addin/` into the WPS `jsaddons` directory. To remove both registrations:
+The script copies `word-template/EqnTide.dotm` into the current user's Word STARTUP directory and installs the WPS JavaScript add-in. It also removes EqnTide's old Word web catalog registration and leftover web assets when upgrading. It does not change other add-ins or shared WebView settings. To remove the template and WPS registration:
 
 ```powershell
 .\scripts\install-addin.ps1 -Uninstall
@@ -373,22 +418,22 @@ This installs the static files under the current user's Kingsoft/WPS `jsaddons` 
 
 Use these steps when the registration scripts are unavailable or when you need to inspect the installation manually. Start the EqnTide desktop application or CLI bridge before opening an add-in.
 
-#### Microsoft Word on Windows
+#### Microsoft Word on Windows: VBA template only
 
-Register the manifest in the current user's Word developer catalog from PowerShell, replacing the example path with the absolute path to this checkout:
+Completely close Word, then copy the template into the default user STARTUP folder:
 
 ```powershell
-$manifest = "C:\path\to\eqntide\word-addin\manifest.xml"
-New-Item -Path "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer" -Force
-Set-ItemProperty -Path "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer" `
-  -Name "EqnTide" -Value $manifest
+$startup = Join-Path $env:APPDATA 'Microsoft\Word\STARTUP'
+New-Item -ItemType Directory -Path $startup -Force | Out-Null
+Copy-Item '.\word-template\EqnTide.dotm' $startup -Force
 ```
 
-Restart Word, then open **Insert → My Add-ins → Developer Add-ins** and select **EqnTide**.
-
-#### Microsoft Word on the Web
-
-Open a document in Word on the Web, choose **Insert → Add-ins → More Add-ins → Manage My Add-ins → Upload My Add-in**, and upload `word-addin/manifest.xml`. The browser must be able to access the bridge URLs in the manifest; organizational Office policies may disable developer add-in uploads or local HTTP endpoints.
+If Word uses a custom STARTUP location, copy the template there instead. Reopen
+Word and check the **EqnTide** ribbon. The VBA template provides Insert/Edit,
+LaTeX conversion and opening the native batch tab. Word macro policy must allow
+loading the template; it does not require an Office.js catalog or web runtime.
+Compatibility must still be qualified on the actual Word versions in use.
+Word on the Web is not supported by this VBA integration.
 
 #### WPS Office on Windows or Linux
 
@@ -431,9 +476,9 @@ Completely exit and restart WPS Writer. The **EqnTide** tab should then appear i
 ### Installation Troubleshooting
 
 - **The add-in reports `Bridge: Offline`:** Start the desktop application or run `eqntide-cli --server`, then open `http://127.0.0.1:17890/health`. A working bridge returns JSON containing `"status":"ok"` and `"server":"eqntide-bridge"`.
-- **Port 17890 is already occupied:** Stop the other process using the port before starting EqnTide. Although the CLI supports `--port`, the bundled Word/WPS manifests and scripts are configured for port `17890`; using another port requires updating those add-in URLs as well.
-- **The add-in files return 404:** Run the CLI bridge from the repository root, or place `word-addin/` and `wps-addin/` beside the distributed executable.
-- **The ribbon does not appear:** Fully close all Word/WPS processes, verify that the manifest or `jsaddons` files were installed for the current user, and reopen the application.
+- **Port 17890 is already occupied:** Stop the other process using the port before starting EqnTide. Although the CLI supports `--port`, the Word VBA source and WPS scripts are configured for port `17890`; using another port requires updating those add-in URLs as well.
+- **The add-in files return 404:** Run the CLI bridge from the repository root, or place `wps-addin/` beside the distributed executable. Word does not load web assets.
+- **The ribbon does not appear:** Fully close all Word/WPS processes, verify the Word STARTUP template and macro settings, or the WPS `jsaddons` files for the current user, and reopen the application.
 - **Network and privacy:** Conversion runs locally and the bridge binds to `127.0.0.1`; EqnTide does not require a conversion cloud service or telemetry endpoint.
 
 ---
@@ -633,3 +678,29 @@ stop the owned bridge and remove its Startup entry. On Linux, the equivalent
 manual opt-out is `scripts/install-bridge-service.sh --uninstall`; remove or
 disable the `eqntide-addins.desktop` XDG autostart entry too if retaining the
 package but opting out of automatic session setup.
+
+### GitHub build workflows
+
+CI runs on pushes and pull requests to `main`, plus manual dispatch. Linux and
+Windows jobs run workspace tests, Clippy, packaging checks, WPS JavaScript syntax
+and Windows PowerShell syntax checks. After checks pass, the reusable
+`build-native.yml` workflow rebuilds the Word template, compiles release binaries,
+smokes their version commands, packages Linux portable/DEB/RPM and Windows ZIP/NSIS,
+and uploads artifacts containing the `linux/<version>/` or `windows/<version>/`
+layout. The tag/manual release workflow uses the same package build; only `v*`
+tags publish the downloaded packages to GitHub Releases.
+
+For local Windows cross-builds on Linux with cargo-xwin/MSVC SDK and NSIS already
+configured:
+
+```bash
+cargo xwin build --workspace --release --locked --target x86_64-pc-windows-msvc
+python3 scripts/package_native.py --target x86_64-pc-windows-msvc
+makensis -DPACKAGE_DIR="$(pwd)/dist/windows/$(python3 scripts/package_native.py --print-version)" scripts/installer.nsi
+```
+
+Cross-compilation and NSIS generation do not replace runtime testing in Windows
+and Word.
+
+Windows x64 MSVC builds use the static CRT flags in `.cargo/config.toml`, so the
+portable/Setup executables do not need a separately installed VC++ runtime.
