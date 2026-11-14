@@ -13,6 +13,12 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   and is parsed by the shared Rust LaTeX service.
 - Renderer hit geometry shares the image layout; existing PNG/EMF behavior and
   STIX baseline tests remain covered.
+- Real Upgrade regression samples cover headerless MTEF in old EMF previews:
+  repair is accepted only when it reproduces the paired OLE payload exactly.
+  Rerunning `bug_upgrade_before.docx` preserved the LaTeX representation of all
+  4,466 source OLE equations and produced identical MTEF in every OLE/EMF pair.
+  The wrapped two-row cases table was rendered and its full-height brace checked;
+  a layout regression test compares direct and wrapped tables.
 - OMML token styles are explicit: default digits, operators, text and function
   names are upright, single-letter variables italic. Regression tests cover
   fraction contents and preservation of explicit mathvariant overrides.
@@ -25,7 +31,14 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   drafts, font-size changes and running batches retain their confirmation.
 - Bridge session tests cover changing the output mode on insert and edit:
   OMML results omit the EMF path so WPS uses native equation XML; MathType
-  results retain their EMF insertion path and embedded editable data.
+  results retain OLE plus the EMF preview, with identical MTEF in both parts.
+- WPS desktop-session and Toggle LaTeX insertions use the complete MathType
+  package, never AddPicture. Mock tests cover replacement, baseline positioning
+  and imported paragraph cleanup. Package tests cover EMF-first reading, OLE
+  fallback, dual-MTEF equality and unique part/shape/relationship identifiers.
+  The user confirmed that the resulting file opens in MathType. WPS
+  scrolling/reopen behavior and repeated MathType editing still need runtime
+  checks after changing from standalone EMF to OLE+EMF insertion.
 - `npm ci --prefix scripts && npm test --prefix scripts` exercises the add-in with mocked document
   ranges: OMML insert/replacement imports Flat OPC (raw XML is literal text in WPS),
   preserves surrounding text and existing paragraph marks, removes a verified

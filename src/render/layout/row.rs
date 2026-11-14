@@ -52,6 +52,15 @@ pub(super) fn unicode_math_styled_char(ch: char, mathvariant: Option<&str>) -> O
     char::from_u32(cp)
 }
 
+fn is_wrapped_table(mut node: &MathNode) -> bool {
+    while matches!(node.tag.as_str(), "mrow" | "mstyle" | "mpadded" | "math")
+        && node.children.len() == 1
+    {
+        node = &node.children[0];
+    }
+    node.tag == "mtable"
+}
+
 impl Layout {
     /// Lay out a run of siblings on one baseline with TeX-style spacing.
     pub(super) fn row(&mut self, kids: &[MathNode], em: f32, ctx: MathContext) -> Result<LBox> {
@@ -158,7 +167,7 @@ impl Layout {
                         class,
                         b,
                         delim: None,
-                        is_table: kid.tag == "mtable",
+                        is_table: is_wrapped_table(kid),
                     });
                 }
             }
@@ -386,5 +395,27 @@ impl Layout {
                 self.atoms_mo(&ch.to_string(), em, out, ssty);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod wrapped_table_tests {
+    use super::*;
+
+    #[test]
+    fn lone_brace_stretches_identically_around_wrapped_and_direct_tables() {
+        let table = "<mtable><mtr><mtd><mfrac><mi>x</mi><mn>2</mn></mfrac></mtd></mtr><mtr><mtd><mn>4</mn></mtd></mtr></mtable>";
+        let direct = MathNode::parse(&format!("<math><mo>{{</mo>{table}</math>")).unwrap();
+        let wrapped = MathNode::parse(&format!(
+            "<math><mo>{{</mo><mrow><mrow>{table}</mrow></mrow></math>"
+        ))
+        .unwrap();
+        let (a, _) = layout_math(&direct, 12.0).unwrap();
+        let (b, _) = layout_math(&wrapped, 12.0).unwrap();
+        assert!(
+            (a.w - b.w).abs() < 0.01,
+            "wrapper must not leave a small brace"
+        );
+        assert_eq!(a.items.len(), b.items.len());
     }
 }
