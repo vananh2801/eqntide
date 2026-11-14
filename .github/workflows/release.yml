@@ -22,6 +22,9 @@ jobs:
             os: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -46,26 +49,27 @@ jobs:
         run: |
           $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
           if (!(Test-Path $nsis)) { choco install nsis --no-progress -y }
-          & $nsis scripts/installer.nsi
+          $version = python scripts/package_native.py --print-version
+          $packageDir = (Resolve-Path "dist/windows/$version").Path
+          & $nsis "/DPACKAGE_DIR=$packageDir" scripts/installer.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item release/EqnTide-Setup.exe dist/EqnTide-Native-Preview-Setup.exe
       - uses: actions/upload-artifact@v4
         with:
           name: eqntide-native-preview-${{ matrix.target }}
           path: |
-            dist/*.zip
-            dist/*.tar.gz
-            dist/*.deb
-            dist/*.rpm
-            dist/*.exe
+            dist/*/*/*.zip
+            dist/*/*/*.tar.gz
+            dist/*/*/*.deb
+            dist/*/*/*.rpm
+            dist/*/*/*.exe
       - name: Publish preview assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           prerelease: true
           files: |
-            dist/*.zip
-            dist/*.tar.gz
-            dist/*.deb
-            dist/*.rpm
-            dist/*.exe
+            dist/*/*/*.zip
+            dist/*/*/*.tar.gz
+            dist/*/*/*.deb
+            dist/*/*/*.rpm
+            dist/*/*/*.exe

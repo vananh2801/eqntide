@@ -30,10 +30,67 @@ class NativeIntegration(unittest.TestCase):
             self.assertIn("eqntide-desktop.exe", (stage / "register-uri.ps1").read_text())
             self.assertIn("EQNTIDE_DESKTOP_BIN=", (stage / "start-server.bat").read_text())
             installer = (pack.ROOT / "scripts/installer.nsi").read_text()
-            for path in re.findall(r'^\s*File(?: /r)? "\.\.\\dist\\windows-stage\\([^"]+)"', installer, re.M):
+            for path in re.findall(r'^\s*File(?: /r)? "\$\{PACKAGE_DIR\}\\windows-stage\\([^"]+)"', installer, re.M):
                 path = path.replace("\\", "/")
                 self.assertTrue(list(stage.glob(path)), path)
             self.assertNotIn("src-tauri", installer)
+            self.assertFalse((stage / "word-addin").exists())
+            template = stage / "word-template/EqnTide.dotm"
+            import zipfile
+            with zipfile.ZipFile(template) as archive:
+                self.assertIn("word/vbaProject.bin", archive.namelist())
+                self.assertIn("customUI/customUI14.xml", archive.namelist())
+            ps = (stage / "scripts/install-addin.ps1").read_text()
+            self.assertIn("word-template\\EqnTide.dotm", ps)
+            self.assertNotIn("Set-ItemProperty", ps)
+            self.assertNotIn("CheckNetIsolation.exe", ps)
+
+    def test_windows_repack_removes_stale_web_payload(self):
+        from unittest.mock import patch
+        import shutil
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            stage = self.stage(base, True)
+            output = base / 'out'
+            version_dir = output / 'windows' / pack.VERSION
+            stale = version_dir / 'windows-stage/word-addin'
+            stale.mkdir(parents=True)
+            (stale / 'manifest.xml').write_text('obsolete')
+            def populate(target, binary_dir, windows):
+                shutil.copytree(stage, target, dirs_exist_ok=True)
+            with patch.object(pack, 'populate', side_effect=populate), patch.object(sys, 'argv', ['package_native.py', '--target', 'x86_64-pc-windows-msvc', '--output', str(output)]):
+                pack.main()
+            self.assertFalse(stale.exists())
+            self.assertIn(f'!define APP_VERSION "{pack.VERSION}"', (version_dir / 'installer-config.nsh').read_text())
+            self.assertTrue((version_dir / 'README-WINDOWS.txt').exists())
+            self.assertTrue(list(version_dir.glob(f'*{pack.VERSION}*.zip')))
+            self.assertTrue((version_dir / 'windows-stage/word-template/EqnTide.dotm').exists())
+            self.assertTrue((version_dir / 'windows-stage/wps-addin/main.js').exists())
+
+    def test_outputs_are_isolated_by_platform_and_version(self):
+        from unittest.mock import patch
+        import shutil
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            fixture = self.stage(base, False)
+            output = base / 'custom output'
+            def populate(target, binary_dir, windows):
+                shutil.copytree(fixture, target, dirs_exist_ok=True)
+            archives = []
+            for target, platform in [('x86_64-unknown-linux-gnu', 'linux'), ('x86_64-pc-windows-msvc', 'windows')]:
+                for version in ('1.2.3', '1.3.0'):
+                    with patch.object(pack, 'VERSION', version), patch.object(pack, 'populate', side_effect=populate), patch.object(sys, 'argv', ['package_native.py', '--target', target, '--output', str(output)]):
+                        pack.main()
+                    folder = output / platform / version
+                    extension = '*.zip' if platform == 'windows' else '*.tar.gz'
+                    archive = next(folder.glob(extension))
+                    self.assertIn(version, archive.name)
+                    archives.append((archive, archive.read_bytes()))
+            for archive, content in archives:
+                self.assertEqual(archive.read_bytes(), content)
+            self.assertFalse((output / 'windows-stage').exists())
 
     @unittest.skipIf(__import__('sys').platform == 'win32', 'Linux systemd installer')
     def test_portable_service_resolves_bundled_executables(self):
@@ -69,6 +126,7 @@ class WpsConfig(unittest.TestCase):
             self.assertNotIn('EqnTide', config['wps'])
 
 
+@unittest.skipUnless(__import__('sys').platform == 'linux', 'Linux desktop package layout')
 class LinuxMigration(unittest.TestCase):
     def test_previous_tauri_desktop_id_launches_native_binary(self):
         with tempfile.TemporaryDirectory() as tmp:

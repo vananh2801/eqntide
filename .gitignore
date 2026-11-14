@@ -9,6 +9,4 @@ dist/
 word-template/tmp_build/
 word-template/*.bin
 word-template/*.new
-release/*.exe
-release/*.zip
 **/__pycache__/

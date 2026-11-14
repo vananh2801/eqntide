@@ -2,8 +2,13 @@
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
 
+!ifndef PACKAGE_DIR
+    !error "Pass /DPACKAGE_DIR=<absolute dist/windows/version directory> after packaging Windows."
+!endif
+!include "${PACKAGE_DIR}\installer-config.nsh"
+
 Name "EqnTide"
-OutFile "..\release\EqnTide-Setup.exe"
+OutFile "${PACKAGE_DIR}\EqnTide-${APP_VERSION}-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\EqnTide"
 RequestExecutionLevel user
 
@@ -29,7 +34,7 @@ Section "MainSection" SEC01
     ; Stop only this installation's bridge before replacing its executable.
     InitPluginsDir
     SetOutPath "$PLUGINSDIR"
-    File "install-bridge-startup.ps1"
+    File "${PACKAGE_DIR}\windows-stage\scripts\install-bridge-startup.ps1"
     ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\install-bridge-startup.ps1" -BaseDir "$INSTDIR" -Stop' $0
     ${If} $0 != 0
         MessageBox MB_ICONEXCLAMATION "Could not stop the old bridge. Close EqnTide bridge processes and run Setup again."
@@ -45,31 +50,31 @@ legacy_retry:
     MessageBox MB_RETRYCANCEL "Close the old EqnTide application before installing the Rust desktop." IDRETRY legacy_retry
     Abort
 legacy_done:
-    File "..\dist\windows-stage\eqntide-desktop.exe"
-    File "..\dist\windows-stage\eqntide-cli.exe"
-    File "..\dist\windows-stage\start-server.bat"
-    File "..\dist\windows-stage\install-addins.bat"
-    File "..\dist\windows-stage\register-uri.ps1"
-    File "..\dist\windows-stage\README.md"
-    File "..\dist\windows-stage\LICENSE"
-    File "..\dist\windows-stage\NOTICE"
+    File "${PACKAGE_DIR}\windows-stage\eqntide-desktop.exe"
+    File "${PACKAGE_DIR}\windows-stage\eqntide-cli.exe"
+    File "${PACKAGE_DIR}\windows-stage\start-server.bat"
+    File "${PACKAGE_DIR}\windows-stage\install-addins.bat"
+    File "${PACKAGE_DIR}\windows-stage\register-uri.ps1"
+    File "${PACKAGE_DIR}\windows-stage\README.md"
+    File "${PACKAGE_DIR}\windows-stage\LICENSE"
+    File "${PACKAGE_DIR}\windows-stage\NOTICE"
 
     SetOutPath "$INSTDIR\scripts"
-    File /r "..\dist\windows-stage\scripts\*.*"
+    File /r "${PACKAGE_DIR}\windows-stage\scripts\*.*"
 
     SetOutPath "$INSTDIR\fonts"
-    File /r "..\dist\windows-stage\fonts\*.*"
+    File /r "${PACKAGE_DIR}\windows-stage\fonts\*.*"
     SetOutPath "$INSTDIR\icons"
-    File /r "..\dist\windows-stage\icons\*.*"
+    File /r "${PACKAGE_DIR}\windows-stage\icons\*.*"
 
     ; Clean assets shipped by older Office.js-based releases.
     RMDir /r "$INSTDIR\word-addin"
 
     SetOutPath "$INSTDIR\wps-addin"
-    File /r "..\dist\windows-stage\wps-addin\*.*"
+    File /r "${PACKAGE_DIR}\windows-stage\wps-addin\*.*"
 
     SetOutPath "$INSTDIR\word-template"
-    File "..\dist\windows-stage\word-template\EqnTide.dotm"
+    File "${PACKAGE_DIR}\windows-stage\word-template\EqnTide.dotm"
 
     ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1"' $0
     ${If} $0 != 0
@@ -99,7 +104,7 @@ legacy_done:
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "UninstallString" '"$INSTDIR\Uninstall.exe"'
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayIcon" "$INSTDIR\eqntide-desktop.exe"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "Publisher" "EqnTide"
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayVersion" "0.3.0"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayVersion" "${APP_VERSION}"
 SectionEnd
 
 Section "Uninstall"

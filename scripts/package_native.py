@@ -6,14 +6,24 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION = "0.3.0"
+VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
 
 # Both package managers run this as root; the helper drops privileges first.
 SESSION_POSTINSTALL = """/usr/bin/python3 /usr/lib/eqntide/scripts/install-session-addins.py --package-install || true
 """
+
+
+def output_directory(root, target, version=VERSION):
+    platform = "windows" if "windows" in target else "linux"
+    return root / platform / version
+
+
+def windows_installer_config(output):
+    (output / "installer-config.nsh").write_text(f'!define APP_VERSION "{VERSION}"\n')
 
 
 def desktop_entry(executable):
@@ -108,21 +118,28 @@ X-GNOME-Autostart-enabled=true
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", required=True)
+    parser.add_argument("--target")
+    parser.add_argument("--print-version", action="store_true", help="Print the package version from Cargo.toml and exit")
     parser.add_argument("--profile", default="release")
     parser.add_argument("--format", choices=("portable", "deb", "rpm", "all"), default="portable")
-    parser.add_argument("--output", type=Path, default=ROOT / "dist")
+    parser.add_argument("--output", type=Path, default=ROOT / "dist", help="Output root; packages go under <root>/<platform>/<version>/")
     args = parser.parse_args()
+    if args.print_version:
+        print(VERSION)
+        return
+    if not args.target:
+        parser.error("--target is required when packaging")
     if not any(platform in args.target for platform in ("linux", "windows")):
         parser.error("Only Linux and Windows packaging is supported; macOS support is temporarily disabled (no test hardware).")
     windows = "windows" in args.target
     binary_dir = ROOT / "target" / args.target / args.profile
     if not binary_dir.exists():
         binary_dir = ROOT / "target" / args.profile
+    args.output = output_directory(args.output, args.target, VERSION)
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="eqntide-package-") as temp:
         temp = Path(temp)
-        label = "eqntide-native-preview-" + args.target
+        label = f"eqntide-native-preview-{VERSION}-{args.target}"
         stage = temp / label
         stage.mkdir()
         populate(stage, binary_dir, windows)
@@ -137,6 +154,8 @@ def main():
                 if windows_stage.exists():
                     shutil.rmtree(windows_stage)
                 shutil.copytree(stage, windows_stage)
+                windows_installer_config(args.output)
+                shutil.copy2(ROOT / "docs/WINDOWS-INSTALLATION.txt", args.output / "README-WINDOWS.txt")
             else:
                 archive = args.output / (label + ".tar.gz")
                 with tarfile.open(archive, "w:gz") as file:
