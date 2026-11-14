@@ -19,6 +19,16 @@ A standalone, high-performance **bidirectional math equation converter and edito
 
 Word uses only the `.dotm` VBA template; there is no Word web add-in or browser-based Word integration. WPS retains its JavaScript add-in. Both communicate with the local bridge at `http://127.0.0.1:17890`, provided by the background CLI or desktop.
 
+With **MathType** selected, both add-ins insert one OLE equation object with an
+EMF preview. The same complete MTEF stream is embedded in the OLE and the EMF;
+EqnTide reads the preview's MTEF first and falls back to OLE when necessary.
+The OLE component is retained for sharing with MathType desktop users. WPS no
+longer substitutes a standalone picture for this object. Choosing **OMML** still
+inserts a native Office equation.
+Word sessions now default to MathType, like WPS. Toggle LaTeX in either add-in
+converts LaTeX text to the OLE+EMF package; the reverse direction produces plain
+LaTeX text.
+
 ---
 
 ## Key Features

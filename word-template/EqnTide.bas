@@ -143,6 +143,15 @@ Public Sub ToggleLatexMacro()
         Exit Sub
     End If
 
+    ' MathType OLE created by Toggle/Insert/Edit must also toggle back to text.
+    If sel.InlineShapes.Count = 1 Then
+        Dim shapeRange As Range
+        Set shapeRange = sel.InlineShapes(1).Range.Duplicate
+        latexStr = CallBridge(shapeRange.WordOpenXML, "flat_opc", "latex")
+        If Len(latexStr) > 0 Then shapeRange.Text = "$" & latexStr & "$"
+        Exit Sub
+    End If
+
     ' Case 2: Selected text contains LaTeX or plain text selected
     Dim txt As String
     txt = sel.Text
@@ -182,7 +191,7 @@ Public Sub ToggleLatexMacro()
             rawLatex = StripDelimiters(fullMatch)
 
             Dim flatOpc As String
-            flatOpc = CallBridge(rawLatex, "latex", "flat_opc_omml")
+            flatOpc = CallBridge(rawLatex, "latex", "flat_opc_mathtype")
 
             If Len(flatOpc) > 0 Then
                 Dim subRng As Range
@@ -196,7 +205,7 @@ Public Sub ToggleLatexMacro()
         cleanLatex = Trim(txt)
         If Len(cleanLatex) > 0 Then
             Dim opc As String
-            opc = CallBridge(cleanLatex, "latex", "flat_opc_omml")
+            opc = CallBridge(cleanLatex, "latex", "flat_opc_mathtype")
             If Len(opc) > 0 Then
                 sel.Range.InsertXML opc
             End If
@@ -263,7 +272,7 @@ Private Sub EditInNativeDesktop(ByVal editExisting As Boolean)
         http.setTimeouts 1000, 1000, 2000, 3000
         http.Open "POST", BRIDGE_ROOT & "/session/open", False
         http.setRequestHeader "Content-Type", "application/json"
-        http.send "{""data"":" & JsonEscape(inputData) & ",""format"":" & JsonEscape(inputFormat) & ",""target_mode"":""omml"",""font_pt"":" & Replace(CStr(fontPt), ",", ".") & "}"
+        http.send "{""data"":" & JsonEscape(inputData) & ",""format"":" & JsonEscape(inputFormat) & ",""target_mode"":""mathtype"",""font_pt"":" & Replace(CStr(fontPt), ",", ".") & "}"
         response = ""
         If Err.Number = 0 Then
             If http.Status = 200 Then response = http.responseText

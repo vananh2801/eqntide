@@ -113,7 +113,7 @@ customui14_xml = r"""<customUI xmlns="http://schemas.microsoft.com/office/2009/0
     <tabs>
       <tab id="EqnTideTab" label="EqnTide">
         <group id="EqnTideEqGroup" label="Equations">
-          <button id="btnToggleLatex" label="Toggle LaTeX" size="large" imageMso="EquationProfessional" onAction="RibbonToggleLatex" screentip="Toggle LaTeX (Alt + \)" supertip="Convert LaTeX to OMML or OMML equation back to LaTeX text." />
+          <button id="btnToggleLatex" label="Toggle LaTeX" size="large" imageMso="EquationProfessional" onAction="RibbonToggleLatex" screentip="Toggle LaTeX (Alt + \)" supertip="Convert LaTeX to MathType OLE with EMF preview, or an equation back to LaTeX text." />
           <button id="btnInsertEquation" label="Insert Equation" size="large" imageMso="EquationInsertGallery" onAction="RibbonInsertEquation" screentip="Insert Equation" supertip="Open EqnTide equation editor." />
           <button id="btnEditEquation" label="Edit Equation" size="large" imageMso="EquationNormalText" onAction="RibbonEditEquation" screentip="Edit Equation" supertip="Edit selected equation." />
           <button id="btnUpgradeMathType" label="Upgrade MathType" size="large" imageMso="EquationLinearFormat" onAction="RibbonUpgradeMathType" screentip="Upgrade MathType" supertip="Upgrade legacy MathType equations." />

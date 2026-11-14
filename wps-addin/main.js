@@ -726,26 +726,32 @@ function EditEquation() {
  * Applies baseline alignment (Font.Position), sanitizes paragraph mark,
  * and optionally places cursor after shape.
  */
-function insertEmfAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
-  if (!doc || !targetRange || !waitData || !waitData.emf_path) return null;
-
+function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
+  var packageXml = waitData && (waitData.flat_opc || waitData.result);
+  if (!doc || !targetRange || !packageXml || !/ProgID=["']Equation\./i.test(packageXml)) return null;
   var insertPos = targetRange.Start;
-  var isRangeToDelete = (typeof targetRange.End === "number" && targetRange.End > targetRange.Start);
-  if (isRangeToDelete) {
-    try {
-      targetRange.Delete();
-    } catch (e) {
-      wpsLog("insertEmfAtDocRange: delete error: " + e);
+  var replaced = targetRange.End - insertPos;
+  var originalEnd = doc.Range().End;
+  var suffix = doc.Range(targetRange.End, Math.min(targetRange.End + 32, originalEnd)).Text;
+  targetRange.InsertXML(packageXml);
+  var newEnd = doc.Range().End;
+  var insertedEnd = insertPos + newEnd - originalEnd + replaced;
+  if (insertedEnd > insertPos &&
+      doc.Range(insertedEnd, Math.min(insertedEnd + suffix.length, newEnd)).Text === suffix) {
+    for (var breaks = 0; breaks < 2; breaks++) {
+      var trailing = doc.Range(insertedEnd - 1, insertedEnd);
+      if (trailing.Text !== "\r" && trailing.Text !== "\n") break;
+      trailing.Delete();
+      insertedEnd--;
     }
   }
-
-  var range = doc.Range(insertPos, insertPos);
+  var range = doc.Range(insertPos, insertedEnd);
   var pic = null;
-  try {
-    pic = range.InlineShapes.AddPicture(waitData.emf_path, false, true, range);
-  } catch (e) {
-    wpsLog("insertEmfAtDocRange: AddPicture error: " + e);
-    return null;
+  if (range.InlineShapes) {
+    for (var index = 1; index <= range.InlineShapes.Count; index++) {
+      var candidate = range.InlineShapes.Item(index);
+      if (candidate.Range.Start === insertPos) { pic = candidate; break; }
+    }
   }
   if (!pic) return null;
   try { pic.AlternativeText = "EqnTide equation"; } catch (_) {}
@@ -782,7 +788,7 @@ function insertEmfAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
     var shapeRange = doc.Range(actualStart, shapeEnd);
     if (shapeRange && shapeRange.Font) {
       shapeRange.Font.Position = pos;
-      wpsLog("insertEmfAtDocRange: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ")");
+      wpsLog("insertMathTypeAtDocRange: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ")");
     }
     try {
       if (pic && pic.Range && pic.Range.Font) {
@@ -836,7 +842,7 @@ function insertEmfAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
 
     return pic;
   } catch (err) {
-    wpsLog("insertEmfAtDocRange: formatting error: " + err);
+    wpsLog("insertMathTypeAtDocRange: formatting error: " + err);
     return pic;
   }
 }
@@ -975,11 +981,11 @@ function batchLatexToMathType(doc, selection, latexMatches) {
 
             for (var j = 0; j < latexMatches.length; j++) {
               var match = latexMatches[j];
-              if (match.convData && match.convData.emf_path) {
+              if (match.convData && match.convData.result) {
                 var rStart = baseStart + match.start;
                 var rEnd = baseStart + match.end;
                 var targetRange = doc.Range(rStart, rEnd);
-                var pic = insertEmfAtDocRange(doc, targetRange, match.convData, false);
+                var pic = insertMathTypeAtDocRange(doc, targetRange, match.convData, false);
                 if (pic) convertedCount++;
               }
             }
@@ -1416,12 +1422,8 @@ function ToggleLatex() {
         function (status, responseText) {
           if (status === 200) {
             var conv = JSON.parse(responseText);
-            if (conv.emf_path) {
-              insertEmfAtDocRange(doc, targetLatexRange, conv, true);
-            } else if (conv.result) {
-              g_editRangeStart = targetLatexRange.Start;
-              g_editRangeEnd = targetLatexRange.End;
-              InsertFlatOpcToSelection(conv.result);
+            if (conv.result) {
+              insertMathTypeAtDocRange(doc, targetLatexRange, conv, true);
             }
             wpsLog("ToggleLatex: successfully converted single LaTeX to MathType equation");
           } else {
@@ -1492,31 +1494,20 @@ function OpenBatchConverter() {
 }
 
 /**
- * Handle session completion: prefers native EMF AddPicture (prevents lazy-load cache drop in WPS Linux)
- * and falls back to Flat OPC InsertXML if needed.
+ * Import the selected output format. MathType always retains OLE plus EMF;
+ * never degrade it to a standalone picture.
  */
 function HandleSessionResult(waitData) {
   if (!waitData || waitData.status !== "ready") return;
 
-  // WPS needs Flat OPC; a bare oMath fragment is inserted as literal text.
-  if (!waitData.emf_path && waitData.omml && waitData.flat_opc) {
-    InsertOmmlToSelection(waitData.flat_opc);
+  if (!waitData.flat_opc) {
+    alert("EqnTide không trả về gói công thức để chèn.");
     return;
   }
-
-  // Try inserting EMF picture via AddPicture.
-  if (waitData.emf_path) {
-    var success = InsertEmfPicture(waitData);
-    if (success) {
-      wpsLog("HandleSessionResult: completed successfully via InsertEmfPicture");
-      return;
-    }
-    wpsLog("HandleSessionResult: InsertEmfPicture returned false, falling back to InsertFlatOpcToSelection");
-  }
-
-  // Fallback to InsertFlatOpcToSelection
-  if (waitData.flat_opc) {
-    InsertFlatOpcToSelection(waitData.flat_opc);
+  if (/ProgID=["']Equation\./i.test(waitData.flat_opc)) {
+    if (!InsertMathTypeEquation(waitData)) alert("Không thể chèn đối tượng MathType OLE + EMF.");
+  } else {
+    InsertOmmlToSelection(waitData.flat_opc);
   }
 }
 
@@ -1610,17 +1601,16 @@ function InsertOmmlToSelection(flatOpcXml) {
 }
 
 /**
- * Insert vector EMF picture with embedded MTEF using InlineShapes.AddPicture.
- * Does not import Flat OPC packages, completely bypassing WPS Linux relationship cache corruption.
+ * Insert a complete MathType object: OLE/MTEF plus EMF/MTEF preview.
  */
-function InsertEmfPicture(waitData) {
+function InsertMathTypeEquation(waitData) {
   try {
     var app = wps.Application;
     var doc = app ? app.ActiveDocument : null;
     var sel = app ? app.Selection : null;
     if (!doc) return false;
 
-    wpsLog("InsertEmfPicture: start. editRangeStart=" + g_editRangeStart + ", editRangeEnd=" + g_editRangeEnd);
+    wpsLog("InsertMathTypeEquation: start. editRangeStart=" + g_editRangeStart + ", editRangeEnd=" + g_editRangeEnd);
 
     var isEdit = (g_editRangeStart !== null && g_editRangeEnd !== null);
     var targetRange = null;
@@ -1628,9 +1618,9 @@ function InsertEmfPicture(waitData) {
     if (isEdit) {
       try {
         targetRange = doc.Range(g_editRangeStart, g_editRangeEnd);
-        wpsLog("InsertEmfPicture: targeting edit range [" + g_editRangeStart + ".." + g_editRangeEnd + "]");
+        wpsLog("InsertMathTypeEquation: targeting edit range [" + g_editRangeStart + ".." + g_editRangeEnd + "]");
       } catch (e) {
-        wpsLog("InsertEmfPicture: error getting edit range: " + e);
+        wpsLog("InsertMathTypeEquation: error getting edit range: " + e);
       }
     }
     g_editRangeStart = null;
@@ -1642,136 +1632,11 @@ function InsertEmfPicture(waitData) {
     }
     if (!targetRange) return false;
 
-    var pic = insertEmfAtDocRange(doc, targetRange, waitData, true);
+    var pic = insertMathTypeAtDocRange(doc, targetRange, waitData, true);
     return pic !== null;
   } catch (err) {
-    wpsLog("InsertEmfPicture: unhandled error: " + err);
+    wpsLog("InsertMathTypeEquation: unhandled error: " + err);
     return false;
-  }
-}
-
-/**
- * Helper: Insert Flat OPC XML into active WPS selection
- */
-function InsertFlatOpcToSelection(flatOpcXml) {
-  try {
-    var app = wps.Application;
-    var doc = app ? app.ActiveDocument : null;
-    var sel = app ? app.Selection : null;
-    var range = null;
-
-    wpsLog('InsertFlatOpcToSelection: start. editRangeStart=' + g_editRangeStart + ', editRangeEnd=' + g_editRangeEnd);
-
-    if (doc && g_editRangeStart !== null && g_editRangeEnd !== null) {
-      try {
-        range = doc.Range(g_editRangeStart, g_editRangeEnd);
-        wpsLog('InsertFlatOpcToSelection: target replace range [' + g_editRangeStart + '..' + g_editRangeEnd + ']');
-      } catch (e) {
-        wpsLog('InsertFlatOpcToSelection: error obtaining edit range: ' + e);
-      }
-    }
-    g_editRangeStart = null;
-    g_editRangeEnd = null;
-    g_editTargetRange = null;
-
-    if (!range) {
-      range = sel ? sel.Range : null;
-    }
-    if (!range) return;
-
-    var startPos = (range && typeof range.Start === "number") ? range.Start : 0;
-
-    if (typeof range.InsertXML === "function") {
-      range.InsertXML(flatOpcXml);
-    }
-
-        if (doc) {
-      try {
-        var docEnd = doc.Content ? doc.Content.End : (startPos + 200);
-        var fullText = doc.Range(0, Math.min(docEnd, 200)).Text;
-        wpsLog("DOC FULL TEXT START: " + JSON.stringify(fullText));
-
-        // Find the newly inserted InlineShape closest to startPos
-        var targetShape = null;
-        if (doc.InlineShapes && doc.InlineShapes.Count > 0) {
-          var minDiff = 999999;
-          for (var i = 1; i <= doc.InlineShapes.Count; i++) {
-            var shp = doc.InlineShapes.Item(i);
-            if (shp && shp.Range && shp.Range.Start >= startPos) {
-              var diff = Math.abs(shp.Range.Start - startPos);
-              if (diff < minDiff) {
-                minDiff = diff;
-                targetShape = shp;
-                if (diff <= 5) break; // Exact match found
-              }
-            }
-          }
-        }
-
-        var shpEnd = targetShape ? targetShape.Range.End : (startPos + 1);
-        wpsLog("targetShape: Start=" + (targetShape ? targetShape.Range.Start : "none") + ", End=" + shpEnd);        // Target cursor: immediately after shape
-        var cursorTarget = shpEnd;
-        try {
-          var endSelRange = doc.Range(cursorTarget, cursorTarget);
-          endSelRange.Select();
-          var curSel = app.Selection;
-          if (curSel) {
-            if (typeof curSel.Collapse === "function") {
-              curSel.Collapse(0);
-            }
-            if (curSel.Font) {
-              curSel.Font.Position = 0;
-              curSel.Font.Subscript = false;
-              curSel.Font.Superscript = false;
-            }
-          }
-          // Sanitize paragraph mark
-          try {
-            var para = endSelRange.Paragraphs.Item(1);
-            if (para && para.Range) {
-              var pEnd = para.Range.End;
-              if (pEnd > 0) {
-                var pMark = doc.Range(pEnd - 1, pEnd);
-                if (pMark && pMark.Font) {
-                  pMark.Font.Position = 0;
-                  pMark.Font.Subscript = false;
-                  pMark.Font.Superscript = false;
-                }
-              }
-            }
-          } catch (_) {}
-          wpsLog("InsertFlatOpcToSelection: selection collapsed to end of shape at " + cursorTarget);
-        } catch (e) {
-          wpsLog("InsertFlatOpcToSelection: cursor error: " + e);
-        }
-      } catch (e) {
-        wpsLog("InsertFlatOpcToSelection: error: " + e);
-      }
-    }
-
-    // Claude workaround 2.4: Trigger document recalculation & refresh so subsequent shapes reload correctly
-    try {
-      if (app) {
-        app.ScreenUpdating = true;
-        if (typeof app.ScreenRefresh === "function") {
-          app.ScreenRefresh();
-        }
-        if (doc && typeof doc.Repaginate === "function") {
-          doc.Repaginate();
-        }
-        var win = app.ActiveWindow;
-        if (win && win.ActivePane && win.ActivePane.View && win.ActivePane.View.Zoom) {
-          var curZoom = win.ActivePane.View.Zoom.Percentage;
-          win.ActivePane.View.Zoom.Percentage = curZoom + 1;
-          win.ActivePane.View.Zoom.Percentage = curZoom;
-        }
-      }
-    } catch (_) {}
-
-    wpsLog('InsertFlatOpcToSelection: finished successfully.');
-  } catch (err) {
-    wpsLog('InsertFlatOpcToSelection: unhandled error: ' + err);
-    console.error('InsertFlatOpcToSelection error:', err);
   }
 }
 

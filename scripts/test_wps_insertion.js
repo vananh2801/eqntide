@@ -75,28 +75,44 @@ for (const suffix of [', sau công thức.\r', '\rĐoạn kế tiếp.\r', ' , g
 }
 }
 }
+// MathType must import the OLE+EMF package even if an emf_path is supplied.
+for (const editing of [false, true]) {
 for (const font of [12, 30]) {
 for (const depth of [0, 4.24, 9.75]) {
   const c = controller();
   const shapeFont = {};
-  const pic = { Range: { Start: 3, Font: shapeFont } };
-  const target = { Start: 3, End: 3 };
+  let text = 'abc' + (editing ? '#' : '') + ',suffix';
+  let imported = null;
+  const pic = { Range: { Start: 3, End: 4, Font: shapeFont } };
   const doc = { Range(start, end) {
+    if (start === undefined) return { End: text.length };
     return { Start: start, End: end, Font: shapeFont,
-      InlineShapes: { AddPicture: () => pic }, Paragraphs: { Item: () => null } };
+      get Text() { return text.slice(start, end); },
+      Delete() { text = text.slice(0, start) + text.slice(end); },
+      InsertXML(xml) { imported = xml; text = text.slice(0, start) + '#\r' + text.slice(end); },
+      InlineShapes: { Count: 1, Item: () => pic,
+        AddPicture() { throw Error('must retain OLE, not insert only EMF'); } },
+      Paragraphs: { Item: () => null }
+    };
   } };
-  const result = c.insertEmfAtDocRange(doc, target, { emf_path: '/test.emf', depth_pt: depth, font_pt: font }, false);
+  const target = doc.Range(3, editing ? 4 : 3);
+  const packageXml = '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/><pkg:binaryData>OLE+EMF</pkg:binaryData></pkg:package>';
+  const result = c.insertMathTypeAtDocRange(doc, target,
+    { result: packageXml, emf_path: '/test.emf', depth_pt: depth, font_pt: font }, false);
   assert.equal(result, pic);
+  assert.equal(imported, packageXml);
+  assert.equal(text, 'abc#,suffix');
   assert.equal(shapeFont.Position, -Number((depth + font * 0.045).toFixed(1)));
+}
 }
 }
 {
   const c = controller();
-  let emf = false;
-  c.InsertEmfPicture = () => { emf = true; return true; };
-  c.InsertOmmlToSelection = () => { throw Error('MathType must use EMF'); };
-  c.HandleSessionResult({ status: 'ready', emf_path: '/test.emf', omml: '<m:oMath/>' });
-  assert.ok(emf);
+  let called = false;
+  c.InsertMathTypeEquation = data => { called = true; assert.ok(data.flat_opc); return true; };
+  c.InsertOmmlToSelection = () => { throw Error('must select MathType package even without emf_path'); };
+  c.HandleSessionResult({ status: 'ready', flat_opc: '<o:OLEObject ProgID="Equation.DSMT4"/>', omml: '<m:oMath/>' });
+  assert.ok(called);
 }
 console.log('WPS insertion regression tests passed');
 

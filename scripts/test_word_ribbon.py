@@ -53,6 +53,14 @@ class WordRibbon(unittest.TestCase):
         self.assertIn('Set mWordEvents = New EqnTideEvents', self.modules['EqnTide'])
         self.assertEqual(self.ribbon.findall('.//r:toggleButton', ns), [])
 
+    def test_packaged_word_output_policy_uses_dual_mathtype_package(self):
+        source = self.modules['EqnTide']
+        self.assertIn('CallBridge(rawLatex, "latex", "flat_opc_mathtype")', source)
+        self.assertIn('CallBridge(cleanLatex, "latex", "flat_opc_mathtype")', source)
+        self.assertNotIn('"flat_opc_omml"', source)
+        self.assertIn('""target_mode"":""mathtype""', source)
+        self.assertIn('CallBridge(shapeRange.WordOpenXML, "flat_opc", "latex")', source)
+
 
 if __name__ == '__main__':
     unittest.main()
