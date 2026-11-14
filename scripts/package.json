@@ -1,0 +1,6 @@
+{
+  "name": "eqntide-wps-regression-tests",
+  "private": true,
+  "scripts": { "test": "node test_wps_insertion.js" },
+  "devDependencies": { "@xmldom/xmldom": "0.9.12" }
+}

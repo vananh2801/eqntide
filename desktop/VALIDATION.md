@@ -13,15 +13,40 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   and is parsed by the shared Rust LaTeX service.
 - Renderer hit geometry shares the image layout; existing PNG/EMF behavior and
   STIX baseline tests remain covered.
+- OMML token styles are explicit: default digits, operators, text and function
+  names are upright, single-letter variables italic. Regression tests cover
+  fraction contents and preservation of explicit mathvariant overrides.
 - App dirty-session queue, concurrent startup requests, failed imports, failed
   session save, and unapplied LaTeX drafts have regression tests.
 - Duplicate Office opens are ignored during loading, active editing and queuing.
   Tests cover global Ctrl+S, source edits in the save frame, Office save/close,
   and save-button visibility at 600×450 before and after scrolling the editor.
+- Unchanged equations close/switch without a confirmation dialog; edits, source
+  drafts, font-size changes and running batches retain their confirmation.
+- Bridge session tests cover changing the output mode on insert and edit:
+  OMML results omit the EMF path so WPS uses native equation XML; MathType
+  results retain their EMF insertion path and embedded editable data.
+- `npm ci --prefix scripts && npm test --prefix scripts` exercises the add-in with mocked document
+  ranges: OMML insert/replacement imports Flat OPC (raw XML is literal text in WPS),
+  preserves surrounding text and existing paragraph marks, removes a verified
+  extra trailing break using document-length deltas (independent of OMath.Range),
+  selects the insertion end and clears picture positioning. Cases cover CR/LF/CRLF,
+  unavailable OMath APIs and OMath ranges including the paragraph mark.
+  Toggle tests reproduce Range.Text preserving the OMML container and verify
+  replacing the actual oMath node with a w:r/w:t node in the paragraph package
+  in cursor, selected-single and batch paths, without trusting Remove APIs.
+  XML assertions use `scripts/fixtures/bug_toggle_v1.xml` minimized from the
+  inspected DOCX sample, preserve other equations and
+  bookmarks, and check that imported spacers are removed while original spaces stay.
+  EMF positioning retains the WPS calibration from commit `9165468`: rendered
+  depth plus 0.045 times the font size, rounded to tenths of a point. These mocks do not qualify actual WPS paragraph layout.
 - Live LaTeX preview is debounced by 180 ms and parsed on a worker. Tests cover
   source preservation, stale-result rejection, invalid drafts, reverting while a
   parse is in flight, clearing the source, and undo to imported attributes.
 - Workspace Clippy and cargo-deny license/source/bans checks.
+- Bridge-launched desktop processes are waited on by background reaper threads.
+  A Linux test launches and reaps eight real child processes and verifies their
+  `/proc` entries disappear, covering zombie accumulation after repeated closes.
 
 ## Local smoke checks
 

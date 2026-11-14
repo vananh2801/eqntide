@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Minimal reproduction extracted from the inspected bug_toggle_v1.docx:
+     ordinary x equation, a separate spacer, LaTeX still inside oMath, bookmarks. -->
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+ <w:body>
+  <w:p>
+   <w:r><w:rPr><w:rFonts w:hint="default"/><w:lang w:val="vi-VN"/></w:rPr><w:t xml:space="preserve">Tìm </w:t></w:r>
+   <m:oMath><m:r><m:rPr/><w:rPr><w:position w:val="0"/></w:rPr><m:t>x</m:t></m:r></m:oMath>
+   <w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>
+   <w:r><w:rPr><w:rFonts w:hint="default"/><w:lang w:val="vi-VN"/></w:rPr><w:t xml:space="preserve">, biết rằng </w:t></w:r>
+   <m:oMath><m:r><m:rPr><m:sty m:val="p"/></m:rPr><w:rPr><w:rFonts w:hint="default" w:ascii="Cambria Math" w:hAnsi="Cambria Math" w:cs="Cambria Math"/><w:position w:val="0"/><w:lang w:val="vi-VN"/></w:rPr><m:t>$\frac{1}{2}x=3$</m:t></m:r></m:oMath>
+   <w:bookmarkStart w:id="0" w:name="_GoBack"/><w:bookmarkEnd w:id="0"/>
+   <w:r><w:rPr><w:rFonts w:hint="default"/><w:b w:val="0"/><w:i w:val="0"/><w:lang w:val="vi-VN"/></w:rPr><w:t>.</w:t></w:r>
+  </w:p>
+  <w:p/>
+ </w:body>
+</w:document>

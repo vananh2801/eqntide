@@ -1617,16 +1617,23 @@ impl App {
         });
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
+        // An Office session alone is not an unsaved change. Cancel an
+        // untouched session before closing/switching so its add-in wait ends
+        // without replacing the equation in the document.
+        if self.pending.is_some() && !self.dirty() && !self.batch_running {
+            if !self.busy {
+                self.finish(false);
+            }
+            return;
+        }
         if self.pending.is_some() {
             egui::Window::new("Finish current equation")
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.label(if self.dirty() {
-                        "Save your changes, discard them, or continue editing."
-                    } else {
-                        "Finish or cancel the current Office session before continuing."
-                    });
+                    if self.dirty() {
+                        ui.label("Save your changes, discard them, or continue editing.");
+                    }
                     if self.batch_running {
                         ui.label("A document is being converted. Stop the batch and wait before closing.");
                         if ui.button("Stop batch").clicked() {
@@ -1737,6 +1744,80 @@ mod tests {
         a.window(request("session-two", None));
         assert_eq!(a.queue.len(), 2);
         assert!(a.session.is_none());
+    }
+    fn draw_dialogs(a: &mut App) -> bool {
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| a.dialogs(ui.ctx()))
+            .textures_delta
+            .clear();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.dialogs(ui.ctx()));
+        output.textures_delta.clear();
+        output.shapes.iter().any(|s| {
+            matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "Finish current equation")
+        })
+    }
+    #[test]
+    fn untouched_office_session_does_not_prompt_even_while_busy() {
+        for intent in [Intent::Close, Intent::Next] {
+            let mut a = app();
+            a.session = Some("office".into());
+            a.pending = Some(intent);
+            // Simulate loading/cancellation in flight; don't launch real HTTP.
+            a.busy = true;
+            assert!(!draw_dialogs(&mut a));
+            assert!(a.pending.is_some());
+            assert_eq!(a.session.as_deref(), Some("office"));
+        }
+    }
+    #[test]
+    fn clean_transition_finishes_without_prompt_and_opens_next_equation() {
+        let mut a = app();
+        a.pending = Some(Intent::Next);
+        a.queue
+            .push_back(request("", Some("<math><mi>y</mi></math>")));
+        assert!(!draw_dialogs(&mut a));
+        assert!(a.busy);
+        let finished = a.rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        a.tx.send(finished).unwrap();
+        a.events(&egui::Context::default());
+        assert_eq!(a.editor.math().to_latex(), "y");
+        assert!(a.pending.is_none());
+        assert!(a.queue.is_empty());
+        assert!(!a.dirty());
+    }
+    #[test]
+    fn changed_office_equation_still_prompts_until_undone() {
+        let mut a = app();
+        a.session = Some("office".into());
+        a.editor.insert_text("x");
+        a.pending = Some(Intent::Close);
+        assert!(draw_dialogs(&mut a));
+        assert!(!a.busy);
+        a.editor.undo();
+        a.changed();
+        a.busy = true;
+        assert!(!draw_dialogs(&mut a));
+    }
+    #[test]
+    fn invalid_source_or_changed_size_still_requires_confirmation() {
+        for source_draft in [true, false] {
+            let mut a = app();
+            a.pending = Some(Intent::Close);
+            if source_draft {
+                a.latex = "\\frac{".into();
+                a.source_changed(Instant::now());
+            } else {
+                a.font_pt += 2.0;
+            }
+            assert!(draw_dialogs(&mut a));
+        }
+    }
+    #[test]
+    fn running_batch_still_requires_confirmation_even_without_equation_edits() {
+        let mut a = app();
+        a.pending = Some(Intent::Close);
+        a.batch_running = true;
+        assert!(draw_dialogs(&mut a));
     }
     #[test]
     fn duplicate_requests_during_loading_do_not_prompt_or_queue() {

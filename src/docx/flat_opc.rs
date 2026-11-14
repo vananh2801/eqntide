@@ -321,7 +321,10 @@ pub fn mathml_to_flat_opc(math: &MathNode, mode: FlatOpcMode, font_pt: f32) -> R
             }
             let native_stream = make_equation_native(&mtef_bytes);
             let ole_bin = make_ole(&native_stream)?;
-            let emf_pic = render_emf_with_mtef(math, font_pt, Some(&mtef_bytes))?;
+            // Template record tags (3/5) overlap MTEF version bytes.
+            // Pass a complete stream, never let the renderer guess from raw records.
+            let complete_mtef = crate::mtef::build_mtef(&mtef_bytes);
+            let emf_pic = render_emf_with_mtef(math, font_pt, Some(&complete_mtef))?;
 
             let obj_run = make_object_run(
                 &ole_rid,
@@ -685,6 +688,25 @@ mod tests {
             part.attr(Some(NS_PKG), "name")
                 .is_some_and(|name| name.starts_with("/word/media/equation"))
         }));
+    }
+
+    #[test]
+    fn fraction_picture_remains_editable_after_repeated_saves() {
+        let mut math =
+            MathNode::parse("<math><mfrac><mi>π</mi><mn>3</mn></mfrac><mo>+</mo><mn>1</mn></math>")
+                .unwrap();
+        for _ in 0..3 {
+            let opc = mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, 12.0).unwrap();
+            let picture_only = opc
+                .replace("/word/embeddings/oleObject", "/word/embeddings/dummy")
+                .replace("ProgID=\"Equation.DSMT4\"", "ProgID=\"Unknown\"");
+            math = flat_opc_to_mathml(&picture_only).unwrap();
+            assert_eq!(math.find_all("mfrac").len(), 1);
+            assert!(math.find_all("mi").iter().any(|n| n.text == "π"));
+            assert!(math.find_all("mn").iter().any(|n| n.text == "3"));
+            assert!(math.find_all("mn").iter().any(|n| n.text == "1"));
+            assert!(math.find_all("mo").iter().any(|n| n.text == "+"));
+        }
     }
 
     #[test]

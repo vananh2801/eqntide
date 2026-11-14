@@ -845,8 +845,16 @@ fn handle_session_update(
             return error_response(500, &format!("failed to generate OMML: {error}"), origin)
         }
     };
-    let mtef = mathml_to_mtef_bytes(&math).ok();
-    let picture = render_emf_with_mtef(&math, update.font_pt, mtef.as_deref()).ok();
+    // WPS prefers emf_path over flat_opc. Supplying a picture for OMML
+    // silently turns a native equation into a MathType picture on insertion.
+    let picture = if update.target_mode.eq_ignore_ascii_case("mathtype") {
+        let mtef = mathml_to_mtef_bytes(&math)
+            .ok()
+            .map(|records| crate::mtef::build_mtef(&records));
+        render_emf_with_mtef(&math, update.font_pt, mtef.as_deref()).ok()
+    } else {
+        None
+    };
     let (emf_path, width_pt, height_pt, depth_pt) = if let Some(picture) = picture {
         let path = std::env::temp_dir().join(format!("eqntide_{session_id}.emf"));
         let path = path.to_string_lossy().into_owned();
@@ -962,6 +970,16 @@ pub(crate) fn spawn_desktop_editor(session_id: &str) {
     spawn_desktop_action(session_id, None);
 }
 
+fn reap_desktop_child(mut child: std::process::Child) -> JoinHandle<()> {
+    // Dropping Child does not reap it. Wait off the request thread so both
+    // short-lived IPC launchers and full desktop sessions cannot leave zombies.
+    std::thread::spawn(move || {
+        if let Err(error) = child.wait() {
+            log::warn!("Failed to reap desktop process {}: {error}", child.id());
+        }
+    })
+}
+
 fn spawn_desktop_action(session_id: &str, tab: Option<&str>) {
     // Library tests must never open an installed desktop application.
     if cfg!(test) {
@@ -1010,6 +1028,7 @@ fn spawn_desktop_action(session_id: &str, tab: Option<&str>) {
                     child.id(),
                     path.display()
                 );
+                reap_desktop_child(child);
                 return;
             }
             Err(e) => {
@@ -1026,6 +1045,26 @@ mod tests {
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpStream;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn repeated_desktop_child_exits_are_reaped() {
+        let mut children = Vec::new();
+        for _ in 0..8 {
+            let child = std::process::Command::new("/bin/sh")
+                .args(["-c", "exit 0"])
+                .spawn()
+                .unwrap();
+            children.push((child.id(), reap_desktop_child(child)));
+        }
+        for (pid, reaper) in children {
+            reaper.join().unwrap();
+            assert!(
+                !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+                "child {pid} must be reaped, not left as a zombie"
+            );
+        }
+    }
 
     struct RawHttpResponse {
         status: u16,
@@ -1216,6 +1255,54 @@ mod tests {
             .unwrap()
             .contains("pkg:package"));
         assert!(wait_result.omml.as_ref().unwrap().contains("m:oMath"));
+    }
+
+    #[test]
+    fn session_output_honors_the_saved_mode_for_insert_and_edit() {
+        let server =
+            start_bridge_server_with_window_requests("127.0.0.1:0", Some(Arc::new(|_| {})))
+                .unwrap();
+        let addr = server.addr();
+        for (initial, saved, data) in [
+            ("mathtype", "omml", ""),
+            ("mathtype", "omml", "<math><mi>x</mi></math>"),
+            ("omml", "mathtype", ""),
+            ("omml", "mathtype", "<math><mi>x</mi></math>"),
+        ] {
+            let body = serde_json::json!({"data":data,"format":"mathml","target_mode":initial})
+                .to_string();
+            let response = send_raw_http(addr, &format!(
+                "POST /session/open HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+            assert_eq!(response.status, 200);
+            let opened: SessionOpenResponse = serde_json::from_str(&response.body).unwrap();
+            let sid = opened.session_id;
+            let body = serde_json::json!({"mathml":"<math><mi>y</mi></math>","target_mode":saved})
+                .to_string();
+            let response = send_raw_http(addr, &format!(
+                "POST /session/{sid}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+            assert_eq!(response.status, 200);
+            let response = send_raw_http(addr, &format!(
+                "GET /session/{sid}/wait?timeout=1 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"));
+            assert_eq!(response.status, 200);
+            let result: SessionWaitResponse = serde_json::from_str(&response.body).unwrap();
+            assert_eq!(result.status, "ready");
+            let package = result.flat_opc.unwrap();
+            if saved == "omml" {
+                assert!(package.contains("m:oMath"));
+                assert!(!package.contains("Equation.DSMT4"));
+                assert!(result.emf_path.is_none());
+                assert!(result.width_pt.is_none());
+                assert!(result.height_pt.is_none());
+                assert!(result.depth_pt.is_none());
+            } else {
+                assert!(package.contains("Equation.DSMT4"));
+                let path = result.emf_path.expect("MathType must retain EMF insertion");
+                let image = std::fs::read(&path).unwrap();
+                let mtef = crate::extract_mtef_from_emf(&image).unwrap();
+                assert!(crate::mtef::decode::mtef_to_mathml(&mtef).is_some());
+                std::fs::remove_file(path).unwrap();
+            }
+        }
     }
 
     #[test]

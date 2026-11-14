@@ -660,13 +660,17 @@ impl MathmlEncoder {
             Some("bold") => (None, Some("b")),
             Some("bold-italic") => (None, Some("bi")),
             Some("normal") => (None, Some("p")),
-            Some("italic") => (None, None),
+            Some("italic") => (None, Some("i")),
             _ => {
-                if node.tag == "mtext" || (node.tag == "mi" && clean.chars().count() > 1) {
-                    (None, Some("p"))
+                // OMML defaults to italic, unlike MathML token defaults.
+                // Spell out each token's style so WPS does not italicize
+                // digits/operators or inherit the surrounding text's style.
+                let style = if node.tag == "mi" && clean.chars().count() == 1 {
+                    "i"
                 } else {
-                    (None, None)
-                }
+                    "p"
+                };
+                (None, Some(style))
             }
         };
 
@@ -1103,6 +1107,43 @@ pub fn apply_math_font(omml: &mut Element, font: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn default_token_styles_are_explicit_in_nested_equations() {
+        let math = MathNode::parse("<math><mfrac><mn>1</mn><mn>2</mn></mfrac><mi>x</mi><mo>+</mo><mn>3</mn><mo>=</mo><mn>0</mn><mi>sin</mi><mtext>text</mtext><ms>string</ms></math>").unwrap();
+        let omml = mathml_to_omml(&math).unwrap();
+        for run in omml.find_all(NS_M, "r") {
+            let text = run.find(NS_M, "t").unwrap().text();
+            let style = run.find(NS_M, "rPr").unwrap().find(NS_M, "sty").unwrap();
+            assert_eq!(
+                style.attr(Some(NS_M), "val"),
+                Some(if text == "x" { "i" } else { "p" }),
+                "run {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_token_variants_override_the_default_style() {
+        for (tag, variant, expected) in [
+            ("mn", "italic", "i"),
+            ("mn", "bold", "b"),
+            ("mo", "bold-italic", "bi"),
+            ("mi", "normal", "p"),
+            ("mi", "bold-italic", "bi"),
+        ] {
+            let mut token = MathNode::leaf(tag, if tag == "mi" { "x" } else { "1" });
+            token.set_attr("mathvariant", variant);
+            let omml = mathml_to_omml(&token).unwrap();
+            let style = omml
+                .find(NS_M, "r")
+                .unwrap()
+                .find(NS_M, "rPr")
+                .unwrap()
+                .find(NS_M, "sty")
+                .unwrap();
+            assert_eq!(style.attr(Some(NS_M), "val"), Some(expected));
+        }
+    }
     use crate::omml::decode::omml_to_mathml;
 
     #[test]

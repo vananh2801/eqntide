@@ -299,7 +299,9 @@ pub fn convert_snippet(
     response.result = match req.to.as_str() {
         "flat_opc_omml" => mathml_to_flat_opc(&math, FlatOpcMode::ModernOmml, req.font_pt),
         "flat_opc_mathtype" | "mathtype" => {
-            let mtef = mathml_to_mtef_bytes(&math).ok();
+            let mtef = mathml_to_mtef_bytes(&math)
+                .ok()
+                .map(|records| crate::mtef::build_mtef(&records));
             if let Ok(pic) = render_emf_with_mtef(&math, req.font_pt, mtef.as_deref()) {
                 let path = std::env::temp_dir()
                     .join(format!("eqntide_snippet_{}.emf", uuid::Uuid::new_v4()));

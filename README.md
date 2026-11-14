@@ -120,6 +120,9 @@ session back to Word/WPS and closes the editor after handing off the result.
 **Ctrl+S** works from both the canvas and the LaTeX source field. Saving waits
 until the source is valid and its preview is up to date; failures retain the
 equation for retry. Standalone editing shows **Lưu MathML (Ctrl+S)** instead.
+Closing or switching away from an unchanged equation cancels its Office session
+without a save/discard prompt. Unsaved edits still require confirmation, as does
+closing while a batch conversion is running.
 
 The desktop reuses a healthy CLI/service bridge or hosts one if port 17890 is
 free. Closing exits the desktop after save/discard handling; an external bridge

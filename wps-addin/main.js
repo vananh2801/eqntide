@@ -715,7 +715,7 @@ function insertEmfAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
     var shapeRange = doc.Range(actualStart, shapeEnd);
     if (shapeRange && shapeRange.Font) {
       shapeRange.Font.Position = pos;
-      wpsLog("insertEmfAtDocRange: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ", offset=" + fontBaselineOffset.toFixed(2) + ", docFontSize=" + docFontSize + ")");
+      wpsLog("insertEmfAtDocRange: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ")");
     }
     try {
       if (pic && pic.Range && pic.Range.Font) {
@@ -941,6 +941,104 @@ function batchLatexToMathType(doc, selection, latexMatches) {
   }
 }
 
+/** Replace a math node in the paragraph package, not its editable contents. */
+function ommlPackageToPlainText(xml, ordinal, latex) {
+  var nsPkg = "http://schemas.microsoft.com/office/2006/xmlPackage";
+  var nsW = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  var nsM = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+  var tree = new DOMParser().parseFromString(xml, "application/xml");
+  if (tree.getElementsByTagName("parsererror").length) throw new Error("Invalid paragraph XML");
+  var parts = tree.getElementsByTagNameNS(nsPkg, "part");
+  if (!parts.length) {
+    nsPkg = "http://schemas.microsoft.com/office/2006/xml/packaging";
+    parts = tree.getElementsByTagNameNS(nsPkg, "part");
+  }
+  var documentPart = null;
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i].getAttributeNS(nsPkg, "name") === "/word/document.xml") documentPart = parts[i];
+  }
+  if (!documentPart) throw new Error("Missing paragraph document part");
+  var maths = documentPart.getElementsByTagNameNS(nsM, "oMath");
+  var math = maths[ordinal];
+  if (!math) throw new Error("Cannot locate equation in paragraph XML");
+  var run = tree.createElementNS(nsW, "w:r");
+  var properties = tree.createElementNS(nsW, "w:rPr");
+  for (var j = 0; j < 2; j++) {
+    var property = tree.createElementNS(nsW, j === 0 ? "w:i" : "w:position");
+    property.setAttributeNS(nsW, "w:val", "0");
+    properties.appendChild(property);
+  }
+  run.appendChild(properties);
+  var text = tree.createElementNS(nsW, "w:t");
+  text.setAttributeNS("http://www.w3.org/XML/1998/namespace", "xml:space", "preserve");
+  text.appendChild(tree.createTextNode(latex));
+  run.appendChild(text);
+  var container = math.parentNode;
+  if (container.namespaceURI === nsM && container.localName === "oMathPara" &&
+      container.getElementsByTagNameNS(nsM, "oMath").length === 1) {
+    container.parentNode.replaceChild(run, container);
+  } else {
+    container.replaceChild(run, math);
+  }
+  return new XMLSerializer().serializeToString(tree);
+}
+
+function replaceEquationWithLatex(doc, start, end, latex) {
+  var target = doc.Range(start, end);
+  var equation = null;
+  try {
+    if (target.OMaths && target.OMaths.Count > 0) equation = target.OMaths.Item(1);
+  } catch (_) {}
+  if (!equation) {
+    // WPS sometimes exposes OMaths only through Selection or Document while
+    // the freshly created document Range reports none.
+    var owners = [wps.Application.Selection, doc];
+    for (var ownerIndex = 0; !equation && ownerIndex < owners.length; ownerIndex++) {
+      try {
+        var collection = owners[ownerIndex].OMaths;
+        if (!collection) continue;
+        for (var mathIndex = 1; mathIndex <= collection.Count; mathIndex++) {
+          var candidate = collection.Item(mathIndex);
+          if (candidate.Range.Start === start) { equation = candidate; break; }
+        }
+      } catch (_) {}
+    }
+  }
+  if (equation) {
+    start = equation.Range.Start;
+    var paragraph = target.Paragraphs.Item(1).Range;
+    var maths = paragraph.OMaths;
+    var ordinal = -1;
+    for (var i = 1; i <= maths.Count; i++) {
+      if (maths.Item(i).Range.Start === start) { ordinal = i - 1; break; }
+    }
+    if (ordinal < 0) throw new Error("Cannot locate equation in its paragraph");
+    var xml = ommlPackageToPlainText(paragraph.WordOpenXML, ordinal, latex);
+    // Replacing the enclosing paragraph exits WPS's equation editing context.
+    // All other runs, equations, bookmarks and paragraph formatting stay in XML.
+    doc.Range(paragraph.Start, paragraph.End).InsertXML(xml);
+  } else {
+    var nativeXml = "";
+    try { nativeXml = target.WordOpenXML || ""; } catch (_) {}
+    if (/<(?:[A-Za-z_][\w.-]*:)?oMath(?:\s|>)/.test(nativeXml)) {
+      throw new Error("Cannot locate the native OMML container; document was not changed");
+    }
+    try {
+      if (target.InlineShapes && target.InlineShapes.Count > 0 && end > start + 1) {
+        target = doc.Range(start, start + 1);
+      }
+    } catch (_) {}
+    target.Text = latex;
+  }
+  var inserted = doc.Range(start, start + latex.length);
+  if (inserted.Font) {
+    inserted.Font.Position = 0;
+    inserted.Font.Subscript = false;
+    inserted.Font.Superscript = false;
+  }
+  return start + latex.length;
+}
+
 /**
  * Batch convert multiple equations in a highlighted range to LaTeX $...$ strings in-place.
  */
@@ -983,13 +1081,7 @@ function batchEquationToLatex(doc, selection, eqTargets) {
                 var rStart = item.start;
                 var rEnd = item.end;
                 var latexStr = item.isDisplay ? ("$$" + item.latex + "$$") : ("$" + item.latex + "$");
-                var repRange = doc.Range(rStart, rEnd);
-                repRange.Text = latexStr;
-                if (repRange.Font) {
-                  repRange.Font.Position = 0;
-                  repRange.Font.Subscript = false;
-                  repRange.Font.Superscript = false;
-                }
+                replaceEquationWithLatex(doc, rStart, rEnd, latexStr);
 
                 // Check and remove adjacent trailing ZWNJ if present
                 try {
@@ -1085,7 +1177,7 @@ function ToggleLatex() {
           if (hasEquationInXml(sXml)) {
             eqTargets.push({
               start: singleEq.Start,
-              end: (singleEq.End > singleEq.Start + 1) ? (singleEq.Start + 1) : singleEq.End,
+              end: singleEq.End,
               xml: sXml,
               isDisplay: false
             });
@@ -1168,13 +1260,7 @@ function ToggleLatex() {
                   }
                 } catch (_) {}
 
-                var replaceRange = doc.Range(rStart, rEnd);
-                replaceRange.Text = latexStr;
-                if (replaceRange.Font) {
-                  replaceRange.Font.Position = 0;
-                  replaceRange.Font.Subscript = false;
-                  replaceRange.Font.Superscript = false;
-                }
+                var nextPos = replaceEquationWithLatex(doc, rStart, rEnd, latexStr);
 
                 // Clean up any trailing ZWNJ if present
                 try {
@@ -1186,7 +1272,6 @@ function ToggleLatex() {
                 } catch (_) {}
 
                 // Move cursor after the inserted LaTeX text
-                var nextPos = rStart + latexStr.length;
                 var endRange = doc.Range(nextPos, nextPos);
                 endRange.Select();
                 var curSel = app.Selection;
@@ -1346,7 +1431,13 @@ function OpenBatchConverter() {
 function HandleSessionResult(waitData) {
   if (!waitData || waitData.status !== "ready") return;
 
-  // Try inserting EMF picture via AddPicture (Claude Test 2 / Clean Media Insertion)
+  // WPS needs Flat OPC; a bare oMath fragment is inserted as literal text.
+  if (!waitData.emf_path && waitData.omml && waitData.flat_opc) {
+    InsertOmmlToSelection(waitData.flat_opc);
+    return;
+  }
+
+  // Try inserting EMF picture via AddPicture.
   if (waitData.emf_path) {
     var success = InsertEmfPicture(waitData);
     if (success) {
@@ -1359,6 +1450,95 @@ function HandleSessionResult(waitData) {
   // Fallback to InsertFlatOpcToSelection
   if (waitData.flat_opc) {
     InsertFlatOpcToSelection(waitData.flat_opc);
+  }
+}
+
+/** Import native OMML through Flat OPC, then remove only its added break. */
+function InsertOmmlToSelection(flatOpcXml) {
+  try {
+    var app = wps.Application;
+    var doc = app ? app.ActiveDocument : null;
+    var sel = app ? app.Selection : null;
+    if (!doc) return;
+    var range = (g_editRangeStart !== null && g_editRangeEnd !== null)
+      ? doc.Range(g_editRangeStart, g_editRangeEnd)
+      : (sel ? sel.Range : null);
+    if (!range || typeof range.InsertXML !== "function") return;
+    if (!/<(?:[A-Za-z_][\w.-]*:)?(?:package|xmlPackage)\b/.test(flatOpcXml)) {
+      throw new Error("OMML insertion requires a Flat OPC package");
+    }
+    var start = range.Start;
+    var replacedLength = range.End - start;
+    var originalEnd = doc.Range().End;
+    var suffix = doc.Range(range.End, Math.min(range.End + 32, originalEnd)).Text;
+    range.InsertXML(flatOpcXml);
+    // Follow 1bd42ab: WPS may include the paragraph mark in OMath.Range,
+    // or not expose OMaths at all. Document growth defines the inserted span.
+    var newDocEnd = doc.Range().End;
+    var insertedEnd = start + newDocEnd - originalEnd + replacedLength;
+    wpsLog("InsertOmmlToSelection: inserted span " + start + ".." + insertedEnd);
+    if (insertedEnd > start && insertedEnd <= newDocEnd &&
+        typeof suffix === "string" &&
+        doc.Range(insertedEnd, Math.min(insertedEnd + suffix.length, newDocEnd)).Text === suffix) {
+      // Only trim characters within the imported span; never the original
+      // paragraph mark or text following it. Support CR, LF and CRLF.
+      for (var breaks = 0; breaks < 2 && insertedEnd > start; breaks++) {
+        var trailing = doc.Range(insertedEnd - 1, insertedEnd);
+        if (trailing.Text !== "\r" && trailing.Text !== "\n") break;
+        trailing.Delete();
+        insertedEnd--;
+        wpsLog("InsertOmmlToSelection: removed imported paragraph mark");
+      }
+      // WPS can append a normal-text spacer after imported OMML. It belongs
+      // to the newly inserted span, not the original suffix (verified above).
+      // Preserve intentional spaces within the incoming equation.
+      var inputTree = new DOMParser().parseFromString(flatOpcXml, "application/xml");
+      var mathText = inputTree.getElementsByTagNameNS(
+        "http://schemas.openxmlformats.org/officeDocument/2006/math", "t");
+      var lastMathText = mathText.length ? mathText[mathText.length - 1].textContent : "";
+      if (insertedEnd > start && lastMathText && !/\s$/.test(lastMathText)) {
+        var spacer = doc.Range(insertedEnd - 1, insertedEnd);
+        if (spacer.Text === " ") {
+          spacer.Delete();
+          insertedEnd--;
+          wpsLog("InsertOmmlToSelection: removed imported spacer");
+        }
+      }
+    }
+    g_editRangeStart = null;
+    g_editRangeEnd = null;
+    g_editTargetRange = null;
+
+    // Inline formatting is best-effort; break cleanup must not depend on
+    // OMaths support or the range returned by a particular WPS build.
+    try {
+      var equation = null;
+      if (range.OMaths && range.OMaths.Count > 0) {
+        equation = range.OMaths.Item(1);
+      } else if (doc.OMaths) {
+        for (var i = 1; i <= doc.OMaths.Count; i++) {
+          var candidate = doc.OMaths.Item(i);
+          if (candidate.Range.Start >= start && candidate.Range.Start <= start + 1) {
+            equation = candidate;
+            break;
+          }
+        }
+      }
+      if (equation) {
+        equation.Type = 1; // wdOMathInline
+        if (equation.Range.Font) equation.Range.Font.Position = 0;
+      }
+    } catch (formatError) {
+      wpsLog("InsertOmmlToSelection: optional inline formatting: " + formatError);
+    }
+    var end = insertedEnd;
+    if (typeof end === "number" && end >= start) {
+      doc.Range(end, end).Select();
+      if (app.Selection && app.Selection.Font) app.Selection.Font.Position = 0;
+    }
+  } catch (error) {
+    wpsLog("InsertOmmlToSelection: " + error);
+    alert("Không thể chèn công thức OMML: " + error);
   }
 }
 
