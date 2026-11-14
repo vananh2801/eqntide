@@ -1,0 +1,77 @@
+name: Build native packages
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Native package - ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Linux build and package dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxi-dev libxrandr-dev libxkbcommon-dev libgl1-mesa-dev libwayland-dev pkg-config rpm
+      - name: Rebuild native-connected Word template
+        run: |
+          python -m pip install -r word-template/requirements.txt
+          python word-template/build_dotm.py
+      - name: Build native desktop and CLI
+        run: cargo build --workspace --release --locked --target ${{ matrix.target }}
+      - name: Linux executable smoke
+        if: runner.os == 'Linux'
+        run: |
+          ./target/${{ matrix.target }}/release/eqntide-cli --version
+          ./target/${{ matrix.target }}/release/eqntide-desktop --version
+      - name: Windows executable smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "target/${{ matrix.target }}/release/eqntide-cli.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $desktop = Start-Process -FilePath "target/${{ matrix.target }}/release/eqntide-desktop.exe" -ArgumentList '--version' -PassThru -Wait
+          if ($desktop.ExitCode -ne 0) { exit $desktop.ExitCode }
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: python scripts/package_native.py --target ${{ matrix.target }} --format all
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        run: python scripts/package_native.py --target ${{ matrix.target }}
+      - name: Build NSIS installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (!(Test-Path $nsis)) { choco install nsis --no-progress -y }
+          $version = python scripts/package_native.py --print-version
+          $packageDir = (Resolve-Path "dist/windows/$version").Path
+          & $nsis "/DPACKAGE_DIR=$packageDir" scripts/installer.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eqntide-native-preview-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            dist/*/*/*.zip
+            dist/*/*/*.tar.gz
+            dist/*/*/*.deb
+            dist/*/*/*.rpm
+            dist/*/*/*.exe
+            dist/*/*/README-*.txt
