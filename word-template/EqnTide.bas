@@ -1,7 +1,8 @@
 Attribute VB_Name = "EqnTide"
 Option Explicit
 
-Private Const BRIDGE_URL As String = "http://127.0.0.1:17890/convert"
+Private Const BRIDGE_ROOT As String = "http://127.0.0.1:17890"
+Private Const BRIDGE_URL As String = "http://127.0.0.1:17890/convert/snippet"
 
 ' =========================================================================
 ' Ribbon Callbacks
@@ -132,19 +133,98 @@ End Sub
 ' =========================================================================
 
 Public Sub InsertEquationMacro()
-    On Error Resume Next
-    Dim wsh As Object
-    Set wsh = CreateObject("WScript.Shell")
-    ' Open local desktop editor or bridge session
-    wsh.Run "http://127.0.0.1:17890/word-addin/taskpane.html", 1, False
+    EditInNativeDesktop False
 End Sub
 
 Public Sub EditEquationMacro()
-    ToggleLatexMacro
+    EditInNativeDesktop True
 End Sub
 
 Public Sub UpgradeMathTypeMacro()
-    MsgBox "Upgrading MathType equations in active document...", vbInformation, "EqnTide"
+    On Error GoTo LaunchError
+    CreateObject("WScript.Shell").Run "eqntide://open?tab=batch", 1, False
+    Exit Sub
+LaunchError:
+    MsgBox "Please install EqnTide desktop and register its URI handler.", vbExclamation, "EqnTide"
+End Sub
+
+Private Sub EditInNativeDesktop(ByVal editExisting As Boolean)
+    On Error GoTo EditError
+    Dim target As Range
+    Set target = Selection.Range.Duplicate
+    Dim inputData As String, inputFormat As String
+    inputFormat = "mathml"
+    If editExisting Then
+        If Selection.OMaths.Count > 0 Then
+            Set target = Selection.OMaths(1).Range.Duplicate
+            inputData = target.WordOpenXML
+            inputFormat = "flat_opc"
+        ElseIf Selection.InlineShapes.Count > 0 Then
+            Set target = Selection.InlineShapes(1).Range.Duplicate
+            inputData = target.WordOpenXML
+            inputFormat = "flat_opc"
+        Else
+            inputData = StripDelimiters(target.Text)
+            inputFormat = "latex"
+        End If
+    End If
+
+    ' Registered by the native NSIS installer or portable register-uri.ps1.
+    CreateObject("WScript.Shell").Run "eqntide://open", 1, False
+    Dim fontPt As Single
+    fontPt = target.Font.Size
+    If fontPt < 6 Or fontPt > 72 Then fontPt = 12
+    Dim http As Object, response As String, sessionId As String
+    Dim attempts As Long
+    For attempts = 1 To 20
+        On Error Resume Next
+        Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+        http.setTimeouts 1000, 1000, 2000, 3000
+        http.Open "POST", BRIDGE_ROOT & "/session/open", False
+        http.setRequestHeader "Content-Type", "application/json"
+        http.send "{""data"":" & JsonEscape(inputData) & ",""format"":" & JsonEscape(inputFormat) & ",""target_mode"":""omml"",""font_pt"":" & Replace(CStr(fontPt), ",", ".") & "}"
+        response = ""
+        If Err.Number = 0 Then
+            If http.Status = 200 Then response = http.responseText
+        End If
+        Err.Clear
+        On Error GoTo EditError
+        sessionId = ExtractJsonField(response, "session_id")
+        If Len(sessionId) > 0 Then Exit For
+        DoEvents
+    Next attempts
+    If Len(sessionId) = 0 Then Err.Raise vbObjectError + 101, , "The local bridge did not start."
+
+    ' The bridge also launches/focuses the native editor for this exact session.
+    Do
+        Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+        http.setTimeouts 1000, 1000, 2000, 3000
+        http.Open "GET", BRIDGE_ROOT & "/session/" & sessionId & "/wait?timeout=1", False
+        http.send
+        If http.Status <> 200 Then Err.Raise vbObjectError + 102, , "The editing session is no longer available."
+        response = http.responseText
+        Dim state As String
+        state = ExtractJsonField(response, "status")
+        If state = "cancelled" Then Exit Sub
+        If state = "ready" Then
+            Dim flatOpc As String
+            flatOpc = ExtractJsonField(response, "flat_opc")
+            If Len(flatOpc) = 0 Then Err.Raise vbObjectError + 103, , "The editor returned an empty result."
+            target.InsertXML flatOpc
+            Exit Sub
+        End If
+        DoEvents
+    Loop
+EditError:
+    Dim message As String
+    message = Err.Description
+    On Error Resume Next
+    If Len(sessionId) > 0 Then
+        http.Open "POST", BRIDGE_ROOT & "/session/" & sessionId & "/cancel", False
+        http.setRequestHeader "Content-Type", "application/json"
+        http.send "{}"
+    End If
+    MsgBox "Cannot complete native editing: " & message, vbExclamation, "EqnTide"
 End Sub
 
 ' =========================================================================
@@ -193,7 +273,7 @@ Private Function CallBridge(ByVal dataStr As String, ByVal fromFmt As String, By
 
 HttpError:
     MsgBox "Cannot connect to Bridge Server at " & BRIDGE_URL & vbCrLf & _
-           "Please ensure omml-editor-desktop.exe (or start-server.bat) is running!", vbCritical, "EqnTide"
+           "Please ensure eqntide-desktop.exe (or start-server.bat) is running!", vbCritical, "EqnTide"
     CallBridge = ""
 End Function
 
@@ -209,38 +289,41 @@ Private Function JsonEscape(ByVal s As String) As String
 End Function
 
 Private Function ExtractJsonResult(ByVal json As String) As String
-    Dim pos As Long
-    pos = InStr(json, """result"":""")
-    If pos > 0 Then
-        pos = pos + 10
-        Dim endPos As Long
-        Dim inEscape As Boolean
-        inEscape = False
-        Dim i As Long
-        For i = pos To Len(json)
-            Dim c As String
-            c = Mid(json, i, 1)
-            If inEscape Then
-                inEscape = False
-            ElseIf c = "\" Then
-                inEscape = True
-            ElseIf c = """" Then
-                endPos = i
-                Exit For
-            End If
-        Next i
+    ExtractJsonResult = ExtractJsonField(json, "result")
+End Function
 
-        If endPos > pos Then
-            Dim rawVal As String
-            rawVal = Mid(json, pos, endPos - pos)
-            rawVal = Replace(rawVal, "\""", """")
-            rawVal = Replace(rawVal, "\\", "\")
-            rawVal = Replace(rawVal, "\n", vbCrLf)
-            rawVal = Replace(rawVal, "\r", "")
-            rawVal = Replace(rawVal, "\t", vbTab)
-            ExtractJsonResult = rawVal
+Private Function ExtractJsonField(ByVal json As String, ByVal field As String) As String
+    Dim pos As Long, i As Long, value As String, ch As String
+    pos = InStr(json, """" & field & """")
+    If pos = 0 Then Exit Function
+    pos = InStr(pos + Len(field) + 2, json, ":")
+    If pos = 0 Then Exit Function
+    pos = pos + 1
+    Do While pos <= Len(json) And (Mid(json, pos, 1) = " " Or Mid(json, pos, 1) = vbTab)
+        pos = pos + 1
+    Loop
+    If Mid(json, pos, 1) <> """" Then Exit Function
+    i = pos + 1
+    Do While i <= Len(json)
+        ch = Mid(json, i, 1)
+        If ch = """" Then
+            ExtractJsonField = value
             Exit Function
+        ElseIf ch = "\" Then
+            i = i + 1
+            ch = Mid(json, i, 1)
+            Select Case ch
+                Case "n": value = value & vbLf
+                Case "r": value = value & vbCr
+                Case "t": value = value & vbTab
+                Case "u"
+                    value = value & ChrW(CLng("&H" & Mid(json, i + 1, 4)))
+                    i = i + 4
+                Case Else: value = value & ch
+            End Select
+        Else
+            value = value & ch
         End If
-    End If
-    ExtractJsonResult = ""
+        i = i + 1
+    Loop
 End Function

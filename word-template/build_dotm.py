@@ -34,7 +34,11 @@ os.makedirs(TMP_DIR, exist_ok=True)
 proj = VbaProject()
 proj.project_id = "{29F9E300-746A-4D92-BF39-382903C5D610}"
 mod = StdModule("EqnTide")
-mod.add_file(os.path.abspath(BAS_PATH))
+# normalize_file appends to .new; use a clean temporary source for every build.
+# Reusing the repository .new file would embed duplicate modules on rebuild.
+module_source = os.path.abspath(os.path.join(TMP_DIR, "EqnTide.bas"))
+shutil.copyfile(BAS_PATH, module_source)
+mod.add_file(module_source)
 mod.normalize_file()
 proj.add_module(mod)
 

@@ -1,0 +1,7 @@
+# VBA build dependencies only; these packages are not needed at runtime.
+ms-ovba==0.0.1
+ms_cfb==0.0.6
+ms_ovba_compression==1.0.1
+ms_ovba_crypto==2.0.1
+PyYAML==6.0.3
+python-red-black-trees==0.0.2

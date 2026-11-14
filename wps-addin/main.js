@@ -1562,9 +1562,8 @@ function LaunchDesktopEditor(param) {
  * Helper: Cold-start desktop editor if bridge daemon is not running.
  */
 function ColdStartDesktopEditor() {
-  // The Fedora/RPM package installs the desktop application at this stable path.
-  // Once it starts, ensureBridgeRunning retries the original bridge request.
-  var binPath = "/usr/bin/eqntide-desktop";
+  // Once the registered native desktop starts, ensureBridgeRunning retries
+  // the original bridge request.
   var uri = "eqntide://open";
 
   // WPS exposes OAAssist on Application in some Linux builds, rather than
@@ -1577,15 +1576,19 @@ function ColdStartDesktopEditor() {
   for (var i = 0; i < assistants.length; i++) {
     try {
       if (assistants[i] && typeof assistants[i].ShellExecute === "function") {
-        assistants[i].ShellExecute(binPath, "");
-        assistants[i].ShellExecute("/usr/bin/xdg-open", uri);
+        // The installer/portable registration owns the executable location on
+        // Windows and Linux. Prefer the registered URI.
+        assistants[i].ShellExecute(uri, "");
+        if (typeof navigator !== "undefined" && /linux/i.test(navigator.platform || "")) {
+          assistants[i].ShellExecute("/usr/bin/xdg-open", uri);
+        }
         break;
       }
     } catch (_) {}
   }
 
   // WPS may silently ignore ShellExecute on Linux. Always invoke the registered
-  // URI handler too; Tauri's single-instance plugin prevents a duplicate window.
+  // URI handler too; the native desktop's single-instance IPC prevents duplicate windows.
   try {
     var a = document.createElement("a");
     a.href = uri;
