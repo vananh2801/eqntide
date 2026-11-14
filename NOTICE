@@ -67,5 +67,3 @@ arboard (MIT OR Apache-2.0), interprocess (0BSD OR Apache-2.0), fs2
 (MIT OR Apache-2.0), together with their platform dependencies.
 Cargo.lock records resolved versions; cargo-deny checks the workspace license
 policy. Bundled STIX fonts retain the SIL Open Font License attribution above.
-The legacy MathLive runtime and its license remain with the legacy desktop;
-the native executable does not embed that runtime.

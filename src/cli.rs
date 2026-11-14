@@ -26,7 +26,7 @@ pub(super) struct Args {
     #[arg(required_unless_present = "server")]
     input: Option<PathBuf>,
 
-    /// Start the local loopback HTTP bridge server (127.0.0.1:17890) for Office/WPS Add-ins and Tauri GUI
+    /// Start the local loopback HTTP bridge server (127.0.0.1:17890) for Office/WPS Add-ins and the native desktop
     #[arg(long, short = 's')]
     server: bool,
 

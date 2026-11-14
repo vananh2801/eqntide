@@ -11,7 +11,8 @@
 - Chỉ hỗ trợ Linux/Windows; tạm dừng macOS vì chưa có máy kiểm thử.
 - Đóng cửa sổ sẽ thoát sau xử lý Lưu/Bỏ thay đổi/Hủy, không thêm tray.
   Bridge CLI/service bên ngoài desktop tiếp tục chạy.
-- Giữ Tauri để đối chiếu và quay lui đến khi đạt parity và kiểm thử Office thực tế.
+- Theo yêu cầu mới, đã xóa Tauri/frontend cũ; dùng Git history khi cần đối chiếu.
+  Bản Rust vẫn là preview đến khi kiểm thử Office và các nền tảng hoàn tất.
 
 “Pure Rust” áp dụng cho mã UI/logic desktop; vẫn dùng API, driver và thư viện
 hệ điều hành. Không yêu cầu viết lại add-in Office bằng Rust.
@@ -33,7 +34,7 @@ Worker thread/channel xử lý chuyển đổi, render và HTTP; không chặn U
 
 Cargo workspace gồm package engine/CLI gốc làm default member,
 `crates/eqntide-editor` không phụ thuộc GUI và `desktop` chứa binary
-`eqntide-desktop`. Tách package Tauri khỏi workspace mới trong giai đoạn song song.
+`eqntide-desktop`. Package Tauri cũ đã được xóa khỏi repository.
 
 Tách service chuyển đổi snippet/document và parser LaTeX dùng chung.
 Giữ API chuyển đổi hiện hữu, DTO/endpoint/status/alias HTTP và chữ ký
@@ -102,7 +103,7 @@ NSIS Windows, DEB/RPM và portable Linux; tài nguyên/add-in/template hoạt đ
 ngoài repository. Chuyển icon sang assets dùng chung, sửa tên binary cũ trong CI.
 Cập nhật README/NOTICE và bỏ yêu cầu WebKit khỏi hướng dẫn native.
 Bỏ macOS khỏi CI/release và đóng gói; chỉ cân nhắc hỗ trợ lại khi có máy kiểm thử.
-Chỉ xóa Tauri/frontend khi qua parity và kiểm tra không add-in nào dùng assets đó.
+Đã xóa Tauri/frontend theo yêu cầu; add-in sử dụng tài nguyên đóng gói độc lập.
 
 ## 4. Kiểm thử và nghiệm thu
 
@@ -121,7 +122,7 @@ Chỉ xóa Tauri/frontend khi qua parity và kiểm tra không add-in nào dùng
   manual Linux X11/Wayland và Windows; không build macOS trên CI.
 
 Hoàn tất cutover khi không còn phụ thuộc desktop Tauri/WebView/MathLive,
-qua bảng parity và không mất dữ liệu trong corpus. Giữ release Tauri cũ để quay lui.
+qua bảng parity và không mất dữ liệu trong corpus. Bản Tauri cũ chỉ còn trong Git history.
 Trạng thái triển khai và các kiểm chứng chưa thực hiện nằm trong
 `desktop/VALIDATION.md`; không xem build thành công là đã kiểm chứng Office.
 

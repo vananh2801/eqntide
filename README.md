@@ -4,7 +4,7 @@ A standalone, high-performance **bidirectional math equation converter and edito
 
 - **Forward (`OMML → MathType`)**: Converts Word native OMML equations into embedded MathType 5.0 OLE objects (`Equation.DSMT4`) with crisp vector EMF (or PNG) previews. Double-clicking any converted equation in Microsoft Word or WPS Office opens it directly in **MathType** for full visual editing.
 - **Reverse (`MathType → OMML`)**: Extracts MTEF v3 (Equation Editor 3.x) and MTEF v5 (MathType 4–7) binary streams from embedded OLE `.bin` containers or WMF (`MTra`) preview images, decodes them into MathML, and replaces the VML `<w:object>` elements with native Word `<m:oMath>` XML.
-- **Interactive Visual Editor (`EqnTide Desktop & Word/WPS Add-in`)**: Visual equation editing with the native Rust desktop preview or legacy MathLive UI, LaTeX source editing, customizable fonts, baseline alignment, and single-click insertion/replacement into Word or WPS Office documents.
+- **Interactive Visual Editor (`EqnTide Desktop & Word/WPS Add-in`)**: Visual equation editing with the native Rust desktop preview, LaTeX source editing, customizable fonts, baseline alignment, and single-click insertion/replacement into Word or WPS Office documents.
 
 ---
 
@@ -14,7 +14,6 @@ A standalone, high-performance **bidirectional math equation converter and edito
 | --- | --- | --- |
 | Rust library and CLI | `src/`, root `Cargo.toml` | Pure Rust conversion engine and the `eqntide-cli` command-line application. |
 | Native Rust desktop (preview) | `desktop/`, `crates/eqntide-editor/` | egui/eframe shell, structural equation editing, and the shared STIX renderer. No desktop WebView or JavaScript. |
-| Legacy desktop (comparison/rollback) | `src-tauri/`, `src-ui/` | Tauri v2 and vendored MathLive UI, retained until native platform and Office qualification is complete. |
 | Microsoft Word add-in | `word-addin/` | Static Office.js manifest, task pane, commands, and assets. It communicates with the local EqnTide bridge. |
 | WPS Office add-in | `wps-addin/` | Static WPS JavaScript add-in, ribbon definition, task pane, and assets. It communicates with the same bridge. |
 
@@ -136,8 +135,8 @@ Word template and font licenses. The portable Linux package includes
 portable ZIP and builds `scripts/installer.nsi`, which registers the current-user
 URI handler. macOS packaging is disabled.
 
-This remains a **native preview**. The legacy Tauri implementation is retained
-for comparison and rollback until the manual platform/Office matrix passes.
+The Rust desktop is the only desktop implementation. This remains a
+**native preview** until the manual platform/Office matrix passes.
 See [implementation plan](plan.md) and [validation status](desktop/VALIDATION.md).
 
 ### Native desktop integration and add-in setup
@@ -150,8 +149,8 @@ installation configures the login bridge and restarts it with the installed bina
 Linux URI/add-in setup helpers require Python 3; the desktop/CLI binaries do not.
 
 All current launchers, package scripts and release jobs target `eqntide-desktop`
-and `eqntide-cli`. Tauri stays in `src-tauri` solely as a development/rollback
-implementation; it is not needed by the native installers or add-ins.
+and `eqntide-cli`. The old Tauri desktop and web frontend have been removed;
+previous versions remain available in Git history.
 
 - **Windows installer:** installs the native binaries, registers `eqntide://`,
   and runs the shared PowerShell add-in installer for Word/WPS and the Word
@@ -191,28 +190,11 @@ executable before development fallbacks, so installed bundles work outside the
 repository. Windows Office and installer runtime qualification remains in
 [the validation matrix](desktop/VALIDATION.md).
 
-### Legacy Tauri prerequisites
+### Build prerequisites
 
-- A current stable [Rust toolchain](https://rustup.rs/) with Cargo.
-- **Windows**: 64-bit Windows 10/11 and Microsoft Visual Studio C++ Build Tools with the Windows SDK.
-- **Linux**: GTK3, WebKit2GTK 4.1, and the other Tauri system libraries.
-
-  On Ubuntu/Debian:
-
-  ```bash
-  sudo apt-get update
-  sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-    librsvg2-dev patchelf libgtk-3-dev
-  ```
-
-  On Fedora:
-
-  ```bash
-  sudo dnf install -y webkit2gtk4.1-devel libappindicator-gtk3-devel \
-    librsvg2-devel gtk3-devel gcc gcc-c++ make pkgconf-pkg-config rpm-build
-  ```
-
-Node.js is not required for a normal build. The desktop frontend is loaded directly from `src-ui/`, and its MathLive runtime is already vendored in `src-ui/vendor/mathlive/`.
+Use stable Rust. Windows builds require Visual Studio C++ Build Tools and the
+Windows SDK. Linux dependencies are listed above; WebKit and the Tauri CLI are
+not required. Node.js is needed only for JavaScript syntax checks in CI.
 
 ### Clone the Repository
 
@@ -242,140 +224,65 @@ Verify the build with:
 
 On Windows PowerShell, use `./target/release/eqntide-cli.exe --version`.
 
-### Build the Legacy Tauri v2 Desktop Application
-
-Install the Tauri v2 CLI once:
-
-```bash
-cargo install tauri-cli --version "^2.0.0" --locked
-```
-
-For development with automatic rebuilds:
-
-```bash
-cd src-tauri
-cargo tauri dev
-```
-
-For a release executable and the platform installer/bundles configured in `src-tauri/tauri.conf.json`:
-
-```bash
-cd src-tauri
-cargo tauri build
-```
-
-Build outputs are placed under `src-tauri/target/release/`:
-
-- Raw executable: `eqntide-desktop` on Linux or `eqntide-desktop.exe` on Windows.
-- Installers/packages: `src-tauri/target/release/bundle/` (for example NSIS on Windows, DEB/AppImage on Linux).
-
-If only the raw desktop executable is needed, without generating a Tauri installer, run this from the repository root:
-
-```bash
-cargo build --release --manifest-path src-tauri/Cargo.toml
-```
-
-Tauri bundles are platform-specific and should normally be built on the target operating system.
-
 ### Linux: Complete Build and Installation Procedure
 
-The following steps install the desktop application, the WPS add-in, and a background bridge that starts at **graphical login**. Run commands as your normal desktop user; use `sudo` only for system packages. Fedora RPM packaging is verified in this repository. The Debian/Ubuntu commands are provided as an alternative and have not been verified here.
+Run builds as your desktop user and use `sudo` only for system dependencies and
+package installation. Close EqnTide and WPS before upgrading.
 
-#### 1. Install build dependencies and Rust
+#### 1. Install build dependencies
 
 Fedora:
 
 ```bash
-sudo dnf install -y git curl gcc gcc-c++ make pkgconf-pkg-config rpm-build \
-  webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel gtk3-devel
+sudo dnf install git gcc gcc-c++ make pkgconf-pkg-config rpm-build python3 \
+  libX11-devel libXi-devel libXrandr-devel libxkbcommon-devel \
+  mesa-libGL-devel wayland-devel
 ```
 
-Ubuntu/Debian (a release providing WebKit2GTK 4.1):
+Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git curl build-essential pkg-config libssl-dev \
-  libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
+sudo apt-get install git build-essential pkg-config python3 dpkg-dev \
+  libx11-dev libxi-dev libxrandr-dev libxkbcommon-dev libgl1-mesa-dev libwayland-dev
 ```
 
-Install stable Rust through [rustup](https://rustup.rs/) if Cargo is not already installed. Open a new terminal afterward and verify:
+Install stable Rust through [rustup](https://rustup.rs/) if Cargo is unavailable.
+
+#### 2. Build the desktop and CLI
+
+From the repository root:
 
 ```bash
-rustc --version
-cargo --version
+cargo build --workspace --release --locked
 ```
 
-Use the distribution's development packages rather than a custom sysroot. If a previous shell configuration sets `PKG_CONFIG_PATH` to `~/.local/sysroot`, use `env -u PKG_CONFIG_PATH` before the build command to use the installed system packages instead. This works in both Bash and Fish.
+#### 3. Package and install
 
-#### 2. Build the CLI and install the Tauri CLI
-
-Clone the repository if needed, then run from its root:
+Fedora:
 
 ```bash
-git clone https://github.com/vananh2801/eqntide.git
-cd eqntide
-cargo build --release --bin eqntide-cli
-./target/release/eqntide-cli --version
-cargo install tauri-cli --version "^2.0.0" --locked
+python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format rpm
+sudo dnf install ./dist/eqntide-native-preview-0.3.0-1.x86_64.rpm
 ```
 
-The CLI binary is `target/release/eqntide-cli`. The background service uses this binary, so building only the desktop application is insufficient.
-
-The frontend already includes MathLive under `src-ui/vendor/`; do **not** run `npm install` for a normal build. `src-ui/node_modules/` must not be present because Tauri rejects it inside `frontendDist`. If it exists from earlier work, move that directory outside `src-ui/` before continuing.
-
-#### 3. Build and install the desktop package
-
-Fedora, starting from the repository root:
+Ubuntu/Debian (not locally qualified):
 
 ```bash
-cd src-tauri
-cargo tauri build --bundles rpm
-cd ..
-sudo dnf install ./src-tauri/target/release/bundle/rpm/*.rpm
+python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format deb
+sudo apt-get install ./dist/eqntide-native-preview_0.3.0_amd64.deb
 ```
 
-Ubuntu/Debian, starting from the repository root:
+For an already installed RPM with the same version, use `sudo dnf reinstall`
+instead. Build on the oldest distribution version you intend to support and
+verify the generated package on each supported version.
 
-```bash
-cd src-tauri
-cargo tauri build --bundles deb
-cd ..
-sudo apt-get install ./src-tauri/target/release/bundle/deb/*.deb
-```
+Packages install both binaries/resources under `/usr/lib/eqntide` and launchers
+under `/usr/bin`. Package hooks configure the WPS add-in and enable the per-user
+background bridge. Setup is deferred to next graphical login if no user session
+is available; no separate source checkout or manual service installation is needed.
 
-These commands install `/usr/bin/eqntide-desktop` and an EqnTide application-menu entry. `cargo build --release --manifest-path src-tauri/Cargo.toml` alone only builds a raw executable; it does not install the application or create menu entries.
-
-For a rebuilt Fedora package with the same version already installed, use:
-
-```bash
-sudo dnf reinstall ./src-tauri/target/release/bundle/rpm/*.rpm
-```
-
-#### 4. Register the WPS add-in
-
-Completely exit WPS before running this command from the repository root:
-
-```bash
-bash scripts/install-addin.sh
-```
-
-This copies the add-in into both `~/.local/share/Kingsoft/wps/jsaddons/` and `~/.local/share/Kingsoft/wps_intl/jsaddons/`, removes legacy `MathEditor` add-in directories, and registers EqnTide. This script **does not install the background service**; perform the next step separately.
-
-#### 5. Install and enable the background bridge
-
-From the repository root, without `sudo`:
-
-```bash
-bash scripts/install-bridge-service.sh
-```
-
-The script installs `~/.config/systemd/user/eqntide.service`, disables the old `matheditor.service`, and enables and starts the new service immediately. On future graphical logins, systemd starts the bridge automatically. This is a user-session service, not a boot service before login.
-
-The service runs `target/release/eqntide-cli --server` from this checkout and sets `EQNTIDE_DESKTOP_BIN=/usr/bin/eqntide-desktop`. Keep the repository and release binary at their installed paths. If you move the checkout, build the CLI and rerun the service installer from the new location.
-
-Do not start a second CLI server manually while this service owns port `17890`. The bridge stays running in the background and launches EqnTide Desktop when an add-in opens an editing session.
-
-#### 6. Verify the installation
+#### 4. Verify and maintain
 
 ```bash
 systemctl --user is-enabled eqntide.service
@@ -383,22 +290,17 @@ systemctl --user status eqntide.service --no-pager
 curl http://127.0.0.1:17890/health
 ```
 
-Expected results: `enabled`, `active (running)`, and JSON containing `"status":"ok"` and `"server":"eqntide-bridge"`. Reopen WPS Writer, select **EqnTide → Insert Equation**, and confirm that the desktop editor opens. The background bridge should already be available even before opening the editor.
-
-Useful maintenance commands:
+Expect `enabled`, `active (running)` and a JSON response with `"status":"ok"`.
+Restart WPS and select **EqnTide → Insert Equation** to test native editing.
 
 ```bash
-# Read recent bridge errors.
 journalctl --user -u eqntide.service -n 80 --no-pager
-# Restart after rebuilding the CLI.
 systemctl --user restart eqntide.service
-# Disable automatic startup and stop the bridge.
-systemctl --user disable --now eqntide.service
-# Remove the WPS add-in (does not stop/remove the bridge service).
-bash scripts/install-addin.sh --uninstall
 ```
 
-If the bridge is healthy but the editor does not appear, check `systemctl --user cat eqntide.service` for `EQNTIDE_DESKTOP_BIN` and verify `/usr/bin/eqntide-desktop` exists. On Fedora/KDE, the installed `/usr/share/applications/EqnTide.desktop` must contain `Exec=eqntide-desktop %u` and `MimeType=x-scheme-handler/eqntide`; reinstall the latest RPM if these are missing.
+For source/portable installs or repairs, use the add-in/service helpers described
+above. The service runs at graphical login; do not start another bridge while
+it owns port `17890`.
 
 ### Prepare and Install the Word/WPS Add-ins
 
@@ -532,7 +434,6 @@ Completely exit and restart WPS Writer. The **EqnTide** tab should then appear i
 - **Port 17890 is already occupied:** Stop the other process using the port before starting EqnTide. Although the CLI supports `--port`, the bundled Word/WPS manifests and scripts are configured for port `17890`; using another port requires updating those add-in URLs as well.
 - **The add-in files return 404:** Run the CLI bridge from the repository root, or place `word-addin/` and `wps-addin/` beside the distributed executable.
 - **The ribbon does not appear:** Fully close all Word/WPS processes, verify that the manifest or `jsaddons` files were installed for the current user, and reopen the application.
-- **Linux WebKit/GStreamer warnings:** EqnTide disables MathLive audio effects; remaining media-framework warnings are normally harmless unless the editor fails to render.
 - **Network and privacy:** Conversion runs locally and the bridge binds to `127.0.0.1`; EqnTide does not require a conversion cloud service or telemetry endpoint.
 
 ---

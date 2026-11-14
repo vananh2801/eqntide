@@ -1,6 +1,6 @@
 //! Serializer from [`MathNode`] (MathML AST) to standard LaTeX markup.
 //!
-//! Used by the bridge server and desktop editor to populate MathLive / LaTeX
+//! Used by the bridge server and desktop editor to populate the LaTeX source
 //! editors when opening sessions or importing equations from OMML / MathType.
 
 use crate::mathml::MathNode;

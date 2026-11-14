@@ -1,7 +1,8 @@
 # Native desktop validation and cutover gate
 
-The native implementation is a preview. The Tauri app remains available for
-comparison and rollback; no release has been published by the implementation task.
+The native implementation is a preview and the only desktop in this repository.
+The legacy Tauri app/frontend were removed at the user's request; Git history
+preserves them. Removal does not qualify the pending Office/platform scenarios.
 
 ## Automated coverage
 
@@ -34,7 +35,7 @@ This verifies an X11 smoke path, not an Office or Wayland qualification.
 
 A release Linux build and portable/RPM packaging were exercised locally. A Windows
 MSVC cross-target `cargo check` also passed on Linux; it is not a Windows runtime
-or installer test. The legacy Tauri command tests passed independently. Final
+or installer test. Final
 workspace checks and artifact sizes are reported in the task completion message.
 Do not extrapolate release behavior on other OSes from a Linux build.
 
@@ -66,11 +67,10 @@ UI, so an idle window does not poll or force continuous repainting.
 
 ## Cutover
 
-Keep native packages labeled preview until the matrix passes. Preserve old
-releases. Remove the Tauri/frontend directories only after verifying no add-in
-uses their assets and the native editor meets the formula corpus and Office
-workflows. The CLI/library default build and HTTP contracts remain available
-throughout migration.
+Keep native packages labeled preview until the matrix passes. The legacy
+Tauri/frontend directories have been removed; add-ins use independent assets.
+Qualify the native editor against the formula corpus and Office workflows.
+The CLI/library default build and HTTP contracts remain available.
 
 Integral placement regression checks cover LaTeX-to-under/over normalization,
 PNG/hit geometry above and below the integral, and explicit Office `subSup` /
@@ -126,3 +126,9 @@ GitHub CI/release builds only Linux and Windows. The native packager rejects
 macOS targets before staging files; macOS app bundles and add-in installation
 code have been removed. OS portability code/dependencies may remain in Rust,
 but they do not represent a supported or tested macOS release.
+
+After removing the legacy desktop/frontend, 130 Rust workspace tests and 11
+Python integration tests passed. Workspace Clippy, formatting and diff checks
+also passed. The native desktop version smoke command remains available without
+legacy files. Historical desktop URI associations and the VBA conversion alias
+are retained for installed clients; Tauri-specific origin exceptions are removed.

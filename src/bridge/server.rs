@@ -1,4 +1,4 @@
-//! Local HTTP bridge server implementation for Office/WPS Add-ins and Tauri GUI.
+//! Local HTTP bridge server implementation for Office/WPS Add-ins and the native desktop.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -122,7 +122,6 @@ pub fn is_allowed_origin(origin: &str) -> bool {
     // File or custom schemes used by desktop WebViews / Add-in iframes
     if origin.starts_with("file://")
         || origin.starts_with("wps-addon:")
-        || origin.starts_with("tauri://")
         || origin.starts_with("vscode-webview://")
     {
         return true;
@@ -142,8 +141,8 @@ pub fn is_allowed_origin(origin: &str) -> bool {
         host_and_port.split(':').next().unwrap_or(host_and_port)
     };
 
-    // 1. Localhost & Tauri origins
-    if matches!(host, "127.0.0.1" | "localhost" | "::1" | "tauri.localhost") {
+    // 1. Localhost origins
+    if matches!(host, "127.0.0.1" | "localhost" | "::1") {
         return true;
     }
 
@@ -1070,6 +1069,20 @@ mod tests {
             status,
             headers,
             body: body.to_string(),
+        }
+    }
+
+    #[test]
+    fn origin_policy_after_legacy_desktop_removal() {
+        for origin in ["tauri://app", "http://tauri.localhost"] {
+            assert!(!is_allowed_origin(origin));
+        }
+        for origin in [
+            "http://127.0.0.1:17890",
+            "https://appsforoffice.microsoft.com",
+            "wps-addon://eqntide",
+        ] {
+            assert!(is_allowed_origin(origin));
         }
     }
 

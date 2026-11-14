@@ -32,7 +32,7 @@
 //! | Module      | Role                                                    |
 //! |-------------|---------------------------------------------------------|
 //! | [`docx`]    | `.docx` package handling and both conversion pipelines  |
-//! | [`bridge`]  | local HTTP bridge server for Word/WPS Add-ins & Tauri   |
+//! | [`bridge`]  | local HTTP bridge server for Word/WPS Add-ins & desktop   |
 //! | [`omml`]    | OMML ⇄ MathML                                           |
 //! | [`mtef`]    | MathML ⇄ MTEF binary                                    |
 //! | [`ole`]     | OLE compound file & WMF wrapper/extractor for MTEF      |

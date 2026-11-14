@@ -72,7 +72,7 @@ pub fn parse_latex_to_mathml(latex_str: &str) -> crate::error::Result<MathNode> 
     {
         clean = clean[2..clean.len() - 2].trim();
     }
-    // These MathLive environments have equivalent native table representations.
+    // These imported LaTeX environments have equivalent native table representations.
     let normalized = latex_aliases(clean)
         .replace(r"\begin{cases}", r"\left\{\begin{matrix}")
         .replace(r"\end{cases}", r"\end{matrix}\right.")

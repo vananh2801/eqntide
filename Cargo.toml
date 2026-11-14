@@ -1,7 +1,6 @@
 [workspace]
 members = [".", "crates/eqntide-editor", "desktop"]
 default-members = ["."]
-exclude = ["src-tauri"]
 resolver = "2"
 
 [package]
