@@ -221,3 +221,22 @@ class SessionAddins(unittest.TestCase):
                 helper.remove_server(base)
                 self.assertEqual(run.call_args.args[0][-1], '--uninstall')
                 self.assertFalse(marker.exists())
+
+
+class SupportedPlatforms(unittest.TestCase):
+    def test_macos_packaging_is_rejected_before_staging(self):
+        from unittest.mock import patch
+        import contextlib
+        import io
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'unsupported-output'
+            for target in ('aarch64-apple-darwin', 'x86_64-apple-darwin'):
+                stderr = io.StringIO()
+                with self.subTest(target=target), patch.object(sys, 'argv', ['package_native.py', '--target', target, '--output', str(output)]), patch.object(pack, 'populate') as populate, contextlib.redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit) as error:
+                        pack.main()
+                    self.assertEqual(error.exception.code, 2)
+                    self.assertIn('macOS support is temporarily disabled', stderr.getvalue())
+                    populate.assert_not_called()
+                    self.assertFalse(output.exists())

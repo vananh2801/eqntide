@@ -8,7 +8,7 @@
   template, undo/redo; bản LaTeX + preview chỉ là mốc trung gian.
 - Giữ engine, CLI, Word/WPS add-in JavaScript/VBA và hợp đồng HTTP tại
   `127.0.0.1:17890`.
-- Ưu tiên Linux/Windows; giữ khả năng build macOS, kiểm chứng Office sau.
+- Chỉ hỗ trợ Linux/Windows; tạm dừng macOS vì chưa có máy kiểm thử.
 - Đóng cửa sổ sẽ thoát sau xử lý Lưu/Bỏ thay đổi/Hủy, không thêm tray.
   Bridge CLI/service bên ngoài desktop tiếp tục chạy.
 - Giữ Tauri để đối chiếu và quay lui đến khi đạt parity và kiểm thử Office thực tế.
@@ -101,7 +101,7 @@ Giữ tên binary, `eqntide://` và `EQNTIDE_DESKTOP_BIN`.
 NSIS Windows, DEB/RPM và portable Linux; tài nguyên/add-in/template hoạt động
 ngoài repository. Chuyển icon sang assets dùng chung, sửa tên binary cũ trong CI.
 Cập nhật README/NOTICE và bỏ yêu cầu WebKit khỏi hướng dẫn native.
-Build/smoke macOS trong CI; hoàn thiện URL dispatch và Office sau kiểm chứng.
+Bỏ macOS khỏi CI/release và đóng gói; chỉ cân nhắc hỗ trợ lại khi có máy kiểm thử.
 Chỉ xóa Tauri/frontend khi qua parity và kiểm tra không add-in nào dùng assets đó.
 
 ## 4. Kiểm thử và nghiệm thu
@@ -118,7 +118,7 @@ Chỉ xóa Tauri/frontend khi qua parity và kiểm tra không add-in nào dùng
   dirty close, lỗi worker và không treo trong lúc chuyển đổi.
 - Cài/nâng cấp/gỡ, URI và assets trên máy sạch không WebKit.
 - CI: `cargo test --workspace --all-targets`, workspace Clippy, cargo-deny;
-  manual Linux X11/Wayland và Windows, build/smoke macOS.
+  manual Linux X11/Wayland và Windows; không build macOS trên CI.
 
 Hoàn tất cutover khi không còn phụ thuộc desktop Tauri/WebView/MathLive,
 qua bảng parity và không mất dữ liệu trong corpus. Giữ release Tauri cũ để quay lui.

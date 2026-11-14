@@ -20,10 +20,6 @@ jobs:
             os: ubuntu-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-apple-darwin
-            os: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -41,8 +37,8 @@ jobs:
       - name: Package Linux
         if: runner.os == 'Linux'
         run: python scripts/package_native.py --target ${{ matrix.target }} --format all
-      - name: Package Windows/macOS
-        if: runner.os != 'Linux'
+      - name: Package Windows
+        if: runner.os == 'Windows'
         run: python scripts/package_native.py --target ${{ matrix.target }}
       - name: Build NSIS installer
         if: runner.os == 'Windows'

@@ -2,7 +2,6 @@
 """Package already-built native binaries; never builds or uploads a release."""
 import argparse
 from pathlib import Path
-import plistlib
 import shutil
 import subprocess
 import tarfile
@@ -115,6 +114,8 @@ def main():
     parser.add_argument("--format", choices=("portable", "deb", "rpm", "all"), default="portable")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
+    if not any(platform in args.target for platform in ("linux", "windows")):
+        parser.error("Only Linux and Windows packaging is supported; macOS support is temporarily disabled (no test hardware).")
     windows = "windows" in args.target
     binary_dir = ROOT / "target" / args.target / args.profile
     if not binary_dir.exists():
@@ -126,13 +127,6 @@ def main():
         stage = temp / label
         stage.mkdir()
         populate(stage, binary_dir, windows)
-        if "apple" in args.target:
-            macos = stage / "EqnTide.app/Contents/MacOS"
-            macos.mkdir(parents=True)
-            for name in ("eqntide-desktop", "eqntide-cli", "word-addin", "wps-addin", "word-template"):
-                shutil.move(str(stage / name), macos / name)
-            with (macos.parent / "Info.plist").open("wb") as file:
-                plistlib.dump({"CFBundleIdentifier": "com.eqntide.desktop", "CFBundleName": "EqnTide", "CFBundleExecutable": "eqntide-desktop", "CFBundleVersion": VERSION, "CFBundleShortVersionString": VERSION, "CFBundlePackageType": "APPL", "CFBundleURLTypes": [{"CFBundleURLName": "EqnTide", "CFBundleURLSchemes": ["eqntide"]}]}, file)
         if args.format in ("portable", "all"):
             if windows:
                 archive = args.output / (label + ".zip")
