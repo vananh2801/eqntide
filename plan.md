@@ -133,3 +133,11 @@ Trạng thái triển khai và các kiểm chứng chưa thực hiện nằm tro
 - https://slint.dev/faqs
 - https://docs.rs/rfd/latest/rfd/
 - https://docs.rs/arboard/latest/arboard/
+
+## Điều chỉnh theo yêu cầu sau triển khai
+
+Ô LaTeX cập nhật canvas trực tiếp khi gõ, debounce 180 ms và parse trong worker.
+Thay đổi này thay thế bước Apply/xác nhận ở trên. Giữ nguyên chuỗi người dùng
+đang gõ và vị trí nhập; kết quả parse cũ không được đè nội dung mới.
+LaTeX lỗi/chưa hoàn chỉnh giữ canvas hợp lệ gần nhất và báo lỗi ngay dưới ô nhập.
+Có thể revert bản nháp; undo khôi phục cây/thuộc tính trước cập nhật nguồn.

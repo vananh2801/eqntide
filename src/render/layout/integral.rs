@@ -1,5 +1,5 @@
 //! Integral templates: the sign is assembled from glyph pieces and its limits
-//! sit beside it.
+//! can sit above/below it; explicit side limits use the script layout.
 
 use super::*;
 
@@ -139,7 +139,7 @@ impl Layout {
     /// An integral sign with its lower/upper limits placed around it.
     pub(super) fn integral_with_limits(
         &mut self,
-        c: char,
+        base_node: &MathNode,
         under_n: Option<&MathNode>,
         over_n: Option<&MathNode>,
         em: f32,
@@ -151,10 +151,9 @@ impl Layout {
         let sub_em = em * sub_ctx.scale(constants);
         let sup_em = em * sup_ctx.scale(constants);
 
-        // Use the hand-built glyph assembly
-        let base = self
-            .integral_without_limits(c, 1.45 * em, em)
-            .unwrap_or_else(|| self.glyph(display_char(c), Face::Symbol, em));
+        // Reuse the integral assembly through the normal node path, retaining
+        // the operator's hit region for caret/selection in the native editor.
+        let base = self.node(base_node, em, ctx)?;
         let sub = match under_n {
             Some(u) => Some(self.node(u, sub_em, sub_ctx)?),
             None => None,

@@ -8,12 +8,23 @@ use super::*;
 impl Layout {
     pub(super) fn scripts(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
         let (sub_n, sup_n) = match n.tag.as_str() {
-            "msub" => (n.children.get(1), None),
-            "msup" => (None, n.children.get(1)),
+            "msub" | "munder" => (n.children.get(1), None),
+            "msup" | "mover" => (None, n.children.get(1)),
             _ => (n.children.get(1), n.children.get(2)),
         };
 
         if let Some(base_node) = n.children.first() {
+            if n.attr("data-limloc") == Some("undOvr")
+                && base_node.tag == "mo"
+                && base_node
+                    .text
+                    .trim()
+                    .chars()
+                    .next()
+                    .is_some_and(is_integral)
+            {
+                return self.integral_with_limits(base_node, sub_n, sup_n, em, ctx);
+            }
             if delimiter::is_eval_bar_base(base_node) {
                 return self.evaluation_bar(sub_n, sup_n, 0.85 * em, 0.65 * em, em, ctx);
             }

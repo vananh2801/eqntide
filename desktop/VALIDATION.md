@@ -14,6 +14,9 @@ comparison and rollback; no release has been published by the implementation tas
   STIX baseline tests remain covered.
 - App dirty-session queue, concurrent startup requests, failed imports, failed
   session save, and unapplied LaTeX drafts have regression tests.
+- Live LaTeX preview is debounced by 180 ms and parsed on a worker. Tests cover
+  source preservation, stale-result rejection, invalid drafts, reverting while a
+  parse is in flight, clearing the source, and undo to imported attributes.
 - Workspace Clippy and cargo-deny license/source/bans checks.
 
 ## Local smoke checks
@@ -23,6 +26,10 @@ with OpenGL software rendering. A nested fraction/root imported through a URI
 rendered correctly. Mouse focus, Ctrl+A, text input and Ctrl+H created `x²` with
 an aligned caret and synchronized LaTeX source. A second invocation forwarded
 `eqntide://open?tab=batch` and exited, selecting Batch in the existing instance.
+A subsequent X11 source-input smoke check typed `\frac{x+1}{2}` and observed
+an automatic fraction preview without Apply, then typed the incomplete
+`\frac{` and verified that the previous formula remained with an inline error.
+Clearing the source cleared the preview.
 This verifies an X11 smoke path, not an Office or Wayland qualification.
 
 A release Linux build and portable/RPM packaging were exercised locally. A Windows
@@ -64,3 +71,7 @@ releases. Remove the Tauri/frontend directories only after verifying no add-in
 uses their assets and the native editor meets the formula corpus and Office
 workflows. The CLI/library default build and HTTP contracts remain available
 throughout migration.
+
+Integral placement regression checks cover LaTeX-to-under/over normalization,
+PNG/hit geometry above and below the integral, and explicit Office `subSup` /
+`undOvr` overrides without rewriting imported MathML.

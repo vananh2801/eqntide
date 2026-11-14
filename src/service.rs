@@ -89,12 +89,40 @@ pub fn parse_latex_to_mathml(latex_str: &str) -> crate::error::Result<MathNode> 
             "unsupported or invalid LaTeX command".into(),
         ));
     }
-    MathNode::parse(
+    let mut math = MathNode::parse(
         &mml.replace("&lang;", "⟨")
             .replace("&rang;", "⟩")
             .replace("columnalign=left", "columnalign=\"left\"")
             .replace("columnalign=right", "columnalign=\"right\""),
-    )
+    )?;
+    normalize_latex_integrals(&mut math);
+    Ok(math)
+}
+
+// The editor's integral templates use limits above/below the sign. The LaTeX
+// dependency emits ordinary side scripts for integrals, so normalize only the
+// LaTeX path. Imported MathML/OMML keeps its explicit placement and structure.
+fn normalize_latex_integrals(node: &mut MathNode) {
+    if node.children.first().is_some_and(|base| {
+        base.tag == "mo"
+            && base.text.trim().chars().count() == 1
+            && base
+                .text
+                .trim()
+                .chars()
+                .next()
+                .is_some_and(crate::symbols::is_integral)
+    }) {
+        node.tag = match node.tag.as_str() {
+            "msub" => "munder".into(),
+            "msup" => "mover".into(),
+            "msubsup" => "munderover".into(),
+            _ => node.tag.clone(),
+        };
+    }
+    for child in &mut node.children {
+        normalize_latex_integrals(child);
+    }
 }
 
 /// Helper to decode any supported equation input representation into [`MathNode`].
@@ -315,5 +343,44 @@ mod tests {
         assert!(text.contains('≥'));
         assert!(!text.contains("PARSE ERROR"));
         assert!(parse_latex_to_mathml(r"\begin{cases}x & x\le0 \\ x^2 & x>0\end{cases}").is_ok());
+    }
+    #[test]
+    fn latex_integral_limits_use_the_editors_under_over_layout() {
+        for (source, tag) in [
+            (r"\int_a^b x dx", "munderover"),
+            (r"\int_a x dx", "munder"),
+            (r"\int^b x dx", "mover"),
+            (r"\iint_a^b x dx", "munderover"),
+            (r"\iiint_a^b x dx", "munderover"),
+            (r"\oint_a^b x dx", "munderover"),
+        ] {
+            let math = parse_latex_to_mathml(source).unwrap();
+            assert!(
+                math.iter().iter().any(|n| n.tag == tag
+                    && n.children.first().is_some_and(|b| b.tag == "mo"
+                        && b.text
+                            .chars()
+                            .next()
+                            .is_some_and(crate::symbols::is_integral))),
+                "{source}"
+            );
+            let omml = mathml_to_omml_xml(&math).unwrap();
+            assert!(omml.contains("undOvr"), "{source}");
+        }
+        for source in ["x_a", "x^b", "x_a^b"] {
+            let original =
+                latex2mathml::latex_to_mathml(source, latex2mathml::DisplayStyle::Inline).unwrap();
+            assert_eq!(
+                parse_latex_to_mathml(source).unwrap(),
+                MathNode::parse(&original).unwrap()
+            );
+        }
+    }
+    #[test]
+    fn mathml_import_keeps_explicit_side_limits() {
+        let xml = r#"<math><munderover data-limloc="subSup"><mo>∫</mo><mi>a</mi><mi>b</mi></munderover></math>"#;
+        let math = decode_input_to_mathml(xml, "mathml").unwrap();
+        assert_eq!(math, MathNode::parse(xml).unwrap());
+        assert!(mathml_to_omml_xml(&math).unwrap().contains("subSup"));
     }
 }

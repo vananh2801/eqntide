@@ -59,7 +59,7 @@ The Word and WPS add-ins are not separate compiled applications. They are served
 
 The new desktop uses **egui + eframe** with the existing Rust conversion engine.
 It supports structural equation editing (caret, selection, templates, undo/redo),
-explicit LaTeX Apply, Office editing sessions, and the four DOCX batch directions.
+live LaTeX preview, Office editing sessions, and the four DOCX batch directions.
 The Word/WPS add-ins remain JavaScript/VBA integrations; they communicate through
 the same local bridge. The desktop itself does not load a WebView or MathLive.
 
@@ -95,10 +95,15 @@ root, **Ctrl+H/L/J** for scripts, **Tab/Shift+Tab** for placeholders, and
 **Ctrl+Z/Y** for undo/redo (Command on macOS where applicable). Templates wrap a
 selection. Matrix controls add/remove rows and columns. Imported MathML is the
 source of truth: opening and saving it does not round-trip through LaTeX.
-Unsupported elements are retained as atomic blocks. Applying a LaTeX draft
-explicitly replaces the tree after confirmation and can be undone. The shared
-LaTeX parser supports the existing palette, including cases and multiline tables;
+Unsupported elements are retained as atomic blocks. Typing in the LaTeX source
+updates the canvas automatically after a short pause (180 ms); no Apply button is
+needed. Source formatting and the text cursor stay intact. Invalid or incomplete
+LaTeX keeps the last valid formula visible and shows an inline error; revert to
+the canvas to discard that draft. Each successful source update can be undone,
+including restoring the attributes of an imported equation. The shared LaTeX parser supports the existing palette, including cases and multiline tables;
 it is not a complete TeX engine, and invalid drafts leave the equation intact.
+Integral limits entered through LaTeX/palettes use the editor's above/below layout;
+imported Office `limLoc` settings retain their requested side or stacked placement.
 
 The desktop reuses a healthy CLI/service bridge or hosts one if port 17890 is
 free. Closing exits the desktop after save/discard handling; an external bridge

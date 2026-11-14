@@ -242,4 +242,39 @@ mod interactive_tests {
         assert_eq!(region.carets.len(), 3);
         assert!(region.carets[1] - region.carets[0] > region.carets[2] - region.carets[1]);
     }
+    fn integral_regions(xml: &str) -> (HitRegion, HitRegion, HitRegion) {
+        let preview = render_interactive(&MathNode::parse(xml).unwrap(), 12.0).unwrap();
+        let find = |path: &[usize]| {
+            preview
+                .regions
+                .iter()
+                .find(|r| r.path == path)
+                .unwrap()
+                .clone()
+        };
+        (find(&[0, 0]), find(&[0, 1]), find(&[0, 2]))
+    }
+    #[test]
+    fn integral_under_over_regions_are_above_and_below_the_operator() {
+        let (base, lo, hi) = integral_regions(
+            "<math><munderover><mo>∫</mo><mi>a</mi><mi>b</mi></munderover></math>",
+        );
+        assert!(hi.y + hi.height < base.y);
+        assert!(lo.y > base.y + base.height);
+        assert!(hi.x < base.x + base.width);
+        assert!(lo.x < base.x + base.width);
+    }
+    #[test]
+    fn integral_layout_honors_explicit_word_limit_placement() {
+        let (base, lo, hi) = integral_regions(
+            r#"<math><munderover data-limloc="subSup"><mo>∫</mo><mi>a</mi><mi>b</mi></munderover></math>"#,
+        );
+        assert!(lo.x > base.x + base.width - 0.5);
+        assert!(hi.x > base.x + base.width - 0.5);
+        let (base, lo, hi) = integral_regions(
+            r#"<math><msubsup data-limloc="undOvr"><mo>∫</mo><mi>a</mi><mi>b</mi></msubsup></math>"#,
+        );
+        assert!(hi.y + hi.height < base.y);
+        assert!(lo.y > base.y + base.height);
+    }
 }

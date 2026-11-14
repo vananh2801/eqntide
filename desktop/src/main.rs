@@ -53,6 +53,7 @@ pub enum Event {
     Window(DesktopWindowRequest),
     Bridge(Result<Option<ServerHandle>, String>),
     Render(u64, Result<Rendered, String>),
+    Latex(u64, Result<eqntide::MathNode, String>),
     Session(String, Result<serde_json::Value, String>),
     Finished(Result<(), String>),
     Copied(Result<String, String>),

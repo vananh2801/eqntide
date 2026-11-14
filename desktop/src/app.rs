@@ -14,6 +14,7 @@ use std::{
         mpsc::Receiver,
         Arc,
     },
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy)]
@@ -35,7 +36,10 @@ pub struct App {
     saved_mode: String,
     latex: String,
     draft_dirty: bool,
-    latex_candidate: Option<MathNode>,
+    latex_generation: u64,
+    latex_deadline: Option<Instant>,
+    latex_parsing: Option<u64>,
+    latex_error: Option<String>,
     session: Option<String>,
     queue: VecDeque<DesktopWindowRequest>,
     startup: Vec<String>,
@@ -118,7 +122,10 @@ impl App {
             saved_mode: "omml".into(),
             latex: String::new(),
             draft_dirty: false,
-            latex_candidate: None,
+            latex_generation: 0,
+            latex_deadline: None,
+            latex_parsing: None,
+            latex_error: None,
             session: None,
             queue: VecDeque::new(),
             startup: args,
@@ -159,6 +166,41 @@ impl App {
         self.render_key += 1;
         self.latex = self.editor.math().to_latex();
         self.draft_dirty = false;
+        self.latex_generation += 1;
+        self.latex_deadline = None;
+        self.latex_error = None;
+    }
+    fn source_changed(&mut self, now: Instant) {
+        self.draft_dirty = true;
+        self.latex_generation += 1;
+        self.latex_deadline = Some(now + Duration::from_millis(180));
+        self.latex_error = None;
+    }
+    fn take_latex_request(&mut self, now: Instant) -> Option<(u64, String)> {
+        if !self.draft_dirty || self.latex_parsing.is_some() || now < self.latex_deadline? {
+            return None;
+        }
+        self.latex_deadline = None;
+        self.latex_parsing = Some(self.latex_generation);
+        Some((self.latex_generation, self.latex.clone()))
+    }
+    fn request_latex_parse(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        if let Some((generation, source)) = self.take_latex_request(now) {
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let result = if source.trim().is_empty() {
+                    Ok(MathNode::new("math"))
+                } else {
+                    eqntide::service::parse_latex_to_mathml(&source).map_err(|e| e.to_string())
+                }
+                .and_then(|math| Editor::try_new(&math).map(|_| math).map_err(str::to_owned));
+                let _ = tx.send(Event::Latex(generation, result));
+            });
+        }
+        if let Some(deadline) = self.latex_deadline.filter(|_| self.latex_parsing.is_none()) {
+            ctx.request_repaint_after(deadline.saturating_duration_since(now));
+        }
     }
     fn launch(&mut self, args: Vec<String>, ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -333,6 +375,26 @@ impl App {
                         self.status="Standalone editing remains available. Free port 17890, then retry the bridge.".into();
                     }
                 },
+                Event::Latex(generation, result) => {
+                    if self.latex_parsing == Some(generation) {
+                        self.latex_parsing = None;
+                    }
+                    if generation != self.latex_generation || !self.draft_dirty {
+                        continue;
+                    }
+                    match result {
+                        Ok(math) => {
+                            if self.editor.math() != math {
+                                self.editor.replace(&math);
+                                self.render_key += 1;
+                            }
+                            // Keep the user's source, spacing and cursor position while typing.
+                            self.draft_dirty = false;
+                            self.latex_error = None;
+                        }
+                        Err(error) => self.latex_error = Some(error),
+                    }
+                }
                 Event::Render(key, result) => {
                     self.render_busy = false;
                     if key == self.render_key {
@@ -566,7 +628,8 @@ impl App {
             return;
         }
         if save && self.draft_dirty {
-            self.status = "Apply or revert the LaTeX draft before saving.".into();
+            self.status =
+                "Wait for valid LaTeX, or revert to the current canvas before saving.".into();
             return;
         }
         if self.session.is_none() && save {
@@ -812,23 +875,25 @@ impl App {
             });
             self.canvas(ui);
         });
-        ui.horizontal(|ui| {
-            let labels = ["LaTeX", "MathML", "Flat OPC", "PNG image"];
-            egui::ComboBox::from_id_salt("copy-format")
-                .selected_text(labels[self.copy_format])
-                .show_ui(ui, |ui| {
-                    for (i, label) in labels.iter().enumerate() {
-                        ui.selectable_value(&mut self.copy_format, i, *label);
-                    }
-                });
-            if ui.button("Copy").clicked() {
-                self.copy(self.copy_format, &ctx);
-            }
-            if ui.button("Export EMF…").clicked() {
-                self.export_emf();
-            }
+        ui.add_enabled_ui(!self.draft_dirty, |ui| {
+            ui.horizontal(|ui| {
+                let labels = ["LaTeX", "MathML", "Flat OPC", "PNG image"];
+                egui::ComboBox::from_id_salt("copy-format")
+                    .selected_text(labels[self.copy_format])
+                    .show_ui(ui, |ui| {
+                        for (i, label) in labels.iter().enumerate() {
+                            ui.selectable_value(&mut self.copy_format, i, *label);
+                        }
+                    });
+                if ui.button("Copy").clicked() {
+                    self.copy(self.copy_format, &ctx);
+                }
+                if ui.button("Export EMF…").clicked() {
+                    self.export_emf();
+                }
+            });
         });
-        ui.label("LaTeX source — edits are applied explicitly");
+        ui.label("LaTeX source — live preview");
         if ui
             .add(
                 egui::TextEdit::multiline(&mut self.latex)
@@ -838,30 +903,23 @@ impl App {
             )
             .changed()
         {
-            self.draft_dirty = true;
+            self.source_changed(Instant::now());
         }
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(self.draft_dirty, egui::Button::new("Apply LaTeX"))
+                .add_enabled(self.draft_dirty, egui::Button::new("Revert to canvas"))
                 .clicked()
             {
-                match eqntide::service::parse_latex_to_mathml(&self.latex) {
-                    Ok(math) => self.latex_candidate = Some(math),
-                    Err(e) => self.status = format!("LaTeX draft retained: {e}"),
-                }
+                self.changed();
             }
-            if ui
-                .add_enabled(self.draft_dirty, egui::Button::new("Revert draft"))
-                .clicked()
-            {
-                self.latex = self.editor.math().to_latex();
-                self.draft_dirty = false;
-            }
-            if self.draft_dirty {
-                ui.label("Draft not applied");
+            if let Some(error) = &self.latex_error {
+                ui.colored_label(ui.visuals().error_fg_color, format!("LaTeX error: {error}"));
+            } else if self.draft_dirty {
+                ui.label("Updating preview…");
             }
         });
     }
+
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let scale = self.zoom * 96.0 / 72.0;
         egui::Frame::new()
@@ -1478,25 +1536,6 @@ impl App {
         });
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
-        if self.latex_candidate.is_some() {
-            egui::Window::new("Replace equation from LaTeX?")
-                .collapsible(false)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.label("Applying replaces the equation tree. Imported attributes and unsupported structures may not survive a LaTeX round-trip. Undo restores the original.");
-                    ui.horizontal(|ui| {
-                        if ui.button("Apply replacement").clicked() {
-                            if let Some(math) = self.latex_candidate.take() {
-                                self.editor.replace(&math);
-                                self.changed();
-                            }
-                        }
-                        if ui.button("Keep original").clicked() {
-                            self.latex_candidate = None;
-                        }
-                    });
-                });
-        }
         if self.pending.is_some() {
             egui::Window::new("Finish current equation")
                 .collapsible(false)
@@ -1556,18 +1595,15 @@ impl eframe::App for App {
         self.request_render(&ctx);
         egui::CentralPanel::default().show(ui, |ui| {
             self.toolbar(ui);
-            ui.add_enabled_ui(
-                !self.busy && self.pending.is_none() && self.latex_candidate.is_none(),
-                |ui| {
-                    if self.tab == 0 {
-                        egui::ScrollArea::vertical()
-                            .id_salt("editor-layout")
-                            .show(ui, |ui| self.editor_ui(ui));
-                    } else {
-                        self.batch_ui(ui);
-                    }
-                },
-            );
+            ui.add_enabled_ui(!self.busy && self.pending.is_none(), |ui| {
+                if self.tab == 0 {
+                    egui::ScrollArea::vertical()
+                        .id_salt("editor-layout")
+                        .show(ui, |ui| self.editor_ui(ui));
+                } else {
+                    self.batch_ui(ui);
+                }
+            });
             ui.separator();
             ui.label(&self.status);
             if self.busy || self.render_busy {
@@ -1575,6 +1611,7 @@ impl eframe::App for App {
             }
         });
         self.dialogs(&ctx);
+        self.request_latex_parse(&ctx);
     }
 }
 
@@ -1646,7 +1683,7 @@ mod tests {
         a.draft_dirty = true;
         a.finish(true);
         assert!(!a.busy);
-        assert!(a.status.contains("Apply or revert"));
+        assert!(a.status.contains("valid LaTeX"));
     }
     #[test]
     fn vertical_navigation_moves_between_fraction_slots_instead_of_the_root() {
@@ -1698,5 +1735,143 @@ mod tests {
         assert_eq!(math.tag, "math");
         assert_eq!(math.children[0].text, "x");
         assert!(eqntide::render::measure(&math, 12.0).unwrap().0 > 0.0);
+    }
+    fn source_request(a: &mut App, source: &str, now: Instant) -> (u64, String) {
+        a.latex = source.into();
+        a.source_changed(now);
+        a.take_latex_request(now + Duration::from_millis(180))
+            .unwrap()
+    }
+    fn parsed(a: &mut App, generation: u64, result: Result<MathNode, String>) {
+        a.tx.send(Event::Latex(generation, result)).unwrap();
+        a.events(&egui::Context::default());
+    }
+    #[test]
+    fn live_latex_updates_the_equation_without_rewriting_the_source() {
+        let mut a = app();
+        let source = r"  \frac{x + 1}{2}  ";
+        let (generation, _) = source_request(&mut a, source, Instant::now());
+        let key = a.render_key;
+        parsed(
+            &mut a,
+            generation,
+            eqntide::service::parse_latex_to_mathml(source).map_err(|e| e.to_string()),
+        );
+        assert_eq!(a.latex, source);
+        assert!(!a.draft_dirty);
+        assert!(a.latex_error.is_none());
+        assert!(a.render_key > key);
+        assert!(a.editor.math().iter().iter().any(|n| n.tag == "mfrac"));
+    }
+    #[test]
+    fn live_latex_debounces_until_typing_pauses() {
+        let mut a = app();
+        let now = Instant::now();
+        a.latex = "x".into();
+        a.source_changed(now);
+        assert!(a
+            .take_latex_request(now + Duration::from_millis(100))
+            .is_none());
+        a.latex = "x+1".into();
+        a.source_changed(now + Duration::from_millis(120));
+        assert!(a
+            .take_latex_request(now + Duration::from_millis(180))
+            .is_none());
+        assert_eq!(
+            a.take_latex_request(now + Duration::from_millis(300))
+                .unwrap()
+                .1,
+            "x+1"
+        );
+    }
+    #[test]
+    fn stale_latex_results_cannot_overwrite_newer_input() {
+        let mut a = app();
+        let now = Instant::now();
+        let (old, _) = source_request(&mut a, "x", now);
+        a.latex = "y".into();
+        a.source_changed(now);
+        parsed(
+            &mut a,
+            old,
+            eqntide::service::parse_latex_to_mathml("x").map_err(|e| e.to_string()),
+        );
+        assert!(a.editor.math().children.is_empty());
+        assert!(a.draft_dirty);
+        assert_eq!(a.latex, "y");
+        let (latest, source) = a
+            .take_latex_request(now + Duration::from_millis(180))
+            .unwrap();
+        parsed(
+            &mut a,
+            latest,
+            eqntide::service::parse_latex_to_mathml(&source).map_err(|e| e.to_string()),
+        );
+        assert_eq!(a.editor.math().to_latex(), "y");
+        assert!(!a.draft_dirty);
+    }
+    #[test]
+    fn invalid_latex_keeps_the_last_valid_equation_and_raw_draft() {
+        let mut a = app();
+        a.load_math("<math><mi>x</mi></math>", None, None);
+        let before = a.editor.math();
+        let key = a.render_key;
+        let source = r"\unknowncommand{a}";
+        let (generation, _) = source_request(&mut a, source, Instant::now());
+        parsed(
+            &mut a,
+            generation,
+            eqntide::service::parse_latex_to_mathml(source).map_err(|e| e.to_string()),
+        );
+        assert_eq!(a.editor.math(), before);
+        assert_eq!(a.render_key, key);
+        assert_eq!(a.latex, source);
+        assert!(a.draft_dirty);
+        assert!(a.latex_error.is_some());
+    }
+    #[test]
+    fn reverting_source_invalidates_its_inflight_parse() {
+        let mut a = app();
+        a.load_math("<math><mi>x</mi></math>", None, None);
+        let before = a.editor.math();
+        let (generation, _) = source_request(&mut a, "y", Instant::now());
+        a.changed();
+        parsed(
+            &mut a,
+            generation,
+            eqntide::service::parse_latex_to_mathml("y").map_err(|e| e.to_string()),
+        );
+        assert_eq!(a.editor.math(), before);
+        assert_eq!(a.latex, "x");
+        assert!(!a.draft_dirty);
+    }
+    #[test]
+    fn live_source_replacement_can_undo_to_original_mathml_attributes() {
+        let mut a = app();
+        a.load_math("<math><mi mathvariant=\"bold\">x</mi></math>", None, None);
+        let before = a.editor.math();
+        let (generation, _) = source_request(&mut a, "y", Instant::now());
+        parsed(
+            &mut a,
+            generation,
+            eqntide::service::parse_latex_to_mathml("y").map_err(|e| e.to_string()),
+        );
+        a.editor.undo();
+        a.changed();
+        assert_eq!(a.editor.math(), before);
+    }
+    #[test]
+    fn clearing_latex_clears_canvas_through_the_background_worker() {
+        let mut a = app();
+        a.load_math("<math><mi>x</mi></math>", None, None);
+        a.latex = String::new();
+        a.source_changed(Instant::now() - Duration::from_secs(1));
+        a.request_latex_parse(&egui::Context::default());
+        let result = a.rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        a.tx.send(result).unwrap();
+        a.events(&egui::Context::default());
+        assert!(a.editor.math().children.is_empty());
+        assert!(!a.draft_dirty);
+        assert!(a.latex.is_empty());
     }
 }
