@@ -11,7 +11,10 @@ on:
       - 'crates/**'
       - 'desktop/**'
       - 'assets/**'
-      - 'scripts/package_native.py'
+      - 'scripts/**'
+      - 'word-addin/**'
+      - 'wps-addin/**'
+      - 'word-template/**'
       - '.github/workflows/**'
   workflow_dispatch:
 
@@ -38,7 +41,14 @@ jobs:
       - run: cargo test --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Python packaging checks
-        run: python -m py_compile scripts/package_native.py
+        run: |
+          python -m py_compile scripts/package_native.py
+          python -m unittest discover -s scripts -p "test_*.py"
+      - name: Add-in JavaScript syntax
+        run: |
+          node --check word-addin/commands.js
+          node --check word-addin/taskpane.js
+          node --check wps-addin/main.js
       - name: Build native desktop and CLI
         run: cargo build --workspace --locked
       - name: Executable smoke test

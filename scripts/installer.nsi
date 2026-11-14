@@ -1,5 +1,6 @@
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
 
 Name "EqnTide"
 OutFile "..\release\EqnTide-Setup.exe"
@@ -25,13 +26,36 @@ RequestExecutionLevel user
 !insertmacro MUI_LANGUAGE "English"
 
 Section "MainSection" SEC01
+    ; Stop only this installation's bridge before replacing its executable.
+    InitPluginsDir
+    SetOutPath "$PLUGINSDIR"
+    File "install-bridge-startup.ps1"
+    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\install-bridge-startup.ps1" -BaseDir "$INSTDIR" -Stop' $0
+    ${If} $0 != 0
+        MessageBox MB_ICONEXCLAMATION "Could not stop the old bridge. Close EqnTide bridge processes and run Setup again."
+        Abort
+    ${EndIf}
     SetOutPath "$INSTDIR"
+    ; Retire the legacy shell only after the user has closed it.
+legacy_retry:
+    IfFileExists "$INSTDIR\EqnTide.exe" 0 legacy_done
+    ClearErrors
+    Delete "$INSTDIR\EqnTide.exe"
+    IfErrors 0 legacy_done
+    MessageBox MB_RETRYCANCEL "Close the old EqnTide application before installing the Rust desktop." IDRETRY legacy_retry
+    Abort
+legacy_done:
     File "..\dist\windows-stage\eqntide-desktop.exe"
     File "..\dist\windows-stage\eqntide-cli.exe"
     File "..\dist\windows-stage\start-server.bat"
+    File "..\dist\windows-stage\install-addins.bat"
+    File "..\dist\windows-stage\register-uri.ps1"
     File "..\dist\windows-stage\README.md"
     File "..\dist\windows-stage\LICENSE"
     File "..\dist\windows-stage\NOTICE"
+
+    SetOutPath "$INSTDIR\scripts"
+    File /r "..\dist\windows-stage\scripts\*.*"
 
     SetOutPath "$INSTDIR\fonts"
     File /r "..\dist\windows-stage\fonts\*.*"
@@ -47,30 +71,16 @@ Section "MainSection" SEC01
     SetOutPath "$INSTDIR\word-template"
     File "..\dist\windows-stage\word-template\EqnTide.dotm"
 
-    ; 1. Auto-install Word Template to Word STARTUP folder
-    CreateDirectory "$APPDATA\Microsoft\Word\STARTUP"
-    CopyFiles /SILENT "$INSTDIR\word-template\EqnTide.dotm" "$APPDATA\Microsoft\Word\STARTUP\EqnTide.dotm"
+    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1"' $0
+    ${If} $0 != 0
+        MessageBox MB_ICONEXCLAMATION "Background bridge setup failed. Run scripts\install-bridge-startup.ps1 to retry."
+    ${EndIf}
 
-    ; 2. Auto-install Word Web Add-in Developer Catalog registry
-    WriteRegStr HKCU "Software\Microsoft\Office\16.0\WEF\Developer" "EqnTide" "$INSTDIR\word-addin\manifest.xml"
-
-    ; 3. Auto-install WPS Office JS Add-in
-    CreateDirectory "$APPDATA\Kingsoft\wps\jsaddons\EqnTide"
-    CreateDirectory "$APPDATA\Kingsoft\wps\jsaddons\EqnTide_1.0.0"
-    CopyFiles /SILENT "$INSTDIR\wps-addin\*.*" "$APPDATA\Kingsoft\wps\jsaddons\EqnTide"
-    CopyFiles /SILENT "$INSTDIR\wps-addin\*.*" "$APPDATA\Kingsoft\wps\jsaddons\EqnTide_1.0.0"
-
-    FileOpen $0 "$APPDATA\Kingsoft\wps\jsaddons\publish.xml" w
-    FileWrite $0 "<?xml version=$\"1.0$\" encoding=$\"UTF-8$\"?>$\r$\n<jsplugins>$\r$\n  <jsplugin name=$\"EqnTide$\" type=$\"wps$\" version=$\"1.0.0$\" enable=$\"enable_dev$\" url=$\"EqnTide_1.0.0/$\" />$\r$\n  <jspluginonline name=$\"EqnTide$\" type=$\"wps$\" enable=$\"enable_dev$\" debug=$\"true$\" url=$\"http://127.0.0.1:17890/wps-addin/$\" />$\r$\n</jsplugins>"
-    FileClose $0
-
-    FileOpen $0 "$APPDATA\Kingsoft\wps\jsaddons\authaddin.json" w
-    FileWrite $0 "{$\r$\n  $\"wps$\": {$\r$\n    $\"namelist$\": $\"EqnTide$\",$\r$\n    $\"EqnTide$\": {$\r$\n      $\"name$\": $\"EqnTide$\",$\r$\n      $\"enable$\": true,$\r$\n      $\"isload$\": true,$\r$\n      $\"path$\": $\"EqnTide_1.0.0/$\",$\r$\n      $\"md5$\": $\"$\",$\r$\n      $\"mode$\": 2$\r$\n    }$\r$\n  }$\r$\n}"
-    FileClose $0
-
-    ; 4. Windows loopback exemption for WebViews
-    ExecWait 'CheckNetIsolation.exe LoopbackExempt -a -n="Microsoft.Win32WebViewHost_cw5n1h2txyewy"'
-    ExecWait 'CheckNetIsolation.exe LoopbackExempt -a -n="Microsoft.WindowsStore_8wekyb3d8bbwe"'
+    ; Share add-in installation policy with the portable package.
+    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-addin.ps1"' $0
+    ${If} $0 != 0
+        MessageBox MB_ICONEXCLAMATION "EqnTide desktop was installed. Add-in setup failed; close Office and rerun scripts\install-addin.ps1."
+    ${EndIf}
 
     WriteRegStr HKCU "Software\Classes\eqntide" "" "URL:EqnTide Protocol"
     WriteRegStr HKCU "Software\Classes\eqntide" "URL Protocol" ""
@@ -93,6 +103,12 @@ Section "MainSection" SEC01
 SectionEnd
 
 Section "Uninstall"
+    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1" -Uninstall' $0
+    ${If} $0 != 0
+        MessageBox MB_ICONEXCLAMATION "Could not stop the bridge. Close EqnTide bridge processes and retry uninstall."
+        Abort
+    ${EndIf}
+    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-addin.ps1" -Uninstall' $0
     ; Remove Word Template Add-in
     Delete "$APPDATA\Microsoft\Word\STARTUP\EqnTide.dotm"
 
@@ -110,6 +126,8 @@ Section "Uninstall"
     RMDir /r "$INSTDIR\fonts"
     RMDir /r "$INSTDIR\icons"
 
+    RMDir /r "$INSTDIR\scripts"
+
     ; Remove files
     RMDir /r "$INSTDIR\word-addin"
     RMDir /r "$INSTDIR\wps-addin"
@@ -117,6 +135,8 @@ Section "Uninstall"
     Delete "$INSTDIR\eqntide-desktop.exe"
     Delete "$INSTDIR\eqntide-cli.exe"
     Delete "$INSTDIR\start-server.bat"
+    Delete "$INSTDIR\install-addins.bat"
+    Delete "$INSTDIR\register-uri.ps1"
     Delete "$INSTDIR\README.md"
     Delete "$INSTDIR\LICENSE"
     Delete "$INSTDIR\NOTICE"

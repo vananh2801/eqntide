@@ -7,7 +7,7 @@ param(
     [switch]$Uninstall
 )
 
-$ErrorActionPreference = "SilentlyContinue"
+$ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (Test-Path (Join-Path $ScriptDir "word-addin")) {
@@ -40,23 +40,55 @@ if ($Uninstall) {
             Remove-Item -Recurse -Force $Path
         }
     }
+    $PublishXml = Join-Path $WpsBasePath 'publish.xml'
+    if (Test-Path $PublishXml) {
+        [xml]$config = Get-Content -Raw $PublishXml
+        foreach ($Node in @($config.DocumentElement.ChildNodes)) {
+            if ($Node.Attributes -and $Node.Attributes['name'] -and $Node.Attributes['name'].Value -in @('EqnTide','MathEditor')) { [void]$config.DocumentElement.RemoveChild($Node) }
+        }
+        $config.Save($PublishXml)
+    }
+    $AuthJson = Join-Path $WpsBasePath 'authaddin.json'
+    if (Test-Path $AuthJson) {
+        $auth = Get-Content -Raw $AuthJson | ConvertFrom-Json
+        if ($auth.wps) {
+            $auth.wps.PSObject.Properties.Remove('EqnTide')
+            $auth.wps.PSObject.Properties.Remove('MathEditor')
+            $names = @(([string]$auth.wps.namelist -split '[,; ]+') | Where-Object { $_ -and $_ -notin @('EqnTide','MathEditor') })
+            $auth.wps | Add-Member -NotePropertyName namelist -NotePropertyValue ($names -join ',') -Force
+            $auth | ConvertTo-Json -Depth 20 | Set-Content $AuthJson -Encoding UTF8
+        }
+    }
     Write-Host "[+] EqnTide and legacy MathEditor WPS add-ins removed." -ForegroundColor Green
 } else {
     Write-Host "--> Installing WPS Office JS Add-in..." -ForegroundColor Yellow
     Remove-Item -Recurse -Force $LegacyWpsTargetPath, $LegacyWpsVersionPath -ErrorAction SilentlyContinue
-    if (!(Test-Path $WpsTargetPath)) {
-        New-Item -ItemType Directory -Path $WpsTargetPath -Force | Out-Null
+    foreach ($Path in @($WpsTargetPath, $WpsVersionPath)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsTargetPath -Recurse -Force
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsVersionPath -Recurse -Force
 
     $PublishXml = Join-Path $WpsBasePath "publish.xml"
-    $xmlContent = "<?xml version=""1.0"" encoding=""UTF-8""?>`r`n<jsplugins>`r`n  <jsplugin name=""EqnTide"" type=""wps"" version=""1.0.0"" enable=""enable_dev"" url=""EqnTide_1.0.0/"" />`r`n  <jspluginonline name=""EqnTide"" type=""wps"" enable=""enable_dev"" debug=""true"" url=""http://127.0.0.1:17890/wps-addin/"" />`r`n</jsplugins>"
-    Set-Content -Path $PublishXml -Value $xmlContent -Encoding UTF8
+    if (Test-Path $PublishXml) { [xml]$config = Get-Content -Raw $PublishXml } else { [xml]$config = '<jsplugins />' }
+    foreach ($Node in @($config.DocumentElement.ChildNodes)) {
+        if ($Node.Attributes -and $Node.Attributes['name'] -and $Node.Attributes['name'].Value -in @('EqnTide', 'MathEditor')) { [void]$config.DocumentElement.RemoveChild($Node) }
+    }
+    $entry = $config.CreateElement('jsplugin')
+    foreach ($pair in (@{name='EqnTide';type='wps';version='1.0.0';enable='enable_dev';url='EqnTide_1.0.0/'}).GetEnumerator()) { $entry.SetAttribute($pair.Key, $pair.Value) }
+    [void]$config.DocumentElement.AppendChild($entry)
+    $online = $config.CreateElement('jspluginonline')
+    foreach ($pair in (@{name='EqnTide';type='wps';enable='enable_dev';debug='true';url='http://127.0.0.1:17890/wps-addin/'}).GetEnumerator()) { $online.SetAttribute($pair.Key, $pair.Value) }
+    [void]$config.DocumentElement.AppendChild($online)
+    $config.Save($PublishXml)
 
     $AuthJson = Join-Path $WpsBasePath "authaddin.json"
-    $jsonContent = "{`r`n  ""wps"": {`r`n    ""namelist"": ""EqnTide"",`r`n    ""EqnTide"": {`r`n      ""name"": ""EqnTide"",`r`n      ""enable"": true,`r`n      ""isload"": true,`r`n      ""path"": ""EqnTide_1.0.0/"",`r`n      ""md5"": """",`r`n      ""mode"": 2`r`n    }`r`n  }`r`n}"
-    Set-Content -Path $AuthJson -Value $jsonContent -Encoding UTF8
+    $auth = if (Test-Path $AuthJson) { Get-Content -Raw $AuthJson | ConvertFrom-Json } else { [pscustomobject]@{} }
+    if (!$auth.wps) { $auth | Add-Member -NotePropertyName wps -NotePropertyValue ([pscustomobject]@{}) -Force }
+    $names = @(([string]$auth.wps.namelist -split '[,; ]+') | Where-Object { $_ -and $_ -notin @('EqnTide','MathEditor') }) + @('EqnTide')
+    $auth.wps | Add-Member -NotePropertyName namelist -NotePropertyValue ($names -join ',') -Force
+    $auth.wps | Add-Member -NotePropertyName EqnTide -NotePropertyValue ([pscustomobject]@{name='EqnTide';enable=$true;isload=$true;path='EqnTide_1.0.0/';md5='';mode=2}) -Force
+    $auth | ConvertTo-Json -Depth 20 | Set-Content $AuthJson -Encoding UTF8
 
     Write-Host "[+] WPS Add-in successfully installed to $WpsTargetPath" -ForegroundColor Green
 }
@@ -86,5 +118,14 @@ if ($Uninstall) {
 }
 
 Write-Host ""
+$WordStartup = Join-Path $env:APPDATA 'Microsoft\Word\STARTUP'
+$Template = Join-Path $WordStartup 'EqnTide.dotm'
+if ($Uninstall) {
+    Remove-Item $Template -ErrorAction SilentlyContinue
+} else {
+    New-Item -ItemType Directory $WordStartup -Force | Out-Null
+    Copy-Item (Join-Path $BaseDir 'word-template\EqnTide.dotm') $Template -Force -ErrorAction Stop
+}
+
 Write-Host "Done! Please restart Microsoft Word or WPS Office." -ForegroundColor Cyan
 Write-Host "Make sure the desktop editor application is running (listening on port 17890)." -ForegroundColor Cyan

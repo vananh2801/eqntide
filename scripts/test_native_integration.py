@@ -1,0 +1,223 @@
+"""Check installed/portable paths without installing into the user's profile."""
+import importlib.util
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import unittest
+
+spec = importlib.util.spec_from_file_location("package_native", Path(__file__).with_name("package_native.py"))
+pack = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pack)
+
+
+class NativeIntegration(unittest.TestCase):
+    def stage(self, root, windows):
+        binaries = root / "bin"
+        binaries.mkdir()
+        for name in ("eqntide-cli", "eqntide-desktop"):
+            file = binaries / (name + (".exe" if windows else ""))
+            file.write_bytes(b"test executable")
+            file.chmod(0o755)
+        stage = root / "portable folder"
+        stage.mkdir()
+        pack.populate(stage, binaries, windows)
+        return stage
+
+    def test_windows_installer_inputs_and_uri_target_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = self.stage(Path(tmp), True)
+            self.assertIn("eqntide-desktop.exe", (stage / "register-uri.ps1").read_text())
+            self.assertIn("EQNTIDE_DESKTOP_BIN=", (stage / "start-server.bat").read_text())
+            installer = (pack.ROOT / "scripts/installer.nsi").read_text()
+            for path in re.findall(r'^\s*File(?: /r)? "\.\.\\dist\\windows-stage\\([^"]+)"', installer, re.M):
+                path = path.replace("\\", "/")
+                self.assertTrue(list(stage.glob(path)), path)
+            self.assertNotIn("src-tauri", installer)
+
+    @unittest.skipIf(__import__('sys').platform == 'win32', 'Linux systemd installer')
+    def test_portable_service_resolves_bundled_executables(self):
+        if __import__('sys').platform != 'linux':
+            self.skipTest('Linux systemd installer')
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = self.stage(Path(tmp), False)
+            result = subprocess.run(["bash", str(stage / "scripts/install-bridge-service.sh"), "--print-unit"], capture_output=True, text=True, check=True)
+            self.assertIn(f'ExecStart="{stage}/eqntide-cli" --server', result.stdout)
+            self.assertIn(f'EQNTIDE_DESKTOP_BIN={stage}/eqntide-desktop', result.stdout)
+            self.assertNotIn("target/release", result.stdout)
+            self.assertTrue((stage / "scripts/install-addin.sh").is_file())
+
+
+class WpsConfig(unittest.TestCase):
+    def test_install_uninstall_preserve_other_addins(self):
+        import configure_wps
+        import json
+        import xml.etree.ElementTree as ET
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'publish.xml').write_text('<jsplugins><jsplugin name="Other" url="other/"/></jsplugins>')
+            (root / 'authaddin.json').write_text(json.dumps({'wps': {'namelist': 'Other', 'Other': {'mode': 2}}}))
+            configure_wps.configure(root)
+            configure_wps.configure(root)
+            nodes = list(ET.parse(root / 'publish.xml').getroot())
+            self.assertEqual(len([n for n in nodes if n.get('name') == 'Other']), 1)
+            self.assertEqual(len([n for n in nodes if n.get('name') == 'EqnTide']), 2)
+            configure_wps.configure(root, uninstall=True)
+            config = json.loads((root / 'authaddin.json').read_text())
+            self.assertEqual(config['wps']['Other'], {'mode': 2})
+            self.assertEqual(config['wps']['namelist'], 'Other')
+            self.assertNotIn('EqnTide', config['wps'])
+
+
+class LinuxMigration(unittest.TestCase):
+    def test_previous_tauri_desktop_id_launches_native_binary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / 'stage'
+            source.mkdir()
+            for name in ('eqntide-cli', 'eqntide-desktop'):
+                (source / name).write_bytes(b'test')
+            (source / 'icons').mkdir()
+            (source / 'icons/icon.png').write_bytes(b'icon')
+            tree = base / 'root'
+            pack.linux_tree(source, tree)
+            alias = (tree / 'usr/share/applications/EqnTide.desktop').read_text()
+            self.assertIn('Exec=/usr/bin/eqntide-desktop %u', alias)
+            self.assertIn('NoDisplay=true', alias)
+            self.assertTrue((tree / 'usr/bin/eqntide-cli').exists())
+
+
+@unittest.skipUnless(__import__('sys').platform == 'linux', 'Linux package/session setup')
+class SessionAddins(unittest.TestCase):
+    def test_session_install_retries_and_updates_only_when_needed(self):
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location('session_addins', Path(__file__).with_name('install-session-addins.py'))
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / 'home'
+            home.mkdir()
+            stage = NativeIntegration().stage(root, False)
+            import os
+            with patch.dict(os.environ, {'HOME': str(home), 'XDG_STATE_HOME': str(home / '.local/state')}), patch.object(helper.os, 'getuid', return_value=1000):
+                helper.install_for_session(stage)
+                marker = home / '.local/state/eqntide/addins.sha256'
+                old_digest = marker.read_text()
+                with patch.object(helper.subprocess, 'run') as run:
+                    helper.install_for_session(stage)
+                    run.assert_not_called()
+                (stage / 'wps-addin/main.js').write_text('// new revision')
+                helper.install_for_session(stage)
+                self.assertNotEqual(marker.read_text(), old_digest)
+                target = home / '.local/share/Kingsoft/wps/jsaddons/EqnTide/main.js'
+                self.assertEqual(target.read_text(), '// new revision')
+                target.unlink()
+                helper.install_for_session(stage)
+                self.assertTrue(target.exists())
+
+    def test_package_setup_drops_privileges_and_ignores_root(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import os
+        spec = importlib.util.spec_from_file_location('session_addins', Path(__file__).with_name('install-session-addins.py'))
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with tempfile.TemporaryDirectory() as tmp:
+            account = SimpleNamespace(pw_name='desktop', pw_dir=tmp, pw_gid=1001)
+            with patch.dict(os.environ, {'SUDO_UID': '1001', 'PKEXEC_UID': '0'}, clear=True), patch.object(helper.pwd, 'getpwuid', return_value=account), patch.object(helper.os, 'getgrouplist', return_value=[1001]), patch.object(helper.subprocess, 'run', return_value=SimpleNamespace(stdout='')) as run:
+                helper.package_install()
+                self.assertEqual(run.call_count, 2)
+                kwargs = run.call_args.kwargs
+                self.assertEqual(kwargs['user'], 1001)
+                self.assertEqual(kwargs['group'], 1001)
+                self.assertEqual(kwargs['env']['HOME'], tmp)
+
+    def test_deb_configure_hook_and_session_fallback_are_packaged(self):
+        from unittest.mock import patch
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'out'
+            stage = NativeIntegration().stage(Path(tmp), False)
+            import shutil
+            def populate(target, binary_dir, windows):
+                shutil.copytree(stage, target, dirs_exist_ok=True)
+            def inspect_deb(args, **kwargs):
+                self.assertEqual(args[0], 'dpkg-deb')
+                tree = Path(args[-2])
+                hook = tree / 'DEBIAN/postinst'
+                self.assertTrue(hook.stat().st_mode & 0o111)
+                self.assertIn('"$1" = configure', hook.read_text())
+                self.assertIn('--package-install', hook.read_text())
+                removal = tree / 'DEBIAN/prerm'
+                self.assertIn('--package-remove', removal.read_text())
+                self.assertIn('remove|deconfigure', removal.read_text())
+                subprocess.run_original(['sh', '-n', str(removal)], check=True)
+                subprocess.run_original(['sh', '-n', str(hook)], check=True)
+                self.assertTrue((tree / 'etc/xdg/autostart/eqntide-addins.desktop').exists())
+                self.assertTrue((tree / 'usr/lib/eqntide/scripts/install-session-addins.py').exists())
+            original = subprocess.run
+            with patch.object(pack, 'populate', side_effect=populate), patch.object(subprocess, 'run_original', original, create=True), patch.object(pack.subprocess, 'run', side_effect=inspect_deb), patch.object(sys, 'argv', ['package_native.py', '--target', 'x86_64-unknown-linux-gnu', '--format', 'deb', '--output', str(output)]):
+                pack.main()
+
+    def test_service_enable_reuse_and_cleanup_in_isolated_home(self):
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage = NativeIntegration().stage(root, False)
+            home = root / 'home'
+            home.mkdir()
+            fake = root / 'tools'
+            fake.mkdir()
+            log = root / 'systemctl.log'
+            command = fake / 'systemctl'
+            command.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_SYSTEMCTL_LOG"\n')
+            command.chmod(0o755)
+            env = dict(os.environ, HOME=str(home), PATH=str(fake) + ':' + os.environ['PATH'], TEST_SYSTEMCTL_LOG=str(log))
+            script = str(stage / 'scripts/install-bridge-service.sh')
+            subprocess.run(['bash', script], env=env, check=True, capture_output=True)
+            subprocess.run(['bash', script, '--ensure'], env=env, check=True, capture_output=True)
+            unit = home / '.config/systemd/user/eqntide.service'
+            self.assertTrue(unit.exists())
+            self.assertIn(f'WorkingDirectory={stage}', unit.read_text())
+            import shutil
+            if shutil.which('systemd-analyze'):
+                subprocess.run(['systemd-analyze', '--user', 'verify', str(unit)], check=True, capture_output=True)
+            calls = log.read_text()
+            self.assertEqual(calls.count('restart eqntide.service'), 1)
+            self.assertIn('enable --now eqntide.service', calls)
+            subprocess.run(['bash', script, '--uninstall'], env=env, check=True, capture_output=True)
+            self.assertFalse(unit.exists())
+            self.assertIn('disable --now eqntide.service', log.read_text())
+
+    def test_server_failure_does_not_skip_addin_setup(self):
+        from unittest.mock import patch
+        import os
+        spec = importlib.util.spec_from_file_location('session_addins', Path(__file__).with_name('install-session-addins.py'))
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {'HOME': tmp}), patch.object(helper.os, 'getuid', return_value=1001), patch.object(helper.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'systemctl')), patch.object(helper, 'install_for_session') as install:
+                with self.assertRaises(RuntimeError):
+                    helper.configure_session(Path(tmp))
+                install.assert_called_once()
+
+    def test_service_removal_requires_matching_installation_marker(self):
+        from unittest.mock import patch
+        import os
+        spec = importlib.util.spec_from_file_location('session_addins', Path(__file__).with_name('install-session-addins.py'))
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / 'installed'
+            state = Path(tmp) / '.local/state/eqntide'
+            state.mkdir(parents=True)
+            marker = state / 'server-managed'
+            with patch.dict(os.environ, {'HOME': tmp}), patch.object(helper.os, 'getuid', return_value=1001), patch.object(helper.subprocess, 'run') as run:
+                marker.write_text('/different/installation')
+                helper.remove_server(base)
+                run.assert_not_called()
+                marker.write_text(str(base.resolve()))
+                helper.remove_server(base)
+                self.assertEqual(run.call_args.args[0][-1], '--uninstall')
+                self.assertFalse(marker.exists())
