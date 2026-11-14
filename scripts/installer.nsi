@@ -62,8 +62,8 @@ legacy_done:
     SetOutPath "$INSTDIR\icons"
     File /r "..\dist\windows-stage\icons\*.*"
 
-    SetOutPath "$INSTDIR\word-addin"
-    File /r "..\dist\windows-stage\word-addin\*.*"
+    ; Clean assets shipped by older Office.js-based releases.
+    RMDir /r "$INSTDIR\word-addin"
 
     SetOutPath "$INSTDIR\wps-addin"
     File /r "..\dist\windows-stage\wps-addin\*.*"

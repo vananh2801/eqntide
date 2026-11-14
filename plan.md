@@ -6,7 +6,7 @@
   JavaScript hay MathLive trong tiến trình desktop.
 - Đích chuyển đổi là editor công thức trực quan có con trỏ cấu trúc, vùng chọn,
   template, undo/redo; bản LaTeX + preview chỉ là mốc trung gian.
-- Giữ engine, CLI, Word/WPS add-in JavaScript/VBA và hợp đồng HTTP tại
+- Giữ engine, CLI, Word VBA `.dotm` và WPS add-in JavaScript và hợp đồng HTTP tại
   `127.0.0.1:17890`.
 - Chỉ hỗ trợ Linux/Windows; tạm dừng macOS vì chưa có máy kiểm thử.
 - Đóng cửa sổ sẽ thoát sau xử lý Lưu/Bỏ thay đổi/Hủy, không thêm tray.
@@ -142,3 +142,6 @@ Thay đổi này thay thế bước Apply/xác nhận ở trên. Giữ nguyên c
 đang gõ và vị trí nhập; kết quả parse cũ không được đè nội dung mới.
 LaTeX lỗi/chưa hoàn chỉnh giữ canvas hợp lệ gần nhất và báo lỗi ngay dưới ô nhập.
 Có thể revert bản nháp; undo khôi phục cây/thuộc tính trước cập nhật nguồn.
+
+Word chỉ dùng `word-template/EqnTide.dotm`; đã bỏ Word Office.js add-in, catalog
+và tài nguyên web. WPS giữ nguyên add-in JavaScript và dùng chung bridge.

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Registers Word & WPS Office Add-ins for the Math Equation Editor & Converter on Windows.
+  Installs the Word VBA template and WPS Office add-in for the Math Equation Editor & Converter on Windows.
 #>
 
 param(
@@ -10,17 +10,15 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (Test-Path (Join-Path $ScriptDir "word-addin")) {
+if (Test-Path (Join-Path $ScriptDir "word-template")) {
     $BaseDir = $ScriptDir
-} elseif (Test-Path (Join-Path (Split-Path -Parent $ScriptDir) "word-addin")) {
+} elseif (Test-Path (Join-Path (Split-Path -Parent $ScriptDir) "word-template")) {
     $BaseDir = Split-Path -Parent $ScriptDir
 } else {
     $BaseDir = $ScriptDir
 }
 
-$WordAddinDir = Join-Path $BaseDir "word-addin"
 $WpsAddinDir = Join-Path $BaseDir "wps-addin"
-$ManifestPath = Join-Path $WordAddinDir "manifest.xml"
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " EqnTide Add-in Installer (Windows)" -ForegroundColor Cyan
@@ -93,30 +91,18 @@ if ($Uninstall) {
     Write-Host "[+] WPS Add-in successfully installed to $WpsTargetPath" -ForegroundColor Green
 }
 
-# 2. Microsoft Word Developer WEF Registry Registration
+# Retire this application's old Word web catalog entry on install AND uninstall.
+# Keep unrelated Office add-ins and shared WebView loopback settings untouched.
 $RegistryPath = "HKCU:\Software\Microsoft\Office\16.0\WEF\Developer"
-
-if ($Uninstall) {
-    if (Test-Path $RegistryPath) {
-        Write-Host "--> Removing Word Add-in Developer Catalog..." -ForegroundColor Yellow
-        Remove-ItemProperty -Path $RegistryPath -Name "EqnTide" -ErrorAction SilentlyContinue
-        Write-Host "[+] Word Add-in registry entry removed." -ForegroundColor Green
-    }
-} else {
-    Write-Host "--> Registering Microsoft Word Add-in Manifest in Developer Catalog..." -ForegroundColor Yellow
-    if (!(Test-Path $RegistryPath)) {
-        New-Item -Path $RegistryPath -Force | Out-Null
-    }
-    Set-ItemProperty -Path $RegistryPath -Name "EqnTide" -Value $ManifestPath -Type String
-    Write-Host "[+] Word Add-in registered via Developer Catalog." -ForegroundColor Green
-
-    # Enable loopback exemption for local webview (Office JS localhost / 127.0.0.1 bridge access)
-    try {
-        CheckNetIsolation.exe LoopbackExempt -a -n="Microsoft.Win32WebViewHost_cw5n1h2txyewy" 2>$null
-        CheckNetIsolation.exe LoopbackExempt -a -n="Microsoft.WindowsStore_8wekyb3d8bbwe" 2>$null
-    } catch {}
+if (Test-Path $RegistryPath) {
+    Remove-ItemProperty -Path $RegistryPath -Name 'EqnTide' -ErrorAction SilentlyContinue
+}
+$LegacyWebAssets = Join-Path $BaseDir 'word-addin'
+if (Test-Path -LiteralPath $LegacyWebAssets) {
+    Remove-Item -LiteralPath $LegacyWebAssets -Recurse -Force
 }
 
+# Word integration is exclusively the VBA global template in STARTUP.
 Write-Host ""
 $WordStartup = Join-Path $env:APPDATA 'Microsoft\Word\STARTUP'
 $Template = Join-Path $WordStartup 'EqnTide.dotm'

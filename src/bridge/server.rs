@@ -388,11 +388,6 @@ fn serve_addin_file(folder: &str, rel_path: &str, origin: Option<&str>) -> Optio
 
 fn serve_addin_route(path: &str, origin: Option<&str>) -> Option<HttpResponse> {
     let (folder, rel_path) = match path {
-        "/manifest.xml" => ("word-addin", "manifest.xml"),
-        path if path.starts_with("/word-addin/") => (
-            "word-addin",
-            path.strip_prefix("/word-addin/").unwrap_or(""),
-        ),
         path if path.starts_with("/wps-addin/") => {
             ("wps-addin", path.strip_prefix("/wps-addin/").unwrap_or(""))
         }
@@ -1295,35 +1290,17 @@ mod tests {
         let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
         let addr = server_handle.addr();
 
-        // 1. Word Add-in files
-        let req = format!(
-            "GET /word-addin/manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
-        );
-        let resp = send_raw_http(addr, &req);
-        assert_eq!(resp.status, 200);
-        assert!(resp.body.contains("EqnTide"));
-        assert!(resp.body.contains("OfficeApp"));
-        assert_eq!(
-            resp.headers.get("content-type").map(|s| s.as_str()),
-            Some("application/xml; charset=utf-8")
-        );
-
-        let req2 = format!(
-            "GET /word-addin/commands.js HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
-        );
-        let resp2 = send_raw_http(addr, &req2);
-        assert_eq!(resp2.status, 200);
-        assert!(resp2.body.contains("insertEquation"));
-        assert_eq!(
-            resp2.headers.get("content-type").map(|s| s.as_str()),
-            Some("application/javascript; charset=utf-8")
-        );
-
-        let req3 =
-            format!("GET /manifest.xml HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-        let resp3 = send_raw_http(addr, &req3);
-        assert_eq!(resp3.status, 200);
-        assert!(resp3.body.contains("EqnTide"));
+        // Removed Word web endpoints stay unavailable even on upgraded installs.
+        // Word now uses the VBA template and the session/conversion API only.
+        for path in [
+            "/manifest.xml",
+            "/word-addin/manifest.xml",
+            "/word-addin/commands.js",
+        ] {
+            let request =
+                format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+            assert_eq!(send_raw_http(addr, &request).status, 404);
+        }
 
         // 2. WPS Add-in files
         let req_wps = format!(

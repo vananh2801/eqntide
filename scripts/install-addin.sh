@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # EqnTide Add-in Sideloading Script (Linux)
-# Registers Word & WPS Office Add-ins for the EqnTide Equation Editor & Converter
+# Registers the WPS Office add-in for the EqnTide Equation Editor & Converter
 # ==============================================================================
 
 set -euo pipefail
@@ -9,7 +9,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-WORD_ADDIN_DIR="${REPO_DIR}/word-addin"
 WPS_ADDIN_DIR="${REPO_DIR}/wps-addin"
 
 ACTION="install"

@@ -34,8 +34,7 @@ def populate(stage, binary_dir, windows):
     suffix = ".exe" if windows else ""
     for name in ("eqntide-cli", "eqntide-desktop"):
         shutil.copy2(binary_dir / (name + suffix), stage / (name + suffix))
-    for name in ("word-addin", "wps-addin"):
-        shutil.copytree(ROOT / name, stage / name)
+    shutil.copytree(ROOT / "wps-addin", stage / "wps-addin")
     (stage / "word-template").mkdir()
     shutil.copy2(ROOT / "word-template/EqnTide.dotm", stage / "word-template/EqnTide.dotm")
     for name in ("README.md", "LICENSE", "NOTICE"):
@@ -134,7 +133,10 @@ def main():
                     for path in stage.rglob("*"):
                         if path.is_file():
                             file.write(path, path.relative_to(temp))
-                shutil.copytree(stage, args.output / "windows-stage", dirs_exist_ok=True)
+                windows_stage = args.output / "windows-stage"
+                if windows_stage.exists():
+                    shutil.rmtree(windows_stage)
+                shutil.copytree(stage, windows_stage)
             else:
                 archive = args.output / (label + ".tar.gz")
                 with tarfile.open(archive, "w:gz") as file:

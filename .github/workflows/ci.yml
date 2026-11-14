@@ -12,7 +12,6 @@ on:
       - 'desktop/**'
       - 'assets/**'
       - 'scripts/**'
-      - 'word-addin/**'
       - 'wps-addin/**'
       - 'word-template/**'
       - '.github/workflows/**'
@@ -46,8 +45,6 @@ jobs:
           python -m unittest discover -s scripts -p "test_*.py"
       - name: Add-in JavaScript syntax
         run: |
-          node --check word-addin/commands.js
-          node --check word-addin/taskpane.js
           node --check wps-addin/main.js
       - name: Build native desktop and CLI
         run: cargo build --workspace --locked

@@ -1,6 +1,6 @@
 //! Local communication bridge server (127.0.0.1:17890) for Office/WPS Add-ins.
 //!
-//! Exposes a high-performance HTTP bridge enabling Office.js and WPS JS Add-ins
+//! Exposes a high-performance HTTP bridge enabling the Word VBA template and WPS JS add-in
 //! to communicate with the local equation conversion engine and popup editor.
 //!
 //! # Key Capabilities
