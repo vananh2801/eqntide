@@ -131,16 +131,35 @@ canvas to insert it. Hover a template for its description and shortcut. The
 horizontal zoom control spans 150–400% and changes only the display. It sits
 beside Save in the fixed footer, on the same row as MathType/OMML, font size and
 undo/redo. The minimum window size is 1040×560 logical pixels to keep this row
-intact, including all current symbol buttons. The actual viewport is checked
+intact. The actual viewport is checked
 again after startup/DPI changes. The template panel always reserves three rows;
-if the compositor temporarily supplies a narrower window, the palette scrolls
-horizontally instead of wrapping into a fourth row.
+large categories or temporarily narrower windows use horizontal scrolling
+instead of wrapping into a fourth row.
 The source field remains below the canvas; invalid LaTeX keeps the canvas white
 and reports errors in the bottom status bar. Template/category lists scroll
-independently in small windows. Open Batch DOCX below the sidebar categories;
+independently in small windows. Batch DOCX stays pinned below the scrolling sidebar categories;
 its back button returns to the equation without losing edits. Empty editing slots
 use a light-blue rounded dashed outline. The canvas and source field share the
 same horizontal margins.
+
+The sidebar contains 20 groups covering the MathType reference palettes: fences,
+fractions/radicals, scripts, integrals, sums, products/set operators, matrices,
+embellishments, bars/braces, labeled arrows, boxes, relations, operators, arrows,
+logic, sets, miscellaneous symbols, lowercase/uppercase Greek and spaces/dots.
+The same catalog supplies the buttons and command suggestions. Accents, scripts
+and boxes take the selected expression, or attach to the preceding expression.
+The **⋯** button in Matrices opens a custom matrix dialog (1–20 rows/columns,
+left/center/right alignment and six fence styles); Cancel leaves the equation
+unchanged. Inserting a matrix is one undo step.
+
+LaTeX extensions preserve structural palette variants when editing the source:
+`\dfrac`/`\tfrac`, `\sfrac`, `\atopfrac`, `\prescript`,
+`\overset`/`\underset`, `\limits`/`\nolimits`, styled letters,
+accents, labeled arrows and aligned arrays. `\enclose{notation}{body}` covers
+partial boxes and strike combinations using MathML notation names (for example,
+`\enclose{top left}{x+1}`); `\boxed`, `\cancel`, `\bcancel` and
+`\xcancel` are convenient aliases. See [palette coverage](desktop/PALETTE_COVERAGE.md)
+for the reference-group mapping and export equivalences.
 
 Typing `\` in the canvas opens native LaTeX command suggestions at the caret.
 Use **↑/↓** to select, **Tab/Enter** or a click to insert, and **Esc** to cancel.

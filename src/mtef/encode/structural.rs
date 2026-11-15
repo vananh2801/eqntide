@@ -4,8 +4,8 @@ use crate::error::Result;
 use crate::mathml::MathNode;
 use crate::mtef::{
     boxed, long_division, matrix, pile, presubscript, presubsuperscript, presuperscript,
-    strike_through, subscript, subsuperscript, superscript, HALIGN_CENTER, HALIGN_LEFT, TV_ST_DOWN,
-    TV_ST_HORIZ, TV_ST_UP, VALIGN_CENTER_BASELINE,
+    strike_through, subscript, subsuperscript, superscript, HALIGN_CENTER, HALIGN_LEFT,
+    HALIGN_RIGHT, TV_ST_DOWN, TV_ST_HORIZ, TV_ST_UP, VALIGN_CENTER_BASELINE,
 };
 
 use super::MathmlEncoder;
@@ -95,7 +95,7 @@ impl MathmlEncoder {
             all_sides || notation.contains("left"),
             all_sides || actuarial || notation.contains("right"),
             all_sides || actuarial || notation.contains("top"),
-            all_sides || actuarial || notation.contains("bottom"),
+            all_sides || notation.contains("bottom"),
         ))
     }
 
@@ -148,6 +148,7 @@ impl MathmlEncoder {
             let row_refs: Vec<&[u8]> = encoded_rows.iter().map(Vec::as_slice).collect();
             let halign = match node.attr("columnalign") {
                 Some("center") => HALIGN_CENTER,
+                Some("right") => HALIGN_RIGHT,
                 _ => HALIGN_LEFT,
             };
             return Ok(pile(halign, VALIGN_CENTER_BASELINE, &row_refs));
@@ -164,6 +165,7 @@ impl MathmlEncoder {
         let cell_refs: Vec<&[u8]> = encoded_cells.iter().map(Vec::as_slice).collect();
         let h_just = match node.attr("columnalign") {
             Some("left") => HALIGN_LEFT,
+            Some("right") => HALIGN_RIGHT,
             _ => HALIGN_CENTER,
         };
         Ok(matrix(

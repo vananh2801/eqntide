@@ -251,19 +251,21 @@ impl Layout {
     }
 
     /// Build the delimiter `c` so that it spans exactly `asc` above and `desc`
-    /// below the baseline. Supports parentheses, brackets, braces, floors, ceilings,
-    /// absolute value (`|`), and norm (`‖`).
+    /// below the baseline. Supports parentheses, brackets, double brackets, braces,
+    /// floors, ceilings, absolute value (`|`), and norm (`‖`).
     pub(super) fn stretchy_delimiter(&self, c: char, asc: f32, desc: f32, em: f32) -> Option<LBox> {
         let norm_c = match c {
             '|' | '\u{2223}' => '|',
             '‖' | '\u{2225}' => '‖',
+            '\u{301A}' => '⟦',
+            '\u{301B}' => '⟧',
             _ => c,
         };
 
         // Straight vertical bars (absolute value `|.|` and norm `||.||`):
         // Scaled vertically using their exact font glyph contours from STIX Two Math,
-        // preserving horizontal stroke thickness and double-bar gap identically to the font design.
-        if norm_c == '|' || norm_c == '‖' {
+        // preserving horizontal stroke thickness and double-bar spacingspacing identically to the font design.
+        if matches!(norm_c, '|' | '‖') {
             let face = Face::Symbol;
             let span = asc + desc;
             let top_y = -asc;
@@ -299,6 +301,42 @@ impl Layout {
                 asc,
                 desc,
                 items: polys.into_iter().map(Item::Poly).collect(),
+            });
+        }
+
+        // Double brackets (`⟦`, `⟧`): constructed from four non-overlapping crisp rectangles
+        // so both the rasterizer (which enforces positive polygon area) and EMF winding-fill
+        // preserve the hollow gap between the two vertical stems and uniform cap thickness.
+        if matches!(norm_c, '⟦' | '⟧') {
+            let span = asc + desc;
+            let top_y = -asc;
+            let bot_y = desc;
+            let pad = 0.05 * em;
+            let v_thick = (0.065 * em).max(1.0);
+            let h_thick = (0.052 * em).max(1.0);
+            let gap = 0.115 * em;
+            let overhang = 0.14 * em;
+            let arm_w = 2.0 * v_thick + gap + overhang;
+            let stem_h = (span - 2.0 * h_thick).max(0.0);
+            let stem_y = top_y + h_thick;
+            let (s1_x, s2_x) = if norm_c == '⟦' {
+                (pad, pad + v_thick + gap)
+            } else {
+                (pad + overhang, pad + overhang + v_thick + gap)
+            };
+            let mut items = Vec::with_capacity(4);
+            items.push(Item::Poly(rect(pad, top_y, arm_w, h_thick)));
+            items.push(Item::Poly(rect(pad, bot_y - h_thick, arm_w, h_thick)));
+            if stem_h > 0.0 {
+                items.push(Item::Poly(rect(s1_x, stem_y, v_thick, stem_h)));
+                items.push(Item::Poly(rect(s2_x, stem_y, v_thick, stem_h)));
+            }
+            return Some(LBox {
+                hits: Vec::new(),
+                w: arm_w + 2.0 * pad,
+                asc,
+                desc,
+                items,
             });
         }
 
@@ -682,6 +720,47 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn double_brackets_render_as_four_disjoint_hollow_rects() {
+        let l = layout();
+        let em = 24.0;
+        let asc = 1.4 * em;
+        let desc = 0.9 * em;
+        for c in ['⟦', '⟧'] {
+            let b = l.stretchy_delimiter(c, asc, desc, em).unwrap();
+            assert_eq!(
+                b.items.len(),
+                4,
+                "{c}: must have top, bottom, and two stems"
+            );
+            let rects: Vec<(f32, f32, f32, f32)> = b
+                .items
+                .iter()
+                .map(|it| match it {
+                    Item::Poly(pts) => {
+                        let (mut x0, mut x1, mut y0, mut y1) =
+                            (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+                        for &(x, y) in pts {
+                            x0 = x0.min(x);
+                            x1 = x1.max(x);
+                            y0 = y0.min(y);
+                            y1 = y1.max(y);
+                        }
+                        (x0, y0, x1, y1)
+                    }
+                    _ => panic!("expected Poly rect"),
+                })
+                .collect();
+            // Stems sit strictly between top bar bottom and bottom bar top, and have horizontal gap.
+            let top_bot = rects[0].3;
+            let bot_top = rects[1].1;
+            let (s1, s2) = (rects[2], rects[3]);
+            assert!((s1.1 - top_bot).abs() < 1e-3);
+            assert!((s1.3 - bot_top).abs() < 1e-3);
+            assert!(s2.0 - s1.2 > 0.05 * em, "hollow gap between vertical bars");
         }
     }
 

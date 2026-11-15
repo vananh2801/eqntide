@@ -13,8 +13,44 @@ pub fn mathml_to_latex(node: &MathNode) -> String {
 }
 
 fn format_node(node: &MathNode, out: &mut String) {
+    if matches!(node.tag.as_str(), "mi" | "mn" | "mo") {
+        let style = match node.attr("mathvariant") {
+            Some("double-struck") => Some("\\mathbb"),
+            Some("fraktur") => Some("\\mathfrak"),
+            Some("script") => Some("\\mathcal"),
+            Some("bold") => Some("\\mathbf"),
+            Some("bold-italic") => Some("\\boldsymbol"),
+            Some("normal") if node.tag == "mi" && !is_named_function(&node.text) => {
+                Some("\\mathrm")
+            }
+            Some("italic") if node.tag != "mi" => Some("\\mathit"),
+            _ => None,
+        };
+        if let Some(command) = style {
+            out.push_str(command);
+            out.push('{');
+            let mut plain = node.clone();
+            plain.attrs.retain(|(k, _)| k != "mathvariant");
+            format_node(&plain, out);
+            out.push('}');
+            return;
+        }
+    }
     match node.tag.as_str() {
-        "math" | "mrow" | "mstyle" => format_children(node, out),
+        "math" | "mrow" => format_children(node, out),
+        "mstyle" => {
+            if let Some(value) = node.attr("displaystyle") {
+                out.push_str(if value == "false" {
+                    "\\textstyle{"
+                } else {
+                    "\\displaystyle{"
+                });
+                format_children(node, out);
+                out.push('}');
+            } else {
+                format_children(node, out);
+            }
+        }
         "mi" => format_identifier(node, out),
         "mn" => out.push_str(node.text.trim()),
         "mo" => format_operator(node, out),
@@ -25,6 +61,7 @@ fn format_node(node: &MathNode, out: &mut String) {
         "msup" => format_superscript(node, out),
         "msub" => format_subscript(node, out),
         "msubsup" => format_subsuperscript(node, out),
+        "mmultiscripts" => format_multiscripts(node, out),
         "munder" => format_underscript(node, out),
         "mover" => format_overscript(node, out),
         "munderover" => format_underoverscript(node, out),
@@ -32,6 +69,11 @@ fn format_node(node: &MathNode, out: &mut String) {
         "mtable" => format_matrix(node, out),
         "mtr" | "mtd" => format_children(node, out),
         "menclose" => format_enclosure(node, out),
+        "mspace" => {
+            out.push_str("\\hspace{");
+            out.push_str(node.attr("width").unwrap_or("0em"));
+            out.push('}');
+        }
         "mprescripts" | "none" => {}
         _ => {
             if !node.text.is_empty() {
@@ -44,15 +86,49 @@ fn format_node(node: &MathNode, out: &mut String) {
     }
 }
 
+fn ends_with_control_word(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 && bytes[i - 1].is_ascii_alphabetic() {
+        i -= 1;
+    }
+    if i == bytes.len() || i == 0 || bytes[i - 1] != b'\\' {
+        return false;
+    }
+    let mut slashes = 0usize;
+    while i > 0 && bytes[i - 1] == b'\\' {
+        slashes += 1;
+        i -= 1;
+    }
+    slashes % 2 == 1
+}
+
 fn format_children(node: &MathNode, out: &mut String) {
     for child in &node.children {
-        format_node(child, out);
+        let needs_space = ends_with_control_word(out);
+        let mut piece = String::new();
+        format_node(child, &mut piece);
+        if needs_space
+            && piece
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+        {
+            out.push(' ');
+        }
+        out.push_str(&piece);
     }
 }
 
 fn format_identifier(node: &MathNode, out: &mut String) {
     let text = node.text.trim();
-    if let Some(greek) = map_greek_or_symbol(text) {
+    if let Some(symbol) = crate::catalog::SYMBOLS
+        .iter()
+        .find(|s| s.tag == "mi" && s.glyph == text)
+    {
+        out.push('\\');
+        out.push_str(symbol.name);
+    } else if let Some(greek) = map_greek_or_symbol(text) {
         out.push_str(greek);
     } else if is_named_function(text) {
         out.push('\\');
@@ -69,12 +145,28 @@ fn format_identifier(node: &MathNode, out: &mut String) {
 
 fn format_operator(node: &MathNode, out: &mut String) {
     let text = node.text.trim();
+    if node.attr("stretchy") == Some("true")
+        && matches!(node.attr("form"), Some("prefix" | "postfix"))
+    {
+        out.push_str(&map_fence_delimiter(
+            text,
+            node.attr("form") == Some("prefix"),
+        ));
+        return;
+    }
     if is_invisible_operator(text) {
         // Invisible times/comma/plus/apply are structural MathML markers.
         return;
     }
     if let Some(operator) = map_operator(text) {
         out.push_str(operator);
+    } else if let Some(symbol) = crate::catalog::SYMBOLS
+        .iter()
+        .find(|s| s.tag == "mo" && s.glyph == text)
+    {
+        out.push('\\');
+        out.push_str(symbol.name);
+        out.push(' ');
     } else {
         out.push_str(text);
     }
@@ -91,8 +183,18 @@ fn format_text(node: &MathNode, out: &mut String) {
 }
 
 fn format_fraction(node: &MathNode, out: &mut String) {
-    let command = if is_binomial(node) {
-        "\\binom"
+    let command = if node.attr("bevelled") == Some("true") {
+        if node.attr("displaystyle") == Some("false") {
+            "\\tsfrac"
+        } else {
+            "\\sfrac"
+        }
+    } else if node.attr("displaystyle") == Some("false") {
+        "\\tfrac"
+    } else if node.attr("displaystyle") == Some("true") {
+        "\\dfrac"
+    } else if is_binomial(node) {
+        "\\atopfrac"
     } else {
         "\\frac"
     };
@@ -135,6 +237,9 @@ fn format_superscript(node: &MathNode, out: &mut String) {
     let base = node.children.first();
     let superscript = node.children.get(1);
     format_optional_wrapped_node(base, out);
+    if is_large_operator(base) {
+        out.push_str("\\nolimits");
+    }
 
     if let Some(prime) = prime_shortcut(superscript) {
         out.push_str(prime);
@@ -152,13 +257,48 @@ fn prime_shortcut(node: Option<&MathNode>) -> Option<&str> {
 
 fn format_subscript(node: &MathNode, out: &mut String) {
     format_optional_wrapped_node(node.children.first(), out);
+    if is_large_operator(node.children.first()) {
+        out.push_str("\\nolimits");
+    }
     format_script(node.children.get(1), "_{", out);
 }
 
 fn format_subsuperscript(node: &MathNode, out: &mut String) {
     format_optional_wrapped_node(node.children.first(), out);
+    if is_large_operator(node.children.first()) {
+        out.push_str("\\nolimits");
+    }
     format_script(node.children.get(1), "_{", out);
     format_script(node.children.get(2), "^{", out);
+}
+
+fn format_multiscripts(node: &MathNode, out: &mut String) {
+    if node.children.is_empty() {
+        return;
+    }
+    let split = node
+        .children
+        .iter()
+        .position(|n| n.tag == "mprescripts")
+        .unwrap_or(node.children.len());
+    let mut body = String::new();
+    format_optional_wrapped_node(node.children.first(), &mut body);
+    for pair in node.children[1..split].chunks(2) {
+        format_script(pair.first(), "_{", &mut body);
+        format_script(pair.get(1), "^{", &mut body);
+    }
+    if split < node.children.len() {
+        for pair in node.children[split + 1..].chunks(2) {
+            let mut wrapped = String::from("\\prescript");
+            format_braced_child(pair.get(1), &mut wrapped);
+            format_braced_child(pair.first(), &mut wrapped);
+            wrapped.push('{');
+            wrapped.push_str(&body);
+            wrapped.push('}');
+            body = wrapped;
+        }
+    }
+    out.push_str(&body);
 }
 
 fn format_optional_wrapped_node(node: Option<&MathNode>, out: &mut String) {
@@ -177,22 +317,41 @@ fn format_script(node: Option<&MathNode>, prefix: &str, out: &mut String) {
 fn format_underscript(node: &MathNode, out: &mut String) {
     let base = node.children.first();
     let underscript = node.children.get(1);
-    if is_large_operator(base) {
+    if let Some(command) = underscript
+        .filter(|n| n.tag == "mo" && !is_large_operator(base))
+        .and_then(|n| map_under_accent(&n.text))
+    {
+        out.push_str(command);
+        format_braced_child(base, out);
+    } else if node.attr("accentunder") == Some("true") {
+        format_over_or_under_set("\\underaccent", underscript, base, out);
+    } else if is_large_operator(base) {
         format_optional_node(base, out);
+        if node.attr("data-limloc") == Some("subSup") {
+            out.push_str("\\nolimits");
+        }
         format_script(underscript, "_{", out);
-        return;
+    } else {
+        format_over_or_under_set("\\underset", underscript, base, out);
     }
-    format_over_or_under_set("\\underset", underscript, base, out);
 }
 
 fn format_overscript(node: &MathNode, out: &mut String) {
     let base = node.children.first();
     let overscript = node.children.get(1);
-    if let Some(accent) = overscript.and_then(|node| map_accent(&node.text)) {
+    if let Some(accent) = overscript
+        .filter(|n| n.tag == "mo" && !is_large_operator(base))
+        .and_then(|node| map_accent(&node.text))
+    {
         out.push_str(accent);
         format_braced_child(base, out);
+    } else if node.attr("accent") == Some("true") {
+        format_over_or_under_set("\\overaccent", overscript, base, out);
     } else if is_large_operator(base) {
         format_optional_node(base, out);
+        if node.attr("data-limloc") == Some("subSup") {
+            out.push_str("\\nolimits");
+        }
         format_script(overscript, "^{", out);
     } else {
         format_over_or_under_set("\\overset", overscript, base, out);
@@ -200,7 +359,19 @@ fn format_overscript(node: &MathNode, out: &mut String) {
 }
 
 fn format_underoverscript(node: &MathNode, out: &mut String) {
+    if !is_large_operator(node.children.first()) {
+        out.push_str("\\overset");
+        format_braced_child(node.children.get(2), out);
+        out.push_str("{\\underset");
+        format_braced_child(node.children.get(1), out);
+        format_braced_child(node.children.first(), out);
+        out.push('}');
+        return;
+    }
     format_optional_node(node.children.first(), out);
+    if node.attr("data-limloc") == Some("subSup") {
+        out.push_str("\\nolimits");
+    }
     format_script(node.children.get(1), "_{", out);
     format_script(node.children.get(2), "^{", out);
 }
@@ -230,14 +401,45 @@ fn format_fenced(node: &MathNode, out: &mut String) {
 }
 
 fn format_matrix(node: &MathNode, out: &mut String) {
-    out.push_str("\\begin{matrix} ");
+    let align = node.attr("columnalign");
+    if let Some(align) = align {
+        let cols = node
+            .children
+            .iter()
+            .map(|r| r.children.len())
+            .max()
+            .unwrap_or(1);
+        let values: Vec<_> = align.split_whitespace().collect();
+        out.push_str("\\begin{array}{");
+        for i in 0..cols {
+            out.push(
+                match values
+                    .get(i)
+                    .or_else(|| values.last())
+                    .copied()
+                    .unwrap_or("center")
+                {
+                    "left" => 'l',
+                    "right" => 'r',
+                    _ => 'c',
+                },
+            );
+        }
+        out.push_str("} ");
+    } else {
+        out.push_str("\\begin{matrix} ");
+    }
     for (row_index, row) in node.children.iter().enumerate() {
         if row_index > 0 {
             out.push_str(" \\\\ ");
         }
         format_matrix_row(row, out);
     }
-    out.push_str(" \\end{matrix}");
+    out.push_str(if align.is_some() {
+        " \\end{array}"
+    } else {
+        " \\end{matrix}"
+    });
 }
 
 fn format_matrix_row(row: &MathNode, out: &mut String) {
@@ -250,23 +452,20 @@ fn format_matrix_row(row: &MathNode, out: &mut String) {
 }
 
 fn format_enclosure(node: &MathNode, out: &mut String) {
-    out.push_str(enclosure_command(node.attr("notation").unwrap_or("box")));
+    let notation = node.attr("notation").unwrap_or("box");
+    match notation {
+        "box" => out.push_str("\\boxed{"),
+        "updiagonalstrike" => out.push_str("\\cancel{"),
+        "downdiagonalstrike" => out.push_str("\\bcancel{"),
+        "updiagonalstrike downdiagonalstrike" => out.push_str("\\xcancel{"),
+        _ => {
+            out.push_str("\\enclose{");
+            out.push_str(notation);
+            out.push_str("}{");
+        }
+    }
     format_children(node, out);
     out.push('}');
-}
-
-fn enclosure_command(notation: &str) -> &'static str {
-    if notation.contains("box") {
-        "\\boxed{"
-    } else if notation.contains("radical") {
-        "\\sqrt{"
-    } else if notation.contains("top") || notation.contains("overline") {
-        "\\overline{"
-    } else if notation.contains("bottom") || notation.contains("underline") {
-        "\\underline{"
-    } else {
-        "{"
-    }
 }
 
 fn trim_trailing_whitespace(s: &mut String) {
@@ -312,7 +511,10 @@ fn is_large_operator(node: Option<&MathNode>) -> bool {
             | "∏"
             | "∫"
             | "∮"
-    ) || (n.tag == "mo" && (t == "∑" || t == "∏" || t == "∫" || t == "∮"))
+    ) || (n.tag == "mo"
+        && t.chars()
+            .next()
+            .is_some_and(|c| crate::symbols::is_big_op(c) || crate::symbols::is_integral(c)))
         || (n.tag == "mi" && matches!(t, "lim" | "min" | "max" | "inf" | "sup"))
 }
 
@@ -325,8 +527,45 @@ fn map_accent(s: &str) -> Option<&'static str> {
         "." | "\u{02D9}" => Some("\\dot"),
         ".." | "\u{00A8}" => Some("\\ddot"),
         "°" => Some("\\mathring"),
+        "⃛" => Some("\\dddot"),
+        "⃜" => Some("\\ddddot"),
+        "←" => Some("\\overleftarrow"),
+        "↔" => Some("\\overleftrightarrow"),
+        "⇀" => Some("\\overrightharpoon"),
+        "↼" => Some("\\overleftharpoon"),
+        "ˇ" => Some("\\check"),
+        "˘" => Some("\\breve"),
+        "´" => Some("\\acute"),
+        "`" => Some("\\grave"),
+        "⏜" | "⌒" => Some("\\overparen"),
+        "⏞" => Some("\\overbrace"),
+        "⎴" => Some("\\overbracket"),
         _ => None,
     }
+}
+
+fn map_under_accent(s: &str) -> Option<&'static str> {
+    Some(match s.trim() {
+        "¯" | "_" | "―" | "̲" => "\\underline",
+        "." | "˙" => "\\underdot",
+        "¨" => "\\underddot",
+        "⃛" => "\\underdddot",
+        "⃜" => "\\underddddot",
+        "^" | "ˆ" => "\\underhat",
+        "~" | "˜" => "\\undertilde",
+        "ˇ" => "\\undercheck",
+        "˘" => "\\underbreve",
+        "°" => "\\underring",
+        "→" => "\\underrightarrow",
+        "←" => "\\underleftarrow",
+        "↔" => "\\underleftrightarrow",
+        "⇀" => "\\underrightharpoon",
+        "↼" => "\\underleftharpoon",
+        "⏝" | "⌣" => "\\underparen",
+        "⏟" => "\\underbrace",
+        "⎵" => "\\underbracket",
+        _ => return None,
+    })
 }
 
 fn map_fence_delimiter(delim: &str, is_open: bool) -> String {
@@ -346,6 +585,17 @@ fn map_fence_delimiter(delim: &str, is_open: bool) -> String {
         "]" => "]",
         "(" => "(",
         ")" => ")",
+        "‖" | "∥" => "\\Vert",
+        "⟨" | "〈" => "\\langle",
+        "⟩" | "〉" => "\\rangle",
+        "⌊" => "\\lfloor",
+        "⌋" => "\\rfloor",
+        "⌈" => "\\lceil",
+        "⌉" => "\\rceil",
+        "⟦" | "〚" => "\\llbracket",
+        "⟧" | "〛" => "\\rrbracket",
+        "⦗" => "\\lgroup",
+        "⦘" => "\\rgroup",
         _ => d,
     };
     if is_open {
@@ -405,7 +655,7 @@ fn map_operator(op: &str) -> Option<&'static str> {
         "′" => Some("'"),
         "″" => Some("''"),
         "‴" => Some("'''"),
-        "°" => Some("^{\\circ}"),
+        "°" => Some("\\degree "),
         "∠" => Some(" \\angle "),
         "⊥" => Some(" \\perp "),
         "∥" => Some(" \\parallel "),
@@ -620,7 +870,7 @@ mod tests {
         let binomial = serialize("<mfrac linethickness=\"0\"><mi>n</mi><mi>k</mi></mfrac>");
         let indexed_root = serialize("<mroot><mi>x</mi><mn>3</mn></mroot>");
 
-        assert_eq!(binomial, "\\binom{n}{k}");
+        assert_eq!(binomial, "\\atopfrac{n}{k}");
         assert_eq!(indexed_root, "\\sqrt[3]{x}");
     }
 

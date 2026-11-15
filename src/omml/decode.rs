@@ -288,8 +288,11 @@ impl OmmlConverter {
         if strike_tlbr {
             notations.push("downdiagonalstrike");
         }
-        if strike_h || strike_v {
+        if strike_h {
             notations.push("horizontalstrike");
+        }
+        if strike_v {
+            notations.push("verticalstrike");
         }
 
         if !notations.is_empty() {
@@ -337,6 +340,18 @@ impl OmmlConverter {
         let text = get_text(node);
         if text.is_empty() {
             return None;
+        }
+        if text
+            .chars()
+            .all(|c| crate::symbols::misc::unicode_space_em(c).is_some())
+        {
+            let width: f32 = text
+                .chars()
+                .filter_map(crate::symbols::misc::unicode_space_em)
+                .sum();
+            let mut space = MathNode::new("mspace");
+            space.set_attr("width", &format!("{width:.6}em"));
+            return Some(space);
         }
         let r_pr = node.find(NS_M, "rPr");
         let sty = m_val(r_pr, "sty", None);
@@ -551,10 +566,12 @@ impl OmmlConverter {
     fn handle_acc(&mut self, node: &Element) -> Result<MathNode> {
         let acc_char = m_val(node.find(NS_M, "accPr"), "chr", Some("^")).unwrap_or_default();
         let base = self.child_mrow(node, "e")?;
-        Ok(mel(
+        let mut accent = mel(
             "mover",
             vec![unwrap_mrow(base), MathNode::leaf("mo", &acc_char)],
-        ))
+        );
+        accent.set_attr("accent", "true");
+        Ok(accent)
     }
 
     fn handle_bar(&mut self, node: &Element) -> Result<MathNode> {
@@ -597,19 +614,53 @@ impl OmmlConverter {
                 | "⟺"
                 | "⇄"
                 | "⇌"
+                | "⇋"
+                | "⇆"
+                | "⇀"
+                | "↼"
+                | "↦"
         );
         if is_arrow {
             let tag = if pos == "top" { "munder" } else { "mover" };
             return Ok(mel(tag, vec![gch, unwrap_mrow(base)]));
         }
         let tag = if pos == "top" { "mover" } else { "munder" };
-        Ok(mel(tag, vec![unwrap_mrow(base), gch]))
+        let mut accent = mel(tag, vec![unwrap_mrow(base), gch]);
+        accent.set_attr(
+            if pos == "top" {
+                "accent"
+            } else {
+                "accentunder"
+            },
+            "true",
+        );
+        Ok(accent)
     }
 
     // ── Matrix / equation array ───────────────────────────────────────────
 
     fn handle_matrix(&mut self, node: &Element) -> Result<MathNode> {
         let mut table = MathNode::new("mtable");
+        if let Some(mcs) = node.find(NS_M, "mPr").and_then(|pr| pr.find(NS_M, "mcs")) {
+            let mut aligns = Vec::new();
+            for mc in mcs.find_all(NS_M, "mc") {
+                let pr = mc.find(NS_M, "mcPr");
+                let align = m_val(pr, "mcJc", Some("center")).unwrap_or_default();
+                let count = m_val(pr, "count", Some("1"))
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(1)
+                    .min(256);
+                aligns.extend(std::iter::repeat_n(align, count));
+            }
+            if !aligns.is_empty() {
+                let alignment = if aligns.iter().all(|a| a == &aligns[0]) {
+                    aligns[0].clone()
+                } else {
+                    aligns.join(" ")
+                };
+                table.set_attr("columnalign", &alignment);
+            }
+        }
         for mr in node.find_all(NS_M, "mr") {
             let mut mtr = MathNode::new("mtr");
             // In ECMA-376 (standard Word OMML), <m:mr> directly contains <m:e> elements.

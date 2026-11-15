@@ -45,6 +45,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bridge;
+pub mod catalog;
 pub mod cli;
 pub mod docx;
 pub mod error;

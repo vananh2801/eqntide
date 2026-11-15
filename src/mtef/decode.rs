@@ -264,11 +264,18 @@ fn resolve_v5_variations(sel: i8, var_code: u16) -> Vec<&'static str> {
         check_flag(&mut res, var_code, 0x0002, "tvFENCE_R");
     }
     if sel == 9 {
-        check_flag(&mut res, var_code, 0x0000, "tvINTV_LPRB");
-        check_flag(&mut res, var_code, 0x0001, "tvINTV_LBRP");
-        check_flag(&mut res, var_code, 0x0002, "tvINTV_LBLB");
-        check_flag(&mut res, var_code, 0x0003, "tvINTV_RBRB");
-        check_flag(&mut res, var_code, 0x0004, "tvINTV_RBLB");
+        match var_code & 0x0003 {
+            0 => res.push("tvINTV_LEFT_LP"),
+            1 => res.push("tvINTV_LEFT_RP"),
+            2 => res.push("tvINTV_LEFT_LB"),
+            _ => res.push("tvINTV_LEFT_RB"),
+        }
+        match (var_code >> 4) & 0x0003 {
+            0 => res.push("tvINTV_RIGHT_LP"),
+            1 => res.push("tvINTV_RIGHT_RP"),
+            2 => res.push("tvINTV_RIGHT_LB"),
+            _ => res.push("tvINTV_RIGHT_RB"),
+        }
     }
     if sel == 10 {
         check_flag(&mut res, var_code, 0, "tvROOT_SQ");
@@ -1388,7 +1395,7 @@ fn map_mt_char_token(typeface: u8, mt_code: u16, is_textmode: bool) -> Option<Ma
         | 0x2070..=0x209F
         | 0x20D0..=0x214F
         | 0x2190..=0x23FF
-        | 0x2500..=0x27BF
+        | 0x2500..=0x27EF
         | 0x27F0..=0x2AFF
         | 0x3000..=0x303F => {
             // Note: BMP Letterlike symbols (ℝ, ℤ, ℕ, ℚ, ℂ, ℍ, ℙ, ℒ, ℜ, ℑ) in 0x2100..=0x214F
@@ -1515,12 +1522,19 @@ fn map_pua_char(mt_code: u16, is_textmode: bool) -> Option<MathNode> {
         // Spaces (0xEF01..=0xEF08)
         0xEF00 => None, // malignmark
         0xEF01 => None, // zero-width space
-        0xEF02 => Some(MathNode::leaf("mtext", "\u{2009}")),
-        0xEF03 => Some(MathNode::leaf("mtext", "\u{205F}")),
-        0xEF04 => Some(MathNode::leaf("mtext", "\u{2009}")),
-        0xEF05 => Some(MathNode::leaf("mtext", "\u{2003}")),
-        0xEF06 => Some(MathNode::leaf("mtext", "\u{2003}\u{2003}")),
-        0xEF08 => Some(MathNode::leaf("mtext", "\u{200A}")),
+        0xEF02..=0xEF08 => {
+            let width = match mt_code {
+                0xEF02 => "0.166667em",
+                0xEF03 => "0.222222em",
+                0xEF04 => "0.277778em",
+                0xEF05 => "1em",
+                0xEF06 => "2em",
+                _ => "0.083333em",
+            };
+            let mut space = MathNode::new("mspace");
+            space.set_attr("width", width);
+            Some(space)
+        }
 
         // Fraktur Capital A..Z (0xF000..=0xF019)
         0xF000..=0xF019 => {
@@ -1803,9 +1817,8 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
                 mfrac.set_attr("bevelled", "true");
             }
             if has_var("tvFR_SMALL") {
-                let mut mstyle = MathNode::with_children("mstyle", vec![mfrac]);
-                mstyle.set_attr("scriptlevel", "+1");
-                Some(mstyle)
+                mfrac.set_attr("displaystyle", "false");
+                Some(mfrac)
             } else {
                 Some(mfrac)
             }
@@ -1906,32 +1919,47 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
         }
 
         "tmINTERVAL" => {
-            let (open_node, close_node) = if has_var("tvINTV_LBLB") {
-                (MathNode::leaf("mo", "["), MathNode::leaf("mo", "["))
-            } else if has_var("tvINTV_RBRB") {
-                (MathNode::leaf("mo", "]"), MathNode::leaf("mo", "]"))
-            } else if has_var("tvINTV_RBLB") {
-                (MathNode::leaf("mo", "]"), MathNode::leaf("mo", "["))
-            } else if has_var("tvINTV_LBRP") {
-                (MathNode::leaf("mo", "["), MathNode::leaf("mo", ")"))
-            } else if has_var("tvINTV_LPRB") {
-                (MathNode::leaf("mo", "("), MathNode::leaf("mo", "]"))
+            let left_from_var = if has_var("tvINTV_LEFT_LP") {
+                Some("(")
+            } else if has_var("tvINTV_LEFT_RP") {
+                Some(")")
+            } else if has_var("tvINTV_LEFT_LB") {
+                Some("[")
+            } else if has_var("tvINTV_LEFT_RB") {
+                Some("]")
             } else {
-                // Delimiters may be in slot[1] or as trailing chars in subobjects
-                let mut delim_nodes = Vec::new();
-                if let Some(s1) = slots.get(1) {
-                    delim_nodes.extend(convert_objs(&s1.objects));
-                }
-                let l = delim_nodes
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| MathNode::leaf("mo", "("));
-                let r = delim_nodes
-                    .get(1)
-                    .cloned()
-                    .unwrap_or_else(|| MathNode::leaf("mo", ")"));
-                (l, r)
+                None
             };
+            let right_from_var = if has_var("tvINTV_RIGHT_LP") {
+                Some("(")
+            } else if has_var("tvINTV_RIGHT_RP") {
+                Some(")")
+            } else if has_var("tvINTV_RIGHT_LB") {
+                Some("[")
+            } else if has_var("tvINTV_RIGHT_RB") {
+                Some("]")
+            } else {
+                None
+            };
+            let (open_node, close_node) =
+                if let (Some(l), Some(r)) = (left_from_var, right_from_var) {
+                    (MathNode::leaf("mo", l), MathNode::leaf("mo", r))
+                } else {
+                    // Delimiters may be in slot[1] or as trailing chars in subobjects
+                    let mut delim_nodes = Vec::new();
+                    if let Some(s1) = slots.get(1) {
+                        delim_nodes.extend(convert_objs(&s1.objects));
+                    }
+                    let l = delim_nodes
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| MathNode::leaf("mo", "("));
+                    let r = delim_nodes
+                        .get(1)
+                        .cloned()
+                        .unwrap_or_else(|| MathNode::leaf("mo", ")"));
+                    (l, r)
+                };
             let body = slot_to_node(slots.first());
             Some(MathNode::with_children(
                 "mrow",
@@ -2149,10 +2177,30 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
                 Some(MathNode::with_children("munderover", vec![s0, s1, s2]))
             } else if upper {
                 let s2 = slot_to_node(slots.get(2).or_else(|| slots.get(1)));
-                Some(MathNode::with_children("mover", vec![s0, s2]))
+                let mut accent = MathNode::with_children("mover", vec![s0, s2]);
+                if accent.children[1].tag == "mo"
+                    && accent.children[1]
+                        .text
+                        .chars()
+                        .next()
+                        .is_some_and(crate::symbols::is_accent)
+                {
+                    accent.set_attr("accent", "true");
+                }
+                Some(accent)
             } else {
                 let s1 = slot_to_node(slots.get(1));
-                Some(MathNode::with_children("munder", vec![s0, s1]))
+                let mut accent = MathNode::with_children("munder", vec![s0, s1]);
+                if accent.children[1].tag == "mo"
+                    && accent.children[1]
+                        .text
+                        .chars()
+                        .next()
+                        .is_some_and(crate::symbols::is_accent)
+                {
+                    accent.set_attr("accentunder", "true");
+                }
+                Some(accent)
             }
         }
 

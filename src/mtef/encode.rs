@@ -45,7 +45,9 @@ impl MathmlEncoder {
     }
 
     pub(super) fn encode_children(&mut self, node: &MathNode) -> Result<Vec<u8>> {
-        if node.tag == "mrow" && node.attr("data-omml-d") == Some("true") {
+        if node.tag == "mrow"
+            && (node.attr("data-omml-d") == Some("true") || is_stretchy_fence_mrow(node))
+        {
             if let Some(delim_bytes) = self.try_encode_omml_delimiter(node)? {
                 return Ok(delim_bytes);
             }
@@ -206,20 +208,20 @@ impl MathmlEncoder {
             return Ok(Some(Vec::new()));
         }
 
-        let first_mo = kids
+        let first_node = kids
             .first()
-            .filter(|n| n.tag == "mo" && n.attr("stretchy") == Some("true"))
-            .map(|n| n.text.trim());
-        let last_mo = if kids.len() > 1 {
+            .filter(|n| n.tag == "mo" && n.attr("stretchy") == Some("true"));
+        let last_node = if kids.len() > 1 {
             kids.last()
                 .filter(|n| n.tag == "mo" && n.attr("stretchy") == Some("true"))
-                .map(|n| n.text.trim())
         } else {
             None
         };
+        let first_mo = first_node.map(|n| n.text.trim()).filter(|t| !t.is_empty());
+        let last_mo = last_node.map(|n| n.text.trim()).filter(|t| !t.is_empty());
 
-        let start = usize::from(first_mo.is_some());
-        let end = if last_mo.is_some() {
+        let start = usize::from(first_node.is_some());
+        let end = if last_node.is_some() {
             kids.len() - 1
         } else {
             kids.len()
@@ -299,12 +301,41 @@ impl MathmlEncoder {
             "mn" => Ok(enc_mn(node)),
             "mo" => Ok(enc_mo(node)),
             "mtext" => Ok(enc_mtext(node)),
+            "mspace" => {
+                let width = crate::symbols::misc::space_width_em(node.attr("width").unwrap_or("0"));
+                let code = match width {
+                    w if (w - 3.0 / 18.0).abs() < 0.00001 => 0xEF02,
+                    w if (w - 4.0 / 18.0).abs() < 0.00001 => 0xEF03,
+                    w if (w - 5.0 / 18.0).abs() < 0.00001 => 0xEF04,
+                    w if (w - 1.0).abs() < 0.00001 => 0xEF05,
+                    w if (w - 2.0).abs() < 0.00001 => 0xEF06,
+                    _ => 0xEF08,
+                };
+                Ok(char_record(crate::mtef::TF_MTEXTRA, code))
+            }
 
             // ── fractions & radicals ────────────────────────────────────
             "mfrac" => {
                 let num = self.nth(node, 0)?;
                 let den = self.nth(node, 1)?;
-                if node.attr("bevelled") == Some("true") {
+                if node.attr("linethickness") == Some("0") {
+                    Ok(crate::mtef::pile(
+                        crate::mtef::HALIGN_CENTER,
+                        crate::mtef::VALIGN_CENTER_BASELINE,
+                        &[&num, &den],
+                    ))
+                } else if node.attr("displaystyle") == Some("false") {
+                    Ok(crate::mtef::fraction_variant(
+                        &num,
+                        &den,
+                        crate::mtef::TV_FR_SMALL
+                            | if node.attr("bevelled") == Some("true") {
+                                crate::mtef::TV_FR_SLASH
+                            } else {
+                                0
+                            },
+                    ))
+                } else if node.attr("bevelled") == Some("true") {
                     Ok(slash_fraction(&num, &den))
                 } else {
                     Ok(fraction(&num, &den))
@@ -1025,13 +1056,29 @@ fn emit_char_with_combining_marks(
     rec
 }
 
+fn is_stretchy_fence_mrow(node: &MathNode) -> bool {
+    let kids = &node.children;
+    kids.len() >= 2
+        && kids.first().is_some_and(|n| {
+            n.tag == "mo" && n.attr("stretchy") == Some("true") && n.attr("form") == Some("prefix")
+        })
+        && kids.last().is_some_and(|n| {
+            n.tag == "mo" && n.attr("stretchy") == Some("true") && n.attr("form") == Some("postfix")
+        })
+        && !kids[1..kids.len() - 1].iter().any(|n| {
+            n.tag == "mo"
+                && n.attr("stretchy") == Some("true")
+                && matches!(n.attr("form"), Some("prefix" | "postfix"))
+        })
+}
+
 fn open_fence_selector(s: &str) -> Option<u8> {
     match s {
         "(" => Some(TM_PAREN),
         "[" => Some(TM_BRACK),
         "{" => Some(TM_BRACE),
         "|" => Some(TM_BAR),
-        "\u{2016}" => Some(TM_DBAR),
+        "\u{2016}" | "\u{2225}" => Some(TM_DBAR),
         "\u{2329}" | "\u{27E8}" => Some(TM_ANGLE),
         "\u{230A}" => Some(TM_FLOOR),
         "\u{2308}" => Some(TM_CEILING),
@@ -1046,7 +1093,7 @@ fn close_fence_selector(s: &str) -> Option<u8> {
         "]" => Some(TM_BRACK),
         "}" => Some(TM_BRACE),
         "|" => Some(TM_BAR),
-        "\u{2016}" => Some(TM_DBAR),
+        "\u{2016}" | "\u{2225}" => Some(TM_DBAR),
         "\u{232A}" | "\u{27E9}" => Some(TM_ANGLE),
         "\u{230B}" => Some(TM_FLOOR),
         "\u{2309}" => Some(TM_CEILING),
@@ -1228,5 +1275,75 @@ mod tests {
             ]
             .concat()
         );
+    }
+    fn decoded(math: &MathNode) -> MathNode {
+        crate::mtef::mtef_to_mathml(&crate::mtef::build_mtef(
+            &mathml_to_mtef_bytes(math).unwrap(),
+        ))
+        .unwrap()
+    }
+    #[test]
+    fn palette_spacing_fraction_and_matrix_variants_survive_mtef() {
+        for width in ["0.166667em", "0.222222em", "0.277778em", "1em", "2em"] {
+            let math = MathNode::parse(&format!(
+                "<math><mi>x</mi><mspace width=\"{width}\"/><mi>y</mi></math>"
+            ))
+            .unwrap();
+            let out = decoded(&math);
+            let space = out
+                .iter()
+                .into_iter()
+                .find(|n| n.tag == "mspace")
+                .expect("explicit space must not disappear");
+            assert!(
+                (crate::symbols::misc::space_width_em(space.attr("width").unwrap())
+                    - crate::symbols::misc::space_width_em(width))
+                .abs()
+                    < 0.00001
+            );
+        }
+        let small = decoded(
+            &MathNode::parse(
+                "<math><mfrac displaystyle=\"false\"><mi>x</mi><mi>y</mi></mfrac></math>",
+            )
+            .unwrap(),
+        );
+        assert!(small
+            .iter()
+            .iter()
+            .any(|n| n.tag == "mfrac" && n.attr("displaystyle") == Some("false")));
+        let diag = decoded(
+            &MathNode::parse("<math><mfrac bevelled=\"true\"><mi>x</mi><mi>y</mi></mfrac></math>")
+                .unwrap(),
+        );
+        assert!(diag
+            .iter()
+            .iter()
+            .any(|n| n.tag == "mfrac" && n.attr("bevelled") == Some("true")));
+        let table=decoded(&MathNode::parse("<math><mtable columnalign=\"right\"><mtr><mtd><mi>x</mi></mtd><mtd><mi>y</mi></mtd></mtr><mtr><mtd><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr></mtable></math>").unwrap());
+        assert!(table
+            .iter()
+            .iter()
+            .any(|n| n.tag == "mtable" && n.attr("columnalign") == Some("right")));
+    }
+    #[test]
+    fn labeled_arrow_directions_and_both_slots_survive_mtef() {
+        for arrow in ["→", "←", "↔", "⇄", "⇌", "⇒", "⇐", "⇔", "⇀", "↼", "⇋", "↦"]
+        {
+            let math = MathNode::parse(&format!(
+                "<math><munderover><mo>{arrow}</mo><mi>a</mi><mi>b</mi></munderover></math>"
+            ))
+            .unwrap();
+            let out = decoded(&math);
+            let nodes = out.iter();
+            assert!(
+                nodes.iter().any(|n| n.text == arrow),
+                "arrow changed: {arrow}: {out:?}"
+            );
+            assert!(
+                nodes.iter().any(|n| n.text == "a") && nodes.iter().any(|n| n.text == "b"),
+                "lost label: {arrow}"
+            );
+        }
     }
 }

@@ -1,147 +1,75 @@
-# Chuyển EqnTide từ Tauri v2 sang desktop UI Rust
+# Kế hoạch bổ sung đầy đủ bảng công cụ MathType cho EqnTide
 
-## 1. Quyết định đã thống nhất
+> Khôi phục từ phiên làm việc Codex (`Tạo layout app từ phác thảo`) và cập nhật theo trạng thái thực tế của repository.
 
-- Chọn **egui + eframe**: UI và logic desktop bằng Rust, không WebView,
-  JavaScript hay MathLive trong tiến trình desktop.
-- Đích chuyển đổi là editor công thức trực quan có con trỏ cấu trúc, vùng chọn,
-  template, undo/redo; bản LaTeX + preview chỉ là mốc trung gian.
-- Giữ engine, CLI, Word VBA `.dotm` và WPS add-in JavaScript và hợp đồng HTTP tại
-  `127.0.0.1:17890`.
-- Chỉ hỗ trợ Linux/Windows; tạm dừng macOS vì chưa có máy kiểm thử.
-- Đóng cửa sổ sẽ thoát sau xử lý Lưu/Bỏ thay đổi/Hủy, không thêm tray.
-  Bridge CLI/service bên ngoài desktop tiếp tục chạy.
-- Theo yêu cầu mới, đã xóa Tauri/frontend cũ; dùng Git history khi cần đối chiếu.
-  Bản Rust vẫn là preview đến khi kiểm thử Office và các nền tảng hoàn tất.
+## 1. Mục tiêu và bố cục
 
-“Pure Rust” áp dụng cho mã UI/logic desktop; vẫn dùng API, driver và thư viện
-hệ điều hành. Không yêu cầu viết lại add-in Office bằng Rust.
+Bổ sung toàn bộ ký hiệu và biến thể mẫu trong 20 ảnh MathType, gồm thao tác chèn, chỉnh sửa trên canvas, gợi ý lệnh LaTeX và xuất MathType/OMML.
 
-### Công nghệ
+- Sidebar dùng danh sách nhóm có cuộn; **Batch DOCX cố định dưới cùng**, ngoài vùng cuộn.
+- Giữ vùng công cụ cao đúng **3 dòng**, kích thước nút, khoảng cách và bo góc hiện tại. Nhóm quá nhiều nút được cuộn ngang, không sinh dòng thứ tư.
+- Thứ tự 20 nhóm:
+  1. Ngoặc (`Fences`)
+  2. Phân số & căn (`Fractions`)
+  3. Chỉ số (`Scripts`)
+  4. Tích phân (`Integrals`)
+  5. Tổng (`Sums`)
+  6. Tích & phép toán lớn (`BigOperators`)
+  7. Ma trận (`Matrices`)
+  8. Dấu trên/dưới (`Embellishments`)
+  9. Gạch trên/dưới (`Bars`)
+  10. Mũi tên có nhãn (`LabeledArrows`)
+  11. Khung (`Boxes`)
+  12. Quan hệ (`Relations`)
+  13. Toán tử (`Operators`)
+  14. Mũi tên (`Arrows`)
+  15. Logic (`Logic`)
+  16. Tập hợp (`Sets`)
+  17. Ký hiệu khác (`Symbols`)
+  18. Hy Lạp thường (`GreekLower`)
+  19. Hy Lạp hoa (`GreekUpper`)
+  20. Khoảng trắng & dấu chấm (`Spaces`)
+- Giữ các chức năng đang có, gồm những mẫu không xuất hiện trong ảnh. Tooltip dùng tiếng Việt và hiển thị lệnh LaTeX tương ứng.
 
-| Lựa chọn | Đánh giá |
-| --- | --- |
-| egui + eframe — chọn | UI Rust, thuận tiện tùy biến canvas, palette và bảng batch. |
-| Iced | State/message rõ ràng, nhưng vẫn cần xây widget editor công thức riêng. |
-| Slint | UI khai báo bằng `.slint`, cần cân nhắc giấy phép; ít phù hợp hơn với ưu tiên UI trực tiếp bằng Rust. |
+## 2. Danh mục và thao tác chèn
 
-Dùng eframe/egui stable cùng phiên bản, glow, X11/Wayland và AccessKit;
-`rfd` cho dialog với portal Linux, `arboard` cho clipboard ảnh,
-`interprocess` + `fs2` cho single-instance. Khóa dependency trong Cargo.lock.
-Worker thread/channel xử lý chuyển đổi, render và HTTP; không chặn UI thread.
+- Tạo catalog chung ([`src/catalog.rs`](src/catalog.rs)) cho bảng nút, thumbnail và gợi ý canvas. Mỗi mục có ID ổn định, nhóm, tên tiếng Việt, lệnh/alias và mẫu LaTeX/MathML; bỏ việc duy trì danh sách ký hiệu riêng trong completion.
+- **Ký hiệu:** bổ sung quan hệ, toán tử, các hướng/kiểu mũi tên, logic, tập hợp, ký hiệu hình học, chữ đặc biệt (`\mathbb`, `\mathcal`, `\mathfrak`), đầy đủ Hy Lạp và các dạng biến thể (`\varepsilon`, `\varphi`, `\vartheta`, `\varpi`, `\varrho`, `\varsigma`, `\varkappa`, `\digamma`, `\varTheta`, `\varUpsilon`, `\lambdabar` nếu thiếu…).
+- **Ngoặc:** bổ sung ngoặc một phía, các cặp ngoặc trong ảnh (kể cả nửa mở `[ )`, `( ]`, `] [`, `[ [`, `] ]`, bra `⟨ |`, ket `| ⟩`, ngoặc vuông kép `⟦ ⟧`, `⟦`, `⟧`, bra-ket `⟨ | ⟩`), ngoặc trên/dưới và vị trí nhãn.
+- **Phân số, căn, chỉ số:** đủ dạng phân số ngang/chéo/không gạch, kích thước thường/nhỏ, căn có chỉ số, chia dài có/không thương, chỉ số trái/phải và tổ hợp trên/dưới.
+- **Tích phân và phép toán lớn:** đủ dạng đơn/kép/ba/vòng trong ảnh; giới hạn dưới, trên, cả hai; vị trí giới hạn bên cạnh (`\nolimits`) hoặc trên/dưới (`\limits`). Áp dụng tương tự cho tổng, tích, đồng tích, hợp và giao lớn.
+- **Dấu và đường:** bổ sung dấu chấm (1–4 chấm trên/dưới), mũ, cung, sóng, vector, móc trên/dưới, acute/grave, gạch đơn/kép trên/dưới, gạch xoá và các mũi tên co giãn có nhãn.
+- **Ma trận:** bổ sung các mẫu hàng/cột (kể cả 4×4), ma trận có dấu chấm tiếp diễn (`\cdots`, `\vdots`, `\ddots`), `Bmatrix`/`Vmatrix`, và nút **“Ma trận tuỳ chỉnh”** (mặc định 2×2, chọn 1–20 hàng/cột, căn trái/giữa/phải và kiểu ngoặc; huỷ không thay đổi công thức).
+- **Khung:** đủ khung kín, bo góc và tổ hợp cạnh hở (`top left`, `top right`, `bottom left`, `bottom right`, `top bottom left`, `top bottom right`, `top left right`, `bottom left right`).
 
-## 2. Kiến trúc và interface
+Quy tắc chèn: mẫu có ô trống nhận phần đang chọn vào ô nội dung chính; chỉ số và dấu trang trí gắn vào biểu thức trước con trỏ khi không chọn nội dung (tạo ô trống nếu chưa có); mỗi lần chèn là một bước undo và trả focus về canvas.
 
-Cargo workspace gồm package engine/CLI gốc làm default member,
-`crates/eqntide-editor` không phụ thuộc GUI và `desktop` chứa binary
-`eqntide-desktop`. Package Tauri cũ đã được xóa khỏi repository.
+## 3. LaTeX, hiển thị và xuất Office
 
-Tách service chuyển đổi snippet/document và parser LaTeX dùng chung.
-Giữ API chuyển đổi hiện hữu, DTO/endpoint/status/alias HTTP và chữ ký
-`WindowCallback`; bổ sung callback mới có thông tin tab nếu cần.
-Thêm `tab: Option<String>` cho `CustomUriAction` để đọc `tab=batch` của add-in.
+- Dùng cây MathML làm dữ liệu gốc; thumbnail và canvas dùng chung bộ dựng hình.
+- Mở rộng parser ([`src/latex_extensions.rs`](src/latex_extensions.rs)) và serializer ([`src/mathml_to_latex.rs`](src/mathml_to_latex.rs)) dùng chung để bảo toàn thuộc tính: kiểu phân số (`\dfrac`, `\tfrac`, `\sfrac`, `\tsfrac`, `\atopfrac`), chỉ số trái (`\prescript`), kiểu chữ (`\mathbb`, `\mathfrak`, `\mathcal`, `\mathbf`, `\mathrm`, `\boldsymbol`), vị trí giới hạn (`\limits`/`\nolimits`), dấu trang trí (`\overaccent`, `\underaccent`, `\doubleoverline`, `\doubleunderline`, …), khung/gạch xoá (`\boxed`, `\cancel`, `\bcancel`, `\xcancel`, `\enclose{notation}{...}`), ma trận có căn cột (`\begin{array}{...}`), `Bmatrix`/`Vmatrix`, và khoảng trắng (`\hspace`, `\,`, `\:`, `\;`, `\quad`, `\qquad`).
+- Completion lấy lệnh và alias từ catalog; giữ cách chọn chuột, `↑`/`↓`, `Tab`, `Enter`, `Space`.
+- Renderer bổ sung [`src/render/layout/enclosure.rs`](src/render/layout/enclosure.rs) cho khung/gạch xoá, dấu trên/dưới, phân số chéo, khoảng trắng và căn lề ma trận.
+- Encoder/decoder MathType MTEF và OMML xử lý đầy đủ các mẫu mới (giới hạn, chỉ số trái, khung, gạch xoá, nhãn mũi tên, phân số chéo/nhỏ, khoảng trắng).
+- Cú pháp lỗi báo ở thanh trạng thái, giữ canvas sáng và giữ công thức hợp lệ trước đó. Không đổi giao thức bridge hoặc định dạng phiên hiện tại.
 
-Editor dùng cây có ID ổn định, placeholder, caret và selection.
-Command chỉnh sửa là transaction có thể hoàn tác nội dung lẫn selection.
-Giữ MathNode và thuộc tính gốc; không round-trip qua LaTeX khi mở/lưu.
-Node chưa hỗ trợ được giữ nguyên như khối nguyên vẹn có thể chọn/copy/xóa.
-LaTeX là bản nháp: chỉ Apply sau parse thành công, cảnh báo thay cây/thuộc tính;
-lỗi không thay nội dung hiện tại.
+## 4. Trạng thái hiện tại & các hạng mục hoàn thiện
 
-Renderer tái sử dụng STIX layout/rasterization. API interactive trả ảnh,
-kích thước, baseline, vùng node/path và tọa độ caret từ cùng layout.
-UI phủ caret/placeholder/selection lên ảnh; cache theo revision/font/zoom/DPI.
-Giữ API xuất EMF/PNG và không thêm dependency egui vào engine.
-
-Bridge được kiểm tra `/health`: dùng bridge có sẵn hoặc desktop tự host.
-Mỗi session thuộc một bridge duy nhất; thao tác native dùng cùng hợp đồng HTTP.
-IPC riêng theo user chuyển argv/URI sang desktop đang chạy, không lấy cổng bridge
-làm khóa instance. Không tự lấy session “latest”. Xếp hàng phiên mới thay vì
-đè nội dung đang sửa; hỗ trợ khởi động nguội, mở lần hai và focus cửa sổ.
-
-## 3. Các giai đoạn
-
-### Mốc 0 — Baseline và khả thi
-
-Lập bảng parity từ UI cũ: palette/template, phím tắt, font/cỡ chữ, target,
-clipboard, session và batch. Corpus gồm phân số, căn, script, giới hạn,
-tích phân, delimiter, accent, matrix/cases và mũi tên.
-Đo startup, RAM idle, kích thước cài đặt và độ trễ trên cùng máy/profile.
-Thử OpenGL, nested formula, caret, DPI, IME tiếng Việt và clipboard Linux/Windows.
-Không cam kết cải thiện tài nguyên trước khi có số đo đối chiếu.
-
-### Mốc 1 — Service và desktop shell
-
-Tạo workspace/service, tab Editor/Batch; cửa sổ 940×650, tối thiểu 600×450.
-Hoàn thành ownership bridge, single-instance, URI và báo lỗi trước khi thay editor.
-Port bốn hướng chuyển đổi DOCX, chọn/drop nhiều tệp, log/kết quả và mở thư mục.
-Worker batch tuần tự; Dừng có hiệu lực giữa các tệp. Mặc định xuất bản mới,
-chỉ ghi đè khi người dùng chọn rõ ràng.
-
-### Mốc 2 — Editor cấu trúc
-
-Nhập token, đặt caret bằng chuột, chọn vùng, copy/cut/paste, undo/redo.
-Trái/phải theo cấu trúc; lên/xuống giữa tử/mẫu, script và ô matrix;
-Tab/Shift+Tab qua placeholder. Template bao vùng chọn; port phím tắt MathType
-và chỉ kích hoạt khi canvas có focus.
-Đạt sửa trực tiếp phân số/căn/script lồng nhau trước khi mở rộng palette.
-
-### Mốc 3 — Parity và Office
-
-Hoàn thành các nhóm template/palette trong baseline, matrix/cases, operator,
-accent, delimiter và arrow. Giữ node lạ nguyên vẹn; xác nhận trước Apply LaTeX
-có khả năng mất thuộc tính/cấu trúc.
-Copy LaTeX/MathML/Flat OPC/PNG; EMF clipboard chỉ dùng khi adapter đã kiểm chứng,
-nếu chưa thì xuất `.emf` với nhãn rõ ràng.
-Save gửi đúng session ID, MathML, target và cỡ chữ; chờ bridge xác nhận.
-Đóng xử lý Lưu/Bỏ thay đổi/Hủy và hủy phiên; chỉ dừng bridge desktop sở hữu.
-
-### Mốc 4 — Đóng gói và cutover
-
-Giữ tên binary, `eqntide://` và `EQNTIDE_DESKTOP_BIN`.
-NSIS Windows, DEB/RPM và portable Linux; tài nguyên/add-in/template hoạt động
-ngoài repository. Chuyển icon sang assets dùng chung, sửa tên binary cũ trong CI.
-Cập nhật README/NOTICE và bỏ yêu cầu WebKit khỏi hướng dẫn native.
-Bỏ macOS khỏi CI/release và đóng gói; chỉ cân nhắc hỗ trợ lại khi có máy kiểm thử.
-Đã xóa Tauri/frontend theo yêu cầu; add-in sử dụng tài nguyên đóng gói độc lập.
-
-## 4. Kiểm thử và nghiệm thu
-
-- Engine/CLI hiện có; đối chiếu service, native và HTTP theo cấu trúc XML/DOCX.
-- Editor: transaction, Unicode, placeholder, vùng chọn, xóa cấu trúc,
-  matrix, undo/redo, thuộc tính, node lạ, bản nháp lỗi và giới hạn độ sâu.
-- Renderer: hit-test/caret khớp ảnh ở nhiều zoom/DPI; baseline, delimiter,
-  ảnh tham chiếu với font nhúng, giới hạn pixel và độ sâu.
-- Bridge: open/update/cancel/timeout, nội bộ/ngoài, port bị chiếm,
-  session hết hạn, URI nguội/nóng, mở lần hai và không tạo vòng lặp launch.
-- Word Windows và WPS Linux/Windows: OMML/MathType, cỡ chữ/baseline và batch.
-- Desktop: IME tiếng Việt, clipboard, drag/drop, đường dẫn Unicode,
-  dirty close, lỗi worker và không treo trong lúc chuyển đổi.
-- Cài/nâng cấp/gỡ, URI và assets trên máy sạch không WebKit.
-- CI: `cargo test --workspace --all-targets`, workspace Clippy, cargo-deny;
-  manual Linux X11/Wayland và Windows; không build macOS trên CI.
-
-Hoàn tất cutover khi không còn phụ thuộc desktop Tauri/WebView/MathLive,
-qua bảng parity và không mất dữ liệu trong corpus. Bản Tauri cũ chỉ còn trong Git history.
-Trạng thái triển khai và các kiểm chứng chưa thực hiện nằm trong
-`desktop/VALIDATION.md`; không xem build thành công là đã kiểm chứng Office.
-
-## 5. Nguồn chính thức
-
-- https://github.com/emilk/egui
-- https://docs.rs/eframe/latest/eframe/
-- https://docs.iced.rs/iced/
-- https://slint.dev/faqs
-- https://docs.rs/rfd/latest/rfd/
-- https://docs.rs/arboard/latest/arboard/
-
-## Điều chỉnh theo yêu cầu sau triển khai
-
-Ô LaTeX cập nhật canvas trực tiếp khi gõ, debounce 180 ms và parse trong worker.
-Thay đổi này thay thế bước Apply/xác nhận ở trên. Giữ nguyên chuỗi người dùng
-đang gõ và vị trí nhập; kết quả parse cũ không được đè nội dung mới.
-LaTeX lỗi/chưa hoàn chỉnh giữ canvas hợp lệ gần nhất và báo lỗi ngay dưới ô nhập.
-Có thể revert bản nháp; undo khôi phục cây/thuộc tính trước cập nhật nguồn.
-
-Word chỉ dùng `word-template/EqnTide.dotm`; đã bỏ Word Office.js add-in, catalog
-và tài nguyên web. WPS giữ nguyên add-in JavaScript và dùng chung bridge.
+### Đã hoàn tất trong repository
+- [x] [`src/catalog.rs`](src/catalog.rs): định nghĩa 20 nhóm, macro `catalog!`, `SYMBOLS`, `ENTRIES`, `PALETTE`, `COMMANDS`, `template()`, `preview_template()`, `attaches_to_previous()`, `matrix()`.
+- [x] [`desktop/src/app.rs`](desktop/src/app.rs), [`desktop/src/palette.rs`](desktop/src/palette.rs), [`desktop/src/commands.rs`](desktop/src/commands.rs): sidebar 20 nhóm cuộn độc lập với Batch DOCX ghim dưới đáy, palette 3 dòng cuộn ngang, hộp thoại Ma trận tuỳ chỉnh, completion đọc từ catalog.
+- [x] [`src/latex_extensions.rs`](src/latex_extensions.rs) & [`src/mathml_to_latex.rs`](src/mathml_to_latex.rs): mở rộng parser/serializer và đối chiếu ánh xạ ký tự/lệnh LaTeX.
+- [x] [`src/render/layout/enclosure.rs`](src/render/layout/enclosure.rs) và cập nhật `layout/*`, `mtef/*`, `omml/*`, `symbols/*`.
+- [x] **Sửa lỗi biên dịch, bố cục & bộ chuyển đổi:**
+  - [`desktop/src/app.rs`](desktop/src/app.rs): sửa test `batch_stays_visible_while_sidebar_groups_scroll` cho API `egui` và bỏ deprecation warning `Id::new`.
+  - [`src/latex_extensions.rs`](src/latex_extensions.rs): dùng chữ cái cho marker `EQNTIDENATIVE...` để `latex2mathml::parse_text` đọc `Token::Letter`; bổ sung parse `\begin{Bmatrix}` / `\begin{Vmatrix}`.
+  - [`src/mathml_to_latex.rs`](src/mathml_to_latex.rs): không thêm khoảng trắng thừa sau `\pi` trước `}`; ánh xạ cả `\u{2329}`/`\u{232A}` sang `\langle`/`\rangle`.
+  - [`src/render/layout/enclosure.rs`](src/render/layout/enclosure.rs): sửa assertion test `1em` ở `12pt` với `PX_PER_PT = 8.0`.
+  - [`src/render/layout/fence.rs`](src/render/layout/fence.rs): hỗ trợ co giãn ngoặc một phía mở (`\left\llbracket ... \right.`, `\left( ... \right.`, `\left| ... \right.`) và bảo toàn `RawHit` trong `stretch_pair`.
+  - [`src/mtef/encode.rs`](src/mtef/encode.rs) & [`src/mtef/decode.rs`](src/mtef/decode.rs): nhận diện `<mrow>` ngoặc co giãn từ `latex2mathml` cho `TM_DIRAC`/`TM_INTERVAL`/`TM_OBRACK`, sửa bitmask giải mã `tmINTERVAL` (`tvINTV_LEFT_*`/`tvINTV_RIGHT_*`), và bổ sung dải `0x27C0..=0x27EF`.
+- [x] **Đối chiếu đủ 20 ảnh MathType với [`src/catalog.rs`](src/catalog.rs):**
+  - Đầy đủ ký hiệu, ngoặc nửa mở `[ )`, `( ]`, `] [`, `[ [`, `] ]`, bra-ket `⟨ |`, `| ⟩`, `⟨ | ⟩`, ngoặc vuông kép `⟦ ⟧`, `⟦`, `⟧`, ma trận `4×4`, mũi tên có nhãn, khung hở, `\lambdabar` và kiểm tra glyph font khả dụng.
+- [x] **Kiểm thử toàn diện theo nghiệm thu:**
+  - Round-trip `MathML → LaTeX → MathML`, `MathML ↔ MTEF`, `MathML ↔ OMML` và `render_interactive` cho toàn bộ mục catalog, cùng kiểm thử thuộc tính ngữ nghĩa (`\limits`/`\nolimits`, `\dfrac`/`\tfrac`/`\sfrac`/`\tsfrac`/`\atopfrac`, `\prescript`, `mathvariant`, dấu/khung/gạch xoá, ma trận, mũi tên có nhãn, khoảng trắng, ngoặc).
+  - Kiểm thử chèn bọc vùng chọn, chèn lồng nhau, điều hướng ô trống, undo/redo, completion, LaTeX lỗi, và bố cục UI đa DPI.
+  - Kiểm tra toàn workspace (`cargo fmt --check`, `cargo clippy --workspace --all-targets --locked`, `cargo test --workspace --locked`, `cargo build --workspace --locked`).

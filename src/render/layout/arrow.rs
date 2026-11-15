@@ -16,6 +16,7 @@ pub(super) enum ArrowDir {
     Right,
     Left,
     Both,
+    Other(char),
 }
 
 /// A recognised arrow template: the arrow plus the text above / below it.
@@ -31,6 +32,9 @@ pub(super) fn arrow_dir(c: char) -> Option<ArrowDir> {
         '\u{2192}' | '\u{27F6}' | '\u{20D7}' => Some(ArrowDir::Right),
         '\u{2190}' | '\u{27F5}' | '\u{20D6}' => Some(ArrowDir::Left),
         '\u{2194}' | '\u{27F7}' => Some(ArrowDir::Both),
+        c @ ('⇒' | '⇐' | '⇔' | '⇀' | '↼' | '⇌' | '⇋' | '↦' | '⇄' | '⇆') => {
+            Some(ArrowDir::Other(c))
+        }
         _ => None,
     }
 }
@@ -52,6 +56,9 @@ fn mo_arrow(n: &MathNode) -> Option<ArrowDir> {
 ///
 /// `→` over text stays a vector accent (`draw_accent`), as in MathType.
 pub(super) fn template_of(n: &MathNode) -> Option<ArrowTemplate<'_>> {
+    if n.attr("accent") == Some("true") || n.attr("accentunder") == Some("true") {
+        return None;
+    }
     let base = n.children.first()?;
     let (under, over) = match n.tag.as_str() {
         "munder" => (n.children.get(1), None),
@@ -115,13 +122,12 @@ impl Layout {
             None => None,
         };
 
-        // Shaft: a little longer than the widest text, never shorter than a
-        // plain arrow.
+        // Shaft: wide enough so labels clear arrowheads on both sides.
         let label_w = [over.as_ref().map(|o| o.w), under.as_ref().map(|u| u.w)]
             .into_iter()
             .flatten()
             .fold(0.0f32, f32::max);
-        let len = (label_w + 0.60 * em).max(1.40 * em);
+        let len = (label_w + 0.72 * em).max(1.40 * em);
 
         let (head_asc, head_desc) = self.f.ink(Face::Symbol, '\u{2192}', em);
         let mut b = LBox {
@@ -135,8 +141,32 @@ impl Layout {
         let e_w = 322.0 * k; // advance of extender '\u{23AF}'
         let face = Face::Symbol;
         let y_glyph = 0.0; // on the baseline, the math glyphs' axis naturally sits on the math axis
+        let y_axis = -c.axis_height * em;
+        let st = c.fraction_rule_thickness * em;
+        let mut arrow_top_y = y_axis - st / 2.0;
+        let mut arrow_bot_y = y_axis + st / 2.0;
 
         match dir {
+            ArrowDir::Other(ch) => {
+                let natural = self.f.glyph_polys(Face::Symbol, ch, em, em, 0.0, 0.0);
+                let (lo, hi, y_lo, y_hi) = natural.iter().flatten().fold(
+                    (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
+                    |(lo, hi, ylo, yhi), p| (lo.min(p.0), hi.max(p.0), ylo.min(p.1), yhi.max(p.1)),
+                );
+                if hi > lo {
+                    arrow_top_y = y_lo;
+                    arrow_bot_y = y_hi;
+                    b.asc = b.asc.max(-y_lo);
+                    b.desc = b.desc.max(y_hi);
+                    b.items.extend(natural.into_iter().map(|p| {
+                        Item::Poly(
+                            p.into_iter()
+                                .map(|(x, y)| ((x - lo) * len / (hi - lo), y))
+                                .collect(),
+                        )
+                    }));
+                }
+            }
             ArrowDir::Right => {
                 // 1. Right arrowhead glyph: tip at `len`
                 let arrow_x = len - 876.0 * k;
@@ -251,14 +281,12 @@ impl Layout {
             }
         }
 
-        let y_axis = -c.axis_height * em;
-        let st = c.fraction_rule_thickness * em;
-        let gap = st / 2.0 + 0.10 * em;
+        let gap = 0.10 * em;
         if let Some(o) = &over {
-            b.place(o, (len - o.w) / 2.0, y_axis - gap - o.desc);
+            b.place(o, (len - o.w) / 2.0, arrow_top_y - gap - o.desc);
         }
         if let Some(u) = &under {
-            b.place(u, (len - u.w) / 2.0, y_axis + gap + u.asc);
+            b.place(u, (len - u.w) / 2.0, arrow_bot_y + gap + u.asc);
         }
         b.w = len;
         Ok(b)
@@ -323,5 +351,46 @@ mod tests {
         ).unwrap();
         let preview = crate::render::render_preview(&math_full, 12.0).unwrap();
         assert!(!preview.png.is_empty(), "preview PNG must not be empty");
+    }
+
+    #[test]
+    fn test_equilibrium_arrow_labels_clear_harpoons() {
+        let mut l = Layout {
+            f: fonts(),
+            depth: 0,
+        };
+        let em = 24.0;
+        let node =
+            MathNode::parse("<math><munderover><mo>⇌</mo><mi>g</mi><mi>f</mi></munderover></math>")
+                .unwrap();
+        let b = l.node(&node.children[0], em, MathContext::DISPLAY).unwrap();
+        let (mut arrow_top, mut arrow_bot) = (f32::MAX, f32::MIN);
+        let mut top_label_y = None;
+        let mut bot_label_y = None;
+        for it in &b.items {
+            match it {
+                Item::Poly(pts) => {
+                    for &(_, y) in pts {
+                        arrow_top = arrow_top.min(y);
+                        arrow_bot = arrow_bot.max(y);
+                    }
+                }
+                Item::Glyph { ch: 'f', y, .. } => top_label_y = Some(*y),
+                Item::Glyph { ch: 'g', y, .. } => bot_label_y = Some(*y),
+                _ => {}
+            }
+        }
+        assert!(
+            top_label_y.unwrap() < arrow_top,
+            "top label baseline {} must clear harpoon top {}",
+            top_label_y.unwrap(),
+            arrow_top
+        );
+        assert!(
+            bot_label_y.unwrap() > arrow_bot,
+            "bottom label baseline {} must clear harpoon bottom {}",
+            bot_label_y.unwrap(),
+            arrow_bot
+        );
     }
 }

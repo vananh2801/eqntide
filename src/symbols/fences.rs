@@ -1,10 +1,10 @@
 //! Fence symbols (parentheses, brackets, braces, bars).
 
 /// Opening fences.
-pub const OPEN: &str = "([{⟨⌊⌈";
+pub const OPEN: &str = "([{⟨⌊⌈⟦〚";
 
 /// Closing fences.
-pub const CLOSE: &str = ")]}⟩⌋⌉";
+pub const CLOSE: &str = ")]}⟩⌋⌉⟧〛";
 
 /// Vertical bars.
 pub const BARS: &str = "|‖\u{2223}\u{2225}";
@@ -33,6 +33,8 @@ pub fn open_for(c: char) -> char {
         '⟩' => '⟨',
         '⌋' => '⌊',
         '⌉' => '⌈',
+        '⟧' => '⟦',
+        '〛' => '〚',
         o => o,
     }
 }

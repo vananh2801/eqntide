@@ -66,6 +66,10 @@ impl Layout {
             .filter(|o| o.tag == "mo" && !big)
             .and_then(|o| o.text.trim().chars().next())
             .filter(|c| is_accent(*c));
+        let under_accent = under_n
+            .filter(|u| u.tag == "mo" && !big && n.attr("accentunder") == Some("true"))
+            .and_then(|u| u.text.trim().chars().next())
+            .filter(|c| is_accent(*c));
         let brace_under = under_n
             .filter(|u| u.tag == "mo" && u.text.trim() == "\u{23DF}")
             .is_some();
@@ -77,7 +81,9 @@ impl Layout {
             });
 
         let under = match under_n {
-            Some(u) if !brace_under && !bar_under => Some(self.node(u, lim_em, lim_ctx)?),
+            Some(u) if !brace_under && !bar_under && under_accent.is_none() => {
+                Some(self.node(u, lim_em, lim_ctx)?)
+            }
             _ => None,
         };
         let over = match over_n {
@@ -105,10 +111,12 @@ impl Layout {
         if let Some(c) = accent {
             self.draw_accent(&mut b, c, w, (w - base.w) / 2.0, base.asc, em);
         }
-        if brace_under {
+        if let Some(c) = under_accent {
+            self.draw_under_accent(&mut b, c, w, (w - base.w) / 2.0, base.desc, em);
+        } else if brace_under {
             self.draw_under_brace(&mut b, w, base.desc, em);
         }
-        if bar_under {
+        if bar_under && under_accent.is_none() {
             let st = 0.045 * em;
             let y = (base.desc + 0.06 * em).max(0.10 * em);
             let x0 = (w - base.w) / 2.0;

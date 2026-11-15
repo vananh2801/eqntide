@@ -1,10 +1,10 @@
 //! Set theory symbols palette (∈ ∉ ⊂ ∪ ∩ …).
 
 /// Set-theoretic relations.
-pub const SET_RELATIONS: &str = "∈∉∋⊂⊃⊆⊇";
+pub const SET_RELATIONS: &str = "∈∉∋∌⊂⊃⊆⊇⊄⊅⊈⊉⊊⊋";
 
 /// Set-theoretic binary operators.
-pub const SET_OPERATORS: &str = "∪∩∖";
+pub const SET_OPERATORS: &str = "∪∩∖⊎⊓⊔";
 
 /// `true` for a set-theoretic relation (∈, ⊂, …).
 pub fn is_relation(c: char) -> bool {

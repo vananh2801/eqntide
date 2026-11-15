@@ -12,6 +12,19 @@ impl Layout {
         base_asc: f32,
         em: f32,
     ) {
+        let c = match c {
+            '\u{0308}' => '¨',
+            '\u{030A}' => '˚',
+            '\u{030C}' => 'ˇ',
+            '\u{0306}' => '˘',
+            '\u{0300}' => 'ˋ',
+            '\u{0301}' => 'ˊ',
+            '\u{20D6}' => '←',
+            '\u{20E1}' => '↔',
+            '\u{20D0}' => '↼',
+            '\u{20D1}' => '⇀',
+            _ => c,
+        };
         // Retrieve top accent attachment position from OpenType MATH table if available;
         // fallback to italic correction compensation if slanted.
         let cx = if let Some(att) = self.top_accent_attachment_of_box(b) {
@@ -29,6 +42,132 @@ impl Layout {
         let st = 0.045 * em;
         let mut polys: Vec<Vec<(f32, f32)>> = Vec::new();
         match c {
+            '¨' | '⃛' | '⃜' => {
+                let count = match c {
+                    '¨' => 2,
+                    '⃛' => 3,
+                    _ => 4,
+                };
+                let step = 0.18 * em;
+                for j in 0..count {
+                    let dcx = cx + (j as f32 - (count - 1) as f32 / 2.0) * step;
+                    polys.push(
+                        (0..12)
+                            .map(|i| {
+                                let a = i as f32 / 12.0 * std::f32::consts::TAU;
+                                (dcx + 0.045 * em * a.cos(), y + 0.045 * em * a.sin())
+                            })
+                            .collect(),
+                    );
+                }
+            }
+            '⏞' | '⏟' => {
+                polys.extend(stroke(
+                    &bar::brace_h(w - 2.0 * x0, y, 0.20 * em, c == '⏟')
+                        .into_iter()
+                        .map(|(x, y)| (x + x0, y))
+                        .collect::<Vec<_>>(),
+                    st,
+                ));
+                b.asc = b.asc.max(base_asc + 0.35 * em);
+            }
+            '⎴' | '⎵' => {
+                let sign = if c == '⎴' { -1.0 } else { 1.0 };
+                let h = 0.16 * em;
+                polys.extend(stroke(
+                    &[
+                        (x0, y),
+                        (x0, y + sign * h),
+                        (w - x0, y + sign * h),
+                        (w - x0, y),
+                    ],
+                    st,
+                ));
+                b.asc = b.asc.max(base_asc + 0.32 * em);
+            }
+            'ˊ' | 'ˋ' => {
+                let (left, right) = if c == 'ˊ' {
+                    (y, y - 0.14 * em)
+                } else {
+                    (y - 0.14 * em, y)
+                };
+                polys.extend(stroke(
+                    &[(cx - 0.07 * em, left), (cx + 0.07 * em, right)],
+                    st,
+                ));
+                b.asc = b.asc.max(base_asc + 0.30 * em);
+            }
+            'ˇ' => {
+                polys.extend(stroke(
+                    &[
+                        (cx - 0.20 * em, y - 0.12 * em),
+                        (cx, y),
+                        (cx + 0.20 * em, y - 0.12 * em),
+                    ],
+                    st,
+                ));
+                b.asc = b.asc.max(base_asc + 0.28 * em);
+            }
+            '˘' | '⌣' | '⏝' => {
+                polys.extend(stroke(
+                    &quad_bezier(
+                        (x0, y - 0.12 * em),
+                        (w / 2.0, y + 0.08 * em),
+                        (w - x0, y - 0.12 * em),
+                        16,
+                    ),
+                    st,
+                ));
+                b.asc = b.asc.max(base_asc + 0.28 * em);
+            }
+            '˚' => {
+                polys.extend(stroke(
+                    &(0..=20)
+                        .map(|i| {
+                            let a = i as f32 / 20.0 * std::f32::consts::TAU;
+                            (
+                                cx + 0.07 * em * a.cos(),
+                                y - 0.05 * em + 0.07 * em * a.sin(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                    st * 0.65,
+                ));
+                b.asc = b.asc.max(base_asc + 0.25 * em);
+            }
+            '_' | '═' | '̿' | '̳' => {
+                polys.push(rect(
+                    x0,
+                    y - st / 2.0,
+                    (w - 2.0 * x0).max(0.3 * em),
+                    st.max(1.0),
+                ));
+                if c != '_' {
+                    polys.push(rect(
+                        x0,
+                        y - 0.12 * em - st / 2.0,
+                        (w - 2.0 * x0).max(0.3 * em),
+                        st.max(1.0),
+                    ));
+                    b.asc = b.asc.max(base_asc + 0.29 * em);
+                }
+            }
+            '←' | '↔' | '⇀' | '↼' | '⇌' | '⇋' => {
+                let natural = self.f.glyph_polys(Face::Symbol, c, em, em, 0.0, 0.0);
+                let (xl, xh, yl, yh) = natural.iter().flatten().fold(
+                    (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
+                    |(xl, xh, yl, yh), p| (xl.min(p.0), xh.max(p.0), yl.min(p.1), yh.max(p.1)),
+                );
+                if xh > xl {
+                    let span = (w - 2.0 * x0).max(0.4 * em);
+                    polys.extend(natural.into_iter().map(|p| {
+                        p.into_iter()
+                            .map(|(x, py)| (x0 + (x - xl) * span / (xh - xl), py + y - yh))
+                            .collect()
+                    }));
+                    b.asc = b.asc.max(-(yl + y - yh) + 0.04 * em);
+                }
+            }
             '\u{20D7}' | '\u{2192}' | '\u{27F6}' => {
                 let ic = self.italic_correction_of_box(b);
                 let eff_em = 0.65 * em;
@@ -200,5 +339,40 @@ impl Layout {
             b.items.push(Item::Poly(p));
         }
         b.asc = b.asc.max(-y + 0.09 * em);
+    }
+    /// Reflect a vector accent below the baseline, preserving its natural width.
+    pub(super) fn draw_under_accent(
+        &self,
+        b: &mut LBox,
+        c: char,
+        w: f32,
+        x0: f32,
+        desc: f32,
+        em: f32,
+    ) {
+        let mut accent = LBox::default();
+        let c = match c {
+            '⏟' => '⏞',
+            '⎵' => '⎴',
+            '⏝' => '⏜',
+            _ => c,
+        };
+        self.draw_accent(&mut accent, c, w, x0, desc, em);
+        for item in accent.items {
+            match item {
+                Item::Poly(p) => b
+                    .items
+                    .push(Item::Poly(p.into_iter().map(|(x, y)| (x, -y)).collect())),
+                Item::Glyph {
+                    ch, face, em, x, y, ..
+                } => b.items.extend(
+                    self.f
+                        .glyph_polys(face, ch, em, em, x, y)
+                        .into_iter()
+                        .map(|p| Item::Poly(p.into_iter().map(|(x, y)| (x, -y)).collect())),
+                ),
+            }
+        }
+        b.desc = b.desc.max(accent.asc);
     }
 }

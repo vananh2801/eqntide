@@ -29,6 +29,25 @@ const PALETTE_HEIGHT: f32 =
 const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 1.5..=4.0;
 const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";
 
+#[derive(Clone)]
+struct MatrixDialog {
+    rows: usize,
+    columns: usize,
+    alignment: &'static str,
+    fence: &'static str,
+}
+
+impl Default for MatrixDialog {
+    fn default() -> Self {
+        Self {
+            rows: 2,
+            columns: 2,
+            alignment: "center",
+            fence: "parentheses",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Intent {
     Close,
@@ -66,6 +85,7 @@ pub struct App {
     zoom: f32,
     tab: usize,
     category: String,
+    matrix_dialog: Option<MatrixDialog>,
     palette_textures: HashMap<&'static str, Option<egui::TextureHandle>>,
     status: String,
     texture: Option<egui::TextureHandle>,
@@ -199,6 +219,7 @@ impl App {
             zoom: 2.0,
             tab: 0,
             category: "Fractions".into(),
+            matrix_dialog: None,
             palette_textures: HashMap::new(),
             status: "Click the canvas to type. Use the palette or Ctrl+F for a fraction.".into(),
             texture: None,
@@ -396,6 +417,7 @@ impl App {
                 match Editor::try_new(&math) {
                     Ok(editor) => {
                         self.editor = editor;
+                        self.matrix_dialog = None;
                         self.command_input = None;
                         self.latex_groups.clear();
                         self.expects_latex_group = false;
@@ -756,7 +778,11 @@ impl App {
     fn insert_template(&mut self, source: &str) {
         match palette::template(source) {
             Ok(template) => {
-                self.editor.insert_template(&template);
+                if palette::attaches_to_previous(source) {
+                    self.editor.insert_template_wrapping_previous(&template);
+                } else {
+                    self.editor.insert_template(&template);
+                }
                 self.changed();
             }
             Err(e) => self.status = e,
@@ -822,100 +848,125 @@ impl App {
     }
 
     fn footer(&mut self, ui: &mut egui::Ui) {
-        ui.add_enabled_ui(!self.busy && self.pending.is_none(), |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
-                ui.add_enabled_ui(!self.draft_dirty, |ui| {
-                    let font = egui::TextStyle::Body.resolve(ui.style());
-                    let color = ui.visuals().widgets.inactive.fg_stroke.color;
-                    let caption =
-                        |text: &str| egui::RichText::new(text).font(font.clone()).color(color);
-                    ui.radio_value(&mut self.target, "mathtype".into(), caption("MathType"));
-                    ui.add_space(12.0);
-                    ui.radio_value(&mut self.target, "omml".into(), caption("OMML"));
-                    ui.separator();
-                    ui.label(caption("Cỡ chữ"));
-                    let size_changed = ui
-                        .scope(|ui| {
-                            ui.style_mut().explanation_tooltips = false;
-                            ui.add(
-                                egui::DragValue::from_get_set(|value| {
-                                    if let Some(value) = value {
-                                        self.font_pt = ((value * 2.0).round() / 2.0) as f32;
-                                    }
-                                    f64::from(self.font_pt)
-                                })
-                                .range(6.0..=72.0)
-                                .min_size(Vec2::new(FONT_SIZE_CONTROL_WIDTH, FOOTER_CONTROL_HEIGHT))
-                                // A quarter of the control's width changes the size by 1 pt.
-                                .speed(4.0 / FONT_SIZE_CONTROL_WIDTH)
-                                .max_decimals(1)
-                                .suffix(" pt"),
-                            )
-                            .on_hover_text("Nhấn giữ và kéo trái/phải để điều chỉnh")
-                            .changed()
-                        })
-                        .inner;
-                    if size_changed {
-                        self.render_key += 1;
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new("↶").min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
-                        )
-                        .on_hover_text("Hoàn tác (Ctrl+Z)")
-                        .clicked()
-                    {
-                        self.command_input = None;
-                        self.latex_groups.clear();
-                        self.expects_latex_group = false;
-                        self.editor.undo();
-                        self.changed();
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new("↷").min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
-                        )
-                        .on_hover_text("Làm lại (Ctrl+Y)")
-                        .clicked()
-                    {
-                        self.command_input = None;
-                        self.latex_groups.clear();
-                        self.expects_latex_group = false;
-                        self.editor.redo();
-                        self.changed();
-                    }
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    self.save_button(ui);
-                    ui.scope(|ui| {
-                        ui.spacing_mut().slider_width = 120.0;
-                        let widgets = &mut ui.visuals_mut().widgets;
-                        for state in [
-                            &mut widgets.noninteractive,
-                            &mut widgets.inactive,
-                            &mut widgets.hovered,
-                            &mut widgets.active,
-                            &mut widgets.open,
-                        ] {
-                            state.corner_radius = egui::CornerRadius::same(4);
+        ui.add_enabled_ui(
+            !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
+            |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    ui.add_enabled_ui(!self.draft_dirty, |ui| {
+                        let font = egui::TextStyle::Body.resolve(ui.style());
+                        let color = ui.visuals().widgets.inactive.fg_stroke.color;
+                        let caption =
+                            |text: &str| egui::RichText::new(text).font(font.clone()).color(color);
+                        ui.radio_value(&mut self.target, "mathtype".into(), caption("MathType"));
+                        ui.add_space(12.0);
+                        ui.radio_value(&mut self.target, "omml".into(), caption("OMML"));
+                        ui.separator();
+                        ui.label(caption("Cỡ chữ"));
+                        let size_changed = ui
+                            .scope(|ui| {
+                                ui.style_mut().explanation_tooltips = false;
+                                ui.add(
+                                    egui::DragValue::from_get_set(|value| {
+                                        if let Some(value) = value {
+                                            self.font_pt = ((value * 2.0).round() / 2.0) as f32;
+                                        }
+                                        f64::from(self.font_pt)
+                                    })
+                                    .range(6.0..=72.0)
+                                    .min_size(Vec2::new(
+                                        FONT_SIZE_CONTROL_WIDTH,
+                                        FOOTER_CONTROL_HEIGHT,
+                                    ))
+                                    // A quarter of the control's width changes the size by 1 pt.
+                                    .speed(4.0 / FONT_SIZE_CONTROL_WIDTH)
+                                    .max_decimals(1)
+                                    .suffix(" pt"),
+                                )
+                                .on_hover_text("Nhấn giữ và kéo trái/phải để điều chỉnh")
+                                .changed()
+                            })
+                            .inner;
+                        if size_changed {
+                            self.render_key += 1;
                         }
-                        ui.add(
-                            egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
-                                .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
-                                .show_value(false),
-                        )
-                        .on_hover_text("Thu phóng hiển thị");
+                        if ui
+                            .add(
+                                egui::Button::new("↶")
+                                    .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
+                            )
+                            .on_hover_text("Hoàn tác (Ctrl+Z)")
+                            .clicked()
+                        {
+                            self.command_input = None;
+                            self.latex_groups.clear();
+                            self.expects_latex_group = false;
+                            self.editor.undo();
+                            self.changed();
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new("↷")
+                                    .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
+                            )
+                            .on_hover_text("Làm lại (Ctrl+Y)")
+                            .clicked()
+                        {
+                            self.command_input = None;
+                            self.latex_groups.clear();
+                            self.expects_latex_group = false;
+                            self.editor.redo();
+                            self.changed();
+                        }
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        self.save_button(ui);
+                        ui.scope(|ui| {
+                            ui.spacing_mut().slider_width = 120.0;
+                            let widgets = &mut ui.visuals_mut().widgets;
+                            for state in [
+                                &mut widgets.noninteractive,
+                                &mut widgets.inactive,
+                                &mut widgets.hovered,
+                                &mut widgets.active,
+                                &mut widgets.open,
+                            ] {
+                                state.corner_radius = egui::CornerRadius::same(4);
+                            }
+                            ui.add(
+                                egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
+                                    .handle_shape(egui::style::HandleShape::Rect {
+                                        aspect_ratio: 1.0,
+                                    })
+                                    .show_value(false),
+                            )
+                            .on_hover_text("Thu phóng hiển thị");
+                        });
                     });
                 });
-            });
-        });
+            },
+        );
     }
 
-    fn sidebar(&mut self, ui: &mut egui::Ui) {
+    fn sidebar(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
+        egui::Panel::bottom("sidebar-batch")
+            .exact_size(60.0)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 8)))
+            .show(ui, |ui| {
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 42.0],
+                        egui::Button::selectable(false, "Batch DOCX"),
+                    )
+                    .clicked()
+                {
+                    self.tab = 1;
+                }
+            });
         ui.add_space(8.0);
         egui::ScrollArea::vertical()
             .id_salt("categories")
+            .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (group, label) in palette::GROUPS {
                     if ui
@@ -928,17 +979,100 @@ impl App {
                         self.category = (*group).into();
                     }
                 }
-                ui.separator();
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 42.0],
-                        egui::Button::selectable(false, "Batch DOCX"),
-                    )
-                    .clicked()
-                {
-                    self.tab = 1;
+            })
+    }
+
+    fn insert_custom_matrix(&mut self, settings: &MatrixDialog) {
+        let matrix = eqntide::catalog::matrix(
+            settings.rows,
+            settings.columns,
+            settings.alignment,
+            settings.fence,
+        );
+        self.command_input = None;
+        self.latex_groups.clear();
+        self.expects_latex_group = false;
+        self.editor.insert_template(&matrix);
+        self.changed();
+        self.status = format!("Đã chèn ma trận {} × {}.", settings.rows, settings.columns);
+    }
+
+    fn matrix_dialog_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut settings) = self.matrix_dialog.take() else {
+            return;
+        };
+        if self.pending.is_some() || self.tab != 0 {
+            return;
+        }
+        let mut insert = false;
+        let response = egui::Modal::new(egui::Id::unique("custom-matrix-dialog")).show(ctx, |ui| {
+            ui.set_min_width(330.0);
+            ui.heading("Ma trận tuỳ chỉnh");
+            ui.add_space(6.0);
+            egui::Grid::new("matrix-settings")
+                .spacing([16.0, 10.0])
+                .show(ui, |ui| {
+                    ui.label("Số hàng");
+                    ui.add(egui::DragValue::new(&mut settings.rows).range(1..=20));
+                    ui.end_row();
+                    ui.label("Số cột");
+                    ui.add(egui::DragValue::new(&mut settings.columns).range(1..=20));
+                    ui.end_row();
+                    ui.label("Căn lề");
+                    egui::ComboBox::from_id_salt("matrix-alignment")
+                        .selected_text(match settings.alignment {
+                            "left" => "Trái",
+                            "right" => "Phải",
+                            _ => "Giữa",
+                        })
+                        .show_ui(ui, |ui| {
+                            for (value, label) in
+                                [("left", "Trái"), ("center", "Giữa"), ("right", "Phải")]
+                            {
+                                ui.selectable_value(&mut settings.alignment, value, label);
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("Kiểu ngoặc");
+                    const FENCES: &[(&str, &str)] = &[
+                        ("none", "Không ngoặc"),
+                        ("parentheses", "Ngoặc tròn ( )"),
+                        ("brackets", "Ngoặc vuông [ ]"),
+                        ("braces", "Ngoặc nhọn { }"),
+                        ("bars", "Định thức | |"),
+                        ("double-bars", "Chuẩn ‖ ‖"),
+                    ];
+                    egui::ComboBox::from_id_salt("matrix-fence")
+                        .selected_text(
+                            FENCES
+                                .iter()
+                                .find(|(value, _)| *value == settings.fence)
+                                .unwrap()
+                                .1,
+                        )
+                        .show_ui(ui, |ui| {
+                            for &(value, label) in FENCES {
+                                ui.selectable_value(&mut settings.fence, value, label);
+                            }
+                        });
+                    ui.end_row();
+                });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                insert = ui.button("Chèn ma trận").clicked();
+                if ui.button("Huỷ").clicked() {
+                    ui.close();
                 }
             });
+        });
+        if insert {
+            self.insert_custom_matrix(&settings);
+            ctx.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
+        } else if !response.should_close() {
+            self.matrix_dialog = Some(settings);
+        } else {
+            ctx.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
+        }
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
@@ -987,7 +1121,8 @@ impl App {
             .floor() as usize;
         // Native DPI/startup adjustments may briefly give us less than the minimum width.
         // Keep three rows in that frame too, scrolling horizontally if necessary.
-        let columns = fitting_columns.max(items.len().div_ceil(3)).max(1);
+        let item_count = items.len() + usize::from(self.category == "Matrices");
+        let columns = fitting_columns.max(item_count.div_ceil(3)).max(1);
         egui::ScrollArea::horizontal()
             .id_salt(("palette", &self.category))
             .vertical_scroll_offset(0.0)
@@ -1054,6 +1189,18 @@ impl App {
                                 ui.end_row();
                             }
                         }
+                        if self.category == "Matrices"
+                            && ui
+                                .add_sized(PALETTE_BUTTON_SIZE, egui::Button::new("⋯"))
+                                .on_hover_text("Ma trận tuỳ chỉnh")
+                                .clicked()
+                        {
+                            self.command_input = None;
+                            self.matrix_dialog = Some(MatrixDialog::default());
+                            ui.memory_mut(|m| {
+                                m.surrender_focus(egui::Id::unique("equation-canvas"))
+                            });
+                        }
                     });
             });
     }
@@ -1088,7 +1235,10 @@ impl App {
                 .exact_size(150.0)
                 .resizable(false)
                 .show(ui, |ui| {
-                    ui.add_enabled_ui(!self.busy && self.pending.is_none(), |ui| self.sidebar(ui));
+                    ui.add_enabled_ui(
+                        !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
+                        |ui| self.sidebar(ui),
+                    );
                 });
         }
         if self.tab == 0 || self.session.is_some() {
@@ -1113,18 +1263,25 @@ impl App {
                     .inner_margin(CONTENT_PADDING),
             )
             .show(ui, |ui| {
-                ui.add_enabled_ui(!self.busy && self.pending.is_none(), |ui| {
-                    if self.tab == 0 {
-                        self.editor_ui(ui);
-                    } else {
-                        self.batch_ui(ui);
-                    }
-                });
+                ui.add_enabled_ui(
+                    !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
+                    |ui| {
+                        if self.tab == 0 {
+                            self.editor_ui(ui);
+                        } else {
+                            self.batch_ui(ui);
+                        }
+                    },
+                );
             });
     }
 
     fn save_available(&self) -> bool {
-        !self.busy && !self.batch_running && self.pending.is_none() && !self.allow_close
+        !self.busy
+            && !self.batch_running
+            && self.pending.is_none()
+            && !self.allow_close
+            && self.matrix_dialog.is_none()
     }
     fn take_save_shortcut(ctx: &egui::Context) -> bool {
         // Consume before widgets see the events, but save after they apply this
@@ -1670,7 +1827,11 @@ impl App {
                 self.command_input = None;
                 self.expects_latex_group = template;
                 if template {
-                    self.editor.insert_template(&math);
+                    if command.is_some_and(|c| palette::attaches_to_previous(c.source)) {
+                        self.editor.insert_template_wrapping_previous(&math);
+                    } else {
+                        self.editor.insert_template(&math);
+                    }
                 } else {
                     self.editor.insert_math(&math);
                 }
@@ -2218,6 +2379,7 @@ impl eframe::App for App {
         if (save_requested || self.save_clicked) && self.save_available() {
             self.finish(true);
         }
+        self.matrix_dialog_ui(&ctx);
         self.dialogs(&ctx);
         self.request_latex_parse(&ctx);
         self.drain_before_close(&ctx);
@@ -2472,7 +2634,7 @@ mod tests {
         assert!(a.command_key(egui::Key::Enter, egui::Modifiers::NONE));
         assert!(a.editor.math().iter().iter().any(|n| n.tag == "mfrac"));
         type_canvas(&mut a, "{1}{2}");
-        assert_eq!(a.editor.math().to_latex(), r"\frac{1}{2}");
+        assert_eq!(a.editor.math().to_latex(), r"\dfrac{1}{2}");
         assert_eq!(a.latex, a.editor.math().to_latex());
     }
 
@@ -2487,7 +2649,7 @@ mod tests {
         a.command_key(egui::Key::ArrowUp, egui::Modifiers::NONE);
         assert_eq!(a.command_input.as_ref().unwrap().selected, 0);
         a.command_key(egui::Key::Escape, egui::Modifiers::NONE);
-        type_canvas(&mut a, r"\al");
+        type_canvas(&mut a, r"\alp");
         assert_eq!(a.editor.math(), before);
         assert!(a.command_key(egui::Key::Tab, egui::Modifiers::NONE));
         assert!(a.editor.math().to_xml().contains('α'));
@@ -2516,8 +2678,8 @@ mod tests {
     #[test]
     fn completion_accept_keys_work_through_the_focused_canvas() {
         for (key, prefix) in [
-            (egui::Key::Enter, "al"),
-            (egui::Key::Tab, "al"),
+            (egui::Key::Enter, "alp"),
+            (egui::Key::Tab, "alp"),
             (egui::Key::Space, "alpha"),
         ] {
             let mut a = app();
@@ -2876,6 +3038,217 @@ mod tests {
                     output.textures_delta.clear();
                 }
             }
+        }
+    }
+
+    #[test]
+    fn every_category_keeps_three_palette_rows_at_compact_sizes() {
+        for dpi in [1.0, 1.25, 1.5] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(dpi);
+            let mut a = app();
+            for &(group, _) in palette::GROUPS {
+                a.category = group.into();
+                for width in [960.0, MIN_WINDOW_SIZE[0]] {
+                    for _ in 0..2 {
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(Rect::from_min_size(
+                                    Pos2::ZERO,
+                                    Vec2::new(width, 560.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| a.shell(ui),
+                        );
+                        let textures: std::collections::HashSet<_> = a
+                            .palette_textures
+                            .values()
+                            .filter_map(|t| t.as_ref().map(egui::TextureHandle::id))
+                            .collect();
+                        let mut rows = Vec::<f32>::new();
+                        for shape in &output.shapes {
+                            if let egui::Shape::Rect(r) = &shape.shape {
+                                if r.brush
+                                    .as_ref()
+                                    .is_some_and(|b| textures.contains(&b.fill_texture_id))
+                                    && !rows.iter().any(|y| (y - r.rect.center().y).abs() < 2.0)
+                                {
+                                    rows.push(r.rect.center().y);
+                                }
+                            }
+                        }
+                        assert!(!rows.is_empty(), "{group} must contain rendered buttons");
+                        assert!(
+                            rows.len() <= 3,
+                            "{group}: {} rows at width {width}, DPI {dpi}",
+                            rows.len()
+                        );
+                        let batch = output
+                            .shapes
+                            .iter()
+                            .find(|s| {
+                                matches!(&s.shape,
+                            egui::Shape::Text(t) if t.galley.text() == "Batch DOCX")
+                            })
+                            .unwrap();
+                        assert!(
+                            batch
+                                .clip_rect
+                                .contains_rect(batch.shape.visual_bounding_rect()),
+                            "{group}"
+                        );
+                        output.textures_delta.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn batch_stays_visible_while_sidebar_groups_scroll() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let mut last_position = None;
+        let mut last_scroll = -1.0f32;
+        let mut time = 0.0f64;
+        for step in [0.0, 300.0, 500.0] {
+            time += 0.1;
+            let mut events = vec![egui::Event::PointerMoved(Pos2::new(75.0, 200.0))];
+            if step > 0.0 {
+                events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, -step),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            let mut scroll_y = 0.0f32;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
+                    time: Some(time),
+                    predicted_dt: 1.0 / 60.0,
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.set_width(150.0);
+                        let sa = a.sidebar(ui);
+                        scroll_y = sa.state.clamped_offset().y;
+                    });
+                },
+            );
+            if step > 0.0 {
+                // Step one settle frame so kinetic/smooth scroll applies.
+                time += 0.05;
+                output.textures_delta.clear();
+                output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::from(MIN_WINDOW_SIZE),
+                        )),
+                        time: Some(time),
+                        predicted_dt: 1.0 / 60.0,
+                        events: vec![egui::Event::PointerMoved(Pos2::new(75.0, 200.0))],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            ui.set_width(150.0);
+                            let sa = a.sidebar(ui);
+                            scroll_y = sa.state.clamped_offset().y;
+                        });
+                    },
+                );
+                assert!(scroll_y > last_scroll, "expected categories to scroll");
+            }
+            last_scroll = scroll_y;
+            let (rect, clip) = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(t) if t.galley.text() == "Batch DOCX" => {
+                        Some((shape.shape.visual_bounding_rect(), shape.clip_rect))
+                    }
+                    _ => None,
+                })
+                .expect("Batch must be visible even with many groups");
+            assert!(clip.contains_rect(rect));
+            if let Some(previous) = last_position {
+                assert_eq!(rect, previous);
+            }
+            last_position = Some(rect);
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn custom_matrix_dialog_cancels_without_changes_and_inserts_one_transaction() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.editor.insert_text("x");
+        a.changed();
+        let before = a.editor.math();
+        a.matrix_dialog = Some(MatrixDialog::default());
+        assert!(!a.save_available());
+        for _ in 0..2 {
+            ctx.run_ui(egui::RawInput::default(), |ui| a.matrix_dialog_ui(ui.ctx()))
+                .textures_delta
+                .clear();
+        }
+        ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| a.matrix_dialog_ui(ui.ctx()),
+        )
+        .textures_delta
+        .clear();
+        assert!(a.matrix_dialog.is_none());
+        assert_eq!(a.editor.math(), before);
+        assert!(a.save_available());
+        a.insert_custom_matrix(&MatrixDialog {
+            rows: 3,
+            columns: 4,
+            alignment: "right",
+            fence: "brackets",
+        });
+        let math = a.editor.math();
+        let table = math.iter().into_iter().find(|n| n.tag == "mtable").unwrap();
+        assert_eq!(table.children.len(), 3);
+        assert!(table.children.iter().all(|r| r.children.len() == 4));
+        assert_eq!(table.attr("columnalign"), Some("right"));
+        assert_eq!(a.latex, math.to_latex());
+        a.editor.undo();
+        assert_eq!(a.editor.math(), before);
+        a.editor.redo();
+        assert_eq!(a.editor.math(), math);
+    }
+
+    #[test]
+    fn palette_accents_take_previous_expression_in_one_undo_step() {
+        for source in [r"\hat{#?}", r"\underline{#?}", r"\boxed{#?}"] {
+            let mut a = app();
+            a.editor.insert_text("x");
+            let before = a.editor.math();
+            a.insert_template(source);
+            let math = a.editor.math();
+            assert_eq!(math.children.len(), 1, "{source}");
+            assert!(math.to_xml().contains("<mi>x</mi>"));
+            assert_eq!(a.latex, math.to_latex());
+            a.editor.undo();
+            assert_eq!(a.editor.math(), before, "{source}");
         }
     }
 

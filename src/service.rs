@@ -8,6 +8,8 @@ use crate::{docx::*, MathNode};
 use crate::{
     mathml_to_mtef_bytes, mathml_to_omml_xml, render_emf, render_emf_with_mtef, render_preview,
 };
+#[path = "latex_extensions.rs"]
+mod latex_extensions;
 
 #[derive(Debug)]
 pub struct ServiceError {
@@ -49,7 +51,6 @@ fn latex_aliases(input: &str) -> String {
                 "le" => "leq",
                 "ge" => "geq",
                 "ne" => "neq",
-                "tfrac" | "dfrac" => "frac",
                 _ => &command,
             });
         } else if let Some(escaped) = chars.next() {
@@ -72,6 +73,12 @@ pub fn parse_latex_to_mathml(latex_str: &str) -> crate::error::Result<MathNode> 
     {
         clean = clean[2..clean.len() - 2].trim();
     }
+    let mut math = latex_extensions::parse(clean)?;
+    normalize_latex_integrals(&mut math);
+    Ok(math)
+}
+
+fn parse_standard(clean: &str) -> crate::error::Result<MathNode> {
     // These imported LaTeX environments have equivalent native table representations.
     let normalized = latex_aliases(clean)
         .replace(r"\begin{cases}", r"\left\{\begin{matrix}")
@@ -89,13 +96,12 @@ pub fn parse_latex_to_mathml(latex_str: &str) -> crate::error::Result<MathNode> 
             "unsupported or invalid LaTeX command".into(),
         ));
     }
-    let mut math = MathNode::parse(
+    let math = MathNode::parse(
         &mml.replace("&lang;", "⟨")
             .replace("&rang;", "⟩")
             .replace("columnalign=left", "columnalign=\"left\"")
             .replace("columnalign=right", "columnalign=\"right\""),
     )?;
-    normalize_latex_integrals(&mut math);
     Ok(math)
 }
 
@@ -103,16 +109,18 @@ pub fn parse_latex_to_mathml(latex_str: &str) -> crate::error::Result<MathNode> 
 // dependency emits ordinary side scripts for integrals, so normalize only the
 // LaTeX path. Imported MathML/OMML keeps its explicit placement and structure.
 fn normalize_latex_integrals(node: &mut MathNode) {
-    if node.children.first().is_some_and(|base| {
-        base.tag == "mo"
-            && base.text.trim().chars().count() == 1
-            && base
-                .text
-                .trim()
-                .chars()
-                .next()
-                .is_some_and(crate::symbols::is_integral)
-    }) {
+    if node.attr("data-limloc") != Some("subSup")
+        && node.children.first().is_some_and(|base| {
+            base.tag == "mo"
+                && base.text.trim().chars().count() == 1
+                && base
+                    .text
+                    .trim()
+                    .chars()
+                    .next()
+                    .is_some_and(crate::symbols::is_integral)
+        })
+    {
         node.tag = match node.tag.as_str() {
             "msub" => "munder".into(),
             "msup" => "mover".into(),

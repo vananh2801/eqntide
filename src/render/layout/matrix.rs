@@ -29,7 +29,6 @@ impl Layout {
                 col_w[j] = col_w[j].max(c.w);
             }
         }
-        let left_align = ncols == 1;
         let col_gap = 1.0 * em;
         let row_gap = 0.35 * em;
         let heights: Vec<(f32, f32)> = rows
@@ -48,14 +47,27 @@ impl Layout {
             heights.iter().map(|(a, d)| a + d).sum::<f32>() + row_gap * (rows.len() - 1) as f32;
         let mut y = -AXIS * em - total / 2.0;
         let mut b = LBox::default();
-        for (r, (a, d)) in rows.iter().zip(&heights) {
+        for ((r, (a, d)), source_row) in rows.iter().zip(&heights).zip(&n.children) {
             y += a;
             let mut x = 0.0;
             for (j, c) in r.iter().enumerate() {
-                let dx = if left_align {
-                    0.0
-                } else {
-                    (col_w[j] - c.w) / 2.0
+                let align = source_row
+                    .children
+                    .get(j)
+                    .and_then(|cell| cell.attr("columnalign"))
+                    .or_else(|| source_row.attr("columnalign"))
+                    .or_else(|| n.attr("columnalign"));
+                let align = align.and_then(|s| {
+                    s.split_whitespace()
+                        .nth(j)
+                        .or_else(|| s.split_whitespace().last())
+                });
+                let dx = match align {
+                    Some("left") => 0.0,
+                    Some("right") => col_w[j] - c.w,
+                    Some("center") => (col_w[j] - c.w) / 2.0,
+                    _ if ncols == 1 => 0.0,
+                    _ => (col_w[j] - c.w) / 2.0,
                 };
                 b.place(c, x + dx, y);
                 x += col_w[j] + col_gap;

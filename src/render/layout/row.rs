@@ -73,14 +73,47 @@ impl Layout {
                 .chars()
                 .filter(|c| !c.is_whitespace() && *c != '\u{00A0}' && *c != '\u{200B}')
                 .collect();
-            if kid.tag == "mspace"
-                || ((kid.tag == "mo" || kid.tag == "mtext") && text_clean.is_empty())
+            if (kid.tag == "mo" || kid.tag == "mtext")
+                && text_clean.is_empty()
+                && !kid
+                    .text
+                    .chars()
+                    .any(|c| crate::symbols::misc::unicode_space_em(c).is_some())
             {
                 continue;
             }
 
             let ssty = ctx.ssty_level();
             match kid.tag.as_str() {
+                "mspace" => {
+                    atoms.push(Atom {
+                        class: Class::Ord,
+                        b: self.node(kid, em, ctx)?,
+                        delim: None,
+                        is_table: false,
+                    });
+                }
+                "mtext"
+                    if kid
+                        .text
+                        .chars()
+                        .all(|c| crate::symbols::misc::unicode_space_em(c).is_some()) =>
+                {
+                    let width: f32 = kid
+                        .text
+                        .chars()
+                        .filter_map(crate::symbols::misc::unicode_space_em)
+                        .sum();
+                    atoms.push(Atom {
+                        class: Class::Ord,
+                        b: LBox {
+                            w: width * em,
+                            ..Default::default()
+                        },
+                        delim: None,
+                        is_table: false,
+                    });
+                }
                 "mo" => self.atoms_mo(&kid.text, em, &mut atoms, ssty),
                 "mi" => self.atoms_mi(kid, em, &mut atoms, ssty),
                 "mn" => {
@@ -261,18 +294,17 @@ impl Layout {
         Class::Ord
     }
 
-    /// TeX spacing table in units of `em`.
+    /// TeX spacing table in units of `em` (The TeXbook, Ch. 18, p. 170).
     fn spacing(&self, left: Class, right: Class, em: f32) -> f32 {
         const THIN: f32 = 3.0 / 18.0;
         const MED: f32 = 4.0 / 18.0;
         const THICK: f32 = 5.0 / 18.0;
         use Class::*;
         let t = match (left, right) {
-            (Ord, Op) | (Op, Ord) | (Op, Op) => THIN,
-            (Ord, Bin) | (Bin, Ord) | (Bin, Op) => MED,
-            (Ord, Rel) | (Rel, Ord) | (Rel, Op) | (Op, Rel) => THICK,
-            (Punct, Ord) | (Punct, Op) | (Punct, Rel) | (Punct, Punct) => THIN,
-            (Op, Open) | (Ord, Ord) => 0.0,
+            (Ord | Close, Op) | (Op, Ord | Op) => THIN,
+            (Ord | Close, Bin) | (Bin, Ord | Op | Open) => MED,
+            (Ord | Close | Op, Rel) | (Rel, Ord | Op | Open) => THICK,
+            (Punct, Ord | Op | Rel | Open | Punct) => THIN,
             _ => 0.0,
         };
         t * em
@@ -417,5 +449,23 @@ mod wrapped_table_tests {
             "wrapper must not leave a small brace"
         );
         assert_eq!(a.items.len(), b.items.len());
+    }
+
+    #[test]
+    fn closing_and_opening_fences_receive_tex_operator_spacing() {
+        let l = Layout {
+            f: fonts(),
+            depth: 0,
+        };
+        let em = 18.0;
+        let med = 4.0 / 18.0 * em;
+        let thick = 5.0 / 18.0 * em;
+        let thin = 3.0 / 18.0 * em;
+        assert!((l.spacing(Class::Close, Class::Bin, em) - med).abs() < 1e-4);
+        assert!((l.spacing(Class::Bin, Class::Open, em) - med).abs() < 1e-4);
+        assert!((l.spacing(Class::Close, Class::Rel, em) - thick).abs() < 1e-4);
+        assert!((l.spacing(Class::Rel, Class::Open, em) - thick).abs() < 1e-4);
+        assert!((l.spacing(Class::Close, Class::Op, em) - thin).abs() < 1e-4);
+        assert!((l.spacing(Class::Punct, Class::Open, em) - thin).abs() < 1e-4);
     }
 }

@@ -217,6 +217,11 @@ fn is_arrow_mo(node: &MathNode) -> bool {
                 | "↔"
                 | "⇄"
                 | "⇌"
+                | "⇋"
+                | "⇆"
+                | "⇀"
+                | "↼"
+                | "↦"
                 | "⟵"
                 | "⟶"
                 | "⟷"
@@ -332,7 +337,21 @@ impl MathmlEncoder {
         match node.tag.as_str() {
             "math" | "mrow" | "mstyle" | "mpadded" => self.encode_row_slice(&node.children),
             "mi" | "mn" | "mo" | "mtext" | "ms" => Ok(self.encode_run(node).into_iter().collect()),
-            "mspace" => Ok(Vec::new()),
+            "mspace" => {
+                let width = crate::symbols::misc::space_width_em(node.attr("width").unwrap_or("0"));
+                let text = match width {
+                    w if (w - 3.0 / 18.0).abs() < 0.00001 => "\u{2009}",
+                    w if (w - 4.0 / 18.0).abs() < 0.00001 => "\u{205F}",
+                    w if (w - 5.0 / 18.0).abs() < 0.00001 => "\u{2005}",
+                    w if (w - 1.0).abs() < 0.00001 => "\u{2003}",
+                    w if (w - 2.0).abs() < 0.00001 => "\u{2003}\u{2003}",
+                    _ => "\u{200A}",
+                };
+                Ok(self
+                    .encode_run(&MathNode::leaf("mtext", text))
+                    .into_iter()
+                    .collect())
+            }
             "mfrac" => self.encode_mfrac(node).map(|e| vec![e]),
             "msqrt" => self.encode_msqrt(node).map(|e| vec![e]),
             "mroot" => self.encode_mroot(node).map(|e| vec![e]),
@@ -943,6 +962,33 @@ impl MathmlEncoder {
             .max()
             .unwrap_or(0);
 
+        if let Some(alignment) = node.attr("columnalign") {
+            let mut mcs = m_el("mcs");
+            let alignments: Vec<_> = alignment.split_whitespace().collect();
+            for index in 0..max_cols {
+                let mut mc_pr = m_el("mcPr");
+                mc_pr.push(m_val_el("count", "1"));
+                let align = alignments
+                    .get(index)
+                    .or_else(|| alignments.last())
+                    .copied()
+                    .unwrap_or("center");
+                mc_pr.push(m_val_el(
+                    "mcJc",
+                    match align {
+                        "left" => "left",
+                        "right" => "right",
+                        _ => "center",
+                    },
+                ));
+                let mut mc = m_el("mc");
+                mc.push(mc_pr);
+                mcs.push(mc);
+            }
+            let mut pr = m_el("mPr");
+            pr.push(mcs);
+            m.push(pr);
+        }
         for row in node.children.iter().filter(|r| r.tag == "mtr") {
             let mut mr = m_el("mr");
             let mut col_count = 0;
@@ -1408,5 +1454,54 @@ mod tests {
         let decoded = mtef_to_mathml(&build_mtef(&mtef)).unwrap();
         let latex = decoded.to_latex();
         assert_eq!(latex, "(Ou,Ov)");
+    }
+    #[test]
+    fn extended_palette_attributes_survive_omml_roundtrip() {
+        for notation in [
+            "top left",
+            "bottom right",
+            "horizontalstrike",
+            "verticalstrike",
+            "updiagonalstrike downdiagonalstrike",
+        ] {
+            let math = MathNode::parse(&format!(
+                "<math><menclose notation=\"{notation}\"><mi>x</mi></menclose></math>"
+            ))
+            .unwrap();
+            let out = crate::omml::omml_to_mathml(&mathml_to_omml(&math).unwrap()).unwrap();
+            let enclosure = out
+                .iter()
+                .into_iter()
+                .find(|n| n.tag == "menclose")
+                .unwrap();
+            let result = enclosure.attr("notation").unwrap();
+            for part in notation.split_whitespace() {
+                assert!(result.contains(part), "{notation}: {result}");
+            }
+        }
+        for width in ["0.166667em", "0.222222em", "0.277778em", "1em", "2em"] {
+            let math = MathNode::parse(&format!(
+                "<math><mi>x</mi><mspace width=\"{width}\"/><mi>y</mi></math>"
+            ))
+            .unwrap();
+            let out = crate::omml::omml_to_mathml(&mathml_to_omml(&math).unwrap()).unwrap();
+            let space = out
+                .iter()
+                .into_iter()
+                .find(|n| n.tag == "mspace")
+                .expect("explicit spacing must survive");
+            assert!(
+                (crate::symbols::misc::space_width_em(space.attr("width").unwrap())
+                    - crate::symbols::misc::space_width_em(width))
+                .abs()
+                    < 0.00001
+            );
+        }
+        let matrix=MathNode::parse("<math><mtable columnalign=\"left right\"><mtr><mtd><mi>x</mi></mtd><mtd><mi>y</mi></mtd></mtr></mtable></math>").unwrap();
+        let out = crate::omml::omml_to_mathml(&mathml_to_omml(&matrix).unwrap()).unwrap();
+        assert!(out
+            .iter()
+            .iter()
+            .any(|n| n.tag == "mtable" && n.attr("columnalign") == Some("left right")));
     }
 }

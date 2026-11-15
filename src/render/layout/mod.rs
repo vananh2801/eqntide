@@ -27,6 +27,7 @@ mod bigop;
 mod boxes;
 mod delimiter;
 mod embellish;
+mod enclosure;
 mod fence;
 mod fraction;
 mod geom;
@@ -369,6 +370,19 @@ impl Layout {
         match n.tag.as_str() {
             "mi" | "mn" | "mo" | "mtext" => self.row(std::slice::from_ref(n), em, ctx),
             "mfrac" => self.frac(n, em, ctx),
+            "menclose" => self.enclosure(n, em, ctx),
+            "mspace" => Ok(LBox {
+                w: crate::symbols::misc::space_width_em(n.attr("width").unwrap_or("0")) * em,
+                ..Default::default()
+            }),
+            "mstyle" => {
+                let child_ctx = match n.attr("displaystyle") {
+                    Some("false") => MathContext::TEXT,
+                    Some("true") => MathContext::DISPLAY,
+                    _ => ctx,
+                };
+                self.row(k, em, child_ctx)
+            }
             "msqrt" => {
                 let c = self.row(k, em, ctx.for_radicand())?;
                 Ok(self.radical(&c, None, em, ctx))

@@ -4,9 +4,21 @@ use super::*;
 
 impl Layout {
     pub(super) fn frac(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
+        let small = n.attr("displaystyle") == Some("false");
+        let ctx = match n.attr("displaystyle") {
+            Some("false") => MathContext::TEXT,
+            Some("true") => MathContext::DISPLAY,
+            _ => ctx,
+        };
+        if n.attr("bevelled") == Some("true") {
+            return self.bevelled_fraction(n, em, ctx, small);
+        }
         let c = self.f.constants();
-        let num_ctx = ctx.for_numerator();
-        let den_ctx = ctx.for_denominator();
+        let (num_ctx, den_ctx) = if small {
+            (ctx.for_superscript(), ctx.for_subscript())
+        } else {
+            (ctx.for_numerator(), ctx.for_denominator())
+        };
         let num_em = em * ctx.rel_scale(num_ctx, c);
         let den_em = em * ctx.rel_scale(den_ctx, c);
 
@@ -41,10 +53,10 @@ impl Layout {
                     c.fraction_num_display_style_gap_min * em,
                     c.fraction_den_display_style_gap_min * em,
                 )
-            } else if ctx.is_script() {
-                // In script context (e.g. limit or exponent), use compact shift
+            } else if small || ctx.is_script() {
+                // Small / script fraction (e.g. \tfrac or nested script): compact shift
                 (
-                    (axis + thick / 2.0 + num.desc + c.fraction_num_gap_min * em).max(0.35 * em),
+                    (axis + thick / 2.0 + num.desc + c.fraction_num_gap_min * em).max(0.42 * em),
                     c.fraction_num_gap_min * em,
                     c.fraction_den_gap_min * em,
                 )
@@ -115,6 +127,48 @@ impl Layout {
                 .push(Item::Poly(rect(0.0, -axis - thick / 2.0, w, thick)));
         }
         b.w = w;
+        Ok(b)
+    }
+    fn bevelled_fraction(
+        &mut self,
+        n: &MathNode,
+        em: f32,
+        ctx: MathContext,
+        small: bool,
+    ) -> Result<LBox> {
+        let part_ctx = if small {
+            ctx.for_superscript()
+        } else {
+            ctx.for_numerator()
+        };
+        let part_em = em * ctx.rel_scale(part_ctx, self.f.constants());
+        let num = n
+            .children
+            .first()
+            .map(|c| self.node(c, part_em, part_ctx))
+            .transpose()?
+            .unwrap_or_default();
+        let den = n
+            .children
+            .get(1)
+            .map(|c| self.node(c, part_em, part_ctx))
+            .transpose()?
+            .unwrap_or_default();
+        let gap = 0.12 * em;
+        let slash_w = 0.4 * em;
+        let up = 0.25 * em;
+        let down = 0.20 * em;
+        let mut b = LBox::default();
+        b.place(&num, 0.0, -up);
+        let sx = num.w + gap;
+        let top = (-num.asc - up).min(-0.7 * em);
+        let bottom = (den.desc + down).max(0.2 * em);
+        for poly in stroke(&[(sx, bottom), (sx + slash_w, top)], 0.045 * em) {
+            b.items.push(Item::Poly(poly));
+        }
+        b.place(&den, sx + slash_w + gap, down);
+        b.asc = b.asc.max(-top);
+        b.desc = b.desc.max(bottom);
         Ok(b)
     }
 }
@@ -238,5 +292,49 @@ mod tests {
         // In MathType / OMML, fraction numerator & denominator stay at full size in both display and text/table!
         assert_eq!(em_disp, em);
         assert_eq!(em_text, em);
+    }
+
+    #[test]
+    fn test_small_fraction_displaystyle_false_shrinks_parts() {
+        let mut l = Layout {
+            f: fonts(),
+            depth: 0,
+        };
+        let em = 24.0;
+        let small_stacked = MathNode::parse(
+            r#"<math><mfrac displaystyle="false"><mn>1</mn><mn>2</mn></mfrac></math>"#,
+        )
+        .unwrap();
+        let small_bevel = MathNode::parse(
+            r#"<math><mfrac bevelled="true" displaystyle="false"><mn>1</mn><mn>2</mn></mfrac></math>"#,
+        )
+        .unwrap();
+
+        let get_em = |b: &LBox| -> f32 {
+            b.items
+                .iter()
+                .find_map(|it| match it {
+                    Item::Glyph { ch: '1', em, .. } => Some(*em),
+                    _ => None,
+                })
+                .unwrap()
+        };
+
+        let em_small = get_em(
+            &l.frac(&small_stacked.children[0], em, MathContext::DISPLAY)
+                .unwrap(),
+        );
+        let em_small_bevel = get_em(
+            &l.frac(&small_bevel.children[0], em, MathContext::DISPLAY)
+                .unwrap(),
+        );
+        assert!(
+            em_small < 0.8 * em,
+            "expected script-size tfrac, got {em_small}"
+        );
+        assert!(
+            em_small_bevel < 0.8 * em,
+            "expected script-size tsfrac, got {em_small_bevel}"
+        );
     }
 }
