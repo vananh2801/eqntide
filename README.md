@@ -173,11 +173,11 @@ completed or canceled. Source-field edits and moving the canvas caret cancel
 that draft. Completing a command is one undo transaction and retains imported
 attributes in the rest of the equation.
 
-The fixed footer's **Lưu và trở về tài liệu (Ctrl+S)** button saves an Office
+The fixed footer's **Save & Return to Document (Ctrl+S)** button saves an Office
 session back to Word/WPS and closes the editor after handing off the result.
 **Ctrl+S** works from both the canvas and the LaTeX source field. Saving waits
 until the source is valid and its preview is up to date; failures retain the
-equation for retry. Standalone editing shows **Lưu MathML (Ctrl+S)** instead.
+equation for retry. Standalone editing shows **Save MathML (Ctrl+S)** instead.
 Closing or switching away from an unchanged equation cancels its Office session
 without a save/discard prompt. Unsaved edits still require confirmation, as does
 closing while a batch conversion is running.

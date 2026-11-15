@@ -766,7 +766,7 @@ mod tests {
     fn unicode_edits_use_char_boundaries() {
         let mut e = Editor::new(&MathNode::with_children(
             "math",
-            vec![MathNode::leaf("mtext", "Tiếng Việt")],
+            vec![MathNode::leaf("mtext", "αβγδε ζηθι")],
         ));
         let id = e.root().children[0].id;
         e.set_caret(
@@ -778,7 +778,7 @@ mod tests {
         );
         e.insert_text("α");
         e.delete(true);
-        assert_eq!(e.math().children[0].text, "Tiếng Việt");
+        assert_eq!(e.math().children[0].text, "αβγδε ζηθι");
     }
     #[test]
     fn insert_structure_splits_token_without_losing_style() {

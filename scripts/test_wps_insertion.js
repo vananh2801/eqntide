@@ -37,9 +37,9 @@ for (const editing of [false, true]) {
 for (const addedBreak of ['', '\r', '\n', '\r\n']) {
 for (const addedSpace of ['', ' ']) {
 for (const omathMode of ['normal', 'includes-break', 'unavailable', 'throws']) {
-for (const suffix of [', sau công thức.\r', '\rĐoạn kế tiếp.\r', ' , giữ khoảng trắng.\r', ' ', '\r', '']) {
+for (const suffix of [', after equation.\r', '\rNext paragraph.\r', ' , keep whitespace.\r', ' ', '\r', '']) {
   const c = controller();
-  const original = 'Trước ' + (editing ? '#' : '') + suffix;
+  const original = 'Start ' + (editing ? '#' : '') + suffix;
   let text = original;
   let cursor;
   let received;
@@ -87,7 +87,7 @@ for (const suffix of [', sau công thức.\r', '\rĐoạn kế tiếp.\r', ' , g
   }
   assert.equal(cursor, 8);
   assert.equal(selection.Font.Position, 0);
-  assert.equal(text, 'Trước EQ' + suffix, 'preserve original suffix and paragraph marks');
+  assert.equal(text, 'Start EQ' + suffix, 'preserve original suffix and paragraph marks');
 }
 }
 }

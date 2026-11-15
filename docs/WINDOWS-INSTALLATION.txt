@@ -2,32 +2,32 @@
              EQNTIDE - WINDOWS RELEASE PACKAGES (x64)
 ========================================================================
 
-YÊU CẦU HỆ THỐNG:
-- Hệ điều hành: Windows 10 (64-bit) hoặc Windows 11 (64-bit).
-- Bộ ứng dụng văn phòng: Microsoft Word hoặc WPS Office.
+SYSTEM REQUIREMENTS:
+- Operating System: Windows 10 (64-bit) or Windows 11 (64-bit).
+- Office Suite: Microsoft Word or WPS Office.
 
 ------------------------------------------------------------------------
-ĐẦU RA: dist/windows/<version>/ (version lấy từ Cargo.toml)
+OUTPUT: dist/windows/<version>/ (version read from Cargo.toml)
 
-CÁC GÓI CÀI ĐẶT:
+INSTALLATION PACKAGES:
 
-1. EqnTide-<version>-Setup.exe  (KHUYẾN NGHỊ CHO NGƯỜI DÙNG)
-   - Bộ cài đặt 1-click chuẩn Windows Setup (NSIS).
-   - Tự động cài đặt ứng dụng vào máy tính.
-   - Tự động nạp file Add-in EqnTide.dotm vào thư mục STARTUP của Word
-     (chỉ dùng VBA .dotm; cần kiểm thử trên phiên bản Word thực tế).
-   - Tự động đăng ký Add-in cho WPS Office.
-   - Tự động tạo icon trên Desktop, Start Menu và đăng ký mục gỡ cài đặt
-     (Uninstall) trong Windows Settings.
+1. EqnTide-<version>-Setup.exe  (RECOMMENDED FOR USERS)
+   - Standard 1-click Windows Setup installer (NSIS).
+   - Automatically installs the application on your computer.
+   - Automatically loads the EqnTide.dotm add-in into Word's STARTUP folder
+     (VBA .dotm only; requires testing on actual Word versions).
+   - Automatically registers the add-in for WPS Office.
+   - Automatically creates Desktop and Start Menu shortcuts and registers
+     the Uninstall entry in Windows Settings.
 
-2. eqntide-native-preview-<version>-x86_64-pc-windows-msvc.zip (GÓI PORTABLE / KHÔNG CẦN CÀI ĐẶT)
-   - Dành cho người muốn chạy trực tiếp không qua trình cài đặt.
-   - Chứa đầy đủ:
+2. eqntide-native-preview-<version>-x86_64-pc-windows-msvc.zip (PORTABLE / NO INSTALL REQUIRED)
+   - For users who want to run directly without an installer.
+   - Includes:
      + eqntide-desktop.exe (Rust Desktop GUI)
      + eqntide-cli.exe (CLI & Bridge Server)
-     + word-template/EqnTide.dotm (Template Add-in cho Word)
-     + wps-addin/ (Add-in cho WPS)
+     + word-template/EqnTide.dotm (Word Template Add-in)
+     + wps-addin/ (WPS Office Add-in)
      + start-server.bat, install-addins.bat, scripts/install-addin.ps1
 
-Word chỉ dùng template VBA .dotm; không có Word Web Add-in hay Word on the Web.
-Bộ cài tự bật bridge nền khi cài và khi đăng nhập; WPS tiếp tục dùng JS Add-in.
+Word uses only the VBA .dotm template; there is no Word Web Add-in or Word on the Web support.
+The installer automatically starts the background bridge at installation and sign-in; WPS continues to use the JS Add-in.

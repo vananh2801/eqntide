@@ -587,7 +587,7 @@ function EditEquation() {
     var selection = app ? app.Selection : null;
     if (!selection) {
       wpsLog("EditEquation: selection is null");
-      alert("Không tìm thấy công thức nào được chọn!");
+      alert("No equation selected!");
       return;
     }
 
@@ -650,7 +650,7 @@ function EditEquation() {
     // If NO equation was selected, do NOT redirect! Show alert directly!
     if (!selData || selData.trim().length === 0) {
       wpsLog("EditEquation: No equation found in selection or adjacent text");
-      alert("Không tìm thấy công thức nào được chọn!");
+      alert("No equation selected!");
       return;
     }
 
@@ -700,7 +700,7 @@ function EditEquation() {
           wpsLog("EditEquation: /session/open response (" + status + "): " + responseText);
           if (status !== 200) {
             console.error("Bridge error (" + status + "): " + responseText);
-            alert("Lỗi kết nối tới EqnTide (" + status + ")");
+            alert("Failed to connect to EqnTide (" + status + ")");
             return;
           }
 
@@ -718,7 +718,7 @@ function EditEquation() {
     });
   } catch (err) {
     console.error("Error reading equation from selection:", err);
-    alert("Không tìm thấy công thức nào được chọn!");
+    alert("No equation selected!");
   }
 }
 
@@ -1270,7 +1270,7 @@ function ToggleLatex() {
 
       // Selected text has neither LaTeX nor equations
       wpsLog("ToggleLatex: no equation or LaTeX found in selected range");
-      alert("Không tìm thấy công thức hoặc mã LaTeX nào trong vùng chọn!\n\nBạn có thể bôi đen đoạn văn bản chứa mã LaTeX ($...$) hoặc công thức để chuyển đổi.");
+      alert("No equation or LaTeX code found in the selection!\n\nSelect text containing LaTeX ($...$) or an equation to convert.");
       return;
     }
 
@@ -1361,7 +1361,7 @@ function ToggleLatex() {
               }
             } else {
               wpsLog("ToggleLatex: equation to LaTeX failed: " + responseText);
-              alert("Không thể chuyển đổi công thức sang LaTeX: " + responseText);
+              alert("Failed to convert equation to LaTeX: " + responseText);
             }
           }
         );
@@ -1392,7 +1392,7 @@ function ToggleLatex() {
 
     if (!targetLatexRange || !rawLatexText) {
       wpsLog("ToggleLatex: no equation or LaTeX found at cursor");
-      alert("Không tìm thấy công thức hoặc mã LaTeX nào tại vị trí con trỏ!\n\nBạn có thể đặt con trỏ bên trong mã LaTeX dạng $...$ hoặc bôi đen đoạn văn bản cần chuyển đổi.");
+      alert("No equation or LaTeX code found at the cursor!\n\nPlace the cursor inside a $...$ LaTeX expression or select the text to convert.");
       return;
     }
 
@@ -1429,7 +1429,7 @@ function ToggleLatex() {
             wpsLog("ToggleLatex: successfully converted single LaTeX to MathType equation");
           } else {
             wpsLog("ToggleLatex: LaTeX conversion error: " + responseText);
-            alert("Chuyển đổi LaTeX sang công thức thất bại:\n" + responseText);
+            alert("Failed to convert LaTeX to an equation:\n" + responseText);
           }
         }
       );
@@ -1502,11 +1502,11 @@ function HandleSessionResult(waitData) {
   if (!waitData || waitData.status !== "ready") return;
 
   if (!waitData.flat_opc) {
-    alert("EqnTide không trả về gói công thức để chèn.");
+    alert("EqnTide did not return an equation package to insert.");
     return;
   }
   if (/ProgID=["']Equation\./i.test(waitData.flat_opc)) {
-    if (!InsertMathTypeEquation(waitData)) alert("Không thể chèn đối tượng MathType OLE + EMF.");
+    if (!InsertMathTypeEquation(waitData)) alert("Failed to insert MathType OLE + EMF object.");
   } else {
     InsertOmmlToSelection(waitData.flat_opc);
   }
@@ -1597,7 +1597,7 @@ function InsertOmmlToSelection(flatOpcXml) {
     }
   } catch (error) {
     wpsLog("InsertOmmlToSelection: " + error);
-    alert("Không thể chèn công thức OMML: " + error);
+    alert("Failed to insert OMML equation: " + error);
   }
 }
 

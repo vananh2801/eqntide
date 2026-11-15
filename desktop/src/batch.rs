@@ -86,16 +86,16 @@ mod tests {
     use super::*;
     #[test]
     fn unicode_output_is_distinct_and_keeps_directory() {
-        let input = Path::new("thư mục/bài tập.docx");
+        let input = Path::new("folder_α/exercise_β.docx");
         assert_eq!(
             output_path(input, "omml"),
-            Path::new("thư mục/bài tập_omml.docx")
+            Path::new("folder_α/exercise_β_omml.docx")
         );
     }
     #[test]
     fn failed_conversion_never_replaces_original_or_leaves_temporary_files() {
         let directory = tempfile::tempdir().unwrap();
-        let input = directory.path().join("bài.docx");
+        let input = directory.path().join("exposé_α.docx");
         std::fs::write(&input, b"not a docx").unwrap();
         assert!(convert_one(&input, "omml", 12.0, true).is_err());
         assert_eq!(std::fs::read(&input).unwrap(), b"not a docx");

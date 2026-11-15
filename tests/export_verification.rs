@@ -27,108 +27,108 @@ fn test_export_all_formats_and_verify_standards() {
     let test_cases = [
         TestCase {
             slug: "01_quadratic",
-            title: "Phân số & Căn bậc hai (Quadratic Formula)",
+            title: "Fraction & Square Root (Quadratic Formula)",
             latex: r"x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}",
         },
         TestCase {
             slug: "02_integral_limits",
-            title: "Tích phân có cận trên/dưới (Definite Integral)",
+            title: "Integral with Upper/Lower Limits (Definite Integral)",
             latex: r"\int\limits_{0}^{\infty} e^{-x^2} dx = \frac{\sqrt{\pi}}{2}",
         },
         TestCase {
             slug: "03_dirac_interval",
-            title: "Ngoặc Dirac & khoảng nửa mở (Dirac Bra-Ket & Interval)",
+            title: "Dirac Bra-Ket & Half-Open Interval",
             latex: r"\langle \psi | \phi \rangle + \left[ a, b \right)",
         },
         TestCase {
             slug: "04_matrix_3x3",
-            title: "Ma trận 3x3 có ngoặc tròn (3x3 Matrix)",
+            title: "3x3 Matrix with Parentheses",
             latex: r"\begin{pmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & 1 \end{pmatrix}",
         },
         TestCase {
             slug: "05_labeled_arrow_box",
-            title: "Mũi tên có nhãn & Khung gạch xoá (Labeled Arrow & Boxed Cancel)",
+            title: "Labeled Arrow & Boxed Cancel",
             latex: r"A \overset{f}{\rightarrow} B + \boxed{x} + \cancel{y}",
         },
         TestCase {
             slug: "06_double_bracket_bar",
-            title: "Ngoặc vuông kép & Gạch kép trên (Double Bracket & Overbar)",
+            title: "Double Brackets & Double Overbar",
             latex: r"\left\llbracket \frac{x}{y} \right\rrbracket + \doubleoverline{z}",
         },
     ];
 
-    println!("\n=== BẮT ĐẦU KIỂM THỬ XUẤT ĐỊNH DẠNG (MathML, OMML, OLE/MTEF, PNG, EMF) ===");
+    println!("\n=== STARTING FORMAT EXPORT VERIFICATION (MathML, OMML, OLE/MTEF, PNG, EMF) ===");
 
     for tc in &test_cases {
         println!("\n------------------------------------------------------------");
-        println!("Mẫu: {} ({})", tc.title, tc.slug);
+        println!("Sample: {} ({})", tc.title, tc.slug);
         println!("LaTeX: {}", tc.latex);
 
-        // 1. Chuyển LaTeX -> MathML
+        // 1. Convert LaTeX -> MathML
         let math = parse_latex_to_mathml(tc.latex)
-            .unwrap_or_else(|e| panic!("Parse LaTeX thất bại cho {}: {e}", tc.slug));
+            .unwrap_or_else(|e| panic!("LaTeX parse failed for {}: {e}", tc.slug));
         let mathml_xml = math.to_xml();
 
-        // 2. Xuất MathML XML
+        // 2. Export MathML XML
         let mathml_path = out_dir.join(format!("{}.mathml", tc.slug));
-        fs::write(&mathml_path, mathml_xml.as_bytes()).expect("ghi file mathml");
+        fs::write(&mathml_path, mathml_xml.as_bytes()).expect("write mathml file");
         assert!(mathml_path.exists());
-        let read_mathml = fs::read_to_string(&mathml_path).expect("đọc lại mathml");
-        let parsed_xml = xml::parse(read_mathml.as_bytes()).expect("XML MathML hợp lệ");
+        let read_mathml = fs::read_to_string(&mathml_path).expect("read back mathml");
+        let parsed_xml = xml::parse(read_mathml.as_bytes()).expect("valid MathML XML");
         assert_eq!(parsed_xml.local, "math");
         println!("  [OK] MathML: {} bytes, root=<math>", read_mathml.len());
 
-        // 3. Xuất Word OMML XML
+        // 3. Export Word OMML XML
         let omml_xml = mathml_to_omml_xml(&math)
-            .unwrap_or_else(|e| panic!("Sinh OMML thất bại cho {}: {e}", tc.slug));
+            .unwrap_or_else(|e| panic!("OMML generation failed for {}: {e}", tc.slug));
         let omml_path = out_dir.join(format!("{}.omml.xml", tc.slug));
-        fs::write(&omml_path, omml_xml.as_bytes()).expect("ghi file omml");
+        fs::write(&omml_path, omml_xml.as_bytes()).expect("write omml file");
         assert!(omml_path.exists());
-        let read_omml = fs::read_to_string(&omml_path).expect("đọc lại omml");
-        let parsed_omml_el = xml::parse(read_omml.as_bytes()).expect("XML OMML hợp lệ");
+        let read_omml = fs::read_to_string(&omml_path).expect("read back omml");
+        let parsed_omml_el = xml::parse(read_omml.as_bytes()).expect("valid OMML XML");
         assert!(
             parsed_omml_el.local == "oMath" || parsed_omml_el.local == "oMathPara",
-            "OMML local name phải là oMath hoặc oMathPara, thực tế: {}",
+            "OMML local name must be oMath or oMathPara, actual: {}",
             parsed_omml_el.local
         );
         // Round-trip OMML -> MathML
-        let back_from_omml = omml_to_mathml(&parsed_omml_el).expect("Giải mã OMML về MathML");
+        let back_from_omml = omml_to_mathml(&parsed_omml_el).expect("decode OMML to MathML");
         assert!(
             !back_from_omml.children.is_empty(),
-            "OMML decode không được rỗng"
+            "OMML decode must not be empty"
         );
         println!(
-            "  [OK] OMML: {} bytes, namespace m:oMath hợp lệ, round-trip OMML -> MathML thành công",
+            "  [OK] OMML: {} bytes, valid m:oMath namespace, OMML -> MathML round-trip succeeded",
             read_omml.len()
         );
 
-        // 4. Xuất OLE binary chứa MathType Equation Native Stream (MTEF)
+        // 4. Export OLE binary containing MathType Equation Native Stream (MTEF)
         let mtef_bytes = mathml_to_mtef_bytes(&math)
-            .unwrap_or_else(|e| panic!("MTEF encoding thất bại cho {}: {e}", tc.slug));
-        assert!(!mtef_bytes.is_empty(), "MTEF bytes không được rỗng");
+            .unwrap_or_else(|e| panic!("MTEF encoding failed for {}: {e}", tc.slug));
+        assert!(!mtef_bytes.is_empty(), "MTEF bytes must not be empty");
         let native_stream = make_equation_native(&mtef_bytes);
         let ole_bytes = make_ole(&native_stream)
-            .unwrap_or_else(|e| panic!("Tạo OLE compound thất bại cho {}: {e}", tc.slug));
+            .unwrap_or_else(|e| panic!("OLE compound creation failed for {}: {e}", tc.slug));
         let ole_path = out_dir.join(format!("{}.ole", tc.slug));
-        fs::write(&ole_path, &ole_bytes).expect("ghi file ole");
+        fs::write(&ole_path, &ole_bytes).expect("write ole file");
 
-        // Kiểm tra cấu trúc chuẩn OLE Compound File Binary (CFB v3):
+        // Verify standard OLE Compound File Binary (CFB v3) structure:
         // Magic header: D0 CF 11 E0 A1 B1 1A E1
         assert_eq!(
             &ole_bytes[0..8],
             &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1],
-            "OLE Magic bytes phải là CFB standard D0CF11E0A1B11AE1"
+            "OLE magic bytes must be standard CFB D0CF11E0A1B11AE1"
         );
         assert_eq!(
             ole_bytes.len() % 512,
             0,
-            "Kích thước OLE phải chia hết cho sector 512 bytes"
+            "OLE size must be aligned to 512-byte sectors"
         );
 
-        // Đọc stream Equation Native bên trong OLE
+        // Read Equation Native stream inside OLE
         let read_native = read_ole_stream(&ole_bytes, &["Equation Native", "contents"])
-            .expect("Phải tìm thấy stream Equation Native trong OLE");
-        // Header của Equation Native chuẩn gồm 28 bytes: [0x1C, 0x00, 0x00, 0x00, 0x02, 0x00, ...]
+            .expect("must find Equation Native stream inside OLE");
+        // Standard Equation Native header is 28 bytes: [0x1C, 0x00, 0x00, 0x00, 0x02, 0x00, ...]
         assert_eq!(
             read_native[0..4],
             [0x1C, 0x00, 0x00, 0x00],
@@ -140,85 +140,85 @@ fn test_export_all_formats_and_verify_standards() {
             "Format type = 2 (embedded)"
         );
 
-        // Trích xuất MTEF stream từ OLE và giải mã ngược về MathML
-        let extracted_mtef = extract_mtef_from_ole(&ole_bytes).expect("Trích xuất MTEF từ OLE");
+        // Extract MTEF stream from OLE and decode back to MathML
+        let extracted_mtef = extract_mtef_from_ole(&ole_bytes).expect("extract MTEF from OLE");
         assert!(
             extracted_mtef[0] == 3 || extracted_mtef[0] == 5,
-            "MTEF version byte phải là 3 hoặc 5"
+            "MTEF version byte must be 3 or 5"
         );
-        let back_from_ole = mtef_to_mathml(&extracted_mtef).expect("MTEF decode về MathML");
+        let back_from_ole = mtef_to_mathml(&extracted_mtef).expect("decode MTEF to MathML");
         assert!(
             !back_from_ole.children.is_empty(),
-            "MTEF từ OLE decode không được rỗng"
+            "decoded MTEF from OLE must not be empty"
         );
         println!(
-            "  [OK] OLE Compound: {} bytes (sector 512-aligned), magic D0CF11E0A1B11AE1, Equation Native 28B header, MTEF v{} decode thành công",
+            "  [OK] OLE Compound: {} bytes (512B sector-aligned), magic D0CF11E0A1B11AE1, 28B Equation Native header, MTEF v{} decode succeeded",
             ole_bytes.len(),
             extracted_mtef[0]
         );
 
-        // 5. Xuất ảnh raster PNG
+        // 5. Export raster PNG image
         let preview = render_preview(&math, 12.0)
-            .unwrap_or_else(|e| panic!("Render preview PNG thất bại cho {}: {e}", tc.slug));
+            .unwrap_or_else(|e| panic!("Render preview PNG failed for {}: {e}", tc.slug));
         let png_path = out_dir.join(format!("{}.png", tc.slug));
-        fs::write(&png_path, &preview.png).expect("ghi file png");
+        fs::write(&png_path, &preview.png).expect("write png file");
         assert!(png_path.exists());
-        // Kiểm tra định dạng PNG:
-        // Magic header 8 bytes: 89 50 4E 47 0D 0A 1A 0A
+        // Verify PNG format:
+        // 8-byte magic header: 89 50 4E 47 0D 0A 1A 0A
         assert_eq!(
             &preview.png[0..8],
             &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
-            "PNG Magic header phải là 89 50 4E 47 0D 0A 1A 0A"
+            "PNG magic header must be 89 50 4E 47 0D 0A 1A 0A"
         );
-        // Kiểm tra chunk IHDR
-        assert_eq!(&preview.png[12..16], b"IHDR", "Chunk đầu tiên phải là IHDR");
-        // Kiểm tra chunk IEND ở cuối
+        // Check IHDR chunk
+        assert_eq!(&preview.png[12..16], b"IHDR", "First chunk must be IHDR");
+        // Check trailing IEND chunk
         assert_eq!(
             &preview.png[preview.png.len() - 8..preview.png.len() - 4],
             b"IEND",
-            "Chunk cuối cùng phải là IEND"
+            "Last chunk must be IEND"
         );
         assert!(
             preview.width_pt > 0.0 && preview.height_pt > 0.0,
-            "Kích thước hình ảnh width_pt, height_pt phải > 0"
+            "Image dimensions width_pt and height_pt must be > 0"
         );
         println!(
-            "  [OK] PNG Image: {} bytes, kích thước {:.1}x{:.1} pt, header PNG + IHDR + IEND chuẩn",
+            "  [OK] PNG Image: {} bytes, size {:.1}x{:.1} pt, valid PNG header + IHDR + IEND",
             preview.png.len(),
             preview.width_pt,
             preview.height_pt
         );
 
-        // 6. Xuất ảnh vector EMF (Enhanced Metafile) có nhúng MTEF
+        // 6. Export vector EMF (Enhanced Metafile) with embedded MTEF
         let complete_mtef = build_mtef(&mtef_bytes);
         let emf_preview = render_emf_with_mtef(&math, 12.0, Some(&complete_mtef))
-            .unwrap_or_else(|e| panic!("Render EMF thất bại cho {}: {e}", tc.slug));
+            .unwrap_or_else(|e| panic!("Render EMF failed for {}: {e}", tc.slug));
         let emf_path = out_dir.join(format!("{}.emf", tc.slug));
-        fs::write(&emf_path, &emf_preview.emf).expect("ghi file emf");
+        fs::write(&emf_path, &emf_preview.emf).expect("write emf file");
         assert!(emf_path.exists());
 
-        // Kiểm tra định dạng EMF chuẩn:
+        // Verify standard EMF format:
         // Record 1 Type = 0x00000001 (EMR_HEADER)
         let rec_type = u32::from_le_bytes(emf_preview.emf[0..4].try_into().unwrap());
-        assert_eq!(rec_type, 1, "EMF Record 1 phải là EMR_HEADER (type 1)");
-        // Signature tại byte 40..44 phải là " EMF" (0x464D4520)
+        assert_eq!(rec_type, 1, "EMF Record 1 must be EMR_HEADER (type 1)");
+        // Signature at bytes 40..44 must be " EMF" (0x464D4520)
         let sig = &emf_preview.emf[40..44];
-        assert_eq!(sig, b" EMF", "EMF Signature tại offset 40 phải là ' EMF'");
+        assert_eq!(sig, b" EMF", "EMF signature at offset 40 must be ' EMF'");
 
-        // Kiểm tra trích xuất MTEF từ EMF (bảo toàn công thức cho Office / WPS)
+        // Verify extracting MTEF from EMF (preserves equation for Office / WPS)
         let emf_mtef =
-            extract_mtef_from_emf(&emf_preview.emf).expect("Trích xuất MTEF nhúng trong EMF");
+            extract_mtef_from_emf(&emf_preview.emf).expect("extract embedded MTEF from EMF");
         assert_eq!(
             emf_mtef, complete_mtef,
-            "MTEF trích xuất từ EMR_COMMENT trong EMF phải khớp 100% với MTEF gốc"
+            "MTEF extracted from EMR_COMMENT in EMF must match original MTEF 100%"
         );
         println!(
-            "  [OK] EMF Vector: {} bytes, EMR_HEADER chuẩn (' EMF'), nhúng MTEF trong EMR_COMMENT khớp 100%",
+            "  [OK] EMF Vector: {} bytes, valid EMR_HEADER (' EMF'), embedded MTEF in EMR_COMMENT matches 100%",
             emf_preview.emf.len()
         );
     }
 
-    println!("\n=== TẤT CẢ 6 MẪU ĐÃ XUẤT VÀ KIỂM ĐỊNH THÀNH CÔNG ===");
+    println!("\n=== ALL 6 SAMPLES EXPORTED AND VERIFIED SUCCESSFULLY ===");
 }
 
 #[test]

@@ -720,7 +720,8 @@ impl App {
         }
         if save && self.command_input.is_some() {
             self.status =
-                "Hoàn tất lệnh LaTeX bằng Tab/Enter hoặc hủy bằng Esc trước khi lưu.".into();
+                "Complete the LaTeX command with Tab/Enter or cancel with Esc before saving."
+                    .into();
             return;
         }
         if save && self.draft_dirty {
@@ -831,9 +832,9 @@ impl App {
     }
     fn save_button(&mut self, ui: &mut egui::Ui) {
         let label = if self.session.is_some() {
-            "Lưu và trở về tài liệu (Ctrl+S)"
+            "Save & Return to Document (Ctrl+S)"
         } else {
-            "Lưu MathML (Ctrl+S)"
+            "Save MathML (Ctrl+S)"
         };
         if ui
             .add_enabled(
@@ -862,7 +863,7 @@ impl App {
                         ui.add_space(12.0);
                         ui.radio_value(&mut self.target, "omml".into(), caption("OMML"));
                         ui.separator();
-                        ui.label(caption("Cỡ chữ"));
+                        ui.label(caption("Font size"));
                         let size_changed = ui
                             .scope(|ui| {
                                 ui.style_mut().explanation_tooltips = false;
@@ -883,7 +884,7 @@ impl App {
                                     .max_decimals(1)
                                     .suffix(" pt"),
                                 )
-                                .on_hover_text("Nhấn giữ và kéo trái/phải để điều chỉnh")
+                                .on_hover_text("Click and drag left/right to adjust")
                                 .changed()
                             })
                             .inner;
@@ -895,7 +896,7 @@ impl App {
                                 egui::Button::new("↶")
                                     .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
                             )
-                            .on_hover_text("Hoàn tác (Ctrl+Z)")
+                            .on_hover_text("Undo (Ctrl+Z)")
                             .clicked()
                         {
                             self.command_input = None;
@@ -909,7 +910,7 @@ impl App {
                                 egui::Button::new("↷")
                                     .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
                             )
-                            .on_hover_text("Làm lại (Ctrl+Y)")
+                            .on_hover_text("Redo (Ctrl+Y)")
                             .clicked()
                         {
                             self.command_input = None;
@@ -940,7 +941,7 @@ impl App {
                                     })
                                     .show_value(false),
                             )
-                            .on_hover_text("Thu phóng hiển thị");
+                            .on_hover_text("Zoom display");
                         });
                     });
                 });
@@ -994,7 +995,7 @@ impl App {
         self.expects_latex_group = false;
         self.editor.insert_template(&matrix);
         self.changed();
-        self.status = format!("Đã chèn ma trận {} × {}.", settings.rows, settings.columns);
+        self.status = format!("Inserted {} × {} matrix.", settings.rows, settings.columns);
     }
 
     fn matrix_dialog_ui(&mut self, ctx: &egui::Context) {
@@ -1007,40 +1008,40 @@ impl App {
         let mut insert = false;
         let response = egui::Modal::new(egui::Id::unique("custom-matrix-dialog")).show(ctx, |ui| {
             ui.set_min_width(330.0);
-            ui.heading("Ma trận tuỳ chỉnh");
+            ui.heading("Custom matrix");
             ui.add_space(6.0);
             egui::Grid::new("matrix-settings")
                 .spacing([16.0, 10.0])
                 .show(ui, |ui| {
-                    ui.label("Số hàng");
+                    ui.label("Rows");
                     ui.add(egui::DragValue::new(&mut settings.rows).range(1..=20));
                     ui.end_row();
-                    ui.label("Số cột");
+                    ui.label("Columns");
                     ui.add(egui::DragValue::new(&mut settings.columns).range(1..=20));
                     ui.end_row();
-                    ui.label("Căn lề");
+                    ui.label("Alignment");
                     egui::ComboBox::from_id_salt("matrix-alignment")
                         .selected_text(match settings.alignment {
-                            "left" => "Trái",
-                            "right" => "Phải",
-                            _ => "Giữa",
+                            "left" => "Left",
+                            "right" => "Right",
+                            _ => "Center",
                         })
                         .show_ui(ui, |ui| {
                             for (value, label) in
-                                [("left", "Trái"), ("center", "Giữa"), ("right", "Phải")]
+                                [("left", "Left"), ("center", "Center"), ("right", "Right")]
                             {
                                 ui.selectable_value(&mut settings.alignment, value, label);
                             }
                         });
                     ui.end_row();
-                    ui.label("Kiểu ngoặc");
+                    ui.label("Delimiters");
                     const FENCES: &[(&str, &str)] = &[
-                        ("none", "Không ngoặc"),
-                        ("parentheses", "Ngoặc tròn ( )"),
-                        ("brackets", "Ngoặc vuông [ ]"),
-                        ("braces", "Ngoặc nhọn { }"),
-                        ("bars", "Định thức | |"),
-                        ("double-bars", "Chuẩn ‖ ‖"),
+                        ("none", "None"),
+                        ("parentheses", "Parentheses ( )"),
+                        ("brackets", "Brackets [ ]"),
+                        ("braces", "Braces { }"),
+                        ("bars", "Bars | |"),
+                        ("double-bars", "Double bars ‖ ‖"),
                     ];
                     egui::ComboBox::from_id_salt("matrix-fence")
                         .selected_text(
@@ -1059,8 +1060,8 @@ impl App {
                 });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                insert = ui.button("Chèn ma trận").clicked();
-                if ui.button("Huỷ").clicked() {
+                insert = ui.button("Insert matrix").clicked();
+                if ui.button("Cancel").clicked() {
                     ui.close();
                 }
             });
@@ -1082,18 +1083,18 @@ impl App {
             }
             let ready = if self.bridge_ready { "●" } else { "○" };
             ui.label(ready).on_hover_text(&self.bridge_status);
-            if !self.bridge_ready && ui.small_button("Thử lại").clicked() {
+            if !self.bridge_ready && ui.small_button("Retry").clicked() {
                 runtime::start_bridge(self.tx.clone());
             }
             if !self.queue.is_empty()
                 && ui
-                    .small_button(format!("Phiên tiếp ({})", self.queue.len()))
+                    .small_button(format!("Next session ({})", self.queue.len()))
                     .clicked()
             {
                 self.pending = Some(Intent::Next);
             }
             if self.tab == 0 && self.latex_error.is_some() {
-                let error = format!("Lỗi LaTeX: {}", self.latex_error.as_deref().unwrap());
+                let error = format!("LaTeX error: {}", self.latex_error.as_deref().unwrap());
                 ui.add(
                     egui::Label::new(
                         egui::RichText::new(&error).color(ui.visuals().error_fg_color),
@@ -1102,7 +1103,7 @@ impl App {
                 )
                 .on_hover_text(error);
             } else if self.tab == 0 && self.draft_dirty {
-                ui.label("Đang cập nhật công thức…");
+                ui.label("Updating equation…");
             } else {
                 ui.add(egui::Label::new(&self.status).truncate())
                     .on_hover_text(&self.status);
@@ -1192,7 +1193,7 @@ impl App {
                         if self.category == "Matrices"
                             && ui
                                 .add_sized(PALETTE_BUTTON_SIZE, egui::Button::new("⋯"))
-                                .on_hover_text("Ma trận tuỳ chỉnh")
+                                .on_hover_text("Custom matrix")
                                 .clicked()
                         {
                             self.command_input = None;
@@ -1328,10 +1329,10 @@ impl App {
                     if self.category == "Matrices" {
                         ui.horizontal(|ui| {
                             for (label, column, grow) in [
-                                ("+ hàng", false, true),
-                                ("− hàng", false, false),
-                                ("+ cột", true, true),
-                                ("− cột", true, false),
+                                ("+ row", false, true),
+                                ("− row", false, false),
+                                ("+ col", true, true),
+                                ("− col", true, false),
                             ] {
                                 if ui.small_button(label).clicked() {
                                     let changed = if grow {
@@ -1342,7 +1343,8 @@ impl App {
                                     if changed {
                                         self.changed();
                                     } else {
-                                        self.status = "Đặt con trỏ trong ma trận trước.".into();
+                                        self.status =
+                                            "Place the caret inside a matrix first.".into();
                                     }
                                 }
                             }
@@ -1836,11 +1838,14 @@ impl App {
                     self.editor.insert_math(&math);
                 }
                 self.changed();
-                self.status = "Đã chèn lệnh LaTeX.".into();
+                self.status = "Inserted LaTeX command.".into();
                 true
             }
             Err(_) => {
-                self.status = format!("Lệnh \\{} chưa hoàn chỉnh hoặc chưa được hỗ trợ; Backspace để sửa, Esc để hủy.", input.name);
+                self.status = format!(
+                    "Command \\{} is incomplete or unsupported; Backspace to edit, Esc to cancel.",
+                    input.name
+                );
                 false
             }
         }
@@ -2002,7 +2007,7 @@ impl App {
             }
             Key::Escape => {
                 self.command_input = None;
-                self.status = "Đã hủy lệnh LaTeX.".into();
+                self.status = "Canceled LaTeX command.".into();
                 true
             }
             Key::Backspace => {
@@ -2036,7 +2041,7 @@ impl App {
                     ui.set_min_width(230.0);
                     ui.monospace(format!("\\{name}"));
                     if candidates.is_empty() {
-                        ui.label("Chưa có gợi ý — Backspace để sửa, Esc để hủy");
+                        ui.label("No suggestions — Backspace to edit, Esc to cancel");
                     }
                     for (index, command) in candidates.iter().enumerate() {
                         if ui
@@ -2049,7 +2054,7 @@ impl App {
                             accept = Some(index);
                         }
                     }
-                    ui.weak("↑↓ chọn · Tab/Enter chèn · Esc hủy");
+                    ui.weak("↑↓ select · Tab/Enter insert · Esc cancel");
                 });
             });
         if let Some(index) = accept {
@@ -2209,7 +2214,7 @@ impl App {
         }
     }
     fn batch_ui(&mut self, ui: &mut egui::Ui) {
-        if ui.button("← Quay lại soạn công thức").clicked() {
+        if ui.button("← Back to equation").clicked() {
             self.tab = 0;
         }
         ui.heading("Batch document conversion");
@@ -2884,16 +2889,16 @@ mod tests {
                         );
                         output.textures_delta.clear();
                         let label = if office {
-                            "Lưu và trở về tài liệu (Ctrl+S)"
+                            "Save & Return to Document (Ctrl+S)"
                         } else {
-                            "Lưu MathML (Ctrl+S)"
+                            "Save MathML (Ctrl+S)"
                         };
                         for text in [
                             label,
                             "source-marker",
                             "MathType",
                             "OMML",
-                            "Cỡ chữ",
+                            "Font size",
                             "↶",
                             "↷",
                         ] {
@@ -3476,8 +3481,7 @@ mod tests {
         let before = a.editor.math();
         let source = a.latex.clone();
         let ctx = egui::Context::default();
-        for (label, expected_tab) in [("Batch DOCX", 1), ("← Quay lại soạn công thức", 0)]
-        {
+        for (label, expected_tab) in [("Batch DOCX", 1), ("← Back to equation", 0)] {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
             let pos = output
                 .shapes

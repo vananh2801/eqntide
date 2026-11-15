@@ -93,10 +93,10 @@ def analyze_docx_visual(docx_path, out_png=None):
     # A single line with normal formula has height around 45 - 60px.
     # When baseline drops significantly, height exceeds 70px.
     if line_height > 70:
-        print(f"FAIL: Line height ({line_height}px) indicates dropped baseline (tụt baseline)!")
+        print(f"FAIL: Line height ({line_height}px) indicates dropped baseline!")
         return False
     else:
-        print(f"PASS: Line height ({line_height}px) is within normal range (thẳng hàng).")
+        print(f"PASS: Line height ({line_height}px) is within normal range (aligned).")
         return True
 
 if __name__ == '__main__':
