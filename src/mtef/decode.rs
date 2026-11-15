@@ -1166,6 +1166,20 @@ fn is_suitable_base(obj: &MtefObj) -> bool {
     }
 }
 
+fn is_suitable_prescript_base(obj: &MtefObj) -> bool {
+    if is_suitable_base(obj) {
+        return true;
+    }
+    matches!(
+        obj,
+        MtefObj::Tmpl {
+            selector: "tmSUP" | "tmSUB" | "tmSUBSUP",
+            variations,
+            ..
+        } if !variations.contains(&"tvSU_PRECEDES")
+    )
+}
+
 /// Apply the sub/sup base mover recursively across an object list.
 pub(super) fn apply_mover_to_list(objects: &mut Vec<MtefObj>) {
     // 1. Strip 0xEF01 (MT Zero Space) and recurse into children first
@@ -1245,7 +1259,8 @@ pub(super) fn apply_mover_to_list(objects: &mut Vec<MtefObj>) {
             idx += 1;
         } else {
             // No preceding candidate: mark tvSU_PRECEDES and try following sibling
-            let next_cand = ((idx + 1)..objects.len()).find(|&k| is_suitable_base(&objects[k]));
+            let next_cand =
+                ((idx + 1)..objects.len()).find(|&k| is_suitable_prescript_base(&objects[k]));
             if let MtefObj::Tmpl { variations, .. } = &mut objects[idx] {
                 if !variations.contains(&"tvSU_PRECEDES") {
                     variations.push("tvSU_PRECEDES");
@@ -1292,7 +1307,8 @@ pub(super) fn apply_mover_to_list(objects: &mut Vec<MtefObj>) {
             continue;
         }
 
-        let next_cand = ((idx + 1)..objects.len()).find(|&k| is_suitable_base(&objects[k]));
+        let next_cand =
+            ((idx + 1)..objects.len()).find(|&k| is_suitable_prescript_base(&objects[k]));
         if let Some(f_idx) = next_cand {
             let open_code = match &objects[f_idx] {
                 MtefObj::Char { mt_code, .. } => open_close_pair(*mt_code),
@@ -1361,6 +1377,14 @@ fn map_mt_char_token(typeface: u8, mt_code: u16, is_textmode: bool) -> Option<Ma
         if mt_code == 0x0020 {
             return Some(MathNode::leaf("mtext", "\u{00A0}"));
         }
+        // Math symbols, modifier accents, arrows, and delimiters encoded under TF_TEXT
+        // for Windows font-linking should decode as `<mo>` rather than literal text.
+        if matches!(
+            mt_code,
+            0x02C6..=0x02DC | 0x2032..=0x2037 | 0x2057 | 0x20D0..=0x20FF | 0x2190..=0x2BFF | 0x3008..=0x301B
+        ) {
+            return Some(MathNode::leaf("mo", &s));
+        }
         return Some(MathNode::leaf("mtext", &s));
     }
 
@@ -1401,11 +1425,19 @@ fn map_mt_char_token(typeface: u8, mt_code: u16, is_textmode: bool) -> Option<Ma
             // Note: BMP Letterlike symbols (ℝ, ℤ, ℕ, ℚ, ℂ, ℍ, ℙ, ℒ, ℜ, ℑ) in 0x2100..=0x214F
             // are operators in chars.py except when used as identifiers; in OMML both <mi> and <mo>
             // render as <m:r><m:t>, while <mi mathvariant="normal"> prevents unwanted italicization.
-            if matches!(
-                mt_code,
-                0x2102 | 0x210D | 0x2115 | 0x2119 | 0x211A | 0x211D | 0x2124
-            ) {
-                return Some(MathNode::leaf("mi", &s));
+            if let Some(ascii) = match mt_code {
+                0x2102 => Some("C"),
+                0x210D => Some("H"),
+                0x2115 => Some("N"),
+                0x2119 => Some("P"),
+                0x211A => Some("Q"),
+                0x211D => Some("R"),
+                0x2124 => Some("Z"),
+                _ => None,
+            } {
+                let mut mi = MathNode::leaf("mi", ascii);
+                mi.set_attr("mathvariant", "double-struck");
+                return Some(mi);
             }
             Some(MathNode::leaf("mo", &s))
         }
@@ -1639,11 +1671,11 @@ fn wrap_embellishments(mut node: MathNode, embells: &[u8]) -> MathNode {
             30 => munder(node, "\u{02DC}", true),
             31 => munder(node, "\u{2322}", true),
             32 => munder(node, "\u{2323}", true),
-            33 => munder(node, "\u{2192}", false),
-            34 => munder(node, "\u{2190}", false),
-            35 => munder(node, "\u{2194}", false),
-            36 => munder(node, "\u{21C1}", false),
-            37 => munder(node, "\u{21BD}", false),
+            33 => munder(node, "\u{2192}", true),
+            34 => munder(node, "\u{2190}", true),
+            35 => munder(node, "\u{2194}", true),
+            36 => munder(node, "\u{21C1}", true),
+            37 => munder(node, "\u{21BD}", true),
             _ => node,
         };
     }
@@ -1797,6 +1829,33 @@ fn convert_matrix(rows: usize, cols: usize, h_just: &str, cells: &[MtefObj]) -> 
     mtable
 }
 
+fn unwrap_single_mrow_node(node: MathNode) -> MathNode {
+    if node.tag == "mrow" && node.children.len() == 1 {
+        node.children.into_iter().next().unwrap()
+    } else {
+        node
+    }
+}
+
+fn wrap_prescript_node(base: MathNode, pre_sub: MathNode, pre_sup: MathNode) -> MathNode {
+    let unwrapped = unwrap_single_mrow_node(base);
+    if matches!(unwrapped.tag.as_str(), "msup" | "msub" | "msubsup") && !unwrapped.children.is_empty()
+    {
+        let mut post = unwrapped;
+        let inner_base = std::mem::replace(&mut post.children[0], MathNode::new("mrow"));
+        post.children[0] = MathNode::with_children(
+            "mmultiscripts",
+            vec![inner_base, MathNode::new("mprescripts"), pre_sub, pre_sup],
+        );
+        post
+    } else {
+        MathNode::with_children(
+            "mmultiscripts",
+            vec![unwrapped, MathNode::new("mprescripts"), pre_sub, pre_sup],
+        )
+    }
+}
+
 fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> Option<MathNode> {
     let slots = extract_template_slots(selector, variations, subobjects);
     let has_var = |v: &str| variations.contains(&v);
@@ -1843,15 +1902,7 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
             let sup_idx = if slots.len() >= 3 { 2 } else { 1 };
             let sup = slot_to_node(slots.get(sup_idx));
             if has_var("tvSU_PRECEDES") {
-                Some(MathNode::with_children(
-                    "mmultiscripts",
-                    vec![
-                        base,
-                        MathNode::new("mprescripts"),
-                        MathNode::new("none"),
-                        sup,
-                    ],
-                ))
+                Some(wrap_prescript_node(base, MathNode::new("none"), sup))
             } else {
                 Some(MathNode::with_children("msup", vec![base, sup]))
             }
@@ -1860,15 +1911,7 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
             let base = slot_to_node(slots.first());
             let sub = slot_to_node(slots.get(1));
             if has_var("tvSU_PRECEDES") {
-                Some(MathNode::with_children(
-                    "mmultiscripts",
-                    vec![
-                        base,
-                        MathNode::new("mprescripts"),
-                        sub,
-                        MathNode::new("none"),
-                    ],
-                ))
+                Some(wrap_prescript_node(base, sub, MathNode::new("none")))
             } else {
                 Some(MathNode::with_children("msub", vec![base, sub]))
             }
@@ -1878,10 +1921,7 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
             let sub = slot_to_node(slots.get(1));
             let sup = slot_to_node(slots.get(2));
             if has_var("tvSU_PRECEDES") {
-                Some(MathNode::with_children(
-                    "mmultiscripts",
-                    vec![base, MathNode::new("mprescripts"), sub, sup],
-                ))
+                Some(wrap_prescript_node(base, sub, sup))
             } else {
                 Some(MathNode::with_children("msubsup", vec![base, sub, sup]))
             }
@@ -2072,8 +2112,8 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
             let is_right = has_var("tvVE_RIGHT");
             let is_harpoon = has_var("tvVE_HARPOON");
             let arrow = if is_harpoon {
-                if is_under {
-                    "\u{21C1}"
+                if is_left {
+                    "\u{21BC}"
                 } else {
                     "\u{21C0}"
                 }
@@ -2160,7 +2200,7 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
 
         // ── Limits ───────────────────────────────────────────────────────────
         "tmLIM" => {
-            let mut s0 = slot_to_node(slots.first());
+            let mut s0 = unwrap_single_mrow_node(slot_to_node(slots.first()));
             if has_var("tvSUBAR") {
                 s0 = characters::munder_stretchy_accent(s0, "\u{00AF}");
             } else if has_var("tvDUBAR") {
@@ -2172,11 +2212,11 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
             let lower = has_var("tvBO_LOWER");
             let upper = has_var("tvBO_UPPER");
             if lower && upper {
-                let s1 = slot_to_node(slots.get(1));
-                let s2 = slot_to_node(slots.get(2));
+                let s1 = unwrap_single_mrow_node(slot_to_node(slots.get(1)));
+                let s2 = unwrap_single_mrow_node(slot_to_node(slots.get(2)));
                 Some(MathNode::with_children("munderover", vec![s0, s1, s2]))
             } else if upper {
-                let s2 = slot_to_node(slots.get(2).or_else(|| slots.get(1)));
+                let s2 = unwrap_single_mrow_node(slot_to_node(slots.get(2).or_else(|| slots.get(1))));
                 let mut accent = MathNode::with_children("mover", vec![s0, s2]);
                 if accent.children[1].tag == "mo"
                     && accent.children[1]
@@ -2189,7 +2229,7 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
                 }
                 Some(accent)
             } else {
-                let s1 = slot_to_node(slots.get(1));
+                let s1 = unwrap_single_mrow_node(slot_to_node(slots.get(1)));
                 let mut accent = MathNode::with_children("munder", vec![s0, s1]);
                 if accent.children[1].tag == "mo"
                     && accent.children[1]
@@ -2210,8 +2250,8 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
                 "tmSUM" => "\u{2211}",
                 "tmPROD" => "\u{220F}",
                 "tmCOPROD" => "\u{2210}",
-                "tmUNION" => "\u{222A}",
-                "tmINTER" => "\u{2229}",
+                "tmUNION" => "\u{22C3}",
+                "tmINTER" => "\u{22C2}",
                 _ => "\u{2211}",
             };
             let op = MathNode::leaf("mo", op_ch);

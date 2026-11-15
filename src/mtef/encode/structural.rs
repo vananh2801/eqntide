@@ -147,9 +147,9 @@ impl MathmlEncoder {
             }
             let row_refs: Vec<&[u8]> = encoded_rows.iter().map(Vec::as_slice).collect();
             let halign = match node.attr("columnalign") {
-                Some("center") => HALIGN_CENTER,
+                Some("left") => HALIGN_LEFT,
                 Some("right") => HALIGN_RIGHT,
-                _ => HALIGN_LEFT,
+                _ => HALIGN_CENTER,
             };
             return Ok(pile(halign, VALIGN_CENTER_BASELINE, &row_refs));
         }

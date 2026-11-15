@@ -221,6 +221,8 @@ fn is_arrow_mo(node: &MathNode) -> bool {
                 | "⇆"
                 | "⇀"
                 | "↼"
+                | "⇁"
+                | "↽"
                 | "↦"
                 | "⟵"
                 | "⟶"
@@ -280,7 +282,7 @@ fn map_accent_char(s: &str) -> Option<&'static str> {
         "`" | "\u{0300}" => Some("\u{0300}"),
         "\u{02D8}" | "\u{0306}" => Some("\u{0306}"),
         "\u{02C7}" | "\u{030C}" => Some("\u{030C}"),
-        "\u{02DA}" | "\u{030A}" => Some("\u{030A}"),
+        "\u{00B0}" | "\u{02DA}" | "\u{030A}" => Some("\u{030A}"),
         "\u{2192}" | "\u{20D7}" | "\u{27F6}" => Some("\u{20D7}"),
         "\u{2190}" | "\u{20D6}" | "\u{27F5}" => Some("\u{20D6}"),
         "\u{2194}" | "\u{20E1}" | "\u{27F7}" => Some("\u{20E1}"),
@@ -833,13 +835,13 @@ impl MathmlEncoder {
             }
         }
 
-        // 4. Extensible arrow with label above (<m:groupChr pos="bot">)
+        // 4. Extensible arrow with label above (<m:groupChr pos="bot" vertJc="bot">)
         if is_arrow_mo(base) {
             let mut g = m_el("groupChr");
             let mut g_pr = m_el("groupChrPr");
             g_pr.push(m_val_el("chr", base.text.trim()));
             g_pr.push(m_val_el("pos", "bot"));
-            g_pr.push(m_val_el("vertJc", "top"));
+            g_pr.push(m_val_el("vertJc", "bot"));
             g.push(g_pr);
             g.push(m_el_children("e", self.encode_node(over)?));
             return Ok(g);
@@ -904,13 +906,13 @@ impl MathmlEncoder {
             }
         }
 
-        // 4. Extensible arrow with label below (<m:groupChr pos="top">)
+        // 4. Extensible arrow with label below (<m:groupChr pos="top" vertJc="top">)
         if is_arrow_mo(base) {
             let mut g = m_el("groupChr");
             let mut g_pr = m_el("groupChrPr");
             g_pr.push(m_val_el("chr", base.text.trim()));
             g_pr.push(m_val_el("pos", "top"));
-            g_pr.push(m_val_el("vertJc", "bot"));
+            g_pr.push(m_val_el("vertJc", "top"));
             g.push(g_pr);
             g.push(m_el_children("e", self.encode_node(under)?));
             return Ok(g);

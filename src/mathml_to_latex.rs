@@ -489,7 +489,10 @@ fn is_invisible_operator(s: &str) -> bool {
 }
 
 fn is_large_operator(node: Option<&MathNode>) -> bool {
-    let Some(n) = node else { return false };
+    let Some(mut n) = node else { return false };
+    while matches!(n.tag.as_str(), "mstyle" | "mrow") && n.children.len() == 1 {
+        n = &n.children[0];
+    }
     let t = n.text.trim();
     matches!(
         t,
@@ -526,14 +529,14 @@ fn map_accent(s: &str) -> Option<&'static str> {
         "→" => Some("\\vec"),
         "." | "\u{02D9}" => Some("\\dot"),
         ".." | "\u{00A8}" => Some("\\ddot"),
-        "°" => Some("\\mathring"),
+        "°" | "\u{02DA}" | "\u{030A}" => Some("\\mathring"),
         "⃛" => Some("\\dddot"),
         "⃜" => Some("\\ddddot"),
         "←" => Some("\\overleftarrow"),
         "↔" => Some("\\overleftrightarrow"),
         "⇀" => Some("\\overrightharpoon"),
         "↼" => Some("\\overleftharpoon"),
-        "ˇ" => Some("\\check"),
+        "ˇ" | "\u{030C}" => Some("\\check"),
         "˘" => Some("\\breve"),
         "´" => Some("\\acute"),
         "`" => Some("\\grave"),
@@ -553,14 +556,14 @@ fn map_under_accent(s: &str) -> Option<&'static str> {
         "⃜" => "\\underddddot",
         "^" | "ˆ" => "\\underhat",
         "~" | "˜" => "\\undertilde",
-        "ˇ" => "\\undercheck",
+        "ˇ" | "\u{030C}" => "\\undercheck",
         "˘" => "\\underbreve",
-        "°" => "\\underring",
+        "°" | "\u{02DA}" | "\u{030A}" => "\\underring",
         "→" => "\\underrightarrow",
         "←" => "\\underleftarrow",
         "↔" => "\\underleftrightarrow",
-        "⇀" => "\\underrightharpoon",
-        "↼" => "\\underleftharpoon",
+        "⇀" | "⇁" => "\\underrightharpoon",
+        "↼" | "↽" => "\\underleftharpoon",
         "⏝" | "⌣" => "\\underparen",
         "⏟" => "\\underbrace",
         "⎵" => "\\underbracket",

@@ -17,7 +17,7 @@ use crate::mtef::{
     EMB_U_2DOT, EMB_U_3DOT, EMB_U_4DOT, EMB_U_BAR, EMB_U_BARROW, EMB_U_FROWN, EMB_U_L1ARROW,
     EMB_U_LARROW, EMB_U_R1ARROW, EMB_U_RARROW, EMB_U_SMILE, EMB_U_TILDE, END, TF_FUNCTION,
     TF_NUMBER, TF_SYMBOL, TF_TEXT, TF_VARIABLE, TF_VECTOR, TM_ANGLE, TM_BAR, TM_BRACE, TM_BRACK,
-    TM_CEILING, TM_COPROD, TM_DBAR, TM_FLOOR, TM_INTER, TM_OBRACK, TM_PAREN, TM_PROD, TM_SUM,
+    TM_CEILING, TM_COPROD, TM_DBAR, TM_FLOOR, TM_INTER, TM_INTOP, TM_OBRACK, TM_PAREN, TM_PROD, TM_SUM,
     TM_SUMOP, TM_UNION, TV_BO_SUM, TV_INT_1, TV_INT_2, TV_INT_3, TV_INT_CCW_LOOP, TV_INT_CW_LOOP,
     TV_INT_LOOP,
 };
@@ -138,20 +138,36 @@ impl MathmlEncoder {
                 }
             }
 
-            // 5. Check if children[i] is a single character record followed by prime operator
+            // 5. Check if children[i] is a single character record followed by one or more prime operators
             if i + 1 < children.len() {
-                if let Some(prime_str) = unwrap_leaf_text(&children[i + 1]) {
-                    if let Some(order) = prime_order(prime_str) {
+                if let Some(first_prime) = unwrap_leaf_text(&children[i + 1]) {
+                    if let Some(mut total_order) = prime_order(first_prime) {
                         let base_bytes = self.dispatch(&children[i])?;
                         if is_single_char_record(&base_bytes) {
-                            let emb = match order {
+                            let mut consumed = 1usize;
+                            while total_order < 3 && i + 1 + consumed < children.len() {
+                                let Some(next_prime) =
+                                    unwrap_leaf_text(&children[i + 1 + consumed])
+                                else {
+                                    break;
+                                };
+                                let Some(next_order) = prime_order(next_prime) else {
+                                    break;
+                                };
+                                if total_order + next_order > 3 {
+                                    break;
+                                }
+                                total_order += next_order;
+                                consumed += 1;
+                            }
+                            let emb = match total_order {
                                 1 => EMB_1PRIME,
                                 2 => EMB_2PRIME,
                                 3.. => EMB_3PRIME,
                                 0 => unreachable!(),
                             };
                             out.extend(attach_embell(base_bytes, emb));
-                            i += 2;
+                            i += 1 + consumed;
                             continue;
                         }
                     }
@@ -377,9 +393,7 @@ impl MathmlEncoder {
                         };
                         return Ok(attach_embell(base, emb));
                     }
-                    if sup_text == "`" || sup_text == "\u{2035}" {
-                        return Ok(attach_embell(base, EMB_BPRIME));
-                    }
+
                 }
                 let sup = self.nth(node, 1)?;
                 if !sup.is_empty() {
@@ -427,11 +441,11 @@ impl MathmlEncoder {
                     ));
                 }
 
-                // Case C: `<munderover>` on a limit function (`lim`, `max`, …) -> `tmLIM`
+                // Case C: `<munderover>` (not an extensible arrow or bigop) -> `tmLIM`
                 let base = self.nth(node, 0)?;
                 let sub = self.nth(node, 1)?;
                 let sup = self.nth(node, 2)?;
-                if node.tag == "munderover" && is_limit_function(base_text) {
+                if node.tag == "munderover" {
                     return Ok(match (!sub.is_empty(), !sup.is_empty()) {
                         (true, true) => under_overscript(&base, &sub, &sup),
                         (true, false) => underscript(&base, &sub),
@@ -568,7 +582,15 @@ impl MathmlEncoder {
                         Ok(over_arc(&base))
                     }
                     // Hat / circumflex (\widehat{AB}, \hat{x})
-                    "^" | "\u{0302}" | "\u{02C6}" | "\u{030C}" | "ˇ" => Ok(over_hat(&base)),
+                    "^" | "\u{0302}" | "\u{02C6}" => Ok(over_hat(&base)),
+                    // Caron (\check{x})
+                    "\u{030C}" | "\u{02C7}" => {
+                        Ok(overscript(&base, &char_record(TF_TEXT, 0x02C7)))
+                    }
+                    // Ring above (\mathring{x})
+                    "\u{00B0}" | "\u{02DA}" | "\u{030A}" => {
+                        Ok(overscript(&base, &char_record(TF_SYMBOL, 0x00B0)))
+                    }
                     // Joint status (\u{FE39})
                     "\u{FE39}" => Ok(joint_status(&base)),
                     // Single-character embellishments (dots, primes, smile)
@@ -917,7 +939,14 @@ fn encode_bigop_template(
             let cap = char_record(TF_SYMBOL, 0x2229);
             big_operator(TM_INTER, main, upper, lower, &cap, sum_bit)
         }
-        _ => big_operator(TM_SUMOP, main, upper, lower, &op_char, sum_bit),
+        _ => big_operator(
+            if sum_style { TM_SUMOP } else { TM_INTOP },
+            main,
+            upper,
+            lower,
+            &op_char,
+            sum_bit,
+        ),
     }
 }
 

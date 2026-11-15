@@ -448,6 +448,30 @@ impl OmmlConverter {
     // ── limLow / limUpp ───────────────────────────────────────────────────
 
     fn handle_lim(&mut self, node: &Element, tag: &str) -> Result<MathNode> {
+        if let Some(e_node) = node.find(NS_M, "e") {
+            let e_children: Vec<&Element> = e_node.elements().collect();
+            if e_children.len() == 1 {
+                let inner = e_children[0];
+                if tag == "munder" && inner.is(NS_M, "limUpp") {
+                    let base = self.get_e(inner)?;
+                    let under = self.child_mrow(node, "lim")?;
+                    let over = self.child_mrow(inner, "lim")?;
+                    return Ok(mel(
+                        "munderover",
+                        vec![base, unwrap_mrow(under), unwrap_mrow(over)],
+                    ));
+                }
+                if tag == "mover" && inner.is(NS_M, "limLow") {
+                    let base = self.get_e(inner)?;
+                    let under = self.child_mrow(inner, "lim")?;
+                    let over = self.child_mrow(node, "lim")?;
+                    return Ok(mel(
+                        "munderover",
+                        vec![base, unwrap_mrow(under), unwrap_mrow(over)],
+                    ));
+                }
+            }
+        }
         let e = self.get_e(node)?;
         let lim = self.child_mrow(node, "lim")?;
         Ok(mel(tag, vec![e, unwrap_mrow(lim)]))
@@ -588,6 +612,7 @@ impl OmmlConverter {
         let g_pr = node.find(NS_M, "groupChrPr");
         let chr_text = m_val(g_pr, "chr", Some("\u{23DF}")).unwrap_or_default();
         let pos = m_val(g_pr, "pos", Some("bot")).unwrap_or_default();
+        let vert_jc = m_val(g_pr, "vertJc", Some("bot")).unwrap_or_default();
         let base = self.child_mrow(node, "e")?;
         let ch = if chr_text.is_empty() {
             "\u{23DF}"
@@ -595,10 +620,11 @@ impl OmmlConverter {
             chr_text.as_str()
         };
         let gch = MathNode::leaf("mo", ch);
-        // In Word OMML, extensible arrow operators with text above/below are encoded as
-        // `<m:groupChr>` where `chr` is the arrow and `<m:e>` is the label:
-        // - `pos="bot"` (default): arrow at bottom, label `<m:e>` above -> `<mover><mo>arrow</mo><m:e/></mover>`
-        // - `pos="top"`: arrow at top, label `<m:e>` below -> `<munder><mo>arrow</mo><m:e/></munder>`
+        // Distinguish extensible arrow under/over accents from labeled arrow operators via `vertJc`:
+        // - `pos="bot"` & `vertJc="top"`: base `<m:e>` sits on baseline, arrow is an under-accent
+        // - `pos="top"` & `vertJc="bot"`: base `<m:e>` sits on baseline, arrow is an over-accent
+        // - `pos="bot"` & `vertJc="bot"`: arrow sits on baseline, `<m:e>` is the label above
+        // - `pos="top"` & `vertJc="top"`: arrow sits on baseline, `<m:e>` is the label below
         let is_arrow = matches!(
             ch,
             "→" | "←"
@@ -618,9 +644,21 @@ impl OmmlConverter {
                 | "⇆"
                 | "⇀"
                 | "↼"
+                | "⇁"
+                | "↽"
                 | "↦"
         );
         if is_arrow {
+            if pos == "bot" && vert_jc == "top" {
+                let mut accent = mel("munder", vec![unwrap_mrow(base), gch]);
+                accent.set_attr("accentunder", "true");
+                return Ok(accent);
+            }
+            if pos == "top" && vert_jc == "bot" {
+                let mut accent = mel("mover", vec![unwrap_mrow(base), gch]);
+                accent.set_attr("accent", "true");
+                return Ok(accent);
+            }
             let tag = if pos == "top" { "munder" } else { "mover" };
             return Ok(mel(tag, vec![gch, unwrap_mrow(base)]));
         }
