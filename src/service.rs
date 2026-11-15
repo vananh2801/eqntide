@@ -305,8 +305,22 @@ pub fn convert_snippet(
         depth_pt: None,
     };
     response.result = match req.to.as_str() {
-        "flat_opc_omml" => mathml_to_flat_opc(&math, FlatOpcMode::ModernOmml, req.font_pt),
+        "flat_opc_omml" => {
+            if let Some(reason) = crate::omml::check_omml_unsupported(&math) {
+                return Err(ServiceError::new(
+                    422,
+                    format!("{reason} is not supported in OMML"),
+                ));
+            }
+            mathml_to_flat_opc(&math, FlatOpcMode::ModernOmml, req.font_pt)
+        }
         "flat_opc_mathtype" | "mathtype" => {
+            if let Some(reason) = crate::mtef::check_mathtype_unsupported(&math) {
+                return Err(ServiceError::new(
+                    422,
+                    format!("{reason} is not supported in MathType"),
+                ));
+            }
             let mtef = mathml_to_mtef_bytes(&math)
                 .ok()
                 .map(|records| crate::mtef::build_mtef(&records));
@@ -322,7 +336,15 @@ pub fn convert_snippet(
             }
             mathml_to_flat_opc(&math, FlatOpcMode::ModernMathtypeOleEmf, req.font_pt)
         }
-        "omml" => mathml_to_omml_xml(&math),
+        "omml" => {
+            if let Some(reason) = crate::omml::check_omml_unsupported(&math) {
+                return Err(ServiceError::new(
+                    422,
+                    format!("{reason} is not supported in OMML"),
+                ));
+            }
+            mathml_to_omml_xml(&math)
+        }
         "mathml" => Ok(math.to_xml()),
         "latex" => Ok(math.to_latex()),
         "emf" | "emf_base64" => render_emf(&math, req.font_pt).map(|p| base64_encode(&p.emf)),
@@ -463,5 +485,75 @@ mod tests {
                 back.to_xml()
             );
         }
+    }
+
+    #[test]
+    fn convert_snippet_rejects_target_unsupported_constructs_with_422() {
+        for source in [
+            r"\enclose{longdiv}{144}",
+            r"\enclose{roundedbox}{x+y}",
+            r"\underddddot{x}",
+            r"\enclose{verticalstrike}{x}",
+            r"\enclose{circle}{x}",
+            r"\enclose{phasorangle}{x}",
+        ] {
+            for to in ["omml", "flat_opc_omml"] {
+                let err = convert_snippet(&ConvertSnippetRequest {
+                    data: source.into(),
+                    from: "latex".into(),
+                    to: to.into(),
+                    font_pt: 12.0,
+                })
+                .unwrap_err();
+                assert_eq!(err.status, 422, "{source} -> {to}: {}", err.message);
+            }
+        }
+
+        // MathType rejects verticalstrike, circle, phasorangle
+        for source in [
+            r"\enclose{verticalstrike}{x}",
+            r"\enclose{circle}{x}",
+            r"\enclose{phasorangle}{x}",
+        ] {
+            for to in ["mathtype", "flat_opc_mathtype"] {
+                let err = convert_snippet(&ConvertSnippetRequest {
+                    data: source.into(),
+                    from: "latex".into(),
+                    to: to.into(),
+                    font_pt: 12.0,
+                })
+                .unwrap_err();
+                assert_eq!(err.status, 422, "{source} -> {to}: {}", err.message);
+            }
+        }
+
+        // MathType accepts longdiv, roundedbox, underddddot
+        for source in [
+            r"\enclose{longdiv}{144}",
+            r"\enclose{roundedbox}{x+y}",
+            r"\underddddot{x}",
+        ] {
+            let res = convert_snippet(&ConvertSnippetRequest {
+                data: source.into(),
+                from: "latex".into(),
+                to: "flat_opc_mathtype".into(),
+                font_pt: 12.0,
+            })
+            .expect(source);
+            assert!(res.result.contains("Equation.DSMT4"));
+            if let Some(path) = res.emf_path {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+
+        // Reverse conversion back to LaTeX remains allowed for any construct
+        let rev = convert_snippet(&ConvertSnippetRequest {
+            data: "<math><menclose notation=\"longdiv\"><mn>144</mn></menclose></math>".into(),
+            from: "mathml".into(),
+            to: "latex".into(),
+            font_pt: 12.0,
+        })
+        .unwrap();
+        assert!(rev.result.contains("longdiv"));
     }
 }

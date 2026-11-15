@@ -169,3 +169,56 @@ pub fn convert_with(
     log::info!("Saved → {}", out_path.display());
     Ok(summary)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+
+    #[test]
+    fn test_omml_to_mathtype_skips_unsupported_omml() {
+        let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+  <w:body>
+    <w:p>
+      <m:oMath><m:r><m:t>x</m:t></m:r><m:r><m:t>+</m:t></m:r><m:r><m:t>1</m:t></m:r></m:oMath>
+      <m:oMath><m:borderBox><m:borderBoxPr><m:hideTop m:val="1"/><m:hideBot m:val="1"/><m:hideLeft m:val="1"/><m:hideRight m:val="1"/><m:strikeV m:val="1"/></m:borderBoxPr><m:e><m:r><m:t>y</m:t></m:r></m:e></m:borderBox></m:oMath>
+    </w:p>
+  </w:body>
+</w:document>"#;
+        let ct_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        w.start_file("[Content_Types].xml", opts).unwrap();
+        w.write_all(ct_xml.as_bytes()).unwrap();
+        w.start_file("word/document.xml", opts).unwrap();
+        w.write_all(doc_xml.as_bytes()).unwrap();
+        let src_docx = w.finish().unwrap().into_inner();
+
+        let (out_docx, summary) = convert_bytes(&src_docx).unwrap();
+        assert_eq!(summary.found, 2);
+        assert_eq!(summary.converted, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.errors, 0);
+
+        let pkg = Package::read(&out_docx).unwrap();
+        assert!(pkg.contains("word/embeddings/oleObject1.bin"));
+        assert!(!pkg.contains("word/embeddings/oleObject2.bin"));
+        let doc_el = xml::parse(pkg.get("word/document.xml").unwrap()).unwrap();
+        assert_eq!(
+            doc_el
+                .iter()
+                .into_iter()
+                .filter(|e| e.is(crate::omml::decode::NS_M, "oMath"))
+                .count(),
+            1
+        );
+    }
+}

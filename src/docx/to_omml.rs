@@ -300,31 +300,54 @@ pub(crate) fn preferred_metafile_math(
     })
 }
 
-fn convert_ole_rid_to_omml(
+enum OmmlConvertOutcome {
+    Converted(Element),
+    Skipped(&'static str),
+}
+
+fn decode_ole_rid_to_mathml(
+    rid: &str,
+    image_ids: &[String],
+    pkg: &Package,
+    rel_map: &HashMap<String, String>,
+) -> Result<MathNode> {
+    if let Some(math) = preferred_metafile_math(image_ids, rid, pkg, rel_map) {
+        return Ok(math);
+    }
+    let target_path = rel_map
+        .get(rid)
+        .ok_or_else(|| Error::InvalidOle(format!("missing relationship target for {rid}")))?;
+    let ole_bytes = pkg
+        .get(target_path)
+        .ok_or_else(|| Error::MissingPart(target_path.clone()))?;
+    ole_to_mathml(ole_bytes).ok_or_else(|| {
+        Error::InvalidMtef(format!("failed to decode MTEF from {target_path}"))
+    })
+}
+
+fn convert_mathml_to_omml_checked(
+    mathml: &MathNode,
+    opts: &ToOmmlOptions,
+) -> Result<OmmlConvertOutcome> {
+    if let Some(reason) = crate::omml::check_omml_unsupported(mathml) {
+        return Ok(OmmlConvertOutcome::Skipped(reason));
+    }
+    let mut omml = mathml_to_omml(mathml)?;
+    if let Some(ref font) = opts.math_font {
+        apply_math_font(&mut omml, font);
+    }
+    Ok(OmmlConvertOutcome::Converted(omml))
+}
+
+fn convert_ole_rid_to_omml_checked(
     rid: &str,
     image_ids: &[String],
     pkg: &Package,
     rel_map: &HashMap<String, String>,
     opts: &ToOmmlOptions,
-) -> Result<Element> {
-    let mathml = if let Some(math) = preferred_metafile_math(image_ids, rid, pkg, rel_map) {
-        math
-    } else {
-        let target_path = rel_map
-            .get(rid)
-            .ok_or_else(|| Error::InvalidOle(format!("missing relationship target for {rid}")))?;
-        let ole_bytes = pkg
-            .get(target_path)
-            .ok_or_else(|| Error::MissingPart(target_path.clone()))?;
-        ole_to_mathml(ole_bytes).ok_or_else(|| {
-            Error::InvalidMtef(format!("failed to decode MTEF from {target_path}"))
-        })?
-    };
-    let mut omml = mathml_to_omml(&mathml)?;
-    if let Some(ref font) = opts.math_font {
-        apply_math_font(&mut omml, font);
-    }
-    Ok(omml)
+) -> Result<OmmlConvertOutcome> {
+    let mathml = decode_ole_rid_to_mathml(rid, image_ids, pkg, rel_map)?;
+    convert_mathml_to_omml_checked(&mathml, opts)
 }
 
 fn mtef_from_metafile(path: &str, bytes: &[u8]) -> Option<Vec<u8>> {
@@ -364,36 +387,58 @@ fn rewrite_element(
                     .or_else(|| ole_nodes[0].attr(None, "id"));
                 let img_rids = collect_imagedata_rids(&el);
 
-                let converted_omml = match ole_rid {
-                    Some(rid) => convert_ole_rid_to_omml(rid, &img_rids, pkg, rel_map, opts).ok(),
-                    None => None,
-                }
-                .or_else(|| {
-                    // Fallback: if `<mc:Fallback>` already holds an `<m:oMath>`, use it
-                    el.find(NS_MC, "Fallback")
-                        .and_then(|fb| fb.find(NS_M, "oMath"))
-                        .cloned()
-                });
+                let outcome = match ole_rid {
+                    Some(rid) => {
+                        convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts)
+                    }
+                    None => Err(Error::InvalidOle("OLEObject missing r:id".into())),
+                };
 
-                if let Some(mut omml) = converted_omml {
-                    if let Some(ref font) = opts.math_font {
-                        apply_math_font(&mut omml, font);
+                match outcome {
+                    Ok(OmmlConvertOutcome::Converted(omml)) => {
+                        if let Some(rid) = ole_rid {
+                            converted_rids.insert(rid.to_owned());
+                        }
+                        converted_rids.extend(img_rids);
+                        summary.converted += 1;
+                        log::info!("Equation {eq_num}: converted AlternateContent → m:oMath");
+                        new_children.push(Node::Element(omml));
+                        continue;
                     }
-                    if let Some(rid) = ole_rid {
-                        converted_rids.insert(rid.to_owned());
+                    Ok(OmmlConvertOutcome::Skipped(reason)) => {
+                        summary.skipped += 1;
+                        log::warn!(
+                            "Equation {eq_num}: {reason} is not supported in OMML, skipping"
+                        );
+                        new_children.push(Node::Element(el));
+                        continue;
                     }
-                    converted_rids.extend(img_rids);
-                    summary.converted += 1;
-                    log::info!("Equation {eq_num}: converted AlternateContent → m:oMath");
-                    new_children.push(Node::Element(omml));
-                    continue;
-                } else {
-                    summary.errors += 1;
-                    log::error!(
-                        "Equation {eq_num}: failed to convert AlternateContent MathType object"
-                    );
-                    new_children.push(Node::Element(el));
-                    continue;
+                    Err(_) => {
+                        // Fallback: if `<mc:Fallback>` already holds an `<m:oMath>`, use it
+                        if let Some(mut omml) = el
+                            .find(NS_MC, "Fallback")
+                            .and_then(|fb| fb.find(NS_M, "oMath"))
+                            .cloned()
+                        {
+                            if let Some(ref font) = opts.math_font {
+                                apply_math_font(&mut omml, font);
+                            }
+                            if let Some(rid) = ole_rid {
+                                converted_rids.insert(rid.to_owned());
+                            }
+                            converted_rids.extend(img_rids);
+                            summary.converted += 1;
+                            log::info!("Equation {eq_num}: converted AlternateContent → m:oMath");
+                            new_children.push(Node::Element(omml));
+                            continue;
+                        }
+                        summary.errors += 1;
+                        log::error!(
+                            "Equation {eq_num}: failed to convert AlternateContent MathType object"
+                        );
+                        new_children.push(Node::Element(el));
+                        continue;
+                    }
                 }
             }
         }
@@ -464,15 +509,28 @@ fn convert_ole_run(
             match ole_rid
                 .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
                 .and_then(|rid| {
-                    let omml = convert_ole_rid_to_omml(rid, &img_rids, pkg, rel_map, opts)?;
-                    Ok((rid, omml))
+                    let res =
+                        convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts)?;
+                    Ok((rid, res))
                 }) {
-                Ok((rid, omml)) => {
+                Ok((rid, OmmlConvertOutcome::Converted(omml))) => {
                     converted_rids.insert(rid.to_owned());
                     converted_rids.extend(img_rids);
                     summary.converted += 1;
                     log::info!("Equation {eq_num}: converted OLE ({rid}) → m:oMath");
                     out.push(omml);
+                }
+                Ok((rid, OmmlConvertOutcome::Skipped(reason))) => {
+                    summary.skipped += 1;
+                    log::warn!(
+                        "Equation {eq_num}: {reason} is not supported in OMML (OLE {rid}), skipping"
+                    );
+                    let mut kept_run = Element::new(Some(NS_W), Some("w"), "r");
+                    if let Some(ref p) = rpr {
+                        kept_run.push(p.clone());
+                    }
+                    kept_run.push(obj.clone());
+                    out.push(kept_run);
                 }
                 Err(e) => {
                     summary.errors += 1;
@@ -499,15 +557,22 @@ fn convert_ole_run(
     match ole_rid
         .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
         .and_then(|rid| {
-            let omml = convert_ole_rid_to_omml(rid, &img_rids, pkg, rel_map, opts)?;
-            Ok((rid, omml))
+            let res = convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts)?;
+            Ok((rid, res))
         }) {
-        Ok((rid, omml)) => {
+        Ok((rid, OmmlConvertOutcome::Converted(omml))) => {
             converted_rids.insert(rid.to_owned());
             converted_rids.extend(img_rids);
             summary.converted += 1;
             log::info!("Equation {eq_num}: converted OLE ({rid}) → m:oMath");
             vec![omml]
+        }
+        Ok((rid, OmmlConvertOutcome::Skipped(reason))) => {
+            summary.skipped += 1;
+            log::warn!(
+                "Equation {eq_num}: {reason} is not supported in OMML (OLE {rid}), skipping"
+            );
+            vec![run_el.clone()]
         }
         Err(e) => {
             summary.errors += 1;
@@ -554,16 +619,20 @@ fn try_convert_metafile_run(
             .ok_or_else(|| {
                 Error::InvalidMtef(format!("failed to decode {kind_str} MTEF in {target_path}"))
             })
-            .and_then(|mml| mathml_to_omml(&mml))
+            .and_then(|mml| convert_mathml_to_omml_checked(&mml, opts))
         {
-            Ok(mut omml) => {
-                if let Some(ref font) = opts.math_font {
-                    apply_math_font(&mut omml, font);
-                }
+            Ok(OmmlConvertOutcome::Converted(omml)) => {
                 converted_rids.insert(rid.clone());
                 summary.converted += 1;
                 log::info!("Equation {eq_num}: converted {kind_str} ({rid}) → m:oMath");
                 return Some(omml);
+            }
+            Ok(OmmlConvertOutcome::Skipped(reason)) => {
+                summary.skipped += 1;
+                log::warn!(
+                    "Equation {eq_num}: {reason} is not supported in OMML ({kind_str} {rid}), skipping"
+                );
+                return None;
             }
             Err(e) => {
                 summary.errors += 1;
@@ -802,5 +871,148 @@ mod tests {
         let (_, sum3) = convert_bytes_to_omml(&fb_docx).unwrap();
         assert_eq!(sum3.found, 1);
         assert_eq!(sum3.converted, 1);
+    }
+
+    #[test]
+    fn test_docx_to_omml_skips_unsupported_ole_and_preserves_resources() {
+        let convertible = crate::service::parse_latex_to_mathml(r"\frac{a}{b}").unwrap();
+        let unsupported = crate::service::parse_latex_to_mathml(r"\enclose{longdiv}{144}").unwrap();
+
+        let make_ole_and_emf = |math: &MathNode| -> (Vec<u8>, Vec<u8>) {
+            let eq_bytes = crate::mtef::encode::mathml_to_mtef_bytes(math).unwrap();
+            let native = crate::mtef::make_equation_native(&eq_bytes);
+            let ole_bin = crate::ole::make_ole(&native).unwrap();
+            let complete_mtef = crate::mtef::build_mtef(&eq_bytes);
+            let preview = crate::render::emf::render_emf_with_mtef(math, 12.0, Some(&complete_mtef)).unwrap();
+            (ole_bin, preview.emf)
+        };
+
+        let (ole1, emf1) = make_ole_and_emf(&convertible);
+        let (ole2, emf2) = make_ole_and_emf(&unsupported);
+
+        let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:v="urn:schemas-microsoft-com:vml"
+            xmlns:o="urn:schemas-microsoft-com:office:office">
+  <w:body>
+    <w:p>
+      <w:r><w:object><v:shape id="_x0000_i1025" style="width:10pt;height:10pt"><v:imagedata r:id="rIdImg1"/></v:shape><o:OLEObject Type="Embed" ProgID="Equation.DSMT4" ShapeID="_x0000_i1025" r:id="rIdOle1"/></w:object></w:r>
+      <w:r><w:object><v:shape id="_x0000_i1026" style="width:10pt;height:10pt"><v:imagedata r:id="rIdImg2"/></v:shape><o:OLEObject Type="Embed" ProgID="Equation.DSMT4" ShapeID="_x0000_i1026" r:id="rIdOle2"/></w:object></w:r>
+    </w:p>
+  </w:body>
+</w:document>"#;
+
+        let rels_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdOle1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="embeddings/oleObject1.bin"/>
+  <Relationship Id="rIdImg1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/equation1.emf"/>
+  <Relationship Id="rIdOle2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="embeddings/oleObject2.bin"/>
+  <Relationship Id="rIdImg2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/equation2.emf"/>
+</Relationships>"#;
+
+        let ct_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Default Extension="emf" ContentType="image/x-emf"/>
+  <Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/>
+</Types>"#;
+
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        w.start_file("[Content_Types].xml", opts).unwrap();
+        w.write_all(ct_xml.as_bytes()).unwrap();
+        w.start_file("word/document.xml", opts).unwrap();
+        w.write_all(doc_xml.as_bytes()).unwrap();
+        w.start_file("word/_rels/document.xml.rels", opts).unwrap();
+        w.write_all(rels_xml.as_bytes()).unwrap();
+        w.start_file("word/embeddings/oleObject1.bin", opts).unwrap();
+        w.write_all(&ole1).unwrap();
+        w.start_file("word/media/equation1.emf", opts).unwrap();
+        w.write_all(&emf1).unwrap();
+        w.start_file("word/embeddings/oleObject2.bin", opts).unwrap();
+        w.write_all(&ole2).unwrap();
+        w.start_file("word/media/equation2.emf", opts).unwrap();
+        w.write_all(&emf2).unwrap();
+        let src_docx = w.finish().unwrap().into_inner();
+
+        let (omml_docx, summary) = convert_bytes_to_omml(&src_docx).unwrap();
+        assert_eq!(summary.found, 2);
+        assert_eq!(summary.converted, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.errors, 0);
+
+        let pkg = Package::read(&omml_docx).unwrap();
+        assert!(!pkg.contains("word/embeddings/oleObject1.bin"));
+        assert!(!pkg.contains("word/media/equation1.emf"));
+        assert!(pkg.contains("word/embeddings/oleObject2.bin"));
+        assert!(pkg.contains("word/media/equation2.emf"));
+
+        let doc_el = xml::parse(pkg.get("word/document.xml").unwrap()).unwrap();
+        let omaths: Vec<_> = doc_el
+            .iter()
+            .into_iter()
+            .filter(|e| e.is(NS_M, "oMath"))
+            .collect();
+        assert_eq!(omaths.len(), 1);
+        assert!(omaths[0].find(NS_M, "f").is_some());
+        let oles: Vec<_> = doc_el
+            .iter()
+            .into_iter()
+            .filter(|e| e.local == "OLEObject")
+            .collect();
+        assert_eq!(oles.len(), 1);
+    }
+
+    #[test]
+    fn test_docx_to_omml_skips_unsupported_standalone_emf() {
+        let unsupported = crate::service::parse_latex_to_mathml(r"\enclose{roundedbox}{x+y}").unwrap();
+        let eq_bytes = crate::mtef::encode::mathml_to_mtef_bytes(&unsupported).unwrap();
+        let mtef = crate::mtef::build_mtef(&eq_bytes);
+        let preview = crate::render::emf::render_emf_with_mtef(&unsupported, 12.0, Some(&mtef)).unwrap();
+
+        let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:v="urn:schemas-microsoft-com:vml">
+  <w:body><w:p><w:r><w:pict><v:shape id="_x0000_i1025" style="width:10pt;height:10pt"><v:imagedata r:id="rId1"/></v:shape></w:pict></w:r></w:p></w:body>
+</w:document>"#;
+        let rels_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/equation1.emf"/>
+</Relationships>"#;
+        let ct_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Default Extension="emf" ContentType="image/x-emf"/>
+</Types>"#;
+
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        w.start_file("[Content_Types].xml", opts).unwrap();
+        w.write_all(ct_xml.as_bytes()).unwrap();
+        w.start_file("word/document.xml", opts).unwrap();
+        w.write_all(doc_xml.as_bytes()).unwrap();
+        w.start_file("word/_rels/document.xml.rels", opts).unwrap();
+        w.write_all(rels_xml.as_bytes()).unwrap();
+        w.start_file("word/media/equation1.emf", opts).unwrap();
+        w.write_all(&preview.emf).unwrap();
+        let src_docx = w.finish().unwrap().into_inner();
+
+        let (omml_docx, summary) = convert_bytes_to_omml(&src_docx).unwrap();
+        assert_eq!(summary.found, 1);
+        assert_eq!(summary.converted, 0);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.errors, 0);
+
+        let pkg = Package::read(&omml_docx).unwrap();
+        assert!(pkg.contains("word/media/equation1.emf"));
+        let doc_el = xml::parse(pkg.get("word/document.xml").unwrap()).unwrap();
+        assert_eq!(
+            doc_el.iter().into_iter().filter(|e| e.is(NS_M, "oMath")).count(),
+            0
+        );
     }
 }

@@ -367,6 +367,16 @@ fn upgrade_element(
                         .and_then(|omath| crate::omml::decode::omml_to_mathml(omath).ok())
                 });
 
+                if let Some(ref mml) = mathml_opt {
+                    if let Some(reason) = crate::mtef::check_mathtype_unsupported(mml) {
+                        summary.skipped += 1;
+                        log::warn!(
+                            "Equation {eq_num}: {reason} is not supported in MathType, skipping"
+                        );
+                        new_children.push(Node::Element(el));
+                        continue;
+                    }
+                }
                 let modern_run_res = match mathml_opt {
                     Some(mml) => build_modern_ole_run(
                         &mml,
@@ -495,19 +505,31 @@ fn upgrade_ole_run(
         None => Err(Error::InvalidOle("OLEObject missing r:id".into())),
     };
 
-    match mathml_res.and_then(|mml| {
-        build_modern_ole_run(
-            &mml,
-            opts.font_pt,
-            eq_num,
-            pkg,
-            rels_root,
-            ct_root,
-            existing_ids,
-            ole_index,
-            img_index,
-        )
-    }) {
+    let mml = match mathml_res {
+        Ok(mml) => mml,
+        Err(e) => {
+            summary.errors += 1;
+            log::error!("Equation {eq_num}: {e}");
+            return vec![run_el.clone()];
+        }
+    };
+    if let Some(reason) = crate::mtef::check_mathtype_unsupported(&mml) {
+        summary.skipped += 1;
+        log::warn!("Equation {eq_num}: {reason} is not supported in MathType, skipping");
+        return vec![run_el.clone()];
+    }
+
+    match build_modern_ole_run(
+        &mml,
+        opts.font_pt,
+        eq_num,
+        pkg,
+        rels_root,
+        ct_root,
+        existing_ids,
+        ole_index,
+        img_index,
+    ) {
         Ok(modern_run) => {
             if let Some(rid) = ole_rid {
                 converted_rids.insert(rid.to_owned());
@@ -562,6 +584,15 @@ fn try_upgrade_metafile_run(
         let eq_num = summary.found;
         let kind_str = if is_wmf { "WMF" } else { "EMF" };
         let mathml_opt = mtef_to_mathml(&mtef_bytes);
+        if let Some(ref mml) = mathml_opt {
+            if let Some(reason) = crate::mtef::check_mathtype_unsupported(mml) {
+                summary.skipped += 1;
+                log::warn!(
+                    "Equation {eq_num}: {reason} is not supported in MathType ({kind_str} {rid}), skipping"
+                );
+                return None;
+            }
+        }
         let modern_run_res = match mathml_opt {
             Some(mml) => build_modern_ole_run(
                 &mml,
@@ -754,5 +785,50 @@ mod tests {
         let pkg = Package::read(&retypeset_docx).unwrap();
         let doc_str = String::from_utf8(pkg.get("word/document.xml").unwrap().to_vec()).unwrap();
         assert!(doc_str.contains("Equation.DSMT4"));
+    }
+
+    #[test]
+    fn test_upgrade_to_mathtype_skips_unsupported_constructs() {
+        let mut node = crate::service::parse_latex_to_mathml(r"\enclose{verticalstrike}{x}").unwrap();
+        // Inject a fake MTEF stream containing tmSTRIKE with verticalstrike? No, MTEF lacks verticalstrike;
+        // build an OLE with AlternateContent fallback or EMF+MathML? Wait: MTEF cannot represent verticalstrike,
+        // so test AlternateContent where Fallback is OMML with strikeV!
+        let _ = &mut node;
+        let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"
+            xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+            xmlns:o="urn:schemas-microsoft-com:office:office"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body><w:p>
+    <mc:AlternateContent>
+      <mc:Choice Requires="wpg"><w:r><w:object><o:OLEObject Type="Embed" ProgID="Equation.3" r:id="rIdMissing"/></w:object></w:r></mc:Choice>
+      <mc:Fallback><m:oMath><m:borderBox><m:borderBoxPr><m:hideTop m:val="1"/><m:hideBot m:val="1"/><m:hideLeft m:val="1"/><m:hideRight m:val="1"/><m:strikeV m:val="1"/></m:borderBoxPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:borderBox></m:oMath></mc:Fallback>
+    </mc:AlternateContent>
+  </w:p></w:body>
+</w:document>"#;
+        let ct_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        w.start_file("[Content_Types].xml", opts).unwrap();
+        w.write_all(ct_xml.as_bytes()).unwrap();
+        w.start_file("word/document.xml", opts).unwrap();
+        w.write_all(doc_xml.as_bytes()).unwrap();
+        let src_docx = w.finish().unwrap().into_inner();
+
+        let (out_docx, summary) = upgrade_legacy_mathtype_bytes(&src_docx).unwrap();
+        assert_eq!(summary.found, 1);
+        assert_eq!(summary.converted, 0);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.errors, 0);
+
+        let pkg = Package::read(&out_docx).unwrap();
+        assert!(!pkg.contains("word/embeddings/oleObject1.bin"));
     }
 }

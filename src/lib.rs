@@ -76,10 +76,13 @@ pub use mathml::MathNode;
 pub use mathml_to_latex::mathml_to_latex;
 pub use mtef::decode::{mtef_to_mathml, ole_to_mathml};
 pub use mtef::encode::mathml_to_mtef_bytes;
-pub use mtef::make_equation_native;
+pub use mtef::{
+    check_mathtype_unsupported, check_mathtype_unsupported_latex, make_equation_native,
+};
 pub use ole::{extract_mtef_from_emf, extract_mtef_from_ole, extract_mtef_from_wmf, make_ole};
 pub use omml::decode::omml_to_mathml;
 pub use omml::encode::{apply_math_font, mathml_to_omml, mathml_to_omml_xml};
+pub use omml::{check_omml_unsupported, check_omml_unsupported_latex};
 pub use render::emf::{render_emf, render_emf_with_mtef};
 pub use render::{render_preview, Preview};
 

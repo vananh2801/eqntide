@@ -119,7 +119,11 @@ impl Job {
 
         // 1. OMML → MathML
         let mathml = omml_to_mathml(&omath)?;
-        // Print MathML on terminal for debug review
+        if let Some(reason) = crate::mtef::check_mathtype_unsupported(&mathml) {
+            self.summary.skipped += 1;
+            log::warn!("Equation {eq_num}: {reason} is not supported in MathType, skipping");
+            return Ok(Outcome::Skipped);
+        }
 
         // 2. MathML → MTEF binary
         let eq_bytes = mathml_to_mtef_bytes(&mathml)?;

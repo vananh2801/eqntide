@@ -388,4 +388,88 @@ mod tests {
         assert!(dst_file.exists());
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_cli_skips_unsupported_equations_without_failing() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("eqntide_cli_skip_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // 1. OMML -> MathType skipping strikeV
+        let src_omml = temp_dir.join("omml_in.docx");
+        let dst_mt = temp_dir.join("mt_out.docx");
+        let docx_bytes = make_minimal_docx(
+            r#"<m:oMath><m:r><m:t>x</m:t></m:r><m:r><m:t>+</m:t></m:r><m:r><m:t>1</m:t></m:r></m:oMath><m:oMath><m:borderBox><m:borderBoxPr><m:hideTop m:val="1"/><m:hideBot m:val="1"/><m:hideLeft m:val="1"/><m:hideRight m:val="1"/><m:strikeV m:val="1"/></m:borderBoxPr><m:e><m:r><m:t>y</m:t></m:r></m:e></m:borderBox></m:oMath>"#,
+        );
+        std::fs::write(&src_omml, docx_bytes).unwrap();
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_with_io(
+            [
+                "eqntide-cli",
+                src_omml.to_str().unwrap(),
+                "-o",
+                dst_mt.to_str().unwrap(),
+            ],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("Converted 1/2 equation(s)"));
+        assert!(String::from_utf8_lossy(&err).contains("1 skipped"));
+
+        // 2. MathType -> OMML skipping longdiv
+        let longdiv = crate::service::parse_latex_to_mathml(r"\enclose{longdiv}{144}").unwrap();
+        let eq_bytes = crate::mtef::encode::mathml_to_mtef_bytes(&longdiv).unwrap();
+        let mtef = crate::mtef::build_mtef(&eq_bytes);
+        let preview = crate::render::emf::render_emf_with_mtef(&longdiv, 12.0, Some(&mtef)).unwrap();
+        let src_mt = temp_dir.join("mt_in.docx");
+        let dst_omml = temp_dir.join("omml_out.docx");
+        {
+            let mut w = zip::ZipWriter::new(std::fs::File::create(&src_mt).unwrap());
+            let opts = zip::write::FileOptions::default();
+            w.start_file("[Content_Types].xml", opts).unwrap();
+            IoWrite::write_all(&mut w, br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Default Extension="emf" ContentType="image/x-emf"/>
+</Types>"#).unwrap();
+            w.start_file("word/document.xml", opts).unwrap();
+            IoWrite::write_all(&mut w, br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:v="urn:schemas-microsoft-com:vml">
+  <w:body><w:p><w:r><w:pict><v:shape id="_x0000_i1025" style="width:10pt;height:10pt"><v:imagedata r:id="rId1"/></v:shape></w:pict></w:r></w:p></w:body>
+</w:document>"#).unwrap();
+            w.start_file("word/_rels/document.xml.rels", opts).unwrap();
+            IoWrite::write_all(&mut w, br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/equation1.emf"/>
+</Relationships>"#).unwrap();
+            w.start_file("word/media/equation1.emf", opts).unwrap();
+            IoWrite::write_all(&mut w, &preview.emf).unwrap();
+            w.finish().unwrap();
+        }
+        out.clear();
+        err.clear();
+        let code_rev = run_with_io(
+            [
+                "eqntide-cli",
+                src_mt.to_str().unwrap(),
+                "-o",
+                dst_omml.to_str().unwrap(),
+                "--to-omml",
+            ],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code_rev, 0, "stderr: {}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out).contains("Converted 0/1 equation(s)"));
+        assert!(String::from_utf8_lossy(&err).contains("1 skipped"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }

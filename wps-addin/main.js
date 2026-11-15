@@ -1007,7 +1007,8 @@ function batchLatexToMathType(doc, selection, latexMatches) {
               }
             } catch (_) {}
 
-            wpsLog("batchLatexToMathType: converted " + convertedCount + "/" + total + " formulas.");
+            var skippedCount = total - convertedCount;
+            wpsLog("batchLatexToMathType: converted " + convertedCount + "/" + total + " formulas" + (skippedCount > 0 ? " (" + skippedCount + " skipped)" : "") + ".");
           }
         }
       );
@@ -1360,8 +1361,13 @@ function ToggleLatex() {
                 wpsLog("ToggleLatex: converted single equation to LaTeX string successfully");
               }
             } else {
-              wpsLog("ToggleLatex: equation to LaTeX failed: " + responseText);
-              alert("Failed to convert equation to LaTeX: " + responseText);
+              var errMsg = responseText;
+              try {
+                var errObj = JSON.parse(responseText);
+                if (errObj && errObj.error) errMsg = errObj.error;
+              } catch (_) {}
+              wpsLog("ToggleLatex: equation to LaTeX skipped/failed (" + status + "): " + errMsg);
+              alert((status === 422 ? "Skipped unsupported equation: " : "Failed to convert equation to LaTeX: ") + errMsg);
             }
           }
         );
@@ -1428,8 +1434,13 @@ function ToggleLatex() {
             }
             wpsLog("ToggleLatex: successfully converted single LaTeX to MathType equation");
           } else {
-            wpsLog("ToggleLatex: LaTeX conversion error: " + responseText);
-            alert("Failed to convert LaTeX to an equation:\n" + responseText);
+            var errMsg = responseText;
+            try {
+              var errObj = JSON.parse(responseText);
+              if (errObj && errObj.error) errMsg = errObj.error;
+            } catch (_) {}
+            wpsLog("ToggleLatex: LaTeX conversion skipped/failed (" + status + "): " + errMsg);
+            alert((status === 422 ? "Skipped unsupported formula:\n" : "Failed to convert LaTeX to an equation:\n") + errMsg);
           }
         }
       );

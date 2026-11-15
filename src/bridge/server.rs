@@ -828,7 +828,19 @@ fn handle_session_update(
             return error_response(422, &format!("failed to parse MathML: {error}"), origin)
         }
     };
-    let mode = if update.target_mode.eq_ignore_ascii_case("mathtype") {
+    let is_mathtype = update.target_mode.eq_ignore_ascii_case("mathtype");
+    if is_mathtype {
+        if let Some(reason) = crate::mtef::check_mathtype_unsupported(&math) {
+            return error_response(
+                422,
+                &format!("{reason} is not supported in MathType"),
+                origin,
+            );
+        }
+    } else if let Some(reason) = crate::omml::check_omml_unsupported(&math) {
+        return error_response(422, &format!("{reason} is not supported in OMML"), origin);
+    }
+    let mode = if is_mathtype {
         FlatOpcMode::ModernMathtypeOleEmf
     } else {
         FlatOpcMode::ModernOmml
@@ -1490,5 +1502,58 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert_eq!(server.pending_requests(), 0);
+    }
+    #[test]
+    fn session_update_validates_target_compatibility() {
+        let server = start_bridge_server("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+
+        // 1. OMML session rejects longdiv with 422
+        let omml_sid = server
+            .session_manager()
+            .create_session_with_target("<math/>".into(), None, Some(12.0), "omml");
+        let body = serde_json::json!({
+            "mathml": "<math><menclose notation=\"longdiv\"><mn>144</mn></menclose></math>",
+            "target_mode": "omml",
+            "font_pt": 12.0
+        })
+        .to_string();
+        let resp = send_raw_http(
+            addr,
+            &format!("POST /session/{omml_sid}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
+        );
+        assert_eq!(resp.status, 422, "body: {}", resp.body);
+
+        // 2. MathType session accepts longdiv with 200
+        let mt_sid = server
+            .session_manager()
+            .create_session_with_target("<math/>".into(), None, Some(12.0), "mathtype");
+        let body_mt = serde_json::json!({
+            "mathml": "<math><menclose notation=\"longdiv\"><mn>144</mn></menclose></math>",
+            "target_mode": "mathtype",
+            "font_pt": 12.0
+        })
+        .to_string();
+        let resp_mt = send_raw_http(
+            addr,
+            &format!("POST /session/{mt_sid}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body_mt}", body_mt.len()),
+        );
+        assert_eq!(resp_mt.status, 200, "body: {}", resp_mt.body);
+
+        // 3. MathType session rejects verticalstrike with 422
+        let mt_sid2 = server
+            .session_manager()
+            .create_session_with_target("<math/>".into(), None, Some(12.0), "mathtype");
+        let body_vs = serde_json::json!({
+            "mathml": "<math><menclose notation=\"verticalstrike\"><mi>x</mi></menclose></math>",
+            "target_mode": "mathtype",
+            "font_pt": 12.0
+        })
+        .to_string();
+        let resp_vs = send_raw_http(
+            addr,
+            &format!("POST /session/{mt_sid2}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body_vs}", body_vs.len()),
+        );
+        assert_eq!(resp_vs.status, 422, "body: {}", resp_vs.body);
     }
 }

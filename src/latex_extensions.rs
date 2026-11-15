@@ -711,6 +711,8 @@ impl<'a> Scanner<'a> {
                         part,
                         "box"
                             | "roundedbox"
+                            | "circle"
+                            | "phasorangle"
                             | "top"
                             | "bottom"
                             | "left"

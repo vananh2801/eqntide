@@ -199,4 +199,34 @@ for (const branch of ['single', 'selected', 'batch']) {
   assert.ok(imported);
   assert.equal(mathPresent, false);
 }
+// Batch LaTeX toggle skips 422 unsupported formulas while still converting supported ones.
+{
+  const c = controller();
+  let text = 'Before $\\enclose{verticalstrike}{x}$ middle $\\frac{1}{2}$ after';
+  const replaced = [];
+  const doc = {
+    Range(start, end) {
+      if (start === undefined) return { End: text.length };
+      return { Start: start, End: end, Font: {}, get Text() { return text.slice(this.Start, this.End); } };
+    }
+  };
+  const selection = { Start: 0, End: text.length, Text: text, Range: doc.Range(0, text.length), Collapse() {} };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = callback => callback();
+  c.insertMathTypeAtDocRange = (d, targetRange, convData) => {
+    replaced.push({ start: targetRange.Start, end: targetRange.End, text: targetRange.Text, result: convData.result });
+    return {};
+  };
+  c.ajaxPost = (url, body, callback) => {
+    const req = JSON.parse(body);
+    if (req.data.includes('verticalstrike')) {
+      callback(422, JSON.stringify({ status: 'error', error: 'Vertical strike is not supported in MathType' }));
+    } else {
+      callback(200, JSON.stringify({ result: '<pkg/>' }));
+    }
+  };
+  c.ToggleLatex();
+  assert.equal(replaced.length, 1);
+  assert.equal(replaced[0].text, '$\\frac{1}{2}$');
+}
 console.log('WPS toggle tests using bug_toggle_v1 XML fixture passed');

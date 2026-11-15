@@ -91,6 +91,60 @@ fn uses_euclid_font_defs(equation_bytes: &[u8]) -> bool {
         .any(|w| w[0] == 0x02 && (w[1] & 0x04) != 0 && (0x7B..=0x7F).contains(&w[2]))
 }
 
+/// Inspect a [`crate::MathNode`] tree for mathematical structures that are not natively supported
+/// in MathType MTEF 5.0.
+///
+/// Returns a descriptive name of the unsupported construct if found.
+pub fn check_mathtype_unsupported(node: &crate::MathNode) -> Option<&'static str> {
+    for n in node.iter() {
+        if n.tag == "menclose" {
+            let notation = n.attr("notation").unwrap_or("");
+            for token in notation.split_whitespace() {
+                match token {
+                    "verticalstrike" => return Some("Vertical strike"),
+                    "circle" => return Some("Circle enclosure"),
+                    "phasorangle" => return Some("Phasor angle"),
+                    _ => {}
+                }
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn enclose_has_token(latex: &str, token: &str) -> bool {
+    let mut rest = latex;
+    while let Some(idx) = rest.find(r"\enclose{") {
+        let after = &rest[idx + r"\enclose{".len()..];
+        if let Some(end) = after.find('}') {
+            if after[..end].split_whitespace().any(|t| t == token) {
+                return true;
+            }
+            rest = &after[end + 1..];
+        } else {
+            if after.split_whitespace().any(|t| t == token) {
+                return true;
+            }
+            break;
+        }
+    }
+    false
+}
+
+/// Inspect a LaTeX string for mathematical structures that are not natively supported
+/// in MathType MTEF 5.0.
+pub fn check_mathtype_unsupported_latex(latex: &str) -> Option<&'static str> {
+    if latex.contains("verticalstrike") {
+        Some("Vertical strike")
+    } else if latex.contains("phasorangle") {
+        Some("Phasor angle")
+    } else if enclose_has_token(latex, "circle") {
+        Some("Circle enclosure")
+    } else {
+        None
+    }
+}
+
 /// Wrap equation content bytes in a complete MTEF 5.0 stream (the part that
 /// follows the 28-byte `EQNOLEFILEHDR`).
 pub fn build_mtef(equation_bytes: &[u8]) -> Vec<u8> {
@@ -135,4 +189,67 @@ pub fn make_equation_native(equation_bytes: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&[0u8; 16]);
     out.extend(mtef_data);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::parse_latex_to_mathml;
+
+    #[test]
+    fn test_unsupported_mathtype_detection() {
+        let cases = [
+            (r"\enclose{verticalstrike}{x}", "Vertical strike"),
+            (
+                r"\enclose{horizontalstrike verticalstrike}{x}",
+                "Vertical strike",
+            ),
+            (r"\enclose{circle}{x}", "Circle enclosure"),
+            (r"\enclose{box circle}{x}", "Circle enclosure"),
+            (r"\enclose{phasorangle}{x}", "Phasor angle"),
+        ];
+
+        for (latex, expected) in cases {
+            let math = parse_latex_to_mathml(latex).unwrap();
+            assert_eq!(
+                check_mathtype_unsupported(&math),
+                Some(expected),
+                "Failed on MathNode for {latex}"
+            );
+            assert_eq!(
+                check_mathtype_unsupported_latex(latex),
+                Some(expected),
+                "Failed on LaTeX for {latex}"
+            );
+        }
+
+        // MathType-supported formulas must return None
+        let supported = [
+            r"\frac{a}{b}",
+            r"\enclose{longdiv}{144}",
+            r"\enclose{roundedbox}{x+y}",
+            r"\underddddot{x}",
+            r"\cancel{x}",
+            r"\bcancel{x}",
+            r"\xcancel{x}",
+            r"\boxed{x}",
+            r"\enclose{horizontalstrike}{x}",
+            r"\enclose{actuarial}{n}",
+            r"\bigcirc",
+        ];
+
+        for latex in supported {
+            let math = parse_latex_to_mathml(latex).unwrap();
+            assert_eq!(
+                check_mathtype_unsupported(&math),
+                None,
+                "False positive on MathNode for {latex}"
+            );
+            assert_eq!(
+                check_mathtype_unsupported_latex(latex),
+                None,
+                "False positive on LaTeX for {latex}"
+            );
+        }
+    }
 }

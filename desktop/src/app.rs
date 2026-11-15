@@ -728,6 +728,22 @@ impl App {
             self.status = "Wait for valid LaTeX before saving.".into();
             return;
         }
+        if save && self.session.is_some() {
+            let math = self.editor.math();
+            if self.target == "omml" {
+                if let Some(unsupported) = eqntide::check_omml_unsupported(&math) {
+                    self.status = format!(
+                        "{unsupported} is not supported in OMML. Switch target to MathType to insert."
+                    );
+                    return;
+                }
+            } else if self.target == "mathtype" {
+                if let Some(unsupported) = eqntide::check_mathtype_unsupported(&math) {
+                    self.status = format!("{unsupported} is not supported in MathType.");
+                    return;
+                }
+            }
+        }
         if self.session.is_none() && save {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("MathML", &["mathml"])
@@ -1093,6 +1109,40 @@ impl App {
             {
                 self.pending = Some(Intent::Next);
             }
+            let target_warning = if self.tab == 0 {
+                let math = self.editor.math();
+                if self.target == "mathtype" {
+                    eqntide::check_mathtype_unsupported(&math)
+                        .or_else(|| eqntide::check_mathtype_unsupported_latex(&self.latex))
+                        .map(|u| format!("Warning: {u} is not supported in MathType."))
+                        .or_else(|| {
+                            eqntide::check_omml_unsupported(&math)
+                                .or_else(|| eqntide::check_omml_unsupported_latex(&self.latex))
+                                .map(|u| {
+                                    format!(
+                                        "Warning: {u} is not supported in OMML (MathType target active)."
+                                    )
+                                })
+                        })
+                } else {
+                    eqntide::check_omml_unsupported(&math)
+                        .or_else(|| eqntide::check_omml_unsupported_latex(&self.latex))
+                        .map(|u| {
+                            if eqntide::check_mathtype_unsupported(&math)
+                                .or_else(|| eqntide::check_mathtype_unsupported_latex(&self.latex))
+                                .is_some()
+                            {
+                                format!("Warning: {u} is not supported in OMML or MathType.")
+                            } else {
+                                format!(
+                                    "Warning: {u} is not supported in OMML. Switch target to MathType to insert."
+                                )
+                            }
+                        })
+                }
+            } else {
+                None
+            };
             if self.tab == 0 && self.latex_error.is_some() {
                 let error = format!("LaTeX error: {}", self.latex_error.as_deref().unwrap());
                 ui.add(
@@ -1104,6 +1154,14 @@ impl App {
                 .on_hover_text(error);
             } else if self.tab == 0 && self.draft_dirty {
                 ui.label("Updating equation…");
+            } else if let Some(warning) = target_warning {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&warning).color(ui.visuals().error_fg_color),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(warning);
             } else {
                 ui.add(egui::Label::new(&self.status).truncate())
                     .on_hover_text(&self.status);
@@ -2418,6 +2476,62 @@ mod tests {
         assert_eq!(a.target, "omml");
         assert_eq!(a.queue.len(), 1);
         assert!(matches!(a.pending, Some(Intent::Next)));
+    }
+    #[test]
+    fn omml_unsupported_warning_displays_in_status_bar() {
+        let cases = [
+            (r"\enclose{longdiv}{144}", "Long division is not supported in OMML"),
+            (r"\enclose{roundedbox}{x}", "Rounded box is not supported in OMML"),
+            (r"\enclose{verticalstrike}{x}", "Vertical strike is not supported in OMML"),
+            (r"\underddddot{x}", "Quadruple underdot is not supported in OMML"),
+        ];
+
+        for (latex, expected_msg) in cases {
+            let mut a = app();
+            let math = eqntide::service::parse_latex_to_mathml(latex).unwrap();
+            a.editor.replace(&math);
+            a.changed();
+            assert_eq!(a.target, "omml");
+
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.status_bar(ui));
+            output.textures_delta.clear();
+            let has_warning = output.shapes.iter().any(|s| {
+                matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains(expected_msg))
+            });
+            assert!(has_warning, "Expected OMML warning in status bar for {latex}");
+        }
+
+        for (latex, expected_msg) in [
+            (r"\enclose{verticalstrike}{x}", "Vertical strike is not supported in MathType"),
+            (r"\enclose{circle}{x}", "Circle enclosure is not supported in MathType"),
+            (r"\enclose{phasorangle}{x}", "Phasor angle is not supported in MathType"),
+        ] {
+            let mut a = app();
+            a.target = "mathtype".into();
+            let math = eqntide::service::parse_latex_to_mathml(latex).unwrap();
+            a.editor.replace(&math);
+            a.changed();
+
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.status_bar(ui));
+            output.textures_delta.clear();
+            let has_warning = output.shapes.iter().any(|s| {
+                matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains(expected_msg))
+            });
+            assert!(has_warning, "Expected MathType warning in status bar for {latex}");
+        }
+
+        // finish(true) in an Office session blocks unsupported constructs for the active target.
+        let mut a = app();
+        a.session = Some("sess-1".into());
+        a.target = "omml".into();
+        let math = eqntide::service::parse_latex_to_mathml(r"\enclose{longdiv}{144}").unwrap();
+        a.editor.replace(&math);
+        a.changed();
+        a.finish(true);
+        assert!(!a.busy);
+        assert!(a.status.contains("not supported in OMML"));
     }
     #[test]
     fn startup_loading_never_opens_two_sessions_concurrently() {
