@@ -210,13 +210,13 @@ read from the root `Cargo.toml`:
 
 ```text
 dist/
-  linux/0.3.0/
-    eqntide-native-preview-0.3.0-x86_64-unknown-linux-gnu.tar.gz
-    eqntide-native-preview-0.3.0-1.x86_64.rpm
-    eqntide-native-preview_0.3.0_amd64.deb
-  windows/0.3.0/
-    eqntide-native-preview-0.3.0-x86_64-pc-windows-msvc.zip
-    EqnTide-0.3.0-Setup.exe
+  linux/0.4.0/
+    eqntide-native-preview-0.4.0-x86_64-unknown-linux-gnu.tar.gz
+    eqntide-native-preview-0.4.0-1.x86_64.rpm
+    eqntide-native-preview_0.4.0_amd64.deb
+  windows/0.4.0/
+    eqntide-native-preview-0.4.0-x86_64-pc-windows-msvc.zip
+    EqnTide-0.4.0-Setup.exe
     README-WINDOWS.txt
     installer-config.nsh
     windows-stage/
@@ -374,14 +374,14 @@ Fedora:
 
 ```bash
 python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format rpm
-sudo dnf install ./dist/linux/0.3.0/eqntide-native-preview-0.3.0-1.x86_64.rpm
+sudo dnf install ./dist/linux/0.4.0/eqntide-native-preview-0.4.0-1.x86_64.rpm
 ```
 
 Ubuntu/Debian (not locally qualified):
 
 ```bash
 python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format deb
-sudo apt-get install ./dist/linux/0.3.0/eqntide-native-preview_0.3.0_amd64.deb
+sudo apt-get install ./dist/linux/0.4.0/eqntide-native-preview_0.4.0_amd64.deb
 ```
 
 For an already installed RPM with the same version, use `sudo dnf reinstall`
@@ -629,7 +629,7 @@ Add `eqntide` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-eqntide = "0.3.0"
+eqntide = "0.4.0"
 ```
 
 ```rust
