@@ -62,14 +62,18 @@ impl Layout {
                 }
             }
             '⏞' | '⏟' => {
+                let content_w = w - 2.0 * x0;
+                let span = content_w.max(0.55 * em);
+                let bx0 = x0 - (span - content_w) / 2.0;
+                let depth = (span * 0.28).clamp(0.12 * em, 0.20 * em);
                 polys.extend(stroke(
-                    &bar::brace_h(w - 2.0 * x0, y, 0.20 * em, c == '⏟')
+                    &bar::brace_h(span, y, depth, c == '⏟')
                         .into_iter()
-                        .map(|(x, y)| (x + x0, y))
+                        .map(|(x, y)| (x + bx0, y))
                         .collect::<Vec<_>>(),
                     st,
                 ));
-                b.asc = b.asc.max(base_asc + 0.35 * em);
+                b.asc = b.asc.max(base_asc + depth + 0.15 * em);
             }
             '⎴' | '⎵' => {
                 let sign = if c == '⎴' { -1.0 } else { 1.0 };
@@ -152,19 +156,25 @@ impl Layout {
                     b.asc = b.asc.max(base_asc + 0.29 * em);
                 }
             }
-            '←' | '↔' | '⇀' | '↼' | '⇌' | '⇋' => {
+            '←' | '↔' | '⇀' | '↼' | '⇌' | '⇋' | '⇒' | '⇐' | '⇔' => {
                 let natural = self.f.glyph_polys(Face::Symbol, c, em, em, 0.0, 0.0);
                 let (xl, xh, yl, yh) = natural.iter().flatten().fold(
                     (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
                     |(xl, xh, yl, yh), p| (xl.min(p.0), xh.max(p.0), yl.min(p.1), yh.max(p.1)),
                 );
                 if xh > xl {
-                    let span = (w - 2.0 * x0).max(0.4 * em);
-                    polys.extend(natural.into_iter().map(|p| {
-                        p.into_iter()
-                            .map(|(x, py)| (x0 + (x - xl) * span / (xh - xl), py + y - yh))
-                            .collect()
-                    }));
+                    let content_w = w - 2.0 * x0;
+                    let span = content_w.max(0.45 * em);
+                    let ax0 = x0 - (span - content_w) / 2.0;
+                    let contours: Vec<Vec<(f32, f32)>> = natural
+                        .into_iter()
+                        .map(|p| {
+                            p.into_iter()
+                                .map(|(x, py)| (ax0 + (x - xl) * span / (xh - xl), py + y - yh))
+                                .collect()
+                        })
+                        .collect();
+                    b.items.push(Item::Contours(contours));
                     b.asc = b.asc.max(-(yl + y - yh) + 0.04 * em);
                 }
             }
@@ -175,7 +185,7 @@ impl Layout {
                 let x_left = x0 + 0.35 * ic;
                 let x_right = (w - x0 + ic).max(x_left + 0.40 * em);
                 let span = x_right - x_left;
-                let y_shaft = -(base_asc + 0.10 * em);
+                let y_shaft = -(base_asc + 0.18 * em);
                 let y_glyph = y_shaft + 259.0 * k;
                 let min_w = 805.0 * k;
 
@@ -187,7 +197,7 @@ impl Layout {
                     let pts = self
                         .f
                         .glyph_polys(Face::Symbol, '\u{2192}', em_x, eff_em, ox, oy);
-                    polys.extend(pts);
+                    b.items.push(Item::Contours(pts));
                 } else {
                     // Delimiter-style piece assembly:
                     // 1. Arrowhead piece at right
@@ -290,17 +300,17 @@ impl Layout {
                         });
                     let w0 = (x_hi - x_lo).max(1.0);
                     let content_w = w - 2.0 * x0;
-                    let span = content_w.max(0.40 * em);
+                    let span = content_w.max(0.58 * em);
                     let em_x = em * span / w0;
-                    let em_y = em;
+                    let em_y = if content_w < 0.7 * em { 0.78 * em } else { em };
                     let y_target = -(base_asc + 0.04 * em);
-                    let oy = y_target - y_hi;
+                    let oy = y_target - y_hi * (em_y / em);
                     let ox = cx - (x_lo + x_hi) / 2.0 * (em_x / em);
                     let pts = self
                         .f
                         .glyph_polys(Face::Symbol, '\u{2322}', em_x, em_y, ox, oy);
-                    polys.extend(pts);
-                    b.asc = b.asc.max(-(oy + y_lo) + 0.04 * em);
+                    b.items.push(Item::Contours(pts));
+                    b.asc = b.asc.max(-(oy + y_lo * (em_y / em)) + 0.04 * em);
                 }
             }
             '\u{00AF}' | '\u{0304}' | '\u{203E}' | '\u{2015}' | '\u{02C9}' => {
@@ -363,14 +373,48 @@ impl Layout {
                 Item::Poly(p) => b
                     .items
                     .push(Item::Poly(p.into_iter().map(|(x, y)| (x, -y)).collect())),
+                Item::Contours(cs) => b.items.push(Item::Contours(
+                    cs.into_iter()
+                        .map(|p| p.into_iter().map(|(x, y)| (x, -y)).collect())
+                        .collect(),
+                )),
                 Item::Glyph {
-                    ch, face, em, x, y, ..
-                } => b.items.extend(
-                    self.f
-                        .glyph_polys(face, ch, em, em, x, y)
+                    ch,
+                    face,
+                    em: glyph_em,
+                    x,
+                    y,
+                    ssty,
+                } if ch == '\u{2192}' || ch == '\u{23AF}' => {
+                    // Both '\u{2192}' and '\u{23AF}' are vertically symmetric around their shaft
+                    // (+259 font units above baseline), so keeping Item::Glyph avoids extender seam notches.
+                    b.items.push(Item::Glyph {
+                        ch,
+                        face,
+                        em: glyph_em,
+                        x,
+                        y: -y + 518.0 * (glyph_em / 1000.0),
+                        ssty,
+                    });
+                }
+                Item::Glyph {
+                    ch,
+                    face,
+                    em: glyph_em,
+                    x,
+                    y,
+                    ..
+                } => {
+                    let contours: Vec<Vec<(f32, f32)>> = self
+                        .f
+                        .glyph_polys(face, ch, glyph_em, glyph_em, x, y)
                         .into_iter()
-                        .map(|p| Item::Poly(p.into_iter().map(|(x, y)| (x, -y)).collect())),
-                ),
+                        .map(|p| p.into_iter().map(|(px, py)| (px, -py)).collect())
+                        .collect();
+                    if !contours.is_empty() {
+                        b.items.push(Item::Contours(contours));
+                    }
+                }
             }
         }
         b.desc = b.desc.max(accent.asc);

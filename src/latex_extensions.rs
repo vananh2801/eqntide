@@ -13,6 +13,32 @@ pub(super) fn parse(source: &str) -> Result<MathNode> {
     parse_at(source, 0)
 }
 
+fn replace_markers(node: &mut MathNode, marker: &str, nodes: &[MathNode]) {
+    if node.tag == "mtext" {
+        if let Some(index) = node.text.strip_prefix(marker).and_then(decode_marker_index) {
+            if let Some(native) = nodes.get(index) {
+                *node = native.clone();
+                return;
+            }
+        }
+    }
+    for child in &mut node.children {
+        replace_markers(child, marker, nodes);
+    }
+}
+
+fn parse_fragment(fragment: &str, marker: &str, nodes: &[MathNode]) -> Result<MathNode> {
+    let mut math = super::parse_standard(fragment)?;
+    replace_markers(&mut math, marker, nodes);
+    Ok(if math.children.len() == 1 {
+        math.children.remove(0)
+    } else {
+        math.tag = "mrow".into();
+        math.attrs.clear();
+        math
+    })
+}
+
 fn parse_at(source: &str, depth: usize) -> Result<MathNode> {
     if depth > MAX_DEPTH {
         return Err(error("expression nesting exceeds 64 levels"));
@@ -104,22 +130,390 @@ fn parse_at(source: &str, depth: usize) -> Result<MathNode> {
             output.push_str(&source[start..scanner.pos]);
         }
     }
-    let mut math = super::parse_standard(&output)?;
-    fn replace(node: &mut MathNode, marker: &str, nodes: &[MathNode]) {
-        if node.tag == "mtext" {
-            if let Some(index) = node.text.strip_prefix(marker).and_then(decode_marker_index) {
-                if let Some(native) = nodes.get(index) {
-                    *node = native.clone();
-                    return;
-                }
-            }
-        }
-        for child in &mut node.children {
-            replace(child, marker, nodes);
+    let rewritten = rewrite_script_pairs(&output, &marker, &mut scanner.nodes)?;
+    let mut math = super::parse_standard(&rewritten)?;
+    replace_markers(&mut math, &marker, &scanner.nodes);
+    Ok(math)
+}
+
+fn rewrite_script_pairs(src: &str, marker: &str, nodes: &mut Vec<MathNode>) -> Result<String> {
+    ScriptRewriter {
+        src,
+        pos: 0,
+        marker,
+        nodes,
+    }
+    .rewrite()
+}
+
+struct ScriptRewriter<'a> {
+    src: &'a str,
+    pos: usize,
+    marker: &'a str,
+    nodes: &'a mut Vec<MathNode>,
+}
+
+impl<'a> ScriptRewriter<'a> {
+    fn peek_char(&self) -> Option<char> {
+        self.src[self.pos..].chars().next()
+    }
+
+    fn next(&mut self) -> Option<char> {
+        let ch = self.peek_char()?;
+        self.pos += ch.len_utf8();
+        Some(ch)
+    }
+
+    fn skip_ws(&mut self) {
+        while self.peek_char().is_some_and(char::is_whitespace) {
+            self.next();
         }
     }
-    replace(&mut math, &marker, &scanner.nodes);
-    Ok(math)
+
+    fn read_command_name(&mut self) -> &'a str {
+        debug_assert!(self.src[self.pos..].starts_with('\\'));
+        self.next();
+        let start = self.pos;
+        while self.peek_char().is_some_and(|c| c.is_ascii_alphabetic()) {
+            self.next();
+        }
+        if start == self.pos {
+            self.next();
+        }
+        &self.src[start..self.pos]
+    }
+
+    fn read_braced(&mut self) -> Result<&'a str> {
+        if self.next() != Some('{') {
+            return Err(error("expected '{'"));
+        }
+        let begin = self.pos;
+        let mut level = 1usize;
+        while let Some(ch) = self.next() {
+            match ch {
+                '\\' => {
+                    self.next();
+                }
+                '{' => level += 1,
+                '}' => {
+                    level -= 1;
+                    if level == 0 {
+                        return Ok(&self.src[begin..self.pos - 1]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Err(error("unclosed group"))
+    }
+
+    fn read_delim(&mut self) -> Result<&'a str> {
+        let start = self.pos;
+        self.skip_ws();
+        if self.src[self.pos..].starts_with('\\') {
+            self.read_command_name();
+        } else if self.next().is_none() {
+            return Err(error("missing delimiter"));
+        }
+        Ok(&self.src[start..self.pos])
+    }
+
+    fn read_tex_arg(&mut self) -> Result<String> {
+        let ws_start = self.pos;
+        self.skip_ws();
+        let ws = &self.src[ws_start..self.pos];
+        let atom = self
+            .read_atom()?
+            .ok_or_else(|| error("missing command argument"))?;
+        Ok(format!("{ws}{atom}"))
+    }
+
+    fn read_left_right(&mut self, delim1: &str) -> Result<String> {
+        let body_start = self.pos;
+        let mut depth = 1usize;
+        while self.pos < self.src.len() {
+            if self.src[self.pos..].starts_with('\\') {
+                let cmd_start = self.pos;
+                let cmd = self.read_command_name();
+                if matches!(cmd, "text" | "operatorname") {
+                    self.skip_ws();
+                    if self.peek_char() == Some('{') {
+                        self.read_braced()?;
+                    }
+                } else if cmd == "left" {
+                    depth += 1;
+                } else if cmd == "right" {
+                    depth -= 1;
+                    if depth == 0 {
+                        let body = &self.src[body_start..cmd_start];
+                        let delim2 = self.read_delim()?;
+                        let rewritten_body = rewrite_script_pairs(body, self.marker, self.nodes)?;
+                        return Ok(format!("\\left{delim1}{rewritten_body}\\right{delim2}"));
+                    }
+                }
+            } else {
+                self.next();
+            }
+        }
+        Err(error("unclosed \\left delimiter"))
+    }
+
+    fn read_begin_end(&mut self, env: &str) -> Result<String> {
+        let body_start = self.pos;
+        let mut level = 1usize;
+        while self.pos < self.src.len() {
+            if self.src[self.pos..].starts_with('\\') {
+                let cmd_start = self.pos;
+                let cmd = self.read_command_name();
+                if matches!(cmd, "text" | "operatorname") {
+                    self.skip_ws();
+                    if self.peek_char() == Some('{') {
+                        self.read_braced()?;
+                    }
+                } else if matches!(cmd, "begin" | "end") {
+                    self.skip_ws();
+                    if self.peek_char() == Some('{') {
+                        let name = self.read_braced()?;
+                        if name == env {
+                            if cmd == "begin" {
+                                level += 1;
+                            } else {
+                                level -= 1;
+                                if level == 0 {
+                                    let body = &self.src[body_start..cmd_start];
+                                    let rewritten_body =
+                                        rewrite_script_pairs(body, self.marker, self.nodes)?;
+                                    return Ok(format!(
+                                        "\\begin{{{env}}}{rewritten_body}\\end{{{env}}}"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.next();
+            }
+        }
+        Err(error(format!("unclosed {env} environment")))
+    }
+
+    fn read_atom(&mut self) -> Result<Option<String>> {
+        let Some(ch) = self.peek_char() else {
+            return Ok(None);
+        };
+        if matches!(ch, '_' | '^' | '}' | '&') {
+            return Ok(None);
+        }
+        if ch == '{' {
+            let inner = self.read_braced()?;
+            let rewritten = rewrite_script_pairs(inner, self.marker, self.nodes)?;
+            return Ok(Some(format!("{{{rewritten}}}")));
+        }
+        if ch == '\\' {
+            let start = self.pos;
+            let cmd = self.read_command_name();
+            let raw = &self.src[start..self.pos];
+            return match cmd {
+                "text" | "operatorname" => {
+                    let ws_start = self.pos;
+                    self.skip_ws();
+                    let ws = &self.src[ws_start..self.pos];
+                    if self.peek_char() == Some('{') {
+                        let inner = self.read_braced()?;
+                        Ok(Some(format!("{raw}{ws}{{{inner}}}")))
+                    } else {
+                        Ok(Some(format!("{raw}{ws}")))
+                    }
+                }
+                "left" => {
+                    let delim1 = self.read_delim()?;
+                    Ok(Some(self.read_left_right(delim1)?))
+                }
+                "right" => {
+                    let delim = self.read_delim()?;
+                    Ok(Some(format!("{raw}{delim}")))
+                }
+                "begin" => {
+                    let ws_start = self.pos;
+                    self.skip_ws();
+                    let ws = &self.src[ws_start..self.pos];
+                    if self.peek_char() == Some('{') {
+                        let env = self.read_braced()?;
+                        let mut out = String::from(raw);
+                        out.push_str(ws);
+                        let body_and_end = self.read_begin_end(env)?;
+                        // read_begin_end returns `\begin{env}...\end{env}`; replace prefix with preserved ws
+                        if let Some(rest) = body_and_end.strip_prefix("\\begin") {
+                            out.push_str(rest);
+                            Ok(Some(out))
+                        } else {
+                            Ok(Some(body_and_end))
+                        }
+                    } else {
+                        Ok(Some(format!("{raw}{ws}")))
+                    }
+                }
+                "sqrt" => {
+                    let mut out = String::from(raw);
+                    let ws_pos = self.pos;
+                    self.skip_ws();
+                    if self.peek_char() == Some('[') {
+                        out.push_str(&self.src[ws_pos..self.pos]);
+                        self.next(); // '['
+                        let deg_start = self.pos;
+                        let mut brace_level = 0usize;
+                        let mut found = false;
+                        while let Some(c) = self.next() {
+                            match c {
+                                '\\' => {
+                                    self.next();
+                                }
+                                '{' => brace_level += 1,
+                                '}' => brace_level = brace_level.saturating_sub(1),
+                                ']' if brace_level == 0 => {
+                                    let deg = &self.src[deg_start..self.pos - 1];
+                                    let rewritten_deg =
+                                        rewrite_script_pairs(deg, self.marker, self.nodes)?;
+                                    out.push('[');
+                                    out.push_str(&rewritten_deg);
+                                    out.push(']');
+                                    found = true;
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if !found {
+                            return Err(error("unclosed root degree"));
+                        }
+                    } else {
+                        self.pos = ws_pos;
+                    }
+                    out.push_str(&self.read_tex_arg()?);
+                    Ok(Some(out))
+                }
+                "frac" | "binom" | "dbinom" | "tbinom" | "overset" | "underset" => {
+                    let a = self.read_tex_arg()?;
+                    let b = self.read_tex_arg()?;
+                    Ok(Some(format!("{raw}{a}{b}")))
+                }
+                "mathrm" | "mathit" | "mathbf" | "mathbb" | "mathfrak" | "mathscr" | "mathsf"
+                | "texttt" | "textit" | "textbf" | "bm" | "symbf" | "boldsymbol" | "underline"
+                | "overline" | "slashed" => {
+                    let a = self.read_tex_arg()?;
+                    Ok(Some(format!("{raw}{a}")))
+                }
+                "bigl" | "bigr" | "Bigl" | "Bigr" | "biggl" | "biggr" | "Biggl" | "Biggr" => {
+                    let delim = self.read_delim()?;
+                    Ok(Some(format!("{raw}{delim}")))
+                }
+                _ => Ok(Some(raw.to_string())),
+            };
+        }
+        if ch.is_ascii_digit() {
+            let start = self.pos;
+            let mut has_period = false;
+            while let Some(c) = self.peek_char() {
+                if c.is_ascii_digit() {
+                    self.next();
+                } else if c == '.' && !has_period {
+                    has_period = true;
+                    self.next();
+                } else {
+                    break;
+                }
+            }
+            return Ok(Some(self.src[start..self.pos].to_string()));
+        }
+        if self.src[self.pos..].starts_with(":=") {
+            self.pos += 2;
+            return Ok(Some(":=".to_string()));
+        }
+        self.next();
+        Ok(Some(ch.to_string()))
+    }
+
+    fn rewrite(&mut self) -> Result<String> {
+        let mut out = String::with_capacity(self.src.len());
+        while self.pos < self.src.len() {
+            let ws_start = self.pos;
+            self.skip_ws();
+            out.push_str(&self.src[ws_start..self.pos]);
+            if self.pos >= self.src.len() {
+                break;
+            }
+            let Some(mut atom) = self.read_atom()? else {
+                let ch = self.next().unwrap();
+                out.push(ch);
+                continue;
+            };
+            if atom != "'" {
+                let save_prime = self.pos;
+                self.skip_ws();
+                if self.peek_char() == Some('\'') {
+                    self.next();
+                    let after_prime = self.pos;
+                    self.skip_ws();
+                    if matches!(self.peek_char(), Some('_') | Some('^')) {
+                        atom.push('\'');
+                        self.pos = after_prime;
+                    } else {
+                        self.pos = save_prime;
+                    }
+                } else {
+                    self.pos = save_prime;
+                }
+            }
+            loop {
+                let save = self.pos;
+                self.skip_ws();
+                if matches!(self.peek_char(), Some('_') | Some('^')) {
+                    let op1 = self.next().unwrap();
+                    self.skip_ws();
+                    let Some(arg1) = self.read_atom()? else {
+                        self.pos = save;
+                        break;
+                    };
+                    let after_arg1 = self.pos;
+                    self.skip_ws();
+                    if let Some(_op2) = self
+                        .peek_char()
+                        .filter(|&c| (op1 == '_' && c == '^') || (op1 == '^' && c == '_'))
+                    {
+                        self.next();
+                        self.skip_ws();
+                        if let Some(arg2) = self.read_atom()? {
+                            let (sub_src, sup_src) = if op1 == '_' {
+                                (arg1, arg2)
+                            } else {
+                                (arg2, arg1)
+                            };
+                            let base_node = parse_fragment(&atom, self.marker, self.nodes)?;
+                            let sub_node = parse_fragment(&sub_src, self.marker, self.nodes)?;
+                            let sup_node = parse_fragment(&sup_src, self.marker, self.nodes)?;
+                            let msubsup = MathNode::with_children(
+                                "msubsup",
+                                vec![base_node, sub_node, sup_node],
+                            );
+                            let idx = self.nodes.len();
+                            self.nodes.push(msubsup);
+                            atom = format!("\\text{{{}{}}}", self.marker, encode_marker_index(idx));
+                            continue;
+                        }
+                    }
+                    self.pos = after_arg1;
+                    atom = format!("{atom}{op1}{arg1}");
+                    break;
+                } else {
+                    self.pos = save;
+                    break;
+                }
+            }
+            out.push_str(&atom);
+        }
+        Ok(out)
+    }
 }
 
 struct Scanner<'a> {
@@ -195,6 +589,20 @@ impl<'a> Scanner<'a> {
     }
     fn math_argument(&mut self) -> Result<MathNode> {
         let arg = self.argument()?;
+        let mut math = parse_at(arg, self.depth + 1)?;
+        if math.children.len() == 1 {
+            Ok(math.children.remove(0))
+        } else {
+            math.tag = "mrow".into();
+            math.attrs.clear();
+            Ok(math)
+        }
+    }
+    fn prescript_argument(&mut self) -> Result<MathNode> {
+        let arg = self.argument()?;
+        if arg.trim().is_empty() {
+            return Ok(MathNode::new("none"));
+        }
         let mut math = parse_at(arg, self.depth + 1)?;
         if math.children.len() == 1 {
             Ok(math.children.remove(0))
@@ -282,8 +690,8 @@ impl<'a> Scanner<'a> {
                 n
             }
             "prescript" => {
-                let sup = self.math_argument()?;
-                let sub = self.math_argument()?;
+                let sup = self.prescript_argument()?;
+                let sub = self.prescript_argument()?;
                 let base = self.math_argument()?;
                 MathNode::with_children(
                     "mmultiscripts",

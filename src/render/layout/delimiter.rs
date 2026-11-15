@@ -300,7 +300,7 @@ impl Layout {
                 w,
                 asc,
                 desc,
-                items: polys.into_iter().map(Item::Poly).collect(),
+                items: vec![Item::Contours(polys)],
             });
         }
 
@@ -386,7 +386,7 @@ impl Layout {
                 w,
                 asc,
                 desc,
-                items: polys.into_iter().map(Item::Poly).collect(),
+                items: vec![Item::Contours(polys)],
             });
         }
 
@@ -659,12 +659,20 @@ mod tests {
             assert_eq!(b_s.asc, asc_s);
             assert_eq!(b_s.desc, desc_s);
             if c != '[' && c != ']' {
-                assert_eq!(b_s.items.len(), usize::from(c == '‖') + 1);
+                assert_eq!(b_s.items.len(), 1);
             }
             assert!(
-                b_s.items.iter().all(|it| matches!(it, Item::Poly(_))),
-                "{c}: short should be Poly"
+                b_s.items
+                    .iter()
+                    .all(|it| matches!(it, Item::Poly(_) | Item::Contours(_))),
+                "{c}: short should be Poly or Contours"
             );
+            if c == '‖' {
+                assert!(matches!(
+                    b_s.items.first(),
+                    Some(Item::Contours(cs)) if cs.len() == 2
+                ));
+            }
 
             // Tall span (6em): Tier 3 assembly. Unclipped end/mid pieces stay Glyph,
             // while the last tiled extender is cut to fit and emitted as a Poly.
@@ -678,8 +686,10 @@ mod tests {
             assert_eq!(b_t.desc, desc_t);
             if c == '|' || c == '‖' {
                 assert!(
-                    b_t.items.iter().all(|it| matches!(it, Item::Poly(_))),
-                    "{c}: tall bar should be Poly"
+                    b_t.items
+                        .iter()
+                        .all(|it| matches!(it, Item::Poly(_) | Item::Contours(_))),
+                    "{c}: tall bar should be Poly or Contours"
                 );
             } else {
                 assert!(
@@ -778,8 +788,11 @@ mod tests {
         assert!(b.w > 0.4 * em);
         assert!(b.asc >= 1.5 * em);
         assert!(b.desc >= 1.2 * em);
-        // Verify bar poly and limits are present
-        assert!(b.items.iter().any(|it| matches!(it, Item::Poly(_))));
+        // Verify bar contours and limits are present
+        assert!(b
+            .items
+            .iter()
+            .any(|it| matches!(it, Item::Poly(_) | Item::Contours(_))));
         assert!(b
             .items
             .iter()

@@ -210,6 +210,26 @@ pub fn render_emf_with_mtef(
                 segs.push(Seg::Close);
                 fill(&mut out, &|o| write_segs(o, &segs, &l, [0, 0, wl, hl]));
             }
+            Item::Contours(contours) => {
+                let mut segs = Vec::new();
+                for pts in contours {
+                    if pts.len() < 3 {
+                        continue;
+                    }
+                    for (i, (x, y)) in pts.iter().enumerate() {
+                        let (x, y) = (ox + x, oy + y);
+                        segs.push(if i == 0 {
+                            Seg::Move(x, y)
+                        } else {
+                            Seg::Line(x, y)
+                        });
+                    }
+                    segs.push(Seg::Close);
+                }
+                if !segs.is_empty() {
+                    fill(&mut out, &|o| write_segs(o, &segs, &l, [0, 0, wl, hl]));
+                }
+            }
         }
     }
     out.record(EMR_EOF, &u32s(&[0, 16, 20])); // no palette; nSizeLast = this record's size
@@ -330,6 +350,65 @@ mod tests {
             preview.width_pt >= 7.0,
             "f glyph width_pt ({}) must accommodate overhang and padding (>= 7.0)",
             preview.width_pt
+        );
+    }
+
+    #[test]
+    fn test_render_emf_contours_single_filled_path() {
+        // Double arrow accent `⇔` has outer contour + hollow inner contour and must
+        // be emitted inside a single BEGINPATH..ENDPATH..FILLPATH under WINDING fill mode.
+        let mut mo = MathNode::leaf("mo", "⇔");
+        mo.set_attr("stretchy", "true");
+        let mut mover = MathNode::with_children("mover", vec![MathNode::leaf("mi", "x"), mo]);
+        mover.set_attr("accent", "true");
+        let math = MathNode::with_children("math", vec![mover]);
+        let preview = render_emf_with_mtef(&math, 14.0, None).expect("renders emf");
+
+        let mut records: Vec<(u32, Vec<u8>)> = Vec::new();
+        let mut pos = 0usize;
+        while pos + 8 <= preview.emf.len() {
+            let kind = u32::from_le_bytes(preview.emf[pos..pos + 4].try_into().unwrap());
+            let size =
+                u32::from_le_bytes(preview.emf[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            assert!(size >= 8 && pos + size <= preview.emf.len());
+            records.push((kind, preview.emf[pos + 8..pos + size].to_vec()));
+            pos += size;
+        }
+        assert_eq!(pos, preview.emf.len());
+        assert!(records.iter().any(|(k, b)| {
+            *k == EMR_SETPOLYFILLMODE
+                && b.len() >= 4
+                && u32::from_le_bytes(b[..4].try_into().unwrap()) == WINDING
+        }));
+
+        // Collect (EMR_MOVETOEX count, EMR_CLOSEFIGURE count) per FILLPATH group.
+        let mut path_figures = Vec::new();
+        let mut in_path = false;
+        let mut moves = 0usize;
+        let mut closes = 0usize;
+        for (kind, _) in &records {
+            match *kind {
+                EMR_BEGINPATH => {
+                    in_path = true;
+                    moves = 0;
+                    closes = 0;
+                }
+                EMR_MOVETOEX if in_path => moves += 1,
+                EMR_CLOSEFIGURE if in_path => closes += 1,
+                EMR_ENDPATH => {
+                    assert!(in_path);
+                    in_path = false;
+                }
+                EMR_FILLPATH => {
+                    path_figures.push((moves, closes));
+                }
+                _ => {}
+            }
+        }
+        // `x` is 1 figure; `⇔` is a compound Item::Contours with >= 2 figures in 1 path.
+        assert!(
+            path_figures.iter().any(|&(m, c)| m >= 2 && c >= 2),
+            "expected multi-contour ⇔ in a single EMF path, got {path_figures:?}"
         );
     }
 }

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use eqntide::catalog::{preview_template, template, ENTRIES, GROUPS};
 use eqntide::mtef::decode::mtef_to_mathml;
 use eqntide::mtef::encode::mathml_to_mtef_bytes;
 use eqntide::mtef::{build_mtef, make_equation_native};
@@ -10,6 +11,7 @@ use eqntide::render::emf::render_emf_with_mtef;
 use eqntide::render::render_preview;
 use eqntide::service::parse_latex_to_mathml;
 use eqntide::xml;
+use eqntide::MathNode;
 
 struct TestCase {
     slug: &'static str,
@@ -269,4 +271,144 @@ fn test_export_visual_layout_sheets() {
             preview.height_pt
         );
     }
+}
+
+#[test]
+fn test_export_all_catalog_pngs() {
+    fn fill_x(n: &mut MathNode) {
+        if matches!(n.tag.as_str(), "mrow" | "mtd") && n.children.is_empty() && n.text.is_empty() {
+            n.children.push(MathNode::leaf("mi", "x"));
+        }
+        for child in &mut n.children {
+            fill_x(child);
+        }
+    }
+    fn node_with_attr(tag: &str, k: &str, v: &str, children: Vec<MathNode>) -> MathNode {
+        let mut n = MathNode::with_children(tag, children);
+        n.set_attr(k, v);
+        n
+    }
+
+    let catalog_dir = Path::new("target/test_exports/catalog");
+    let items_dir = catalog_dir.join("items");
+    fs::create_dir_all(&items_dir).expect("create catalog/items dir");
+
+    let mut total = 0usize;
+    for (g_idx, (group_id, _group_label)) in GROUPS.iter().enumerate() {
+        let group_entries: Vec<_> = ENTRIES.iter().filter(|e| e.group == *group_id).collect();
+        let group_item_dir = items_dir.join(format!("{:02}_{group_id}", g_idx + 1));
+        fs::create_dir_all(&group_item_dir).expect("create group item dir");
+
+        let is_symbols_only = group_entries.iter().all(|e| !e.source.contains("#?"));
+        let cols = if is_symbols_only { 4usize } else { 2usize };
+        let per_page = if is_symbols_only { 24usize } else { 10usize };
+        let sheet_pt = if is_symbols_only { 10.0 } else { 8.0 };
+
+        for (page_idx, page_entries) in group_entries.chunks(per_page).enumerate() {
+            let mut rows: Vec<MathNode> = Vec::new();
+            for chunk in page_entries.chunks(cols) {
+                let mut cells: Vec<MathNode> = Vec::new();
+                for entry in chunk {
+                    let preview_math = preview_template(entry.source)
+                        .unwrap_or_else(|e| panic!("preview_template failed {}: {e}", entry.id));
+                    let preview_png = render_preview(&preview_math, 14.0)
+                        .unwrap_or_else(|e| panic!("render preview failed {}: {e}", entry.id));
+                    assert!(!preview_png.png.is_empty());
+
+                    let raw_node = template(entry.source)
+                        .unwrap_or_else(|e| panic!("template failed {}: {e}", entry.id));
+                    let raw_math = MathNode::with_children("math", vec![raw_node.clone()]);
+                    let raw_png = render_preview(&raw_math, 14.0)
+                        .unwrap_or_else(|e| panic!("render raw failed {}: {e}", entry.id));
+
+                    let mut filled_node = raw_node;
+                    fill_x(&mut filled_node);
+                    let filled_math = MathNode::with_children("math", vec![filled_node.clone()]);
+                    let filled_png = render_preview(&filled_math, 14.0)
+                        .unwrap_or_else(|e| panic!("render filled failed {}: {e}", entry.id));
+
+                    let safe_id: String = entry
+                        .id
+                        .chars()
+                        .map(|c| {
+                            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect();
+                    fs::write(
+                        group_item_dir.join(format!("{safe_id}__preview.png")),
+                        &preview_png.png,
+                    )
+                    .expect("write item preview png");
+                    if entry.source.contains("#?") {
+                        fs::write(
+                            group_item_dir.join(format!("{safe_id}__raw.png")),
+                            &raw_png.png,
+                        )
+                        .expect("write item raw png");
+                        fs::write(
+                            group_item_dir.join(format!("{safe_id}__filled.png")),
+                            &filled_png.png,
+                        )
+                        .expect("write item filled png");
+                    }
+
+                    let short_id = entry
+                        .id
+                        .strip_prefix("symbol-")
+                        .or_else(|| entry.id.strip_prefix(&format!("{group_id}-")))
+                        .unwrap_or(entry.id);
+                    let mut cell_children = vec![
+                        MathNode::leaf("mtext", &format!("[{short_id}]")),
+                        node_with_attr("mspace", "width", "0.30em", vec![]),
+                        node_with_attr("mstyle", "displaystyle", "true", preview_math.children),
+                    ];
+                    if entry.source.contains("#?") {
+                        cell_children.push(node_with_attr("mspace", "width", "0.35em", vec![]));
+                        cell_children.push(node_with_attr(
+                            "mstyle",
+                            "displaystyle",
+                            "true",
+                            vec![filled_node],
+                        ));
+                    }
+                    let td = node_with_attr(
+                        "mtd",
+                        "columnalign",
+                        "left",
+                        vec![MathNode::with_children("mrow", cell_children)],
+                    );
+                    cells.push(td);
+                    total += 1;
+                }
+                rows.push(MathNode::with_children("mtr", cells));
+            }
+
+            let sheet_math =
+                MathNode::with_children("math", vec![MathNode::with_children("mtable", rows)]);
+            let sheet_png = render_preview(&sheet_math, sheet_pt).unwrap_or_else(|e| {
+                panic!("render sheet failed {group_id} p{}: {e}", page_idx + 1)
+            });
+            let sheet_path = if group_entries.len() > per_page {
+                catalog_dir.join(format!("{:02}_{group_id}_p{}.png", g_idx + 1, page_idx + 1))
+            } else {
+                catalog_dir.join(format!("{:02}_{group_id}.png", g_idx + 1))
+            };
+            fs::write(&sheet_path, &sheet_png.png).expect("write group sheet png");
+            println!(
+                "[OK] {}: {} entries ({:.1}x{:.1} pt)",
+                sheet_path.file_name().unwrap().to_string_lossy(),
+                page_entries.len(),
+                sheet_png.width_pt,
+                sheet_png.height_pt
+            );
+        }
+    }
+    println!(
+        "[OK] Exported {total} catalog entries across {} groups",
+        GROUPS.len()
+    );
 }

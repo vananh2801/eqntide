@@ -7,14 +7,22 @@ impl Layout {
         let notation = n.attr("notation").unwrap_or("box");
         let has = |part: &str| notation.split_whitespace().any(|s| s == part);
         let boxed = has("box") || has("roundedbox");
-        let pad = if boxed || has("longdiv") || has("actuarial") || has("left") || has("right") {
+        let pad_left = if has("longdiv") {
+            0.22 * em
+        } else if boxed || has("actuarial") || has("left") || has("right") {
             0.15 * em
         } else {
             0.07 * em
         };
+        let pad_right =
+            if boxed || has("longdiv") || has("actuarial") || has("left") || has("right") {
+                0.15 * em
+            } else {
+                0.07 * em
+            };
         let mut b = LBox::default();
-        b.place(&body, pad, 0.0);
-        let w = body.w + 2.0 * pad;
+        b.place(&body, pad_left, 0.0);
+        let w = body.w + pad_left + pad_right;
         let top = -body.asc - 0.12 * em;
         let bottom = body.desc + 0.12 * em;
         let st = 0.045 * em;

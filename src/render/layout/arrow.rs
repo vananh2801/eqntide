@@ -158,13 +158,15 @@ impl Layout {
                     arrow_bot_y = y_hi;
                     b.asc = b.asc.max(-y_lo);
                     b.desc = b.desc.max(y_hi);
-                    b.items.extend(natural.into_iter().map(|p| {
-                        Item::Poly(
+                    let contours: Vec<Vec<(f32, f32)>> = natural
+                        .into_iter()
+                        .map(|p| {
                             p.into_iter()
                                 .map(|(x, y)| ((x - lo) * len / (hi - lo), y))
-                                .collect(),
-                        )
-                    }));
+                                .collect()
+                        })
+                        .collect();
+                    b.items.push(Item::Contours(contours));
                 }
             }
             ArrowDir::Right => {
@@ -347,7 +349,8 @@ mod tests {
 
         // Render preview images for visual inspection
         let math_full = MathNode::parse(
-            "<math><mtable><mtr><mtd><mi>A</mi><mover><mo>→</mo><mi>yields</mi></mover><mi>B</mi></mtd></mtr><mtr><mtd><mi>A</mi><munder><mo>↔</mo><mi>x</mi></munder><mi>B</mi></mtd></mtr></mtable></math>"
+            "<math><mtable><mtr><mtd><mi>A</mi><mover><mo>→</mo><mi>yields</mi></mover><mi>B</mi></mtd></mtr>\
+            <mtr><mtd><mi>A</mi><munder><mo>↔</mo><mi>x</mi></munder><mi>B</mi></mtd></mtr></mtable></math>"
         ).unwrap();
         let preview = crate::render::render_preview(&math_full, 12.0).unwrap();
         assert!(!preview.png.is_empty(), "preview PNG must not be empty");
@@ -373,6 +376,14 @@ mod tests {
                     for &(_, y) in pts {
                         arrow_top = arrow_top.min(y);
                         arrow_bot = arrow_bot.max(y);
+                    }
+                }
+                Item::Contours(cs) => {
+                    for pts in cs {
+                        for &(_, y) in pts {
+                            arrow_top = arrow_top.min(y);
+                            arrow_bot = arrow_bot.max(y);
+                        }
                     }
                 }
                 Item::Glyph { ch: 'f', y, .. } => top_label_y = Some(*y),

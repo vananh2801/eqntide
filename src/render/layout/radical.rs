@@ -60,8 +60,8 @@ impl Layout {
                 let t_x = x_rad + (x_max as f32 / upem * em);
 
                 let polys = self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base);
-                for p in polys {
-                    b.items.push(Item::Poly(p));
+                if !polys.is_empty() {
+                    b.items.push(Item::Contours(polys));
                 }
 
                 let r_bot_y = r_top_y + glyph_h;
@@ -110,11 +110,11 @@ impl Layout {
 
                     // Place top part so its tip is at r_top_y
                     let y_top_base = r_top_y + (top_y_max as f32 / upem * em);
-                    for p in self
-                        .f
-                        .math_glyph_polys(top.glyph_id, em, em, x_rad, y_top_base)
-                    {
-                        b.items.push(Item::Poly(p));
+                    let top_polys =
+                        self.f
+                            .math_glyph_polys(top.glyph_id, em, em, x_rad, y_top_base);
+                    if !top_polys.is_empty() {
+                        b.items.push(Item::Contours(top_polys));
                     }
 
                     // Place k extenders below top part
@@ -125,11 +125,11 @@ impl Layout {
                     let mut current_y_base = y_top_base;
                     for _ in 0..k {
                         current_y_base += (ext_y_max as f32 - o) / upem * em;
-                        for p in
+                        let ext_polys =
                             self.f
-                                .math_glyph_polys(ext.glyph_id, em, em, x_rad, current_y_base)
-                        {
-                            b.items.push(Item::Poly(p));
+                                .math_glyph_polys(ext.glyph_id, em, em, x_rad, current_y_base);
+                        if !ext_polys.is_empty() {
+                            b.items.push(Item::Contours(ext_polys));
                         }
                     }
 
@@ -139,11 +139,11 @@ impl Layout {
                         .math_glyph_bbox(bot.glyph_id)
                         .unwrap_or((86, -5, 916, 1899));
                     let y_bot_base = current_y_base + (bot_y_max as f32 - o) / upem * em;
-                    for p in self
-                        .f
-                        .math_glyph_polys(bot.glyph_id, em, em, x_rad, y_bot_base)
-                    {
-                        b.items.push(Item::Poly(p));
+                    let bot_polys =
+                        self.f
+                            .math_glyph_polys(bot.glyph_id, em, em, x_rad, y_bot_base);
+                    if !bot_polys.is_empty() {
+                        b.items.push(Item::Contours(bot_polys));
                     }
 
                     let r_bot_y = r_top_y + glyph_h;
@@ -159,8 +159,9 @@ impl Layout {
                     let r_top_y = -(c.asc + gap + thick);
                     let y_base = r_top_y + (y_max as f32 / upem * em);
                     let t_x = x_rad + (x_max as f32 / upem * em);
-                    for p in self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base) {
-                        b.items.push(Item::Poly(p));
+                    let polys = self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base);
+                    if !polys.is_empty() {
+                        b.items.push(Item::Contours(polys));
                     }
                     (t_x, r_top_y, r_top_y + glyph_h, y_base)
                 }
@@ -175,8 +176,9 @@ impl Layout {
                 let r_top_y = -(c.asc + gap + thick);
                 let y_base = r_top_y + (y_max as f32 / upem * em);
                 let t_x = x_rad + (x_max as f32 / upem * em);
-                for p in self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base) {
-                    b.items.push(Item::Poly(p));
+                let polys = self.f.math_glyph_polys(variant_gid, em, em, x_rad, y_base);
+                if !polys.is_empty() {
+                    b.items.push(Item::Contours(polys));
                 }
                 (t_x, r_top_y, r_top_y + glyph_h, y_base)
             };

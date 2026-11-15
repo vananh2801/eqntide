@@ -28,6 +28,31 @@ impl Layout {
             if delimiter::is_eval_bar_base(base_node) {
                 return self.evaluation_bar(sub_n, sup_n, 0.85 * em, 0.65 * em, em, ctx);
             }
+            if base_node.tag == "mrow" && base_node.children.len() >= 2 {
+                let first = &base_node.children[0];
+                let last = &base_node.children[base_node.children.len() - 1];
+                if first.tag == "mo"
+                    && first.text.trim().is_empty()
+                    && delimiter::is_eval_bar_base(last)
+                {
+                    let inner_nodes = &base_node.children[1..base_node.children.len() - 1];
+                    let inner = self.row(inner_nodes, em, ctx)?;
+                    let h2 = (inner.asc - AXIS * em)
+                        .max(inner.desc + AXIS * em)
+                        .max(0.675 * em);
+                    let bar_asc = AXIS * em + h2;
+                    let bar_desc = h2 - AXIS * em;
+                    let mut eval_box =
+                        self.evaluation_bar(sub_n, sup_n, bar_asc, bar_desc, em, ctx)?;
+                    eval_box.mark(last);
+                    let mut b = LBox::default();
+                    b.place(&inner, 0.0, 0.0);
+                    let gap = if inner.w > 0.0 { 0.06 * em } else { 0.0 };
+                    b.place(&eval_box, inner.w + gap, 0.0);
+                    b.w = inner.w + gap + eval_box.w;
+                    return Ok(b);
+                }
+            }
         }
 
         let base = match n.children.first() {
@@ -510,5 +535,48 @@ mod tests {
             .unwrap();
 
         assert!(sup_y_cramped > sup_y_normal, "In cramped style, superscript y-coordinate must be lower (shifted down) than in un-cramped style");
+    }
+
+    #[test]
+    fn test_evaluation_bar_with_fenced_base_scales_to_inner_height() {
+        let math_short =
+            crate::service::parse_latex_to_mathml(r"\left. x \right|_{0}^{1}").unwrap();
+        let math_tall =
+            crate::service::parse_latex_to_mathml(r"\left. \frac{1}{2} \right|_{0}^{1}").unwrap();
+        let (box_short, _) = layout_math(&math_short, 14.0).unwrap();
+        let (box_tall, _) = layout_math(&math_tall, 14.0).unwrap();
+
+        let (min_y_short, max_y_short) = (
+            -box_short.ink_bounds(fonts()).2,
+            box_short.ink_bounds(fonts()).3,
+        );
+        let (min_y_tall, max_y_tall) = (
+            -box_tall.ink_bounds(fonts()).2,
+            box_tall.ink_bounds(fonts()).3,
+        );
+        assert!(
+            min_y_tall + max_y_tall > min_y_short + max_y_short + 20.0,
+            "Evaluation bar for \\frac{{1}}{{2}} ({:.1}) must stretch taller than for x ({:.1})",
+            min_y_tall + max_y_tall,
+            min_y_short + max_y_short
+        );
+        // Inner `x` must appear to the left of the bar and limits (`0`, `1`).
+        let x_pos = box_short
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Glyph { ch: 'x', x, .. } => Some(*x),
+                _ => None,
+            })
+            .unwrap();
+        let lim_x = box_short
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Glyph { ch: '0', x, .. } => Some(*x),
+                _ => None,
+            })
+            .unwrap();
+        assert!(lim_x > x_pos + 10.0);
     }
 }

@@ -41,10 +41,16 @@ impl Layout {
     /// Draw a horizontal brace under a base whose descent is `base_desc`.
     pub(super) fn draw_under_brace(&self, b: &mut LBox, w: f32, base_desc: f32, em: f32) {
         let y0 = base_desc + 0.06 * em;
-        let pts = brace_h(w, y0, 0.2 * em, true);
+        let span = w.max(0.55 * em);
+        let bx0 = (w - span) / 2.0;
+        let depth = (span * 0.28).clamp(0.12 * em, 0.20 * em);
+        let pts: Vec<(f32, f32)> = brace_h(span, y0, depth, true)
+            .into_iter()
+            .map(|(x, y)| (x + bx0, y))
+            .collect();
         for q in stroke(&pts, 0.045 * em) {
             b.items.push(Item::Poly(q));
         }
-        b.desc = b.desc.max(y0 + 0.2 * em + 0.04 * em);
+        b.desc = b.desc.max(y0 + depth + 0.04 * em);
     }
 }

@@ -398,13 +398,21 @@ mod tests {
             let omml = mathml_to_omml_xml(&math).unwrap();
             assert!(omml.contains("undOvr"), "{source}");
         }
-        for source in ["x_a", "x^b", "x_a^b"] {
+        for source in ["x_a", "x^b"] {
             let original =
                 latex2mathml::latex_to_mathml(source, latex2mathml::DisplayStyle::Inline).unwrap();
             assert_eq!(
                 parse_latex_to_mathml(source).unwrap(),
                 MathNode::parse(&original).unwrap()
             );
+        }
+        for source in ["x_a^b", "x^b_a"] {
+            let math = parse_latex_to_mathml(source).unwrap();
+            let subsup = &math.children[0];
+            assert_eq!(subsup.tag, "msubsup", "{source}: {}", math.to_xml());
+            assert_eq!(subsup.children[0].text, "x");
+            assert_eq!(subsup.children[1].text, "a");
+            assert_eq!(subsup.children[2].text, "b");
         }
     }
     #[test]
@@ -413,5 +421,47 @@ mod tests {
         let math = decode_input_to_mathml(xml, "mathml").unwrap();
         assert_eq!(math, MathNode::parse(xml).unwrap());
         assert!(mathml_to_omml_xml(&math).unwrap().contains("subSup"));
+    }
+
+    #[test]
+    fn prescript_empty_slot_renders_none_without_placeholder() {
+        let math = parse_latex_to_mathml(r"\prescript{\prime}{}{x}").unwrap();
+        let mm = math
+            .iter()
+            .into_iter()
+            .find(|n| n.tag == "mmultiscripts")
+            .unwrap();
+        // mmultiscripts children: [base, mprescripts, sub (none), sup (prime)]
+        assert_eq!(mm.children.len(), 4, "{}", math.to_xml());
+        assert_eq!(mm.children[1].tag, "mprescripts");
+        assert_eq!(mm.children[2].tag, "none", "{}", math.to_xml());
+        assert_eq!(mm.children[0].text, "x");
+    }
+
+    #[test]
+    fn compound_bases_with_script_pairs_parse_to_msubsup_and_roundtrip() {
+        for source in [
+            r"f'_0^1",
+            r"\sqrt{x_a^b}_0^1",
+            r"\left. x \right|_{0}^{1}",
+            r"\left. \frac{1}{2} \right|_{0}^{1}",
+        ] {
+            let math = parse_latex_to_mathml(source).unwrap();
+            assert!(
+                math.iter().into_iter().any(|n| n.tag == "msubsup"),
+                "{source}: {}",
+                math.to_xml()
+            );
+            let omml = mathml_to_omml_xml(&math).unwrap();
+            assert!(!omml.is_empty(), "{source}");
+            let mtef = mathml_to_mtef_bytes(&math).unwrap();
+            assert!(!mtef.is_empty(), "{source}");
+            let back = parse_latex_to_mathml(&math.to_latex()).unwrap();
+            assert!(
+                back.iter().into_iter().any(|n| n.tag == "msubsup"),
+                "{source} roundtrip: {}",
+                back.to_xml()
+            );
+        }
     }
 }

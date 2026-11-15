@@ -18,8 +18,11 @@ pub(crate) enum Item {
         y: f32,
         ssty: u8,
     },
-    /// A filled polygon (rules, radical strokes, brace outlines, …).
+    /// A single filled polygon (rules, brace outlines, clipped pieces, …).
     Poly(Vec<(f32, f32)>),
+    /// Multiple contours forming one compound shape (e.g. a glyph outline with inner holes).
+    /// Relative contour winding is preserved so holes stay hollow under nonzero fill.
+    Contours(Vec<Vec<(f32, f32)>>),
 }
 
 /// A laid-out box: width, ascent, descent and the items to draw.
@@ -94,6 +97,11 @@ impl LBox {
                     ssty: *ssty,
                 },
                 Item::Poly(p) => Item::Poly(p.iter().map(|(x, y)| (x + dx, y + dy)).collect()),
+                Item::Contours(cs) => Item::Contours(
+                    cs.iter()
+                        .map(|p| p.iter().map(|(x, y)| (x + dx, y + dy)).collect())
+                        .collect(),
+                ),
             });
         }
         self.asc = self.asc.max(o.asc - dy);
@@ -136,6 +144,16 @@ impl LBox {
                         max_x = max_x.max(*px);
                         min_y = min_y.min(*py);
                         max_y = max_y.max(*py);
+                    }
+                }
+                Item::Contours(cs) => {
+                    for pts in cs {
+                        for (px, py) in pts {
+                            min_x = min_x.min(*px);
+                            max_x = max_x.max(*px);
+                            min_y = min_y.min(*py);
+                            max_y = max_y.max(*py);
+                        }
                     }
                 }
             }
