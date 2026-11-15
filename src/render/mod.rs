@@ -11,12 +11,14 @@
 //! * [`canvas`] – coverage canvas the glyphs are drawn onto
 //! * [`emf`]    – the same picture as vector EMF (what Word/WPS prefer for OLE previews)
 //! * [`png`]    – PNG encoder for the alpha mask
+//! * [`svg`]    – vector SVG export
 
 pub mod canvas;
 pub mod emf;
 pub mod font;
 pub(crate) mod layout;
 pub mod png;
+pub mod svg;
 
 use ab_glyph_rasterizer::{point, Rasterizer};
 
@@ -58,6 +60,74 @@ pub fn render_preview(math: &MathNode, font_pt: f32) -> Result<Preview> {
     rasterize(&b, em)
 }
 
+/// Coverage alpha mask rasterized directly at an exact pixel budget.
+#[derive(Debug, Clone)]
+pub struct AlphaMask {
+    pub width: u32,
+    pub height: u32,
+    pub alpha: Vec<u8>,
+}
+
+/// Lay out `math` at standard proportions and scale its vector geometry directly
+/// to fit `(max_w_px, max_h_px)` in exact device pixels (1 texel = 1 pixel).
+pub fn render_alpha_fit(math: &MathNode, max_w_px: f32, max_h_px: f32) -> Result<AlphaMask> {
+    let (mut b, em) = layout::layout_math(math, 12.0)?;
+    let f = fonts();
+    let (min_x, max_x, min_y, max_y) = b.ink_bounds(f);
+    let asc = (-min_y).max(0.70 * em);
+    let desc = max_y.max(0.22 * em);
+    let left_extra = (-min_x).max(0.0);
+    let right_extra = (max_x - b.w).max(0.0);
+    let box_w = (b.w + left_extra + right_extra).max(1.0);
+    let box_h = (asc + desc).max(1.0);
+    let pad = 1.0f32;
+    let avail_w = (max_w_px - 2.0 * pad - 0.01).max(1.0);
+    let avail_h = (max_h_px - 2.0 * pad - 0.01).max(1.0);
+    let scale = (avail_w / box_w).min(avail_h / box_h);
+
+    b.w *= scale;
+    b.asc *= scale;
+    b.desc *= scale;
+    for it in &mut b.items {
+        match it {
+            Item::Glyph { em, x, y, .. } => {
+                *em *= scale;
+                *x *= scale;
+                *y *= scale;
+            }
+            Item::Poly(pts) => {
+                for (x, y) in pts {
+                    *x *= scale;
+                    *y *= scale;
+                }
+            }
+            Item::Contours(cs) => {
+                for pts in cs {
+                    for (x, y) in pts {
+                        *x *= scale;
+                        *y *= scale;
+                    }
+                }
+            }
+        }
+    }
+
+    let (w_px, h_px, alpha) = rasterize_alpha(
+        &b,
+        pad,
+        pad,
+        left_extra * scale,
+        right_extra * scale,
+        asc * scale,
+        desc * scale,
+    )?;
+    Ok(AlphaMask {
+        width: w_px as u32,
+        height: h_px as u32,
+        alpha,
+    })
+}
+
 fn signed_area(pts: &[(f32, f32)]) -> f32 {
     (0..pts.len())
         .map(|i| {
@@ -75,6 +145,27 @@ fn rasterize(b: &layout::LBox, em: f32) -> Result<Preview> {
     let left_extra = (-min_x).max(0.0);
     let right_extra = (max_x - b.w).max(0.0);
     let (pad_x, pad_y) = (2.0f32, 2.0f32);
+    let (w_px, h_px, alpha) =
+        rasterize_alpha(b, pad_x, pad_y, left_extra, right_extra, asc, desc)?;
+    let ppm = (PX_PER_PT * 72.0 / 0.0254).round() as u32;
+    Ok(Preview {
+        png: png::encode_alpha(w_px as u32, h_px as u32, &alpha, ppm),
+        width_pt: w_px as f32 / PX_PER_PT,
+        height_pt: h_px as f32 / PX_PER_PT,
+        depth_pt: (desc + pad_y) / PX_PER_PT,
+    })
+}
+
+fn rasterize_alpha(
+    b: &layout::LBox,
+    pad_x: f32,
+    pad_y: f32,
+    left_extra: f32,
+    right_extra: f32,
+    asc: f32,
+    desc: f32,
+) -> Result<(usize, usize, Vec<u8>)> {
+    let f = fonts();
     let w_px = (b.w + left_extra + right_extra + 2.0 * pad_x)
         .ceil()
         .max(1.0) as usize;
@@ -155,13 +246,7 @@ fn rasterize(b: &layout::LBox, em: f32) -> Result<Preview> {
     });
 
     let alpha: Vec<u8> = canvas.cov.iter().map(|c| (c * 255.0 + 0.5) as u8).collect();
-    let ppm = (PX_PER_PT * 72.0 / 0.0254).round() as u32;
-    Ok(Preview {
-        png: png::encode_alpha(w_px as u32, h_px as u32, &alpha, ppm),
-        width_pt: w_px as f32 / PX_PER_PT,
-        height_pt: h_px as f32 / PX_PER_PT,
-        depth_pt: (desc + pad_y) / PX_PER_PT,
-    })
+    Ok((w_px, h_px, alpha))
 }
 
 /// Region in typographic points, relative to the preview image's top-left.

@@ -84,7 +84,8 @@ pub use omml::decode::omml_to_mathml;
 pub use omml::encode::{apply_math_font, mathml_to_omml, mathml_to_omml_xml};
 pub use omml::{check_omml_unsupported, check_omml_unsupported_latex};
 pub use render::emf::{render_emf, render_emf_with_mtef};
-pub use render::{render_preview, Preview};
+pub use render::svg::{render_svg, SvgPreview};
+pub use render::{render_alpha_fit, render_preview, AlphaMask, Preview};
 
 /// Convenience helper: convert a MathType OLE `.bin` payload directly to an `<m:oMath>` XML string.
 pub fn ole_to_omml_xml(ole_data: &[u8]) -> Result<String> {
