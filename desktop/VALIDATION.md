@@ -6,6 +6,34 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
 
 ## Automated coverage
 
+- Canvas command completion covers typed `\lim_{x\rightarrow+\infty}`,
+  nested fraction/root arguments, keyboard selection and mouse acceptance of
+  the real popup. `\dfrac` completion inserts editable fraction slots; Toggle
+  tests cover bare/delimited WPS detection and OMML/MathType conversion packages.
+  Checks cover source synchronization, one-step undo, imported
+  attributes, incomplete/unknown drafts, cancellation and save blocking.
+
+- Sketch-based layout: fixed footer/save and LaTeX visibility at 1040×560,
+  1100×650 and 1440×900 in light/dark themes for standalone/Office sessions.
+  Checks cover initial and settled layout, canvas/source overlap and aligned
+  horizontal edges. Templates reserve three rows at every size; format/font/undo/
+  redo controls and Save stay on one footer row at the window's enforced minimum.
+  Synthetic placeholder decoration uses the preview's geometry
+  without adding placeholder attributes to the editor's formula or exports.
+- Startup resize tests cover native geometry and Wayland's missing inner-rect
+  geometry, already-large/maximized windows and smaller monitors. All 49 Symbols
+  fit at the minimum width at 100–200% DPI; temporarily narrower viewports keep
+  at most three rows using horizontal overflow.
+- Canvas scrolling covers short/long/tall formulas and returning to a short
+  formula at 100%, 125%, 150% and 200% DPI. Content bounds exclude empty canvas
+  space to avoid rounding-induced horizontal overflow; corners match text inputs.
+- Invalid LaTeX retains an undimmed white canvas and reports its error only in
+  the bottom status bar. Sidebar Batch DOCX and its back button retain unsaved
+  equation/source contents.
+- Every visual palette thumbnail renders nonempty math from its insertion
+  template, including symbols and structural placeholders. Cached white alpha
+  masks are tinted with the current theme's text color.
+
 - Workspace engine/CLI tests, structured editor transactions, Unicode edits,
   template selection wrapping, scripts, fixed arity, matrix resizing, stable
   import attributes/unknown nodes, undo/redo, and import depth limits.
@@ -26,7 +54,7 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   session save, and unapplied LaTeX drafts have regression tests.
 - Duplicate Office opens are ignored during loading, active editing and queuing.
   Tests cover global Ctrl+S, source edits in the save frame, Office save/close,
-  and save-button visibility at 600×450 before and after scrolling the editor.
+  and save-button visibility at the minimum size, including Office save labels.
 - Unchanged equations close/switch without a confirmation dialog; edits, source
   drafts, font-size changes and running batches retain their confirmation.
 - Bridge session tests cover changing the output mode on insert and edit:

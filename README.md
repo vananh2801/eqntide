@@ -118,14 +118,43 @@ source of truth: opening and saving it does not round-trip through LaTeX.
 Unsupported elements are retained as atomic blocks. Typing in the LaTeX source
 updates the canvas automatically after a short pause (180 ms); no Apply button is
 needed. Source formatting and the text cursor stay intact. Invalid or incomplete
-LaTeX keeps the last valid formula visible and shows an inline error until
+LaTeX keeps the last valid formula visible and shows a status-bar error until
 the source is corrected. Each successful source update can be undone,
 including restoring the attributes of an imported equation. The shared LaTeX parser supports the existing palette, including cases and multiline tables;
 it is not a complete TeX engine, and invalid drafts leave the equation intact.
 Integral limits entered through LaTeX/palettes use the editor's above/below layout;
 imported Office `limLoc` settings retain their requested side or stacked placement.
 
-The fixed toolbar's **Lưu và trở về tài liệu (Ctrl+S)** button saves an Office
+The editor follows the system light/dark theme, with a white equation canvas.
+Choose a category in the left sidebar, then click a visual template above the
+canvas to insert it. Hover a template for its description and shortcut. The
+horizontal zoom control spans 150–400% and changes only the display. It sits
+beside Save in the fixed footer, on the same row as MathType/OMML, font size and
+undo/redo. The minimum window size is 1040×560 logical pixels to keep this row
+intact, including all current symbol buttons. The actual viewport is checked
+again after startup/DPI changes. The template panel always reserves three rows;
+if the compositor temporarily supplies a narrower window, the palette scrolls
+horizontally instead of wrapping into a fourth row.
+The source field remains below the canvas; invalid LaTeX keeps the canvas white
+and reports errors in the bottom status bar. Template/category lists scroll
+independently in small windows. Open Batch DOCX below the sidebar categories;
+its back button returns to the equation without losing edits. Empty editing slots
+use a light-blue rounded dashed outline. The canvas and source field share the
+same horizontal margins.
+
+Typing `\` in the canvas opens native LaTeX command suggestions at the caret.
+Use **↑/↓** to select, **Tab/Enter** or a click to insert, and **Esc** to cancel.
+A complete command also commits before a space or delimiter, so typing
+`\lim_{x\rightarrow+\infty}` builds real math rather than literal command names.
+Common symbols/functions and templates such as `\frac`, `\dfrac`, `\sqrt`, accents and
+matrices are supported. Braced fraction/root/script arguments navigate the
+structural slots; this is command entry, not a complete TeX engine.
+Unfinished/unknown commands stay in a separate draft and block saving until
+completed or canceled. Source-field edits and moving the canvas caret cancel
+that draft. Completing a command is one undo transaction and retains imported
+attributes in the rest of the equation.
+
+The fixed footer's **Lưu và trở về tài liệu (Ctrl+S)** button saves an Office
 session back to Word/WPS and closes the editor after handing off the result.
 **Ctrl+S** works from both the canvas and the LaTeX source field. Saving waits
 until the source is valid and its preview is up to date; failures retain the

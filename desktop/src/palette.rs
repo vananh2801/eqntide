@@ -1,5 +1,33 @@
 //! Native palette data ported from the existing desktop's complete button inventory.
 use eqntide::MathNode;
+pub const GROUPS: &[(&str, &str)] = &[
+    ("Fences", "Ngoặc"),
+    ("Fractions", "Phân số & căn"),
+    ("Scripts", "Chỉ số & dấu"),
+    ("Integrals", "Tích phân & tổng"),
+    ("Matrices", "Ma trận"),
+    ("Symbols", "Ký hiệu"),
+];
+
+/// Use the insertion template itself, with empty slots made visible for thumbnails.
+pub fn preview_template(source: &str) -> Result<MathNode, String> {
+    fn fill(node: &mut MathNode) {
+        if node.children.is_empty()
+            && node.text.is_empty()
+            && matches!(node.tag.as_str(), "math" | "mrow" | "mtd")
+        {
+            node.children.push(MathNode::leaf("mi", "□"));
+        } else {
+            for child in &mut node.children {
+                fill(child);
+            }
+        }
+    }
+    let mut math = template(source)?;
+    fill(&mut math);
+    Ok(MathNode::with_children("math", vec![math]))
+}
+
 pub const PALETTE: &[(&str, &str, &str)] = &[
     (
         "Fractions",
@@ -257,6 +285,22 @@ mod tests {
             .collect();
         assert!(errors.is_empty(), "{}", errors.join("\n"));
     }
+    #[test]
+    fn every_thumbnail_contains_visible_math_inside_a_math_root() {
+        for (_, label, source) in PALETTE {
+            let math = preview_template(source).unwrap();
+            assert_eq!(math.tag, "math", "{label}");
+            let preview = eqntide::render::render_preview(&math, 12.0).unwrap();
+            let pixels = image::load_from_memory(&preview.png).unwrap().to_rgba8();
+            assert!(
+                pixels.pixels().any(|p| p.0[3] > 0),
+                "empty thumbnail: {label}"
+            );
+        }
+        let fraction = preview_template("\\frac{#?}{#?}").unwrap();
+        assert_eq!(fraction.children[0].tag, "mfrac");
+    }
+
     #[test]
     fn filled_palette_templates_render_and_export_to_office() {
         fn fill(n: &mut MathNode) {

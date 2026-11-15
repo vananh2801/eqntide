@@ -334,6 +334,27 @@ pub fn convert_snippet(
 mod tests {
     use super::*;
     #[test]
+    fn dfrac_converts_through_both_office_toggle_targets() {
+        for to in ["flat_opc_omml", "flat_opc_mathtype"] {
+            let response = convert_snippet(&ConvertSnippetRequest {
+                data: r"\dfrac{1}{2}".into(),
+                from: "latex".into(),
+                to: to.into(),
+                font_pt: 12.0,
+            })
+            .unwrap();
+            let recovered = flat_opc_to_mathml(&response.result).unwrap();
+            assert!(
+                recovered.iter().iter().any(|node| node.tag == "mfrac"),
+                "{to}"
+            );
+            if let Some(path) = response.emf_path {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn unknown_latex_commands_are_errors_instead_of_equation_text() {
         assert!(parse_latex_to_mathml(r"x+\thiscommanddoesnotexist{a}").is_err());
     }

@@ -1,5 +1,5 @@
 use crate::EventSender as Sender;
-use crate::{batch, instance::Instance, palette, runtime, Event, Rendered};
+use crate::{batch, commands, instance::Instance, palette, runtime, Event, Rendered};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use eqntide::{
     bridge::{DesktopWindowRequest, ServerHandle},
@@ -7,7 +7,7 @@ use eqntide::{
 };
 use eqntide_editor::{Caret, Editor, Move};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -16,6 +16,18 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+const CONTENT_PADDING: i8 = 10;
+const UI_CORNER_RADIUS: egui::CornerRadius = egui::CornerRadius::same(6);
+const FONT_SIZE_CONTROL_WIDTH: f32 = 96.0;
+const FOOTER_CONTROL_HEIGHT: f32 = 30.0;
+pub(crate) const MIN_WINDOW_SIZE: [f32; 2] = [1040.0, 560.0];
+const PALETTE_BUTTON_SIZE: Vec2 = Vec2::new(44.0, 31.0);
+const PALETTE_GAP: f32 = 6.0;
+const PALETTE_HEIGHT: f32 =
+    3.0 * PALETTE_BUTTON_SIZE.y + 2.0 * PALETTE_GAP + CONTENT_PADDING as f32;
+const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 1.5..=4.0;
+const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";
 
 #[derive(Clone, Copy)]
 enum Intent {
@@ -45,6 +57,7 @@ pub struct App {
     queue: VecDeque<DesktopWindowRequest>,
     startup: Vec<String>,
     busy: bool,
+    save_clicked: bool,
     pending: Option<Intent>,
     allow_close: bool,
     close_deadline: Option<Instant>,
@@ -53,6 +66,7 @@ pub struct App {
     zoom: f32,
     tab: usize,
     category: String,
+    palette_textures: HashMap<&'static str, Option<egui::TextureHandle>>,
     status: String,
     texture: Option<egui::TextureHandle>,
     rendered: Option<Rendered>,
@@ -60,6 +74,9 @@ pub struct App {
     requested_key: u64,
     render_busy: bool,
     ime: String,
+    command_input: Option<commands::Input>,
+    latex_groups: Vec<u64>,
+    expects_latex_group: bool,
     files: Vec<PathBuf>,
     batch_logs: Vec<String>,
     batch_target: usize,
@@ -78,7 +95,27 @@ impl App {
         rx: Receiver<Event>,
         args: Vec<String>,
     ) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::light());
+        cc.egui_ctx.set_theme(egui::ThemePreference::System);
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            cc.egui_ctx.style_mut_of(theme, |style| {
+                style.spacing.item_spacing = Vec2::new(8.0, 8.0);
+                style.spacing.button_padding = Vec2::new(10.0, 7.0);
+                style.visuals.selection.bg_fill = Color32::from_rgb(40, 157, 207);
+                style.visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+                let widgets = &mut style.visuals.widgets;
+                for state in [
+                    &mut widgets.noninteractive,
+                    &mut widgets.inactive,
+                    &mut widgets.hovered,
+                    &mut widgets.active,
+                    &mut widgets.open,
+                ] {
+                    state.corner_radius = UI_CORNER_RADIUS;
+                }
+                style.visuals.window_corner_radius = UI_CORNER_RADIUS;
+                style.visuals.menu_corner_radius = UI_CORNER_RADIUS;
+            });
+        }
         tx.attach(cc.egui_ctx.clone());
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
@@ -153,6 +190,7 @@ impl App {
             queue: VecDeque::new(),
             startup: args,
             busy: false,
+            save_clicked: false,
             pending: None,
             allow_close: false,
             close_deadline: None,
@@ -161,6 +199,7 @@ impl App {
             zoom: 2.0,
             tab: 0,
             category: "Fractions".into(),
+            palette_textures: HashMap::new(),
             status: "Click the canvas to type. Use the palette or Ctrl+F for a fraction.".into(),
             texture: None,
             rendered: None,
@@ -168,6 +207,9 @@ impl App {
             requested_key: 0,
             render_busy: false,
             ime: String::new(),
+            command_input: None,
+            latex_groups: vec![],
+            expects_latex_group: false,
             files: vec![],
             batch_logs: vec![],
             batch_target: 0,
@@ -180,6 +222,7 @@ impl App {
     }
     fn dirty(&self) -> bool {
         self.draft_dirty
+            || self.command_input.is_some()
             || self.editor.math().to_xml() != self.saved_xml
             || self.font_pt != self.saved_font
             || self.target != self.saved_mode
@@ -193,6 +236,9 @@ impl App {
         self.latex_error = None;
     }
     fn source_changed(&mut self, now: Instant) {
+        self.command_input = None;
+        self.latex_groups.clear();
+        self.expects_latex_group = false;
         self.draft_dirty = true;
         self.latex_generation += 1;
         self.latex_deadline = Some(now + Duration::from_millis(180));
@@ -348,7 +394,12 @@ impl App {
         match result {
             Ok(math) => {
                 match Editor::try_new(&math) {
-                    Ok(editor) => self.editor = editor,
+                    Ok(editor) => {
+                        self.editor = editor;
+                        self.command_input = None;
+                        self.latex_groups.clear();
+                        self.expects_latex_group = false;
+                    }
                     Err(e) => {
                         self.status = e.into();
                         return false;
@@ -565,7 +616,9 @@ impl App {
                 return;
             }
             if n.children.is_empty() && matches!(n.tag.as_str(), "math" | "mtd") {
-                n.children.push(MathNode::leaf("mi", "□"));
+                let mut slot = MathNode::leaf("mi", "□");
+                slot.attrs.push((PLACEHOLDER_ATTR.into(), "true".into()));
+                n.children.push(slot);
                 return;
             }
             if n.text.is_empty()
@@ -577,6 +630,7 @@ impl App {
             {
                 n.tag = "mi".into();
                 n.text = "□".into();
+                n.attrs.push((PLACEHOLDER_ATTR.into(), "true".into()));
             }
             for c in &mut n.children {
                 placeholders(c);
@@ -596,7 +650,22 @@ impl App {
                     let image = image::load_from_memory(&preview.preview.png)
                         .map_err(|e| e.to_string())?
                         .to_rgba8();
+                    let placeholders = preview
+                        .regions
+                        .iter()
+                        .filter(|region| {
+                            region
+                                .path
+                                .iter()
+                                .try_fold(&math, |node, &index| node.children.get(index))
+                                .is_some_and(|node| {
+                                    node.attrs.iter().any(|(key, _)| key == PLACEHOLDER_ATTR)
+                                })
+                        })
+                        .cloned()
+                        .collect();
                     Ok(Rendered {
+                        placeholders,
                         image: egui::ColorImage::from_rgba_unmultiplied(
                             [image.width() as usize, image.height() as usize],
                             image.as_raw(),
@@ -625,6 +694,11 @@ impl App {
     }
     fn finish(&mut self, save: bool) {
         if self.busy {
+            return;
+        }
+        if save && self.command_input.is_some() {
+            self.status =
+                "Hoàn tất lệnh LaTeX bằng Tab/Enter hoặc hủy bằng Esc trước khi lưu.".into();
             return;
         }
         if save && self.draft_dirty {
@@ -729,58 +803,324 @@ impl App {
     fn copy(&self, ctx: &egui::Context) {
         ctx.copy_text(self.selected_equation().to_latex());
     }
-    fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading("EqnTide");
-            ui.separator();
-            ui.selectable_value(&mut self.tab, 0, "Equation editor");
-            ui.selectable_value(&mut self.tab, 1, "Batch DOCX");
-            if self.dirty() {
-                ui.label(egui::RichText::new("● Unsaved").color(Color32::from_rgb(180, 90, 0)));
-            }
+    fn save_button(&mut self, ui: &mut egui::Ui) {
+        let label = if self.session.is_some() {
+            "Lưu và trở về tài liệu (Ctrl+S)"
+        } else {
+            "Lưu MathML (Ctrl+S)"
+        };
+        if ui
+            .add_enabled(
+                self.save_available() && !self.draft_dirty && self.command_input.is_none(),
+                egui::Button::new(egui::RichText::new(label).color(Color32::WHITE))
+                    .fill(Color32::from_rgb(25, 135, 190)),
+            )
+            .clicked()
+        {
+            self.save_clicked = true;
+        }
+    }
+
+    fn footer(&mut self, ui: &mut egui::Ui) {
+        ui.add_enabled_ui(!self.busy && self.pending.is_none(), |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.add_enabled_ui(!self.draft_dirty, |ui| {
+                    let font = egui::TextStyle::Body.resolve(ui.style());
+                    let color = ui.visuals().widgets.inactive.fg_stroke.color;
+                    let caption =
+                        |text: &str| egui::RichText::new(text).font(font.clone()).color(color);
+                    ui.radio_value(&mut self.target, "mathtype".into(), caption("MathType"));
+                    ui.add_space(12.0);
+                    ui.radio_value(&mut self.target, "omml".into(), caption("OMML"));
+                    ui.separator();
+                    ui.label(caption("Cỡ chữ"));
+                    let size_changed = ui
+                        .scope(|ui| {
+                            ui.style_mut().explanation_tooltips = false;
+                            ui.add(
+                                egui::DragValue::new(&mut self.font_pt)
+                                    .range(6.0..=72.0)
+                                    .min_size(Vec2::new(
+                                        FONT_SIZE_CONTROL_WIDTH,
+                                        FOOTER_CONTROL_HEIGHT,
+                                    ))
+                                    // A quarter of the control's width changes the size by 1 pt.
+                                    .speed(4.0 / FONT_SIZE_CONTROL_WIDTH)
+                                    .max_decimals(1)
+                                    .suffix(" pt"),
+                            )
+                            .on_hover_text("Nhấn giữ và kéo trái/phải để điều chỉnh")
+                            .changed()
+                        })
+                        .inner;
+                    if size_changed {
+                        self.render_key += 1;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new("↶").min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
+                        )
+                        .on_hover_text("Hoàn tác (Ctrl+Z)")
+                        .clicked()
+                    {
+                        self.command_input = None;
+                        self.latex_groups.clear();
+                        self.expects_latex_group = false;
+                        self.editor.undo();
+                        self.changed();
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new("↷").min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
+                        )
+                        .on_hover_text("Làm lại (Ctrl+Y)")
+                        .clicked()
+                    {
+                        self.command_input = None;
+                        self.latex_groups.clear();
+                        self.expects_latex_group = false;
+                        self.editor.redo();
+                        self.changed();
+                    }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.save_button(ui);
+                    ui.scope(|ui| {
+                        ui.spacing_mut().slider_width = 120.0;
+                        let widgets = &mut ui.visuals_mut().widgets;
+                        for state in [
+                            &mut widgets.noninteractive,
+                            &mut widgets.inactive,
+                            &mut widgets.hovered,
+                            &mut widgets.active,
+                            &mut widgets.open,
+                        ] {
+                            state.corner_radius = egui::CornerRadius::same(4);
+                        }
+                        ui.add(
+                            egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
+                                .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
+                                .show_value(false),
+                        )
+                        .on_hover_text("Thu phóng hiển thị");
+                    });
+                });
+            });
         });
-        ui.horizontal(|ui| {
-            ui.label(&self.bridge_status);
-            if !self.bridge_ready && ui.button("Retry").clicked() {
-                runtime::start_bridge(self.tx.clone());
-            }
-            if !self.queue.is_empty() {
-                ui.label(format!("{} session(s) queued", self.queue.len()));
-                if ui.button("Next session").clicked() {
-                    self.pending = Some(Intent::Next);
+    }
+
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical()
+            .id_salt("categories")
+            .show(ui, |ui| {
+                for (group, label) in palette::GROUPS {
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 42.0],
+                            egui::Button::selectable(self.category == *group, *label),
+                        )
+                        .clicked()
+                    {
+                        self.category = (*group).into();
+                    }
                 }
-            }
-        });
-        if self.tab == 0 || self.session.is_some() {
-            ui.horizontal_wrapped(|ui| {
-                let label = if self.session.is_some() {
-                    "Lưu và trở về tài liệu (Ctrl+S)"
-                } else {
-                    "Lưu MathML (Ctrl+S)"
-                };
+                ui.separator();
                 if ui
-                    .add_enabled(
-                        self.save_available() && !self.draft_dirty,
-                        egui::Button::new(label),
+                    .add_sized(
+                        [ui.available_width(), 42.0],
+                        egui::Button::selectable(false, "Batch DOCX"),
                     )
                     .clicked()
                 {
-                    self.finish(true);
-                }
-                if self.draft_dirty {
-                    if self.latex_error.is_some() {
-                        ui.colored_label(
-                            ui.visuals().error_fg_color,
-                            "Sửa lỗi LaTeX trước khi lưu.",
-                        );
-                    } else {
-                        ui.label("Đang cập nhật LaTeX, vui lòng chờ trước khi lưu…");
-                    }
+                    self.tab = 1;
                 }
             });
-        }
-        ui.separator();
     }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if self.busy || self.render_busy {
+                ui.spinner();
+            }
+            let ready = if self.bridge_ready { "●" } else { "○" };
+            ui.label(ready).on_hover_text(&self.bridge_status);
+            if !self.bridge_ready && ui.small_button("Thử lại").clicked() {
+                runtime::start_bridge(self.tx.clone());
+            }
+            if !self.queue.is_empty()
+                && ui
+                    .small_button(format!("Phiên tiếp ({})", self.queue.len()))
+                    .clicked()
+            {
+                self.pending = Some(Intent::Next);
+            }
+            if self.tab == 0 && self.latex_error.is_some() {
+                let error = format!("Lỗi LaTeX: {}", self.latex_error.as_deref().unwrap());
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&error).color(ui.visuals().error_fg_color),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(error);
+            } else if self.tab == 0 && self.draft_dirty {
+                ui.label("Đang cập nhật công thức…");
+            } else {
+                ui.add(egui::Label::new(&self.status).truncate())
+                    .on_hover_text(&self.status);
+            }
+        });
+    }
+
+    fn palette_ui(&mut self, ui: &mut egui::Ui) {
+        let height = ui.available_height();
+        let items: Vec<_> = palette::PALETTE
+            .iter()
+            .filter(|(group, _, _)| *group == self.category)
+            .collect();
+        let fitting_columns = ((ui.available_width() + PALETTE_GAP)
+            / (PALETTE_BUTTON_SIZE.x + PALETTE_GAP))
+            .floor() as usize;
+        // Native DPI/startup adjustments may briefly give us less than the minimum width.
+        // Keep three rows in that frame too, scrolling horizontally if necessary.
+        let columns = fitting_columns.max(items.len().div_ceil(3)).max(1);
+        egui::ScrollArea::horizontal()
+            .id_salt(("palette", &self.category))
+            .vertical_scroll_offset(0.0)
+            .max_height(height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new(("palette-grid", &self.category))
+                    .num_columns(columns)
+                    .spacing(Vec2::splat(PALETTE_GAP))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().button_padding = Vec2::new(5.0, 4.0);
+                        ui.spacing_mut().item_spacing = Vec2::splat(PALETTE_GAP);
+                        for (index, (_, label, source)) in items.iter().enumerate() {
+                            let texture =
+                                self.palette_textures.entry(source).or_insert_with(|| {
+                                    let math = palette::preview_template(source).ok()?;
+                                    let preview =
+                                        eqntide::render::render_preview(&math, 12.0).ok()?;
+                                    let mut pixels =
+                                        image::load_from_memory(&preview.png).ok()?.to_rgba8();
+                                    // White alpha masks can be tinted for both system themes.
+                                    for pixel in pixels.pixels_mut() {
+                                        pixel.0[0..3].fill(255);
+                                    }
+                                    let image = egui::ColorImage::from_rgba_unmultiplied(
+                                        [pixels.width() as usize, pixels.height() as usize],
+                                        pixels.as_raw(),
+                                    );
+                                    Some(ui.ctx().load_texture(
+                                        *source,
+                                        image,
+                                        egui::TextureOptions::LINEAR,
+                                    ))
+                                });
+                            let response = if let Some(texture) = texture {
+                                let size = texture.size_vec2();
+                                let ratio = (34.0 / size.x).min(22.0 / size.y);
+                                let image = egui::Image::new((texture.id(), size * ratio))
+                                    .tint(ui.visuals().text_color());
+                                ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(image))
+                            } else {
+                                ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(*label))
+                            };
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::Role::Button,
+                                    ui.is_enabled(),
+                                    *label,
+                                )
+                            });
+                            if response
+                                .on_hover_text(format!("{label}\n{source}"))
+                                .clicked()
+                            {
+                                self.command_input = None;
+                                self.latex_groups.clear();
+                                self.expects_latex_group = false;
+                                self.insert_template(source);
+                                ui.memory_mut(|m| {
+                                    m.request_focus(egui::Id::unique("equation-canvas"))
+                                });
+                            }
+                            if (index + 1) % columns == 0 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+            });
+    }
+
+    fn enforce_window_minimum(ctx: &egui::Context) {
+        let request = ctx.input(|input| {
+            let viewport = input.viewport();
+            if viewport.maximized == Some(true) || viewport.fullscreen == Some(true) {
+                return None;
+            }
+            // Wayland does not provide native inner_rect; the UI viewport still has its size.
+            let size = viewport.inner_rect.unwrap_or(input.viewport_rect()).size();
+            // Respect a physically smaller display, avoiding resize loops with the compositor.
+            let minimum =
+                Vec2::from(MIN_WINDOW_SIZE).min(viewport.monitor_size.unwrap_or(Vec2::INFINITY));
+            let required = size.max(minimum);
+            (required.x > size.x + 0.5 || required.y > size.y + 0.5).then_some((minimum, required))
+        });
+        if let Some((minimum, required)) = request {
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(minimum));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(required));
+        }
+    }
+
+    fn shell(&mut self, ui: &mut egui::Ui) {
+        self.save_clicked = false;
+        egui::Panel::bottom("app-status")
+            .exact_size(32.0)
+            .show(ui, |ui| self.status_bar(ui));
+        if self.tab == 0 {
+            egui::Panel::left("app-sidebar")
+                .exact_size(150.0)
+                .resizable(false)
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(!self.busy && self.pending.is_none(), |ui| self.sidebar(ui));
+                });
+        }
+        if self.tab == 0 || self.session.is_some() {
+            egui::Panel::bottom("app-footer")
+                .exact_size(56.0)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(ui.visuals().panel_fill)
+                        .inner_margin(egui::Margin {
+                            left: CONTENT_PADDING,
+                            right: CONTENT_PADDING,
+                            top: CONTENT_PADDING,
+                            bottom: CONTENT_PADDING,
+                        }),
+                )
+                .show(ui, |ui| self.footer(ui));
+        }
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::NONE
+                    .fill(ui.visuals().panel_fill)
+                    .inner_margin(CONTENT_PADDING),
+            )
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!self.busy && self.pending.is_none(), |ui| {
+                    if self.tab == 0 {
+                        self.editor_ui(ui);
+                    } else {
+                        self.batch_ui(ui);
+                    }
+                });
+            });
+    }
+
     fn save_available(&self) -> bool {
         !self.busy && !self.batch_running && self.pending.is_none() && !self.allow_close
     }
@@ -803,93 +1143,64 @@ impl App {
         })
     }
     fn editor_ui(&mut self, ui: &mut egui::Ui) {
-        ui.add_enabled_ui(!self.draft_dirty, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Size (pt)");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.font_pt)
-                            .range(6.0..=72.0)
-                            .speed(0.25),
-                    )
-                    .changed()
-                {
-                    self.render_key += 1;
-                }
-                ui.selectable_value(&mut self.target, "omml".into(), "OMML");
-                ui.selectable_value(&mut self.target, "mathtype".into(), "MathType");
-                ui.label("Zoom");
-                ui.add(egui::Slider::new(&mut self.zoom, 1.0..=5.0).show_value(false));
-                if ui.button("Undo").clicked() {
-                    self.editor.undo();
-                    self.changed();
-                }
-                if ui.button("Redo").clicked() {
-                    self.editor.redo();
-                    self.changed();
-                }
+        egui::Panel::top("templates-panel")
+            .exact_size(PALETTE_HEIGHT)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                bottom: CONTENT_PADDING,
+                ..Default::default()
+            }))
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!self.draft_dirty, |ui| self.palette_ui(ui));
             });
-            ui.horizontal_wrapped(|ui| {
-                for group in [
-                    "Fractions",
-                    "Scripts",
-                    "Integrals",
-                    "Fences",
-                    "Matrices",
-                    "Symbols",
-                ] {
-                    ui.selectable_value(&mut self.category, group.into(), group);
-                }
-            });
-            egui::ScrollArea::vertical()
-                .id_salt("palette")
-                .max_height(92.0)
-                .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for (group, label, source) in palette::PALETTE {
-                            if *group == self.category {
-                                let short = label.split(" (").next().unwrap_or(label);
-                                if ui.small_button(short).on_hover_text(*source).clicked() {
-                                    self.insert_template(source);
-                                    ui.memory_mut(|m| {
-                                        m.request_focus(egui::Id::unique("equation-canvas"))
-                                    });
+        egui::Panel::bottom("latex-panel")
+            .exact_size(60.0)
+            .show_separator_line(false)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                top: CONTENT_PADDING,
+                ..Default::default()
+            }))
+            .show(ui, |ui| self.latex_ui(ui));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                ui.add_enabled_ui(!self.draft_dirty, |ui| {
+                    if self.category == "Matrices" {
+                        ui.horizontal(|ui| {
+                            for (label, column, grow) in [
+                                ("+ hàng", false, true),
+                                ("− hàng", false, false),
+                                ("+ cột", true, true),
+                                ("− cột", true, false),
+                            ] {
+                                if ui.small_button(label).clicked() {
+                                    let changed = if grow {
+                                        self.editor.grow_matrix(column)
+                                    } else {
+                                        self.editor.shrink_matrix(column)
+                                    };
+                                    if changed {
+                                        self.changed();
+                                    } else {
+                                        self.status = "Đặt con trỏ trong ma trận trước.".into();
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
+                    }
+                    self.canvas(ui);
                 });
-            ui.horizontal(|ui| {
-                if ui.small_button("Matrix + row").clicked() {
-                    if !self.editor.grow_matrix(false) {
-                        self.status = "Place the caret inside a matrix first.".into();
-                    } else {
-                        self.changed();
-                    }
-                }
-                if ui.small_button("Matrix − row").clicked() && self.editor.shrink_matrix(false) {
-                    self.changed();
-                }
-                if ui.small_button("Matrix − column").clicked() && self.editor.shrink_matrix(true)
-                {
-                    self.changed();
-                }
-                if ui.small_button("Matrix + column").clicked() {
-                    if !self.editor.grow_matrix(true) {
-                        self.status = "Place the caret inside a matrix first.".into();
-                    } else {
-                        self.changed();
-                    }
-                }
             });
-            self.canvas(ui);
-        });
-        ui.label("LaTeX source — live preview");
+    }
+
+    fn latex_ui(&mut self, ui: &mut egui::Ui) {
         if ui
-            .add(
+            .add_sized(
+                [ui.available_width(), 48.0],
                 egui::TextEdit::multiline(&mut self.latex)
-                    .id(egui::Id::unique("latex-source"))
                     .desired_rows(2)
+                    .id(egui::Id::unique("latex-source"))
                     .desired_width(f32::INFINITY)
                     .font(egui::TextStyle::Monospace),
             )
@@ -897,27 +1208,25 @@ impl App {
         {
             self.source_changed(Instant::now());
         }
-        ui.horizontal(|ui| {
-            if let Some(error) = &self.latex_error {
-                ui.colored_label(ui.visuals().error_fg_color, format!("LaTeX error: {error}"));
-            } else if self.draft_dirty {
-                ui.label("Updating preview…");
-            }
-        });
     }
 
-    fn canvas(&mut self, ui: &mut egui::Ui) {
+    fn canvas(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
+        // A pending/invalid source disables editing, but keeps the last preview legible.
+        ui.set_opacity(1.0);
         let scale = self.zoom * 96.0 / 72.0;
+        let height = (ui.available_height() - 26.0).max(12.0);
         egui::Frame::new()
             .fill(Color32::WHITE)
+            .corner_radius(UI_CORNER_RADIUS)
             .stroke(Stroke::new(1.0, Color32::LIGHT_GRAY))
             .inner_margin(12.0)
             .show(ui, |ui| {
                 egui::ScrollArea::both()
                     .id_salt("formula-scroll")
-                    .max_height(220.0)
-                    .min_scrolled_height(135.0)
-                    .show(ui, |ui| {
+                    .max_height(height)
+                    .min_scrolled_height(height)
+                    .auto_shrink([false, false])
+                    .show_viewport(ui, |ui, viewport| {
                         let size = self
                             .rendered
                             .as_ref()
@@ -928,9 +1237,15 @@ impl App {
                                 )
                             })
                             .unwrap_or(Vec2::new(60.0, 40.0));
-                        let available = ui.available_width().max(size.x + 12.0);
-                        let (_, rect) =
-                            ui.allocate_space(Vec2::new(available, 135.0_f32.max(size.y + 20.0)));
+                        // Only the formula contributes to scrollable content. Filling the
+                        // viewport via allocate_space can round past its width at fractional DPI.
+                        let content_size = size + Vec2::new(12.0, 20.0);
+                        let (_, content_rect) = ui.allocate_space(content_size);
+                        // Empty canvas space remains clickable without creating overflow.
+                        let rect = Rect::from_min_size(
+                            content_rect.min,
+                            viewport.size().max(content_size),
+                        );
                         let response = ui.interact(
                             rect,
                             egui::Id::unique("equation-canvas"),
@@ -952,8 +1267,25 @@ impl App {
                                 Color32::BLACK,
                             );
                         }
+                        if let Some(rendered) = &self.rendered {
+                            for slot in &rendered.placeholders {
+                                let rect = Rect::from_min_size(
+                                    origin + Vec2::new(slot.x, slot.y) * scale,
+                                    Vec2::new(slot.width, slot.height) * scale,
+                                );
+                                Self::paint_placeholder(ui.painter(), rect);
+                            }
+                        }
                         if response.clicked() || response.drag_started() {
                             response.request_focus();
+                        }
+                        // Enter/Space also set clicked() for a focused egui widget.
+                        // Only a real pointer click may cancel command entry or reposition the caret.
+                        let pointer_clicked = response.clicked_by(egui::PointerButton::Primary);
+                        if pointer_clicked || response.drag_started() {
+                            self.command_input = None;
+                            self.latex_groups.clear();
+                            self.expects_latex_group = false;
                         }
                         if response.drag_started() {
                             if let Some(pos) = ui.input(|i| i.pointer.press_origin()) {
@@ -962,7 +1294,7 @@ impl App {
                                 }
                             }
                         }
-                        if (response.clicked() || response.dragged()) && !self.render_busy {
+                        if (pointer_clicked || response.dragged()) && !self.render_busy {
                             if let Some(pos) = response.interact_pointer_pos() {
                                 if let Some(caret) = self.hit(pos, origin, scale) {
                                     let extend =
@@ -983,12 +1315,12 @@ impl App {
                             if let Some(r) = self.node_rect(id, origin, scale) {
                                 ui.painter().rect_filled(
                                     r,
-                                    2.0,
+                                    UI_CORNER_RADIUS,
                                     Color32::from_rgba_unmultiplied(60, 120, 230, 65),
                                 );
                             }
                         }
-                        if response.has_focus() {
+                        if response.has_focus() && ui.is_enabled() {
                             ui.memory_mut(|m| {
                                 m.set_focus_lock_filter(
                                     response.id,
@@ -1026,9 +1358,38 @@ impl App {
                             }
                             self.keyboard(ui);
                         }
-                    });
-            });
+                        if self.command_input.is_some() && ui.is_enabled() {
+                            let cursor = self
+                                .caret_rect(origin, scale)
+                                .unwrap_or(Rect::from_min_size(origin, Vec2::new(1.0, 24.0)));
+                            self.command_popup(ui, cursor.left_bottom() + Vec2::new(0.0, 6.0));
+                        }
+                    })
+            })
+            .inner
     }
+    fn paint_placeholder(painter: &egui::Painter, rect: Rect) {
+        // Cover only the synthetic square; the formula texture and hit regions stay unchanged.
+        painter.rect_filled(rect.expand(0.5), 0.0, Color32::WHITE);
+        let rect = rect.shrink(1.0);
+        let radius = UI_CORNER_RADIUS;
+        painter.rect_filled(rect, radius, Color32::from_rgb(239, 248, 255));
+        let mut path = vec![];
+        egui::epaint::tessellator::path::rounded_rectangle(
+            &mut path,
+            egui::epaint::RoundedRect::new(rect, radius),
+        );
+        if let Some(&first) = path.first() {
+            path.push(first);
+        }
+        painter.extend(egui::Shape::dashed_line(
+            &path,
+            Stroke::new(1.2, Color32::from_rgb(133, 192, 230)),
+            4.0,
+            3.0,
+        ));
+    }
+
     fn region(&self, id: u64) -> Option<eqntide::render::HitRegion> {
         let path = self.editor.path(id)?;
         let rendered = self.rendered.as_ref()?;
@@ -1284,19 +1645,289 @@ impl App {
             self.editor.set_caret(caret, extend);
         }
     }
+    fn commit_command(&mut self, choose_suggestion: bool) -> bool {
+        let Some(input) = &self.command_input else {
+            return true;
+        };
+        let command = if choose_suggestion {
+            commands::suggestions(&input.name)
+                .get(input.selected)
+                .copied()
+        } else {
+            commands::exact(&input.name)
+        };
+        let result = if let Some(command) = command {
+            palette::template(command.source).map(|math| (math, command.source.contains("#?")))
+        } else {
+            eqntide::service::parse_latex_to_mathml(&format!("\\{}", input.name))
+                .map(|math| (math, false))
+                .map_err(|e| e.to_string())
+        };
+        match result {
+            Ok((math, template)) => {
+                self.command_input = None;
+                self.expects_latex_group = template;
+                if template {
+                    self.editor.insert_template(&math);
+                } else {
+                    self.editor.insert_math(&math);
+                }
+                self.changed();
+                self.status = "Đã chèn lệnh LaTeX.".into();
+                true
+            }
+            Err(_) => {
+                self.status = format!("Lệnh \\{} chưa hoàn chỉnh hoặc chưa được hỗ trợ; Backspace để sửa, Esc để hủy.", input.name);
+                false
+            }
+        }
+    }
+
+    fn canvas_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            if let Some(input) = &mut self.command_input {
+                if ch.is_ascii_alphabetic() || input.name.chars().any(|c| !c.is_ascii_alphabetic())
+                {
+                    input.name.push(ch);
+                    input.selected = 0;
+                    continue;
+                }
+                if input.name.is_empty() && matches!(ch, '{' | '}' | ' ' | ',' | ';' | '!') {
+                    self.command_input = None;
+                    let text = if matches!(ch, ',' | ';' | '!') {
+                        " ".into()
+                    } else {
+                        ch.to_string()
+                    };
+                    self.editor.insert_text(&text);
+                    continue;
+                }
+                if !self.commit_command(false) {
+                    self.command_input.as_mut().unwrap().name.push(ch);
+                    continue;
+                }
+                if ch.is_whitespace() {
+                    continue;
+                }
+            }
+            match ch {
+                '\\' => {
+                    self.expects_latex_group = false;
+                    self.command_input = Some(commands::Input::default());
+                }
+                '{' if self.expects_latex_group || !self.latex_groups.is_empty() => {
+                    self.latex_groups.push(self.editor.caret().node);
+                    self.expects_latex_group = false;
+                }
+                '}' if !self.latex_groups.is_empty() => self.close_latex_group(),
+                '^' | '_' => {
+                    self.insert_template(if ch == '^' { "^{#?}" } else { "_{#?}" });
+                    self.expects_latex_group = true;
+                }
+                '/' => {
+                    if let Ok(template) = palette::template("\\frac{#?}{#?}") {
+                        self.editor.insert_template_wrapping_previous(&template);
+                    }
+                }
+                _ => {
+                    self.expects_latex_group = false;
+                    self.editor.insert_text(&ch.to_string());
+                }
+            }
+        }
+    }
+
+    fn close_latex_group(&mut self) {
+        let Some(start) = self.latex_groups.pop() else {
+            return;
+        };
+        let Some(mut path) = self.editor.path(start) else {
+            return;
+        };
+        while let Some(index) = path.pop() {
+            let Some(parent_id) = self.editor.id_at_path(&path) else {
+                return;
+            };
+            let parent = self.editor.node(parent_id).unwrap();
+            if !matches!(
+                parent.tag.as_str(),
+                "mfrac"
+                    | "mroot"
+                    | "msqrt"
+                    | "msub"
+                    | "msup"
+                    | "msubsup"
+                    | "munder"
+                    | "mover"
+                    | "munderover"
+            ) {
+                continue;
+            }
+            if parent.tag == "mfrac" && index == 0 {
+                self.expects_latex_group = true;
+                self.editor.set_caret(
+                    Caret {
+                        node: parent.children[1].id,
+                        offset: 0,
+                    },
+                    false,
+                );
+                return;
+            }
+            while let Some(index) = path.pop() {
+                let id = self.editor.id_at_path(&path).unwrap();
+                if self.editor.node(id).unwrap().row() {
+                    self.editor.set_caret(
+                        Caret {
+                            node: id,
+                            offset: index + 1,
+                        },
+                        false,
+                    );
+                    return;
+                }
+            }
+            return;
+        }
+    }
+
+    fn command_key(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
+        use egui::Key;
+        if modifiers.command {
+            if key == Key::Z && self.command_input.take().is_some() {
+                self.latex_groups.clear();
+                self.expects_latex_group = false;
+                return true;
+            }
+            if !matches!(key, Key::S | Key::C) {
+                self.command_input = None;
+                self.latex_groups.clear();
+                self.expects_latex_group = false;
+            }
+            return false;
+        }
+        let Some(input) = &mut self.command_input else {
+            if matches!(
+                key,
+                Key::ArrowLeft
+                    | Key::ArrowRight
+                    | Key::ArrowUp
+                    | Key::ArrowDown
+                    | Key::Home
+                    | Key::End
+            ) {
+                self.latex_groups.clear();
+                self.expects_latex_group = false;
+            }
+            return false;
+        };
+        match key {
+            Key::ArrowDown | Key::ArrowUp => {
+                let count = commands::suggestions(&input.name).len();
+                if count > 0 {
+                    input.selected = if key == Key::ArrowDown {
+                        (input.selected + 1) % count
+                    } else {
+                        (input.selected + count - 1) % count
+                    };
+                }
+                true
+            }
+            Key::Tab | Key::Enter => {
+                self.commit_command(true);
+                true
+            }
+            Key::Escape => {
+                self.command_input = None;
+                self.status = "Đã hủy lệnh LaTeX.".into();
+                true
+            }
+            Key::Backspace => {
+                if input.name.pop().is_none() {
+                    self.command_input = None;
+                } else {
+                    input.selected = 0;
+                }
+                true
+            }
+            Key::Delete => true,
+            Key::ArrowLeft | Key::ArrowRight | Key::Home | Key::End => !self.commit_command(false),
+            _ => false,
+        }
+    }
+
+    fn command_popup(&mut self, ui: &mut egui::Ui, anchor: Pos2) {
+        let Some(input) = &self.command_input else {
+            return;
+        };
+        let name = input.name.clone();
+        let selected = input.selected;
+        let candidates = commands::suggestions(&name);
+        let mut accept = None;
+        egui::Area::new(egui::Id::unique("canvas-command-popup"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(anchor)
+            .constrain(true)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(230.0);
+                    ui.monospace(format!("\\{name}"));
+                    if candidates.is_empty() {
+                        ui.label("Chưa có gợi ý — Backspace để sửa, Esc để hủy");
+                    }
+                    for (index, command) in candidates.iter().enumerate() {
+                        if ui
+                            .selectable_label(
+                                index == selected,
+                                format!("\\{}   {}", command.name, command.label),
+                            )
+                            .clicked()
+                        {
+                            accept = Some(index);
+                        }
+                    }
+                    ui.weak("↑↓ chọn · Tab/Enter chèn · Esc hủy");
+                });
+            });
+        if let Some(index) = accept {
+            if let Some(input) = &mut self.command_input {
+                input.selected = index;
+            }
+            self.commit_command(true);
+            ui.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
+        }
+    }
+
     fn keyboard(&mut self, ui: &mut egui::Ui) {
         let events = ui.input(|i| i.events.clone());
         let before = self.editor.revision;
         for event in events {
+            if let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = &event
+            {
+                if self.command_key(*key, *modifiers) {
+                    continue;
+                }
+            }
             match event {
                 egui::Event::Copy => self.copy(ui.ctx()),
                 egui::Event::Cut => {
+                    self.command_input = None;
+                    self.latex_groups.clear();
+                    self.expects_latex_group = false;
                     if self.editor.selected_math().is_some() {
                         self.copy(ui.ctx());
                         self.editor.delete(true);
                     }
                 }
                 egui::Event::Paste(text) => {
+                    self.command_input = None;
+                    self.latex_groups.clear();
+                    self.expects_latex_group = false;
                     if text.trim_start().starts_with('<') {
                         match eqntide::service::decode_input_to_mathml(&text, "auto") {
                             Ok(math) => self.editor.insert_math(&math),
@@ -1313,22 +1944,13 @@ impl App {
                 }
                 egui::Event::Text(text) => {
                     if self.ime.is_empty() {
-                        match text.as_str() {
-                            "/" => {
-                                if let Ok(template) = palette::template("\\frac{#?}{#?}") {
-                                    self.editor.insert_template_wrapping_previous(&template);
-                                }
-                            }
-                            "^" => self.insert_template("^{#?}"),
-                            "_" => self.insert_template("_{#?}"),
-                            _ => self.editor.insert_text(&text),
-                        }
+                        self.canvas_text(&text);
                     }
                 }
                 egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => self.ime = text,
                 egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                     self.ime.clear();
-                    self.editor.insert_text(&text);
+                    self.canvas_text(&text);
                 }
                 egui::Event::Ime(egui::ImeEvent::DeleteSurrounding {
                     before_chars,
@@ -1424,6 +2046,9 @@ impl App {
         }
     }
     fn batch_ui(&mut self, ui: &mut egui::Ui) {
+        if ui.button("← Quay lại soạn công thức").clicked() {
+            self.tab = 0;
+        }
         ui.heading("Batch document conversion");
         ui.label("Drop .docx files here. By default, a new copy is saved beside each input.");
         ui.add_enabled_ui(!self.batch_running, |ui| {
@@ -1559,6 +2184,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        Self::enforce_window_minimum(&ctx);
         self.events(&ctx);
         let save_requested = Self::take_save_shortcut(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
@@ -1586,24 +2212,8 @@ impl eframe::App for App {
             self.tab = 1;
         }
         self.request_render(&ctx);
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.toolbar(ui);
-            ui.add_enabled_ui(!self.busy && self.pending.is_none(), |ui| {
-                if self.tab == 0 {
-                    egui::ScrollArea::vertical()
-                        .id_salt("editor-layout")
-                        .show(ui, |ui| self.editor_ui(ui));
-                } else {
-                    self.batch_ui(ui);
-                }
-            });
-            ui.separator();
-            ui.label(&self.status);
-            if self.busy || self.render_busy {
-                ui.spinner();
-            }
-        });
-        if save_requested && self.save_available() {
+        self.shell(ui);
+        if (save_requested || self.save_clicked) && self.save_available() {
             self.finish(true);
         }
         self.dialogs(&ctx);
@@ -1807,6 +2417,221 @@ mod tests {
             },
         }
     }
+    fn type_canvas(a: &mut App, text: &str) {
+        egui::Context::default()
+            .run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Text(text.into())],
+                    ..Default::default()
+                },
+                |ui| a.keyboard(ui),
+            )
+            .textures_delta
+            .clear();
+    }
+
+    #[test]
+    fn typed_latex_commands_build_real_math_and_keep_source_in_sync() {
+        let mut a = app();
+        // Separate keystrokes exercise the command buffer rather than the paste parser.
+        for ch in r"\lim_{x\rightarrow+\infty}".chars() {
+            type_canvas(&mut a, &ch.to_string());
+        }
+        let xml = a.editor.math().to_xml();
+        assert!(xml.contains("lim"), "{xml}");
+        assert!(xml.contains('→') && xml.contains('∞'), "{xml}");
+        assert!(
+            !xml.contains('\\'),
+            "commands must not become literal characters: {xml}"
+        );
+        assert!(a.command_input.is_none());
+        assert_eq!(a.latex, a.editor.math().to_latex());
+        assert!(eqntide::render::render_interactive(&a.editor.math(), 12.0).is_ok());
+    }
+
+    #[test]
+    fn typed_fraction_groups_fill_slots_and_exit_back_to_the_outer_equation() {
+        let mut a = app();
+        type_canvas(&mut a, r"\frac{1}{\sqrt{2}}+x");
+        assert_eq!(a.editor.math().to_latex(), r"\frac{1}{\sqrt{2}}+x");
+        assert!(a.command_input.is_none());
+        assert!(a.latex_groups.is_empty());
+        type_canvas(&mut a, "{y}");
+        assert!(
+            a.editor.math().to_xml().contains('{'),
+            "literal braces still work outside LaTeX groups"
+        );
+    }
+
+    #[test]
+    fn dfrac_completion_inserts_fraction_slots_and_accepts_typed_arguments() {
+        let mut a = app();
+        type_canvas(&mut a, r"\df");
+        assert!(a.command_key(egui::Key::Enter, egui::Modifiers::NONE));
+        assert!(a.editor.math().iter().iter().any(|n| n.tag == "mfrac"));
+        type_canvas(&mut a, "{1}{2}");
+        assert_eq!(a.editor.math().to_latex(), r"\frac{1}{2}");
+        assert_eq!(a.latex, a.editor.math().to_latex());
+    }
+
+    #[test]
+    fn completion_navigation_cancel_and_unknown_commands_keep_existing_work() {
+        let mut a = app();
+        type_canvas(&mut a, "x");
+        let before = a.editor.math();
+        type_canvas(&mut a, r"\l");
+        a.command_key(egui::Key::ArrowDown, egui::Modifiers::NONE);
+        assert_eq!(a.command_input.as_ref().unwrap().selected, 1);
+        a.command_key(egui::Key::ArrowUp, egui::Modifiers::NONE);
+        assert_eq!(a.command_input.as_ref().unwrap().selected, 0);
+        a.command_key(egui::Key::Escape, egui::Modifiers::NONE);
+        type_canvas(&mut a, r"\al");
+        assert_eq!(a.editor.math(), before);
+        assert!(a.command_key(egui::Key::Tab, egui::Modifiers::NONE));
+        assert!(a.editor.math().to_xml().contains('α'));
+        let accepted = a.editor.math();
+        type_canvas(&mut a, r"\nosuchcommand+1");
+        assert_eq!(a.command_input.as_ref().unwrap().name, "nosuchcommand+1");
+        a.finish(true);
+        assert!(!a.busy);
+        assert_eq!(a.editor.math(), accepted);
+        a.command_key(egui::Key::Backspace, egui::Modifiers::NONE);
+        assert_eq!(a.command_input.as_ref().unwrap().name, "nosuchcommand+");
+        a.command_key(egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(a.command_input.is_none());
+        assert!(
+            a.pending.is_none(),
+            "Esc must cancel completion without closing the app"
+        );
+        a.editor.undo();
+        assert_eq!(
+            a.editor.math(),
+            before,
+            "accepting a command is one undo transaction"
+        );
+    }
+
+    #[test]
+    fn completion_accept_keys_work_through_the_focused_canvas() {
+        for (key, prefix) in [
+            (egui::Key::Enter, "al"),
+            (egui::Key::Tab, "al"),
+            (egui::Key::Space, "alpha"),
+        ] {
+            let mut a = app();
+            let ctx = egui::Context::default();
+            let input = |events| egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                events,
+                ..Default::default()
+            };
+            ctx.run_ui(input(vec![]), |ui| {
+                a.shell(ui);
+                ui.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
+            })
+            .textures_delta
+            .clear();
+            ctx.run_ui(
+                input(vec![egui::Event::Text(format!("\\{prefix}"))]),
+                |ui| a.shell(ui),
+            )
+            .textures_delta
+            .clear();
+            assert!(a.command_input.is_some());
+            assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("equation-canvas"))));
+            let mut events = vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }];
+            if key == egui::Key::Space {
+                events.push(egui::Event::Text(" ".into()));
+            }
+            ctx.run_ui(input(events), |ui| a.shell(ui))
+                .textures_delta
+                .clear();
+            assert!(
+                a.editor.math().to_xml().contains('α'),
+                "{key:?} must insert the completion"
+            );
+            assert!(a.command_input.is_none());
+            assert_eq!(a.latex, a.editor.math().to_latex());
+        }
+    }
+
+    #[test]
+    fn completion_popup_accepts_mouse_selection() {
+        let mut a = app();
+        type_canvas(&mut a, r"\al");
+        let ctx = egui::Context::default();
+        let mut choice = None;
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                    ..Default::default()
+                },
+                |ui| a.command_popup(ui, Pos2::new(100.0, 100.0)),
+            );
+            choice = output.shapes.iter().find_map(|s| {
+                if let egui::Shape::Text(t) = &s.shape {
+                    if t.galley.text().starts_with(r"\alpha ") {
+                        return Some(s.shape.visual_bounding_rect().center());
+                    }
+                }
+                None
+            });
+            output.textures_delta.clear();
+        }
+        let pos = choice.expect("completion item must be visible");
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| a.command_popup(ui, Pos2::new(100.0, 100.0)),
+        )
+        .textures_delta
+        .clear();
+        assert!(a.command_input.is_none());
+        assert!(a.editor.math().to_xml().contains('α'));
+        assert_eq!(a.latex, a.editor.math().to_latex());
+    }
+
+    #[test]
+    fn command_template_wraps_selection_without_reparsing_existing_math() {
+        let mut a = app();
+        a.load_math("<math><mi mathvariant=\"bold\">x</mi></math>", None, None);
+        let before = a.editor.math();
+        a.editor.select_all();
+        type_canvas(&mut a, r"\frac");
+        a.command_key(egui::Key::Enter, egui::Modifiers::NONE);
+        let xml = a.editor.math().to_xml();
+        assert!(
+            xml.contains("mfrac") && xml.contains("mathvariant=\"bold\""),
+            "{xml}"
+        );
+        a.editor.undo();
+        assert_eq!(a.editor.math(), before);
+    }
+
     #[test]
     fn save_shortcut_is_global_and_consumed_once_without_stealing_sum() {
         for focus in [None, Some("equation-canvas"), Some("latex-source")] {
@@ -1862,48 +2687,466 @@ mod tests {
         assert!(a.status.contains("valid LaTeX"));
     }
     #[test]
-    fn save_button_stays_visible_above_scrolled_editor_at_minimum_size() {
+    fn fixed_layout_keeps_save_and_source_visible_across_sizes_and_themes() {
         for office in [false, true] {
-            let mut previous_rect = None;
-            for offset in [0.0, 600.0] {
-                let mut a = app();
-                a.bridge_ready = true;
-                if office {
-                    a.session = Some("office".into());
+            for size in [
+                Vec2::from(MIN_WINDOW_SIZE),
+                Vec2::new(1100.0, 650.0),
+                Vec2::new(1440.0, 900.0),
+            ] {
+                for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                    let mut a = app();
+                    a.bridge_ready = true;
+                    a.latex = "source-marker".into();
+                    if office {
+                        a.session = Some("office".into());
+                    }
+                    let ctx = egui::Context::default();
+                    ctx.set_theme(theme);
+                    // Match the desktop's padding: taller buttons used to misalign earlier labels.
+                    ctx.style_mut_of(theme, |style| {
+                        style.spacing.item_spacing = Vec2::new(8.0, 8.0);
+                        style.spacing.button_padding = Vec2::new(10.0, 7.0);
+                    });
+                    let screen = Rect::from_min_size(Pos2::ZERO, size);
+                    // Run twice to cover initial panel sizing and the settled layout.
+                    for _ in 0..2 {
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ui| a.shell(ui),
+                        );
+                        output.textures_delta.clear();
+                        let label = if office {
+                            "Lưu và trở về tài liệu (Ctrl+S)"
+                        } else {
+                            "Lưu MathML (Ctrl+S)"
+                        };
+                        for text in [
+                            label,
+                            "source-marker",
+                            "MathType",
+                            "OMML",
+                            "Cỡ chữ",
+                            "↶",
+                            "↷",
+                        ] {
+                            let shape = output.shapes.iter().find(|shape| {
+                                matches!(&shape.shape, egui::Shape::Text(t) if t.galley.text() == text)
+                            }).unwrap_or_else(|| panic!("missing {text} at {size:?}"));
+                            let rect = shape.shape.visual_bounding_rect();
+                            if text != "source-marker" {
+                                let save = output
+                                    .shapes
+                                    .iter()
+                                    .find(|s| {
+                                        matches!(&s.shape,
+                                    egui::Shape::Text(t) if t.galley.text() == label)
+                                    })
+                                    .unwrap();
+                                assert!(
+                                    (rect.center().y
+                                        - save.shape.visual_bounding_rect().center().y)
+                                        .abs()
+                                        <= 3.0,
+                                    "footer control {text} must share the save row"
+                                );
+                            }
+                            if text == "source-marker" {
+                                for painted in &output.shapes {
+                                    if let egui::Shape::Rect(frame) = &painted.shape {
+                                        if frame.fill == Color32::WHITE
+                                            && frame.stroke.color == Color32::LIGHT_GRAY
+                                            && frame.rect.width() > 100.0
+                                        {
+                                            assert!(
+                                                (frame.rect.top()
+                                                    - CONTENT_PADDING as f32
+                                                    - PALETTE_HEIGHT)
+                                                    .abs()
+                                                    <= 1.0,
+                                                "palette must reserve three rows at every size"
+                                            );
+                                            let source = ctx
+                                                .read_response(egui::Id::unique("latex-source"))
+                                                .unwrap()
+                                                .rect;
+                                            assert!(
+                                                (frame.rect.left() - source.left()).abs() <= 1.0,
+                                                "left edges: canvas {:?}, source {:?}",
+                                                frame.rect,
+                                                source
+                                            );
+                                            assert!(
+                                                (frame.rect.right() - source.right()).abs() <= 1.0,
+                                                "right edges: canvas {:?}, source {:?}",
+                                                frame.rect,
+                                                source
+                                            );
+                                            assert!(
+                                                frame.rect.bottom() <= rect.top(),
+                                                "canvas {:?} covers source {:?} at {:?}",
+                                                frame.rect,
+                                                rect,
+                                                size
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            assert!(screen.contains_rect(rect), "{text}: {rect:?} at {size:?}");
+                            assert!(
+                                shape.clip_rect.contains_rect(rect),
+                                "{text} clipped: {rect:?} by {:?}",
+                                shape.clip_rect
+                            );
+                        }
+                    }
                 }
-                let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 450.0));
-                let mut output = egui::Context::default().run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(screen),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        a.toolbar(ui);
-                        egui::ScrollArea::vertical()
-                            .id_salt("editor-layout")
-                            .vertical_scroll_offset(offset)
-                            .show(ui, |ui| a.editor_ui(ui));
-                    },
-                );
-                output.textures_delta.clear();
-                let label = if office {
-                    "Lưu và trở về tài liệu (Ctrl+S)"
-                } else {
-                    "Lưu MathML (Ctrl+S)"
-                };
-                let shape = output.shapes.iter().find(|shape| {
-                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
-                }).expect("fixed save button must be rendered");
-                let rect = shape.shape.visual_bounding_rect();
-                assert!(screen.contains_rect(rect));
-                assert!(shape.clip_rect.contains_rect(rect));
-                if let Some(previous) = previous_rect {
-                    assert_eq!(rect, previous);
-                }
-                previous_rect = Some(rect);
             }
         }
     }
+    #[test]
+    fn symbol_buttons_use_at_most_three_rows_even_during_startup_resize() {
+        for dpi in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(dpi);
+            let mut a = app();
+            a.category = "Symbols".into();
+            for width in [960.0, MIN_WINDOW_SIZE[0], 1100.0] {
+                for _ in 0..2 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(width, 650.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| a.shell(ui),
+                    );
+                    let textures: std::collections::HashSet<_> = a
+                        .palette_textures
+                        .values()
+                        .filter_map(|t| t.as_ref().map(egui::TextureHandle::id))
+                        .collect();
+                    let images: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Rect(r) = &shape.shape {
+                                if r.brush
+                                    .as_ref()
+                                    .is_some_and(|b| textures.contains(&b.fill_texture_id))
+                                {
+                                    return Some(r.rect);
+                                }
+                            }
+                            None
+                        })
+                        .collect();
+                    let mut rows: Vec<f32> = vec![];
+                    for image in &images {
+                        if !rows.iter().any(|y| (y - image.center().y).abs() < 2.0) {
+                            rows.push(image.center().y);
+                        }
+                    }
+                    assert!(
+                        rows.len() <= 3,
+                        "{} rows at width {width}, DPI {dpi}",
+                        rows.len()
+                    );
+                    if width >= MIN_WINDOW_SIZE[0] {
+                        let count = palette::PALETTE
+                            .iter()
+                            .filter(|(g, _, _)| *g == "Symbols")
+                            .count();
+                        assert_eq!(
+                            images.len(),
+                            count,
+                            "every symbol must fit at the minimum width"
+                        );
+                        assert!(images.iter().all(|r| output.shapes.iter().any(|s|
+                            matches!(&s.shape, egui::Shape::Rect(p) if p.rect == *r && s.clip_rect.contains_rect(*r)))));
+                    }
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn startup_resize_corrects_undersized_native_and_wayland_viewports() {
+        for wayland in [false, true] {
+            for (size, maximized, monitor, expected) in [
+                (
+                    Vec2::new(960.0, 540.0),
+                    false,
+                    Vec2::new(1600.0, 900.0),
+                    Some(Vec2::from(MIN_WINDOW_SIZE)),
+                ),
+                (
+                    Vec2::new(1100.0, 650.0),
+                    false,
+                    Vec2::new(1600.0, 900.0),
+                    None,
+                ),
+                (
+                    Vec2::new(960.0, 540.0),
+                    true,
+                    Vec2::new(1600.0, 900.0),
+                    None,
+                ),
+                (
+                    Vec2::new(900.0, 600.0),
+                    false,
+                    Vec2::new(900.0, 600.0),
+                    None,
+                ),
+            ] {
+                let ctx = egui::Context::default();
+                let rect = Rect::from_min_size(Pos2::ZERO, size);
+                let mut input = egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                };
+                let viewport = input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+                viewport.inner_rect = (!wayland).then_some(rect);
+                viewport.monitor_size = Some(monitor);
+                viewport.maximized = Some(maximized);
+                let mut output = ctx.run_ui(input, |ui| App::enforce_window_minimum(ui.ctx()));
+                let requested = output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .iter()
+                    .find_map(|c| {
+                        if let egui::ViewportCommand::InnerSize(size) = c {
+                            Some(*size)
+                        } else {
+                            None
+                        }
+                    });
+                assert_eq!(requested, expected, "Wayland fallback: {wayland}");
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn placeholder_decoration_uses_render_geometry_without_changing_equations() {
+        for (xml, slots) in [
+            ("<math/>", 1),
+            ("<math><mfrac><mrow/><mrow/></mfrac></math>", 2),
+            ("<math><msqrt><mrow/></msqrt></math>", 1),
+            ("<math><mi>□</mi></math>", 0),
+        ] {
+            let mut a = app();
+            a.load_math(xml, None, None);
+            let before = a.editor.math();
+            let ctx = egui::Context::default();
+            a.request_render(&ctx);
+            let Event::Render(_, result) = a.rx.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!("expected equation render")
+            };
+            let rendered = result.unwrap();
+            assert_eq!(rendered.placeholders.len(), slots, "{xml}");
+            assert!(rendered
+                .placeholders
+                .iter()
+                .all(|r| r.width > 0.0 && r.height > 0.0));
+            assert_eq!(a.editor.math(), before);
+            assert!(!a.editor.math().to_xml().contains(PLACEHOLDER_ATTR));
+        }
+    }
+
+    #[test]
+    fn canvas_scrolls_only_for_formula_overflow_across_dpi_changes() {
+        for dpi in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(dpi);
+            let mut a = app();
+            let short = MathNode::with_children("math", vec![MathNode::leaf("mi", "x")]);
+            let long =
+                MathNode::with_children("math", vec![MathNode::leaf("mi", &"x".repeat(100))]);
+            let mut tall = MathNode::leaf("mi", "x");
+            for _ in 0..8 {
+                tall = MathNode::with_children("mfrac", vec![tall, MathNode::leaf("mi", "x")]);
+            }
+            let tall = MathNode::with_children("math", vec![tall]);
+            let mut frame = 0;
+            // Returning to a short formula must remove overflow after either kind of scroll.
+            for (math, horizontal, vertical) in [
+                (&short, false, false),
+                (&long, true, false),
+                (&short, false, false),
+                (&tall, false, true),
+                (&short, false, false),
+            ] {
+                a.rendered = Some(Rendered {
+                    placeholders: vec![],
+                    image: egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255]),
+                    preview: eqntide::render::render_interactive(math, a.font_pt).unwrap(),
+                });
+                for _ in 0..4 {
+                    let mut scroll = None;
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(320.3, 200.7),
+                            )),
+                            time: Some(frame as f64 * 0.25),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            scroll = Some(a.canvas(ui));
+                        },
+                    );
+                    frame += 1;
+                    output.textures_delta.clear();
+                    let scroll = scroll.unwrap();
+                    assert_eq!(
+                        scroll.content_size.x > scroll.inner_rect.width(),
+                        horizontal,
+                        "horizontal overflow at DPI {dpi}: {:?} in {:?}",
+                        scroll.content_size,
+                        scroll.inner_rect
+                    );
+                    assert_eq!(
+                        scroll.content_size.y > scroll.inner_rect.height(),
+                        vertical,
+                        "vertical overflow at DPI {dpi}: {:?} in {:?}",
+                        scroll.content_size,
+                        scroll.inner_rect
+                    );
+                    let canvas = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::Rect(r)
+                                if r.fill == Color32::WHITE
+                                    && r.stroke.color == Color32::LIGHT_GRAY =>
+                            {
+                                Some(r)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        canvas.corner_radius,
+                        ctx.style_of(ctx.theme())
+                            .visuals
+                            .widgets
+                            .inactive
+                            .corner_radius
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_source_keeps_white_canvas_and_reports_error_only_in_status() {
+        let mut a = app();
+        a.load_math("<math><mi>x</mi></math>", None, None);
+        let before = a.editor.math();
+        a.latex = "\\frac{1}".into();
+        a.source_changed(Instant::now());
+        a.latex_error = Some("incomplete fraction".into());
+        let ctx = egui::Context::default();
+        ctx.set_theme(egui::Theme::Dark);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(940.0, 650.0))),
+                ..Default::default()
+            },
+            |ui| a.shell(ui),
+        );
+        output.textures_delta.clear();
+        let text_shapes: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                if let egui::Shape::Text(t) = &s.shape {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(!text_shapes
+            .iter()
+            .any(|t| t.galley.text() == "LaTeX" || t.galley.text() == a.status));
+        let error = text_shapes
+            .iter()
+            .find(|t| t.galley.text().contains("incomplete fraction"))
+            .unwrap();
+        assert!(
+            error.pos.y > 610.0,
+            "error must be in the bottom status bar"
+        );
+        assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.fill == Color32::WHITE && r.rect.width() > 200.0)));
+        assert_eq!(a.editor.math(), before);
+        assert!(a.draft_dirty);
+    }
+
+    #[test]
+    fn sidebar_batch_and_back_preserve_unsaved_equation() {
+        let mut a = app();
+        a.editor.insert_text("x");
+        a.changed();
+        let before = a.editor.math();
+        let source = a.latex.clone();
+        let ctx = egui::Context::default();
+        for (label, expected_tab) in [("Batch DOCX", 1), ("← Quay lại soạn công thức", 0)]
+        {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|s| {
+                    if let egui::Shape::Text(t) = &s.shape {
+                        if t.galley.text() == label {
+                            return Some(s.shape.visual_bounding_rect().center());
+                        }
+                    }
+                    None
+                })
+                .unwrap();
+            output.textures_delta.clear();
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| a.shell(ui),
+            )
+            .textures_delta
+            .clear();
+            assert_eq!(a.tab, expected_tab);
+            assert_eq!(a.editor.math(), before);
+            assert_eq!(a.latex, source);
+            assert!(a.dirty());
+        }
+    }
+
     #[test]
     fn invalid_import_keeps_existing_work_and_source() {
         let mut a = app();
@@ -1947,6 +3190,7 @@ mod tests {
         );
         let preview = eqntide::render::render_interactive(&a.editor.math(), 12.0).unwrap();
         a.rendered = Some(Rendered {
+            placeholders: vec![],
             preview,
             image: egui::ColorImage::filled([1, 1], Color32::WHITE),
         });

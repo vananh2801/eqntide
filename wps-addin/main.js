@@ -78,6 +78,7 @@ function isLatexText(text) {
     (t.startsWith("\\[") && t.endsWith("\\]")) ||
     (t.startsWith("\\(") && t.endsWith("\\)")) ||
     t.indexOf("\\frac") !== -1 ||
+    t.indexOf("\\dfrac") !== -1 ||
     t.indexOf("\\sqrt") !== -1 ||
     t.startsWith("\\begin") ||
     t.indexOf("\\sum") !== -1 ||

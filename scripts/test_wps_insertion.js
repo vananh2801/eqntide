@@ -13,6 +13,24 @@ function controller() {
   context.wpsLog = () => {};
   return context;
 }
+// Toggle must recognize bare \dfrac as well as delimited formulas.
+for (const source of [String.raw`\dfrac{1}{2}`, String.raw`$\dfrac{1}{2}$`, String.raw`\[\dfrac{1}{2}\]`]) {
+  const c = controller();
+  const selection = { Start: 10, End: 10 + source.length, Text: source };
+  const doc = {};
+  let captured;
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = callback => callback();
+  c.batchLatexToMathType = (actualDoc, actualSelection, matches) => {
+    assert.equal(actualDoc, doc);
+    assert.equal(actualSelection, selection);
+    captured = matches;
+  };
+  c.ToggleLatex();
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].latex, String.raw`\dfrac{1}{2}`);
+}
+
 // Model WPS's observed behavior: packages create native equations; raw
 // oMath/XML is literal text. Exercise extra breaks and existing paragraph marks.
 for (const editing of [false, true]) {

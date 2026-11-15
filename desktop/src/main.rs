@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod app;
 mod batch;
+mod commands;
 mod instance;
 mod palette;
 mod runtime;
@@ -45,6 +46,7 @@ impl<T> EventSender<T> {
 }
 
 pub struct Rendered {
+    placeholders: Vec<eqntide::render::HitRegion>,
     preview: InteractivePreview,
     image: eframe::egui::ColorImage,
 }
@@ -79,8 +81,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icons/icon.png")).ok();
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("EqnTide — Equation Editor")
-        .with_inner_size([940.0, 650.0])
-        .with_min_inner_size([600.0, 450.0]);
+        .with_inner_size([1100.0, 650.0])
+        .with_min_inner_size(app::MIN_WINDOW_SIZE);
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
