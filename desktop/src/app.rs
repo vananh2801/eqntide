@@ -839,16 +839,18 @@ impl App {
                         .scope(|ui| {
                             ui.style_mut().explanation_tooltips = false;
                             ui.add(
-                                egui::DragValue::new(&mut self.font_pt)
-                                    .range(6.0..=72.0)
-                                    .min_size(Vec2::new(
-                                        FONT_SIZE_CONTROL_WIDTH,
-                                        FOOTER_CONTROL_HEIGHT,
-                                    ))
-                                    // A quarter of the control's width changes the size by 1 pt.
-                                    .speed(4.0 / FONT_SIZE_CONTROL_WIDTH)
-                                    .max_decimals(1)
-                                    .suffix(" pt"),
+                                egui::DragValue::from_get_set(|value| {
+                                    if let Some(value) = value {
+                                        self.font_pt = ((value * 2.0).round() / 2.0) as f32;
+                                    }
+                                    f64::from(self.font_pt)
+                                })
+                                .range(6.0..=72.0)
+                                .min_size(Vec2::new(FONT_SIZE_CONTROL_WIDTH, FOOTER_CONTROL_HEIGHT))
+                                // A quarter of the control's width changes the size by 1 pt.
+                                .speed(4.0 / FONT_SIZE_CONTROL_WIDTH)
+                                .max_decimals(1)
+                                .suffix(" pt"),
                             )
                             .on_hover_text("Nhấn giữ và kéo trái/phải để điều chỉnh")
                             .changed()
