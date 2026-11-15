@@ -87,6 +87,7 @@ pub struct App {
     category: String,
     matrix_dialog: Option<MatrixDialog>,
     palette_textures: HashMap<&'static str, Option<egui::TextureHandle>>,
+    palette_ppp: f32,
     status: String,
     texture: Option<egui::TextureHandle>,
     rendered: Option<Rendered>,
@@ -221,6 +222,7 @@ impl App {
             category: "Fractions".into(),
             matrix_dialog: None,
             palette_textures: HashMap::new(),
+            palette_ppp: 0.0,
             status: "Click the canvas to type. Use the palette or Ctrl+F for a fraction.".into(),
             texture: None,
             rendered: None,
@@ -1194,33 +1196,49 @@ impl App {
                     .show(ui, |ui| {
                         ui.spacing_mut().button_padding = Vec2::new(5.0, 4.0);
                         ui.spacing_mut().item_spacing = Vec2::splat(PALETTE_GAP);
+                        let ppp = ui.ctx().pixels_per_point();
+                        if (self.palette_ppp - ppp).abs() > f32::EPSILON {
+                            self.palette_textures.clear();
+                            self.palette_ppp = ppp;
+                        }
+                        let icon_color = if ui.visuals().dark_mode {
+                            Color32::WHITE
+                        } else {
+                            Color32::BLACK
+                        };
                         for (index, (_, label, source)) in items.iter().enumerate() {
                             let texture =
                                 self.palette_textures.entry(source).or_insert_with(|| {
                                     let math = palette::preview_template(source).ok()?;
-                                    let preview =
-                                        eqntide::render::render_preview(&math, 12.0).ok()?;
-                                    let mut pixels =
-                                        image::load_from_memory(&preview.png).ok()?.to_rgba8();
-                                    // White alpha masks can be tinted for both system themes.
-                                    for pixel in pixels.pixels_mut() {
-                                        pixel.0[0..3].fill(255);
+                                    let mask = eqntide::render_alpha_fit(
+                                        &math,
+                                        34.0 * ppp,
+                                        22.0 * ppp,
+                                    )
+                                    .ok()?;
+                                    let mut rgba = Vec::with_capacity(mask.alpha.len() * 4);
+                                    // White alpha masks can be tinted pure white in dark mode
+                                    // and pure black in light mode at exact 1:1 physical pixels.
+                                    for &alpha in &mask.alpha {
+                                        let a = alpha as f32 / 255.0;
+                                        let boosted =
+                                            (a.powf(0.70) * 255.0).round().min(255.0) as u8;
+                                        rgba.extend_from_slice(&[255, 255, 255, boosted]);
                                     }
                                     let image = egui::ColorImage::from_rgba_unmultiplied(
-                                        [pixels.width() as usize, pixels.height() as usize],
-                                        pixels.as_raw(),
+                                        [mask.width as usize, mask.height as usize],
+                                        &rgba,
                                     );
                                     Some(ui.ctx().load_texture(
                                         *source,
                                         image,
-                                        egui::TextureOptions::LINEAR,
+                                        egui::TextureOptions::NEAREST,
                                     ))
                                 });
                             let response = if let Some(texture) = texture {
-                                let size = texture.size_vec2();
-                                let ratio = (34.0 / size.x).min(22.0 / size.y);
-                                let image = egui::Image::new((texture.id(), size * ratio))
-                                    .tint(ui.visuals().text_color());
+                                let display_size = texture.size_vec2() / ppp;
+                                let image =
+                                    egui::Image::new((texture.id(), display_size)).tint(icon_color);
                                 ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(image))
                             } else {
                                 ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(*label))
@@ -1440,6 +1458,27 @@ impl App {
             .stroke(Stroke::new(1.0, Color32::LIGHT_GRAY))
             .inner_margin(12.0)
             .show(ui, |ui| {
+                let light_blue = Color32::from_rgb(133, 192, 230);
+                let hover_blue = Color32::from_rgb(40, 157, 207);
+                let active_blue = Color32::from_rgb(25, 135, 190);
+                let track_blue = Color32::from_rgb(238, 246, 253);
+
+                ui.visuals_mut().widgets.inactive.bg_fill = light_blue;
+                ui.visuals_mut().widgets.inactive.fg_stroke.color = light_blue;
+                ui.visuals_mut().widgets.hovered.bg_fill = hover_blue;
+                ui.visuals_mut().widgets.hovered.fg_stroke.color = hover_blue;
+                ui.visuals_mut().widgets.active.bg_fill = active_blue;
+                ui.visuals_mut().widgets.active.fg_stroke.color = active_blue;
+                ui.visuals_mut().extreme_bg_color = track_blue;
+
+                let scroll = &mut ui.spacing_mut().scroll;
+                scroll.dormant_handle_opacity = 0.5;
+                scroll.active_handle_opacity = 0.85;
+                scroll.interact_handle_opacity = 1.0;
+                scroll.dormant_background_opacity = 0.3;
+                scroll.active_background_opacity = 0.6;
+                scroll.interact_background_opacity = 0.85;
+
                 egui::ScrollArea::both()
                     .id_salt("formula-scroll")
                     .max_height(height)
@@ -3862,5 +3901,37 @@ mod tests {
         assert!(a.editor.math().children.is_empty());
         assert!(!a.draft_dirty);
         assert!(a.latex.is_empty());
+    }
+
+    #[test]
+    fn palette_icons_use_theme_contrast_and_physical_dpi() {
+        let mut a = app();
+        for (theme, expected_tint) in [
+            (egui::Theme::Dark, Color32::WHITE),
+            (egui::Theme::Light, Color32::BLACK),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.set_theme(theme);
+            ctx.set_pixels_per_point(1.5);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+            let texture_ids: std::collections::HashSet<_> = a
+                .palette_textures
+                .values()
+                .filter_map(|t| t.as_ref().map(egui::TextureHandle::id))
+                .collect();
+            assert!(!texture_ids.is_empty());
+            assert!((a.palette_ppp - 1.5).abs() < f32::EPSILON);
+            let tinted_match = output.shapes.iter().any(|s| match &s.shape {
+                egui::Shape::Rect(r) => r.brush.as_ref().is_some_and(|b| {
+                    texture_ids.contains(&b.fill_texture_id) && r.fill == expected_tint
+                }),
+                _ => false,
+            });
+            assert!(
+                tinted_match,
+                "expected palette icons to tint {expected_tint:?} in {theme:?}"
+            );
+            output.textures_delta.clear();
+        }
     }
 }
