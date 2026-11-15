@@ -88,6 +88,7 @@ pub struct App {
     matrix_dialog: Option<MatrixDialog>,
     palette_textures: HashMap<&'static str, Option<egui::TextureHandle>>,
     palette_ppp: f32,
+    logo_texture: Option<egui::TextureHandle>,
     status: String,
     texture: Option<egui::TextureHandle>,
     rendered: Option<Rendered>,
@@ -223,6 +224,7 @@ impl App {
             matrix_dialog: None,
             palette_textures: HashMap::new(),
             palette_ppp: 0.0,
+            logo_texture: None,
             status: "Click the canvas to type. Use the palette or Ctrl+F for a fraction.".into(),
             texture: None,
             rendered: None,
@@ -940,27 +942,6 @@ impl App {
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         self.save_button(ui);
-                        ui.scope(|ui| {
-                            ui.spacing_mut().slider_width = 120.0;
-                            let widgets = &mut ui.visuals_mut().widgets;
-                            for state in [
-                                &mut widgets.noninteractive,
-                                &mut widgets.inactive,
-                                &mut widgets.hovered,
-                                &mut widgets.active,
-                                &mut widgets.open,
-                            ] {
-                                state.corner_radius = egui::CornerRadius::same(4);
-                            }
-                            ui.add(
-                                egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
-                                    .handle_shape(egui::style::HandleShape::Rect {
-                                        aspect_ratio: 1.0,
-                                    })
-                                    .show_value(false),
-                            )
-                            .on_hover_text("Zoom display");
-                        });
                     });
                 });
             },
@@ -969,17 +950,20 @@ impl App {
 
     fn sidebar(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
         egui::Panel::bottom("sidebar-batch")
-            .exact_size(60.0)
+            .exact_size(142.0)
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 8)))
             .show(ui, |ui| {
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 42.0],
-                        egui::Button::selectable(false, "Batch DOCX"),
-                    )
-                    .clicked()
-                {
-                    self.tab = 1;
+                ui.spacing_mut().item_spacing.y = 6.0;
+                for (tab, label) in [(1, "Batch DOCX"), (2, "Settings"), (3, "About")] {
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 38.0],
+                            egui::Button::selectable(self.tab == tab, label),
+                        )
+                        .clicked()
+                    {
+                        self.tab = tab;
+                    }
                 }
             });
         ui.add_space(8.0);
@@ -1343,10 +1327,12 @@ impl App {
                 ui.add_enabled_ui(
                     !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
                     |ui| {
-                        if self.tab == 0 {
-                            self.editor_ui(ui);
-                        } else {
-                            self.batch_ui(ui);
+                        match self.tab {
+                            0 => self.editor_ui(ui),
+                            1 => self.batch_ui(ui),
+                            2 => self.settings_ui(ui),
+                            3 => self.about_ui(ui),
+                            _ => self.editor_ui(ui),
                         }
                     },
                 );
@@ -2410,6 +2396,127 @@ impl App {
             }
         });
     }
+
+    fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        if ui.button("← Back to equation").clicked() {
+            self.tab = 0;
+        }
+        ui.add_space(10.0);
+        ui.heading("Settings");
+        ui.add_space(12.0);
+        ui.group(|ui| {
+            ui.set_min_width(ui.available_width().min(520.0));
+            ui.label(egui::RichText::new("Canvas zoom").strong());
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.scope(|ui| {
+                    ui.spacing_mut().slider_width = 220.0;
+                    let widgets = &mut ui.visuals_mut().widgets;
+                    for state in [
+                        &mut widgets.noninteractive,
+                        &mut widgets.inactive,
+                        &mut widgets.hovered,
+                        &mut widgets.active,
+                        &mut widgets.open,
+                    ] {
+                        state.corner_radius = egui::CornerRadius::same(4);
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
+                            .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
+                            .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
+                    );
+                });
+                if ui.button("Reset (200%)").clicked() {
+                    self.zoom = 2.0;
+                }
+            });
+        });
+        ui.add_space(10.0);
+        ui.group(|ui| {
+            ui.set_min_width(ui.available_width().min(520.0));
+            ui.label(egui::RichText::new("Appearance").strong());
+            ui.add_space(4.0);
+            let is_dark = ui.visuals().dark_mode;
+            ui.horizontal(|ui| {
+                ui.label(if is_dark {
+                    "Current theme: Dark mode"
+                } else {
+                    "Current theme: Light mode"
+                });
+                ui.add_space(8.0);
+                let toggle_label = if is_dark {
+                    "Switch to Light mode"
+                } else {
+                    "Switch to Dark mode"
+                };
+                if ui.button(toggle_label).clicked() {
+                    let next = if is_dark {
+                        egui::Theme::Light
+                    } else {
+                        egui::Theme::Dark
+                    };
+                    ui.ctx().set_theme(next);
+                }
+            });
+        });
+    }
+
+    fn about_ui(&mut self, ui: &mut egui::Ui) {
+        if ui.button("← Back to equation").clicked() {
+            self.tab = 0;
+        }
+        ui.add_space(10.0);
+        ui.heading("About EqnTide");
+        ui.add_space(12.0);
+        let logo = self.logo_texture.get_or_insert_with(|| {
+            let bytes = include_bytes!("../../assets/icons/icon.png");
+            let pixels = image::load_from_memory(bytes)
+                .expect("bundled icon is valid")
+                .to_rgba8();
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [pixels.width() as usize, pixels.height() as usize],
+                pixels.as_raw(),
+            );
+            ui.ctx()
+                .load_texture("eqntide-logo", image, egui::TextureOptions::LINEAR)
+        });
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::Image::new((logo.id(), Vec2::splat(72.0)))
+                    .corner_radius(egui::CornerRadius::same(12)),
+            );
+            ui.add_space(12.0);
+            ui.vertical(|ui| {
+                ui.heading("EqnTide");
+                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                ui.label(env!("CARGO_PKG_DESCRIPTION"));
+            });
+        });
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(10.0);
+        egui::Grid::new("about-info")
+            .num_columns(2)
+            .spacing([16.0, 8.0])
+            .show(ui, |ui| {
+                ui.strong("Author:");
+                ui.label(env!("CARGO_PKG_AUTHORS"));
+                ui.end_row();
+
+                ui.strong("Version:");
+                ui.label(env!("CARGO_PKG_VERSION"));
+                ui.end_row();
+
+                ui.strong("License:");
+                ui.label(env!("CARGO_PKG_LICENSE"));
+                ui.end_row();
+
+                ui.strong("GitHub:");
+                ui.hyperlink(env!("CARGO_PKG_REPOSITORY"));
+                ui.end_row();
+            });
+    }
     fn dialogs(&mut self, ctx: &egui::Context) {
         // An Office session alone is not an unsaved change. Cancel an
         // untouched session before closing/switching so its add-in wait ends
@@ -2519,10 +2626,22 @@ mod tests {
     #[test]
     fn omml_unsupported_warning_displays_in_status_bar() {
         let cases = [
-            (r"\enclose{longdiv}{144}", "Long division is not supported in OMML"),
-            (r"\enclose{roundedbox}{x}", "Rounded box is not supported in OMML"),
-            (r"\enclose{verticalstrike}{x}", "Vertical strike is not supported in OMML"),
-            (r"\underddddot{x}", "Quadruple underdot is not supported in OMML"),
+            (
+                r"\enclose{longdiv}{144}",
+                "Long division is not supported in OMML",
+            ),
+            (
+                r"\enclose{roundedbox}{x}",
+                "Rounded box is not supported in OMML",
+            ),
+            (
+                r"\enclose{verticalstrike}{x}",
+                "Vertical strike is not supported in OMML",
+            ),
+            (
+                r"\underddddot{x}",
+                "Quadruple underdot is not supported in OMML",
+            ),
         ];
 
         for (latex, expected_msg) in cases {
@@ -2538,13 +2657,25 @@ mod tests {
             let has_warning = output.shapes.iter().any(|s| {
                 matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains(expected_msg))
             });
-            assert!(has_warning, "Expected OMML warning in status bar for {latex}");
+            assert!(
+                has_warning,
+                "Expected OMML warning in status bar for {latex}"
+            );
         }
 
         for (latex, expected_msg) in [
-            (r"\enclose{verticalstrike}{x}", "Vertical strike is not supported in MathType"),
-            (r"\enclose{circle}{x}", "Circle enclosure is not supported in MathType"),
-            (r"\enclose{phasorangle}{x}", "Phasor angle is not supported in MathType"),
+            (
+                r"\enclose{verticalstrike}{x}",
+                "Vertical strike is not supported in MathType",
+            ),
+            (
+                r"\enclose{circle}{x}",
+                "Circle enclosure is not supported in MathType",
+            ),
+            (
+                r"\enclose{phasorangle}{x}",
+                "Phasor angle is not supported in MathType",
+            ),
         ] {
             let mut a = app();
             a.target = "mathtype".into();
@@ -2558,7 +2689,10 @@ mod tests {
             let has_warning = output.shapes.iter().any(|s| {
                 matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains(expected_msg))
             });
-            assert!(has_warning, "Expected MathType warning in status bar for {latex}");
+            assert!(
+                has_warning,
+                "Expected MathType warning in status bar for {latex}"
+            );
         }
 
         // finish(true) in an Office session blocks unsupported constructs for the active target.
@@ -3933,5 +4067,116 @@ mod tests {
             );
             output.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn sidebar_settings_and_about_tabs_work_and_toggle_theme() {
+        let mut a = app();
+        let ctx = egui::Context::default();
+        ctx.set_theme(egui::Theme::Dark);
+
+        // Open Settings from sidebar
+        for (label, expected_tab) in [
+            ("Settings", 2),
+            ("← Back to equation", 0),
+            ("About", 3),
+            ("← Back to equation", 0),
+        ] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|s| {
+                    if let egui::Shape::Text(t) = &s.shape {
+                        if t.galley.text() == label {
+                            return Some(s.shape.visual_bounding_rect().center());
+                        }
+                    }
+                    None
+                })
+                .unwrap_or_else(|| panic!("missing button {label}"));
+            output.textures_delta.clear();
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| a.shell(ui),
+            )
+            .textures_delta
+            .clear();
+            assert_eq!(a.tab, expected_tab);
+        }
+
+        // Verify About displays logo, version, author, and GitHub link
+        a.tab = 3;
+        let mut about_out = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+        let texts: Vec<_> = about_out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|t| t == "About EqnTide"));
+        assert!(texts.iter().any(|t| t == env!("CARGO_PKG_AUTHORS")));
+        assert!(texts.iter().any(|t| t == env!("CARGO_PKG_VERSION")));
+        assert!(texts.iter().any(|t| t == env!("CARGO_PKG_REPOSITORY")));
+        assert!(a.logo_texture.is_some());
+        about_out.textures_delta.clear();
+
+        // Verify Settings toggles theme from Dark -> Light
+        a.tab = 2;
+        let mut settings_out = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+        let toggle_pos = settings_out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Switch to Light mode" => {
+                    Some(s.shape.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("missing theme toggle button in Settings");
+        settings_out.textures_delta.clear();
+        ctx.run_ui(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::PointerMoved(toggle_pos),
+                    egui::Event::PointerButton {
+                        pos: toggle_pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos: toggle_pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| a.shell(ui),
+        )
+        .textures_delta
+        .clear();
+        assert_eq!(ctx.theme(), egui::Theme::Light);
     }
 }

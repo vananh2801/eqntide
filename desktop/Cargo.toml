@@ -2,7 +2,10 @@
 name = "eqntide-desktop"
 version = "0.4.0"
 edition = "2021"
+description = "EqnTide: Bidirectional math equation converter & editor between Word OMML, LaTeX, and MathType"
 license = "MIT"
+authors = ["Anh"]
+repository = "https://github.com/vananh2801/eqntide"
 publish = false
 
 [dependencies]
