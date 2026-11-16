@@ -48,7 +48,7 @@ pub fn acquire(args: &[String], tx: Sender<Event>) -> io::Result<Option<Instance
             }
         }
         return Err(
-            last.unwrap_or_else(|| io::Error::other("Desktop did not accept the launch request")),
+            last.unwrap_or_else(|| io::Error::other("Desktop did not accept the launch request"))
         );
     }
     let listener = ListenerOptions::new()

@@ -37,15 +37,17 @@ fn build_icon_res(ico: &[u8]) -> Vec<u8> {
     assert_eq!(le_u16(ico, 0), 0, "ICO reserved must be 0");
     assert_eq!(le_u16(ico, 2), 1, "ICO type must be 1");
     let count = le_u16(ico, 4) as usize;
-    assert!(count > 0 && ico.len() >= 6 + count * 16, "Truncated ICO directory");
+    assert!(
+        count > 0 && ico.len() >= 6 + count * 16,
+        "Truncated ICO directory"
+    );
 
     let mut res = Vec::with_capacity(ico.len() + 256);
     // Standard 32-byte empty Win32 .res header
     res.extend_from_slice(&[
-        0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
-        0xff, 0xff, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0xff, 0xff, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
     ]);
 
     let mut group_icon = Vec::with_capacity(6 + count * 14);
@@ -102,6 +104,7 @@ fn main() {
     } else {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("../assets/icons/icon.ico");
-        res.compile().expect("failed to compile Windows icon resource");
+        res.compile()
+            .expect("failed to compile Windows icon resource");
     }
 }
