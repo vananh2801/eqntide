@@ -248,7 +248,7 @@ URI handler. macOS packaging is disabled.
 
 The Rust desktop is the only desktop implementation. This remains a
 **native preview** until the manual platform/Office matrix passes.
-See [implementation plan](plan.md) and [validation status](desktop/VALIDATION.md).
+See [validation status](desktop/VALIDATION.md).
 
 ### Native desktop integration and add-in setup
 
