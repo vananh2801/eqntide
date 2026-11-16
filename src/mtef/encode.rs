@@ -17,9 +17,9 @@ use crate::mtef::{
     EMB_U_2DOT, EMB_U_3DOT, EMB_U_4DOT, EMB_U_BAR, EMB_U_BARROW, EMB_U_FROWN, EMB_U_L1ARROW,
     EMB_U_LARROW, EMB_U_R1ARROW, EMB_U_RARROW, EMB_U_SMILE, EMB_U_TILDE, END, TF_FUNCTION,
     TF_NUMBER, TF_SYMBOL, TF_TEXT, TF_VARIABLE, TF_VECTOR, TM_ANGLE, TM_BAR, TM_BRACE, TM_BRACK,
-    TM_CEILING, TM_COPROD, TM_DBAR, TM_FLOOR, TM_INTER, TM_INTOP, TM_OBRACK, TM_PAREN, TM_PROD, TM_SUM,
-    TM_SUMOP, TM_UNION, TV_BO_SUM, TV_INT_1, TV_INT_2, TV_INT_3, TV_INT_CCW_LOOP, TV_INT_CW_LOOP,
-    TV_INT_LOOP,
+    TM_CEILING, TM_COPROD, TM_DBAR, TM_FLOOR, TM_INTER, TM_INTOP, TM_OBRACK, TM_PAREN, TM_PROD,
+    TM_SUM, TM_SUMOP, TM_UNION, TV_BO_SUM, TV_INT_1, TV_INT_2, TV_INT_3, TV_INT_CCW_LOOP,
+    TV_INT_CW_LOOP, TV_INT_LOOP,
 };
 use crate::symbols::{has_foreign_letters, is_function, is_prime_char, prime_order};
 
@@ -393,7 +393,6 @@ impl MathmlEncoder {
                         };
                         return Ok(attach_embell(base, emb));
                     }
-
                 }
                 let sup = self.nth(node, 1)?;
                 if !sup.is_empty() {
@@ -584,9 +583,7 @@ impl MathmlEncoder {
                     // Hat / circumflex (\widehat{AB}, \hat{x})
                     "^" | "\u{0302}" | "\u{02C6}" => Ok(over_hat(&base)),
                     // Caron (\check{x})
-                    "\u{030C}" | "\u{02C7}" => {
-                        Ok(overscript(&base, &char_record(TF_TEXT, 0x02C7)))
-                    }
+                    "\u{030C}" | "\u{02C7}" => Ok(overscript(&base, &char_record(TF_TEXT, 0x02C7))),
                     // Ring above (\mathring{x})
                     "\u{00B0}" | "\u{02DA}" | "\u{030A}" => {
                         Ok(overscript(&base, &char_record(TF_SYMBOL, 0x00B0)))

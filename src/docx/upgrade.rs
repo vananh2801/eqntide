@@ -789,7 +789,8 @@ mod tests {
 
     #[test]
     fn test_upgrade_to_mathtype_skips_unsupported_constructs() {
-        let mut node = crate::service::parse_latex_to_mathml(r"\enclose{verticalstrike}{x}").unwrap();
+        let mut node =
+            crate::service::parse_latex_to_mathml(r"\enclose{verticalstrike}{x}").unwrap();
         // Inject a fake MTEF stream containing tmSTRIKE with verticalstrike? No, MTEF lacks verticalstrike;
         // build an OLE with AlternateContent fallback or EMF+MathML? Wait: MTEF cannot represent verticalstrike,
         // so test AlternateContent where Fallback is OMML with strikeV!

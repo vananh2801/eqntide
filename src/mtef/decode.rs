@@ -1839,7 +1839,8 @@ fn unwrap_single_mrow_node(node: MathNode) -> MathNode {
 
 fn wrap_prescript_node(base: MathNode, pre_sub: MathNode, pre_sup: MathNode) -> MathNode {
     let unwrapped = unwrap_single_mrow_node(base);
-    if matches!(unwrapped.tag.as_str(), "msup" | "msub" | "msubsup") && !unwrapped.children.is_empty()
+    if matches!(unwrapped.tag.as_str(), "msup" | "msub" | "msubsup")
+        && !unwrapped.children.is_empty()
     {
         let mut post = unwrapped;
         let inner_base = std::mem::replace(&mut post.children[0], MathNode::new("mrow"));
@@ -2216,7 +2217,8 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
                 let s2 = unwrap_single_mrow_node(slot_to_node(slots.get(2)));
                 Some(MathNode::with_children("munderover", vec![s0, s1, s2]))
             } else if upper {
-                let s2 = unwrap_single_mrow_node(slot_to_node(slots.get(2).or_else(|| slots.get(1))));
+                let s2 =
+                    unwrap_single_mrow_node(slot_to_node(slots.get(2).or_else(|| slots.get(1))));
                 let mut accent = MathNode::with_children("mover", vec![s0, s2]);
                 if accent.children[1].tag == "mo"
                     && accent.children[1]

@@ -320,9 +320,8 @@ fn decode_ole_rid_to_mathml(
     let ole_bytes = pkg
         .get(target_path)
         .ok_or_else(|| Error::MissingPart(target_path.clone()))?;
-    ole_to_mathml(ole_bytes).ok_or_else(|| {
-        Error::InvalidMtef(format!("failed to decode MTEF from {target_path}"))
-    })
+    ole_to_mathml(ole_bytes)
+        .ok_or_else(|| Error::InvalidMtef(format!("failed to decode MTEF from {target_path}")))
 }
 
 fn convert_mathml_to_omml_checked(
@@ -509,8 +508,7 @@ fn convert_ole_run(
             match ole_rid
                 .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
                 .and_then(|rid| {
-                    let res =
-                        convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts)?;
+                    let res = convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts)?;
                     Ok((rid, res))
                 }) {
                 Ok((rid, OmmlConvertOutcome::Converted(omml))) => {
@@ -883,7 +881,8 @@ mod tests {
             let native = crate::mtef::make_equation_native(&eq_bytes);
             let ole_bin = crate::ole::make_ole(&native).unwrap();
             let complete_mtef = crate::mtef::build_mtef(&eq_bytes);
-            let preview = crate::render::emf::render_emf_with_mtef(math, 12.0, Some(&complete_mtef)).unwrap();
+            let preview =
+                crate::render::emf::render_emf_with_mtef(math, 12.0, Some(&complete_mtef)).unwrap();
             (ole_bin, preview.emf)
         };
 
@@ -927,11 +926,13 @@ mod tests {
         w.write_all(doc_xml.as_bytes()).unwrap();
         w.start_file("word/_rels/document.xml.rels", opts).unwrap();
         w.write_all(rels_xml.as_bytes()).unwrap();
-        w.start_file("word/embeddings/oleObject1.bin", opts).unwrap();
+        w.start_file("word/embeddings/oleObject1.bin", opts)
+            .unwrap();
         w.write_all(&ole1).unwrap();
         w.start_file("word/media/equation1.emf", opts).unwrap();
         w.write_all(&emf1).unwrap();
-        w.start_file("word/embeddings/oleObject2.bin", opts).unwrap();
+        w.start_file("word/embeddings/oleObject2.bin", opts)
+            .unwrap();
         w.write_all(&ole2).unwrap();
         w.start_file("word/media/equation2.emf", opts).unwrap();
         w.write_all(&emf2).unwrap();
@@ -967,10 +968,12 @@ mod tests {
 
     #[test]
     fn test_docx_to_omml_skips_unsupported_standalone_emf() {
-        let unsupported = crate::service::parse_latex_to_mathml(r"\enclose{roundedbox}{x+y}").unwrap();
+        let unsupported =
+            crate::service::parse_latex_to_mathml(r"\enclose{roundedbox}{x+y}").unwrap();
         let eq_bytes = crate::mtef::encode::mathml_to_mtef_bytes(&unsupported).unwrap();
         let mtef = crate::mtef::build_mtef(&eq_bytes);
-        let preview = crate::render::emf::render_emf_with_mtef(&unsupported, 12.0, Some(&mtef)).unwrap();
+        let preview =
+            crate::render::emf::render_emf_with_mtef(&unsupported, 12.0, Some(&mtef)).unwrap();
 
         let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -1011,7 +1014,11 @@ mod tests {
         assert!(pkg.contains("word/media/equation1.emf"));
         let doc_el = xml::parse(pkg.get("word/document.xml").unwrap()).unwrap();
         assert_eq!(
-            doc_el.iter().into_iter().filter(|e| e.is(NS_M, "oMath")).count(),
+            doc_el
+                .iter()
+                .into_iter()
+                .filter(|e| e.is(NS_M, "oMath"))
+                .count(),
             0
         );
     }

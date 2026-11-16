@@ -145,8 +145,7 @@ fn rasterize(b: &layout::LBox, em: f32) -> Result<Preview> {
     let left_extra = (-min_x).max(0.0);
     let right_extra = (max_x - b.w).max(0.0);
     let (pad_x, pad_y) = (2.0f32, 2.0f32);
-    let (w_px, h_px, alpha) =
-        rasterize_alpha(b, pad_x, pad_y, left_extra, right_extra, asc, desc)?;
+    let (w_px, h_px, alpha) = rasterize_alpha(b, pad_x, pad_y, left_extra, right_extra, asc, desc)?;
     let ppm = (PX_PER_PT * 72.0 / 0.0254).round() as u32;
     Ok(Preview {
         png: png::encode_alpha(w_px as u32, h_px as u32, &alpha, ppm),

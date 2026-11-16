@@ -8,7 +8,10 @@ use eqntide::xml;
 use eqntide::{mathml_to_latex, MathNode};
 
 fn count_omml(root: &xml::Element, local: &str) -> usize {
-    root.iter().into_iter().filter(|e| e.is(NS_M, local)).count()
+    root.iter()
+        .into_iter()
+        .filter(|e| e.is(NS_M, local))
+        .count()
 }
 
 fn collect_text(node: &MathNode) -> String {
@@ -58,10 +61,18 @@ fn bug1_under_arrows_and_labeled_arrows_preserve_roles_across_omml_and_mtef() {
     ] {
         let (omml1, from_mtef, omml2, final_mathml) = roundtrip_omml_mtef_omml(latex);
         let omml1_el = xml::parse(omml1.as_bytes()).unwrap();
-        assert_eq!(count_omml(&omml1_el, "groupChr"), 1, "{latex} omml1: {omml1}");
+        assert_eq!(
+            count_omml(&omml1_el, "groupChr"),
+            1,
+            "{latex} omml1: {omml1}"
+        );
 
         let omml2_el = xml::parse(omml2.as_bytes()).unwrap();
-        assert_eq!(count_omml(&omml2_el, "groupChr"), 1, "{latex} omml2: {omml2}");
+        assert_eq!(
+            count_omml(&omml2_el, "groupChr"),
+            1,
+            "{latex} omml2: {omml2}"
+        );
 
         assert!(
             from_mtef
@@ -93,8 +104,18 @@ fn bug1_under_arrows_and_labeled_arrows_preserve_roles_across_omml_and_mtef() {
                 .into_iter()
                 .find(|n| n.tag == expect_tag)
                 .unwrap_or_else(|| panic!("{latex}: {}", tree.to_xml()));
-            assert_eq!(collect_text(&node.children[0]), "→", "{latex}: {}", tree.to_xml());
-            assert_eq!(collect_text(&node.children[1]), "f", "{latex}: {}", tree.to_xml());
+            assert_eq!(
+                collect_text(&node.children[0]),
+                "→",
+                "{latex}: {}",
+                tree.to_xml()
+            );
+            assert_eq!(
+                collect_text(&node.children[1]),
+                "f",
+                "{latex}: {}",
+                tree.to_xml()
+            );
         }
     }
 }

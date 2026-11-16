@@ -1194,12 +1194,9 @@ impl App {
                             let texture =
                                 self.palette_textures.entry(source).or_insert_with(|| {
                                     let math = palette::preview_template(source).ok()?;
-                                    let mask = eqntide::render_alpha_fit(
-                                        &math,
-                                        34.0 * ppp,
-                                        22.0 * ppp,
-                                    )
-                                    .ok()?;
+                                    let mask =
+                                        eqntide::render_alpha_fit(&math, 34.0 * ppp, 22.0 * ppp)
+                                            .ok()?;
                                     let mut rgba = Vec::with_capacity(mask.alpha.len() * 4);
                                     // White alpha masks can be tinted pure white in dark mode
                                     // and pure black in light mode at exact 1:1 physical pixels.
@@ -1326,14 +1323,12 @@ impl App {
             .show(ui, |ui| {
                 ui.add_enabled_ui(
                     !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
-                    |ui| {
-                        match self.tab {
-                            0 => self.editor_ui(ui),
-                            1 => self.batch_ui(ui),
-                            2 => self.settings_ui(ui),
-                            3 => self.about_ui(ui),
-                            _ => self.editor_ui(ui),
-                        }
+                    |ui| match self.tab {
+                        0 => self.editor_ui(ui),
+                        1 => self.batch_ui(ui),
+                        2 => self.settings_ui(ui),
+                        3 => self.about_ui(ui),
+                        _ => self.editor_ui(ui),
                     },
                 );
             });

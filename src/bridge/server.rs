@@ -1509,9 +1509,12 @@ mod tests {
         let addr = server.addr();
 
         // 1. OMML session rejects longdiv with 422
-        let omml_sid = server
-            .session_manager()
-            .create_session_with_target("<math/>".into(), None, Some(12.0), "omml");
+        let omml_sid = server.session_manager().create_session_with_target(
+            "<math/>".into(),
+            None,
+            Some(12.0),
+            "omml",
+        );
         let body = serde_json::json!({
             "mathml": "<math><menclose notation=\"longdiv\"><mn>144</mn></menclose></math>",
             "target_mode": "omml",
@@ -1525,9 +1528,12 @@ mod tests {
         assert_eq!(resp.status, 422, "body: {}", resp.body);
 
         // 2. MathType session accepts longdiv with 200
-        let mt_sid = server
-            .session_manager()
-            .create_session_with_target("<math/>".into(), None, Some(12.0), "mathtype");
+        let mt_sid = server.session_manager().create_session_with_target(
+            "<math/>".into(),
+            None,
+            Some(12.0),
+            "mathtype",
+        );
         let body_mt = serde_json::json!({
             "mathml": "<math><menclose notation=\"longdiv\"><mn>144</mn></menclose></math>",
             "target_mode": "mathtype",
@@ -1541,9 +1547,12 @@ mod tests {
         assert_eq!(resp_mt.status, 200, "body: {}", resp_mt.body);
 
         // 3. MathType session rejects verticalstrike with 422
-        let mt_sid2 = server
-            .session_manager()
-            .create_session_with_target("<math/>".into(), None, Some(12.0), "mathtype");
+        let mt_sid2 = server.session_manager().create_session_with_target(
+            "<math/>".into(),
+            None,
+            Some(12.0),
+            "mathtype",
+        );
         let body_vs = serde_json::json!({
             "mathml": "<math><menclose notation=\"verticalstrike\"><mi>x</mi></menclose></math>",
             "target_mode": "mathtype",

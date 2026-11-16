@@ -424,7 +424,8 @@ mod tests {
         let longdiv = crate::service::parse_latex_to_mathml(r"\enclose{longdiv}{144}").unwrap();
         let eq_bytes = crate::mtef::encode::mathml_to_mtef_bytes(&longdiv).unwrap();
         let mtef = crate::mtef::build_mtef(&eq_bytes);
-        let preview = crate::render::emf::render_emf_with_mtef(&longdiv, 12.0, Some(&mtef)).unwrap();
+        let preview =
+            crate::render::emf::render_emf_with_mtef(&longdiv, 12.0, Some(&mtef)).unwrap();
         let src_mt = temp_dir.join("mt_in.docx");
         let dst_omml = temp_dir.join("omml_out.docx");
         {
