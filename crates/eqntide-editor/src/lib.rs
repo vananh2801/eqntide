@@ -24,6 +24,13 @@ impl Node {
     pub fn opaque(&self) -> bool {
         is_opaque_tag(&self.tag)
     }
+    pub fn is_fence_delimiter(&self) -> bool {
+        self.tag == "mo"
+            && self.attrs.iter().any(|(k, v)| {
+                (k == "stretchy" && v == "true")
+                    || (k == "form" && matches!(v.as_str(), "prefix" | "infix" | "postfix"))
+            })
+    }
     pub fn math(&self) -> MathNode {
         MathNode {
             tag: self.tag.clone(),
@@ -479,6 +486,7 @@ impl Editor {
             let c = s.caret();
             if let Some(n) = s.state.root.find_mut(c.node) {
                 if n.token()
+                    && !n.is_fence_delimiter()
                     && (n.tag == "mtext"
                         || text.chars().all(|ch| match n.tag.as_str() {
                             "mi" => ch.is_alphabetic(),
@@ -529,44 +537,78 @@ impl Editor {
         let c = self.caret();
         let nodes: Vec<_> = math.iter().map(|n| import(n, &mut self.next_id)).collect();
         let last = nodes.last().map(|n| n.id);
-        let Some(n) = self.state.root.find_mut(c.node) else {
-            return;
-        };
-        if n.token() {
-            let mut prefix = n.math();
-            let mut suffix = prefix.clone();
-            prefix.text = n.text.chars().take(c.offset).collect();
-            suffix.text = n.text.chars().skip(c.offset).collect();
-            n.tag = "mrow".into();
-            n.text.clear();
-            n.attrs.clear();
-            n.children.clear();
-            if !prefix.text.is_empty() {
-                n.children.push(import(&prefix, &mut self.next_id));
+        let token_boundary_in_row = self.node(c.node).and_then(|n| {
+            if !n.token() {
+                return None;
             }
-            n.children.extend(nodes);
-            let offset = n.children.len();
-            if !suffix.text.is_empty() {
-                n.children.push(import(&suffix, &mut self.next_id));
+            let char_len = n.text.chars().count();
+            if c.offset > 0 && c.offset < char_len {
+                return None;
             }
-            self.state.caret = Caret { node: n.id, offset };
-        } else if n.row() {
-            let offset = c.offset.min(n.children.len());
+            let mut path = self.path(c.node)?;
+            let child_idx = path.pop()?;
+            let parent = self.state.root.at(&path);
+            parent
+                .row()
+                .then_some((parent.id, child_idx, n.text.is_empty(), c.offset == 0))
+        });
+        if let Some((parent_id, child_idx, empty_token, at_start)) = token_boundary_in_row {
             let count = nodes.len();
-            n.children.splice(offset..offset, nodes);
-            self.state.caret = Caret {
-                node: n.id,
-                offset: offset + count,
-            };
-        } else {
-            // Enter the chosen fixed-arity slot instead of adding invalid children.
-            let index = c.offset.min(n.children.len().saturating_sub(1));
-            if let Some(child) = n.children.get(index) {
+            let parent = self.state.root.find_mut(parent_id).unwrap();
+            if empty_token {
+                parent.children.splice(child_idx..=child_idx, nodes);
                 self.state.caret = Caret {
-                    node: child.id,
-                    offset: 0,
+                    node: parent_id,
+                    offset: child_idx + count,
                 };
-                self.splice(math);
+            } else {
+                let insert_at = if at_start { child_idx } else { child_idx + 1 };
+                parent.children.splice(insert_at..insert_at, nodes);
+                self.state.caret = Caret {
+                    node: parent_id,
+                    offset: insert_at + count,
+                };
+            }
+        } else {
+            let Some(n) = self.state.root.find_mut(c.node) else {
+                return;
+            };
+            if n.token() {
+                let mut prefix = n.math();
+                let mut suffix = prefix.clone();
+                prefix.text = n.text.chars().take(c.offset).collect();
+                suffix.text = n.text.chars().skip(c.offset).collect();
+                n.tag = "mrow".into();
+                n.text.clear();
+                n.attrs.clear();
+                n.children.clear();
+                if !prefix.text.is_empty() {
+                    n.children.push(import(&prefix, &mut self.next_id));
+                }
+                n.children.extend(nodes);
+                let offset = n.children.len();
+                if !suffix.text.is_empty() {
+                    n.children.push(import(&suffix, &mut self.next_id));
+                }
+                self.state.caret = Caret { node: n.id, offset };
+            } else if n.row() {
+                let offset = c.offset.min(n.children.len());
+                let count = nodes.len();
+                n.children.splice(offset..offset, nodes);
+                self.state.caret = Caret {
+                    node: n.id,
+                    offset: offset + count,
+                };
+            } else {
+                // Enter the chosen fixed-arity slot instead of adding invalid children.
+                let index = c.offset.min(n.children.len().saturating_sub(1));
+                if let Some(child) = n.children.get(index) {
+                    self.state.caret = Caret {
+                        node: child.id,
+                        offset: 0,
+                    };
+                    self.splice(math);
+                }
             }
         }
         if let Some(id) = last {
@@ -639,9 +681,11 @@ impl Editor {
                 let caret = s.caret();
                 if let Some(node) = s.state.root.find_mut(caret.node) {
                     if node.row() && caret.offset > 0 {
-                        selected = Some(node.children.remove(caret.offset - 1).math());
-                        s.state.caret.offset -= 1;
-                    } else if node.token() && caret.offset > 0 {
+                        if !node.children[caret.offset - 1].is_fence_delimiter() {
+                            selected = Some(node.children.remove(caret.offset - 1).math());
+                            s.state.caret.offset -= 1;
+                        }
+                    } else if node.token() && caret.offset > 0 && !node.is_fence_delimiter() {
                         let mut prefix = node.math();
                         prefix.text = node.text.chars().take(caret.offset).collect();
                         node.text = node.text.chars().skip(caret.offset).collect();
@@ -966,10 +1010,155 @@ mod regression_tests {
         let mut e = Editor::default();
         let root = e.root().id;
         // Simulating selection on empty root with out-of-bounds offset
-        e.state.anchor = Some(Caret { node: root, offset: 0 });
-        e.state.caret = Caret { node: root, offset: 1 };
+        e.state.anchor = Some(Caret {
+            node: root,
+            offset: 0,
+        });
+        e.state.caret = Caret {
+            node: root,
+            offset: 1,
+        };
         assert!(e.selected_ids().is_empty());
         assert!(e.selected_math().is_none());
         assert!(e.erase_selection().is_none());
+    }
+    #[test]
+    fn editing_at_fence_boundaries_keeps_delimiters_as_direct_row_siblings() {
+        let fence = |left: &str, right: &str| {
+            let mut l = MathNode::leaf("mo", left);
+            l.set_attr("stretchy", "true");
+            l.set_attr("form", "prefix");
+            let mut r = MathNode::leaf("mo", right);
+            r.set_attr("stretchy", "true");
+            r.set_attr("form", "postfix");
+            MathNode::with_children(
+                "math",
+                vec![MathNode::with_children(
+                    "mrow",
+                    vec![l, MathNode::new("mrow"), r],
+                )],
+            )
+        };
+
+        for (left, right) in [("∥", "∥"), ("(", ")")] {
+            let mut e = Editor::new(&fence(left, right));
+            let inner_id = e.root().children[0].children[1].id;
+            e.set_caret(
+                Caret {
+                    node: inner_id,
+                    offset: 0,
+                },
+                false,
+            );
+            e.insert_template(&MathNode::with_children(
+                "mfrac",
+                vec![MathNode::new("mrow"), MathNode::new("mrow")],
+            ));
+            e.insert_text("1");
+            e.move_caret(Move::NextPlaceholder, false);
+            e.insert_text("2");
+
+            // Typing `x` at the left boundary of the closing fence must insert into the fence mrow.
+            let right_id = e.root().children[0].children[2].id;
+            e.set_caret(
+                Caret {
+                    node: right_id,
+                    offset: 0,
+                },
+                false,
+            );
+            e.insert_text("x");
+            // Typing `+` at the right boundary of the closing fence must not corrupt the delimiter text.
+            e.set_caret(
+                Caret {
+                    node: right_id,
+                    offset: 1,
+                },
+                false,
+            );
+            e.insert_text("+");
+            // Typing `a` at the left boundary of the opening fence must stay in the same row.
+            let left_id = e.root().children[0].children[0].id;
+            e.set_caret(
+                Caret {
+                    node: left_id,
+                    offset: 0,
+                },
+                false,
+            );
+            e.insert_text("a");
+
+            let math = e.math();
+            let row = &math.children[0].children;
+            assert_eq!(row[0].tag, "mi");
+            assert_eq!(row[0].text, "a");
+            assert_eq!(row[1].tag, "mo");
+            assert_eq!(row[1].text, left);
+            assert_eq!(row[1].attr("form"), Some("prefix"));
+            assert_eq!(row[2].tag, "mrow");
+            assert_eq!(row[3].tag, "mi");
+            assert_eq!(row[3].text, "x");
+            assert_eq!(row[4].tag, "mo");
+            assert_eq!(row[4].text, right);
+            assert_eq!(row[4].attr("form"), Some("postfix"));
+            assert_eq!(row[5].tag, "mo");
+            assert_eq!(row[5].text, "+");
+        }
+    }
+    #[test]
+    fn wrapping_scripts_or_fractions_at_fence_boundaries_does_not_steal_delimiter() {
+        let mut l = MathNode::leaf("mo", "∥");
+        l.set_attr("stretchy", "true");
+        l.set_attr("form", "prefix");
+        let mut r = MathNode::leaf("mo", "∥");
+        r.set_attr("stretchy", "true");
+        r.set_attr("form", "postfix");
+        let mut e = Editor::new(&MathNode::with_children(
+            "math",
+            vec![MathNode::with_children(
+                "mrow",
+                vec![l, MathNode::leaf("mi", "x"), r],
+            )],
+        ));
+        let row_id = e.root().children[0].id;
+        let right_id = e.root().children[0].children[2].id;
+        let msup =
+            MathNode::with_children("msup", vec![MathNode::new("mrow"), MathNode::new("mrow")]);
+        let mfrac =
+            MathNode::with_children("mfrac", vec![MathNode::new("mrow"), MathNode::new("mrow")]);
+
+        // Caret on closing delimiter offset 1: pressing `^` must not steal `∥` into the base.
+        e.set_caret(
+            Caret {
+                node: right_id,
+                offset: 1,
+            },
+            false,
+        );
+        e.insert_template(&msup);
+        // Caret right after opening delimiter in parent row: `/` must not steal `∥` into numerator.
+        e.set_caret(
+            Caret {
+                node: row_id,
+                offset: 1,
+            },
+            false,
+        );
+        e.insert_template_wrapping_previous(&mfrac);
+
+        let math = e.math();
+        let row = &math.children[0].children;
+        assert_eq!(row[0].tag, "mo");
+        assert_eq!(row[0].text, "∥");
+        assert_eq!(row[0].attr("form"), Some("prefix"));
+        assert_eq!(row[1].tag, "mfrac");
+        assert!(row[1].children[0].children.is_empty());
+        assert_eq!(row[2].tag, "mi");
+        assert_eq!(row[2].text, "x");
+        assert_eq!(row[3].tag, "mo");
+        assert_eq!(row[3].text, "∥");
+        assert_eq!(row[3].attr("form"), Some("postfix"));
+        assert_eq!(row[4].tag, "msup");
+        assert!(row[4].children[0].children.is_empty());
     }
 }
