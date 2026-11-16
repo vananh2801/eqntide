@@ -96,9 +96,13 @@ fn parse_standard(clean: &str) -> crate::error::Result<MathNode> {
             "unsupported or invalid LaTeX command".into(),
         ));
     }
+    // latex2mathml 0.2.3 writes raw `<` operators without XML escaping and `</mro>` for sized parens.
     let math = MathNode::parse(
         &mml.replace("&lang;", "⟨")
             .replace("&rang;", "⟩")
+            .replace("><</", ">&lt;</")
+            .replace("<mo><&#x0338;</mo>", "<mo>&lt;&#x0338;</mo>")
+            .replace("</mro>", "</mo>")
             .replace("columnalign=left", "columnalign=\"left\"")
             .replace("columnalign=right", "columnalign=\"right\""),
     )?;
@@ -388,6 +392,23 @@ mod tests {
     fn unknown_latex_commands_are_errors_instead_of_equation_text() {
         assert!(parse_latex_to_mathml(r"x+\thiscommanddoesnotexist{a}").is_err());
     }
+    #[test]
+    fn less_than_operator_parses_and_roundtrips() {
+        let math = parse_latex_to_mathml(r"x < 0").unwrap();
+        assert!(math
+            .iter()
+            .into_iter()
+            .any(|n| n.tag == "mo" && n.text == "<"));
+        let omml = mathml_to_omml_xml(&math).unwrap();
+        assert!(omml.contains("&lt;"));
+        let back =
+            crate::omml::omml_to_mathml(&crate::xml::parse(omml.as_bytes()).unwrap()).unwrap();
+        assert!(back
+            .iter()
+            .into_iter()
+            .any(|n| n.tag == "mo" && n.text == "<"));
+    }
+
     #[test]
     fn aliases_preserve_delimiters_and_longer_control_words() {
         let math = parse_latex_to_mathml(r"\left(x\le0\right)\geq1").unwrap();
