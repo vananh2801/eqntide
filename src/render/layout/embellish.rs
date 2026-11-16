@@ -14,7 +14,7 @@ impl Layout {
     ) {
         let c = match c {
             '\u{0308}' => '¨',
-            '\u{030A}' => '˚',
+            '\u{030A}' | '°' => '˚',
             '\u{030C}' => 'ˇ',
             '\u{0306}' => '˘',
             '\u{0300}' => 'ˋ',
@@ -418,5 +418,36 @@ impl Layout {
             }
         }
         b.desc = b.desc.max(accent.asc);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mathring_renders_hollow_ring_distinct_from_dot() {
+        let dot_math = crate::service::parse_latex_to_mathml(r"\dot{x}").unwrap();
+        let ring_math = crate::service::parse_latex_to_mathml(r"\mathring{x}").unwrap();
+
+        let (dot_box, _) = layout_math(&dot_math, 14.0).unwrap();
+        let (ring_box, _) = layout_math(&ring_math, 14.0).unwrap();
+
+        let dot_polys = dot_box
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::Poly(_)))
+            .count();
+        let ring_polys = ring_box
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::Poly(_)))
+            .count();
+
+        assert_eq!(dot_polys, 1, "overdot should draw a single filled polygon");
+        assert!(
+            ring_polys > 1,
+            "mathring should draw a stroked ring (multiple edge segments), got {ring_polys}"
+        );
     }
 }
