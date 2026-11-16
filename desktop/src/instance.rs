@@ -27,7 +27,10 @@ pub fn acquire(args: &[String], tx: Sender<Event>) -> io::Result<Option<Instance
     lock_path.hash(&mut hasher);
     let name = format!("eqntide-desktop-{:x}", hasher.finish());
     if let Err(error) = lock.try_lock_exclusive() {
-        if error.kind() != io::ErrorKind::WouldBlock {
+        let is_contended = error.kind() == io::ErrorKind::WouldBlock
+            || error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+            || error.raw_os_error() == Some(33); // ERROR_LOCK_VIOLATION on Windows
+        if !is_contended {
             return Err(error);
         }
         let mut last = None;
@@ -45,7 +48,7 @@ pub fn acquire(args: &[String], tx: Sender<Event>) -> io::Result<Option<Instance
             }
         }
         return Err(
-            last.unwrap_or_else(|| io::Error::other("Desktop did not accept the launch request"))
+            last.unwrap_or_else(|| io::Error::other("Desktop did not accept the launch request")),
         );
     }
     let listener = ListenerOptions::new()

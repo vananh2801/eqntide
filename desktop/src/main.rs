@@ -66,7 +66,14 @@ pub enum Event {
     BatchDone,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn log_file_path(filename: &str) -> Option<std::path::PathBuf> {
+    let dirs = directories::ProjectDirs::from("com", "eqntide", "EqnTide")?;
+    let log_dir = dirs.data_local_dir().join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    Some(log_dir.join(filename))
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel();
     let tx = EventSender::new(tx);
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -86,9 +93,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
+    #[cfg(target_os = "windows")]
+    let renderer = eframe::Renderer::Wgpu;
+    #[cfg(not(target_os = "windows"))]
+    let renderer = eframe::Renderer::Glow;
+
     let options = eframe::NativeOptions {
         viewport,
-        renderer: eframe::Renderer::Glow,
+        renderer,
         ..Default::default()
     };
     eframe::run_native(
@@ -97,4 +109,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(move |cc| Ok(Box::new(app::App::new(cc, instance, tx, rx, args)))),
     )?;
     Ok(())
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("EqnTide crashed unexpectedly:\n\n{info}");
+        if let Some(path) = log_file_path("desktop_panic.log") {
+            let _ = std::fs::write(&path, &msg);
+        }
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("EqnTide Crash")
+            .set_description(&msg)
+            .show();
+    }));
+
+    if let Err(err) = run() {
+        let msg = format!("Failed to start EqnTide desktop:\n\n{err}");
+        if let Some(path) = log_file_path("desktop_error.log") {
+            let _ = std::fs::write(&path, &msg);
+        }
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("EqnTide Startup Failed")
+            .set_description(&msg)
+            .show();
+        std::process::exit(1);
+    }
 }
