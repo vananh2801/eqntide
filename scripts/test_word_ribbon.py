@@ -61,6 +61,17 @@ class WordRibbon(unittest.TestCase):
         self.assertIn('""target_mode"":""mathtype""', source)
         self.assertIn('CallBridge(shapeRange.WordOpenXML, "flat_opc", "latex")', source)
 
+    def test_all_flat_opc_insertions_use_inline_break_cleanup(self):
+        source = self.modules['EqnTide']
+        self.assertIn('Private Sub InsertFlatOpcInline(', source)
+        self.assertEqual(source.count('.InsertXML'), 1)
+        self.assertIn('target.InsertXML flatOpc', source)
+        self.assertIn('InsertFlatOpcInline subRng, flatOpc, False', source)
+        self.assertIn('InsertFlatOpcInline sel.Range.Duplicate, opc, True', source)
+        self.assertIn('InsertFlatOpcInline target, flatOpc, True', source)
+        self.assertIn('If actualSuffix = suffix Then', source)
+        self.assertIn('doc.Range(insertedEnd - 1, insertedEnd).Delete', source)
+
 
 if __name__ == '__main__':
     unittest.main()

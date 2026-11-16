@@ -196,18 +196,18 @@ Public Sub ToggleLatexMacro()
             If Len(flatOpc) > 0 Then
                 Dim subRng As Range
                 Set subRng = ActiveDocument.Range(startOffset + m.FirstIndex, startOffset + m.FirstIndex + m.Length)
-                subRng.InsertXML flatOpc
+                InsertFlatOpcInline subRng, flatOpc, False
             End If
         Next i
     Else
         ' No delimiters, assume entire selected text is pure LaTeX formula
         Dim cleanLatex As String
-        cleanLatex = Trim(txt)
+        cleanLatex = Trim(Replace(Replace(txt, vbCr, ""), vbLf, ""))
         If Len(cleanLatex) > 0 Then
             Dim opc As String
             opc = CallBridge(cleanLatex, "latex", "flat_opc_mathtype")
             If Len(opc) > 0 Then
-                sel.Range.InsertXML opc
+                InsertFlatOpcInline sel.Range.Duplicate, opc, True
             End If
         End If
     End If
@@ -300,7 +300,7 @@ Private Sub EditInNativeDesktop(ByVal editExisting As Boolean)
             Dim flatOpc As String
             flatOpc = ExtractJsonField(response, "flat_opc")
             If Len(flatOpc) = 0 Then Err.Raise vbObjectError + 103, , "The editor returned an empty result."
-            target.InsertXML flatOpc
+            InsertFlatOpcInline target, flatOpc, True
             Exit Sub
         End If
         DoEvents
@@ -320,6 +320,78 @@ End Sub
 ' =========================================================================
 ' Helper Functions
 ' =========================================================================
+
+Private Sub InsertFlatOpcInline(ByVal target As Range, ByVal flatOpc As String, ByVal moveCursorAfter As Boolean)
+    Dim doc As Document
+    Set doc = ActiveDocument
+
+    ' Never swallow an existing trailing paragraph mark if the selection ends with one.
+    Do While target.End > target.Start
+        Dim tailCh As String
+        tailCh = doc.Range(target.End - 1, target.End).Text
+        If tailCh <> vbCr And tailCh <> vbLf Then Exit Do
+        target.End = target.End - 1
+    Loop
+
+    Dim insertPos As Long
+    insertPos = target.Start
+    Dim replaced As Long
+    replaced = target.End - insertPos
+    Dim originalEnd As Long
+    originalEnd = doc.Content.End
+    Dim suffixLen As Long
+    suffixLen = 32
+    If target.End + suffixLen > originalEnd Then suffixLen = originalEnd - target.End
+    Dim suffix As String
+    If suffixLen > 0 Then
+        suffix = doc.Range(target.End, target.End + suffixLen).Text
+    Else
+        suffix = ""
+    End If
+
+    target.InsertXML flatOpc
+
+    Dim newEnd As Long
+    newEnd = doc.Content.End
+    Dim insertedEnd As Long
+    insertedEnd = insertPos + newEnd - originalEnd + replaced
+
+    If insertedEnd > insertPos And insertedEnd <= newEnd Then
+        Dim verifyLen As Long
+        verifyLen = Len(suffix)
+        Dim actualSuffix As String
+        If verifyLen > 0 And insertedEnd + verifyLen <= newEnd Then
+            actualSuffix = doc.Range(insertedEnd, insertedEnd + verifyLen).Text
+        ElseIf verifyLen = 0 Then
+            actualSuffix = ""
+        Else
+            actualSuffix = vbNullString
+        End If
+        If actualSuffix = suffix Then
+            Dim breaks As Long
+            Dim ch As String
+            For breaks = 1 To 2
+                If insertedEnd <= insertPos Then Exit For
+                ch = doc.Range(insertedEnd - 1, insertedEnd).Text
+                If ch <> vbCr And ch <> vbLf Then Exit For
+                doc.Range(insertedEnd - 1, insertedEnd).Delete
+                insertedEnd = insertedEnd - 1
+            Next breaks
+        End If
+    End If
+
+    If moveCursorAfter And insertedEnd >= insertPos Then
+        Dim afterRng As Range
+        Set afterRng = doc.Range(insertedEnd, insertedEnd)
+        afterRng.Select
+        On Error Resume Next
+        Selection.Collapse wdCollapseEnd
+        Selection.Font.Position = 0
+        Selection.Font.Subscript = False
+        Selection.Font.Superscript = False
+        On Error GoTo 0
+    End If
+End Sub
 
 Private Function StripDelimiters(ByVal s As String) As String
     s = Trim(s)
