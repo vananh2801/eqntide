@@ -10,23 +10,46 @@ impl Layout {
         let mut pairs: Vec<(usize, usize)> = Vec::new();
         for i in 0..atoms.len() {
             let Some(c) = atoms[i].delim else { continue };
-            if is_open(c) {
-                stack.push(i);
-            } else if is_close(c) {
-                let want = open_for(c);
-                if let Some(pos) = stack.iter().rposition(|&j| atoms[j].delim == Some(want)) {
-                    pairs.push((stack[pos], i));
-                    stack.truncate(pos);
+            match atoms[i].fence_role {
+                FenceRole::Prefix => stack.push(i),
+                FenceRole::Postfix => {
+                    let want = open_for(c);
+                    if let Some(pos) = stack
+                        .iter()
+                        .rposition(|&j| atoms[j].delim == Some(want))
+                        .or_else(|| {
+                            stack
+                                .iter()
+                                .rposition(|&j| atoms[j].fence_role == FenceRole::Prefix)
+                        })
+                    {
+                        pairs.push((stack[pos], i));
+                        stack.truncate(pos);
+                    }
                 }
-            } else if let Some(&j) = stack.last() {
-                if atoms[j].delim == Some(c) {
-                    pairs.push((j, i));
-                    stack.pop();
-                } else {
-                    stack.push(i);
+                FenceRole::Neutral => {
+                    if is_open(c) {
+                        stack.push(i);
+                    } else if is_close(c) {
+                        let want = open_for(c);
+                        if let Some(pos) = stack.iter().rposition(|&j| atoms[j].delim == Some(want))
+                        {
+                            pairs.push((stack[pos], i));
+                            stack.truncate(pos);
+                        }
+                    } else if let Some(&j) = stack.last() {
+                        if atoms[j].delim == Some(c) {
+                            atoms[j].class = Class::Open;
+                            atoms[i].class = Class::Close;
+                            pairs.push((j, i));
+                            stack.pop();
+                        } else {
+                            stack.push(i);
+                        }
+                    } else {
+                        stack.push(i);
+                    }
                 }
-            } else {
-                stack.push(i);
             }
         }
         let last = atoms.len().saturating_sub(1);
@@ -37,6 +60,12 @@ impl Layout {
                 .iter()
                 .any(|&(a, b)| a == 0 || b == 0 || a == last || b == last)
         {
+            if atoms[0].delim.is_some_and(is_bar) {
+                atoms[0].class = Class::Open;
+            }
+            if atoms[last].delim.is_some_and(is_bar) {
+                atoms[last].class = Class::Close;
+            }
             pairs.push((0, last));
         }
         for (j, i) in pairs.iter().copied() {
@@ -58,13 +87,15 @@ impl Layout {
         // Lone `{` before a table (systems of equations) / lone `}` after one.
         for i in 0..atoms.len() {
             let Some(c) = atoms[i].delim else { continue };
-            if is_open(c)
+            let opens_next = atoms[i].fence_role == FenceRole::Prefix || is_open(c);
+            let closes_prev = atoms[i].fence_role == FenceRole::Postfix || is_close(c);
+            if opens_next
                 && atoms.get(i + 1).is_some_and(|a| a.is_table)
                 && atoms[i].b.asc < 0.9 * em
             {
                 let (a, d) = (atoms[i + 1].b.asc, atoms[i + 1].b.desc);
                 self.stretch_pair(atoms, i, a, d, em);
-            } else if is_close(c) && i > 0 && atoms[i - 1].is_table && atoms[i].b.asc < 0.9 * em {
+            } else if closes_prev && i > 0 && atoms[i - 1].is_table && atoms[i].b.asc < 0.9 * em {
                 let (a, d) = (atoms[i - 1].b.asc, atoms[i - 1].b.desc);
                 self.stretch_pair(atoms, i, a, d, em);
             }
@@ -80,7 +111,11 @@ impl Layout {
             {
                 continue;
             }
-            if (is_bar(c) || is_close(c)) && i > 0 && !(is_close(c) && atoms[i - 1].is_table) {
+            let closes_prev = atoms[i].fence_role == FenceRole::Postfix || is_close(c);
+            let opens_next = atoms[i].fence_role == FenceRole::Prefix || is_open(c);
+            let is_closing_delim = atoms[i].fence_role == FenceRole::Postfix
+                || (atoms[i].fence_role == FenceRole::Neutral && (is_bar(c) || is_close(c)));
+            if is_closing_delim && i > 0 && !(closes_prev && atoms[i - 1].is_table) {
                 let mut asc = 0.0f32;
                 let mut desc = 0.0f32;
                 for a in &atoms[..i] {
@@ -92,16 +127,20 @@ impl Layout {
                     continue;
                 }
             }
-            if (is_open(c)
-                || (is_bar(c)
-                    && (i == 0
-                        || matches!(
-                            atoms[i - 1].class,
-                            Class::Rel | Class::Op | Class::Bin | Class::Open | Class::Punct
-                        ))))
-                && i + 1 < atoms.len()
-                && !(is_open(c) && atoms[i + 1].is_table)
-            {
+            let is_opening_delim = atoms[i].fence_role == FenceRole::Prefix
+                || (atoms[i].fence_role == FenceRole::Neutral
+                    && (is_open(c)
+                        || (is_bar(c)
+                            && (i == 0
+                                || matches!(
+                                    atoms[i - 1].class,
+                                    Class::Rel
+                                        | Class::Op
+                                        | Class::Bin
+                                        | Class::Open
+                                        | Class::Punct
+                                )))));
+            if is_opening_delim && i + 1 < atoms.len() && !(opens_next && atoms[i + 1].is_table) {
                 let mut asc = 0.0f32;
                 let mut desc = 0.0f32;
                 for a in &atoms[i + 1..] {
@@ -204,14 +243,62 @@ mod tests {
     }
 
     #[test]
+    fn matched_norms_bars_and_interval_fences_stretch_equally() {
+        let font_pt = 12.0;
+        for latex in [
+            r"\left\Vert \frac{1}{2}x \right\Vert",
+            r"a = \left\Vert \frac{1}{2}x \right\Vert",
+            r"\left| \frac{1}{2}x \right|",
+            r"a = \left] \frac{1}{2}, x \right[",
+            r"a = \left[ \frac{1}{2}, x \right[",
+            r"a = \left] \frac{1}{2}, x \right]",
+        ] {
+            let math = parse_latex_to_mathml(latex).expect("parse latex");
+            let preview = render_interactive(&math, font_pt).expect("render");
+            let delims: Vec<_> = preview
+                .regions
+                .iter()
+                .filter(|r| {
+                    node_at(&math, &r.path).is_some_and(|n| {
+                        n.tag == "mo" && matches!(n.text.trim(), "∥" | "‖" | "|" | "[" | "]")
+                    })
+                })
+                .collect();
+            assert_eq!(
+                delims.len(),
+                2,
+                "{latex}: expected 2 delimiter regions, got {} in {}",
+                delims.len(),
+                math.to_xml()
+            );
+            assert!(
+                delims[0].height > 1.4 * font_pt && delims[1].height > 1.4 * font_pt,
+                "{latex}: expected both delimiters > {}, got left={}, right={}",
+                1.4 * font_pt,
+                delims[0].height,
+                delims[1].height
+            );
+            assert!(
+                (delims[0].height - delims[1].height).abs() < 0.05,
+                "{latex}: expected matching delimiter heights, got left={}, right={}",
+                delims[0].height,
+                delims[1].height
+            );
+        }
+    }
+
+    #[test]
     fn unmatched_single_sided_fences_stretch_to_tall_content() {
         let font_pt = 12.0;
         for latex in [
             r"\left\llbracket \frac{1}{2} \right.",
             r"\left( \frac{1}{2} \right.",
             r"\left| \frac{1}{2} \right.",
+            r"\left] \frac{1}{2} \right.",
+            r"x = \left] \frac{1}{2} \right.",
             r"\left. \frac{1}{2} \right\rrbracket",
             r"\left. \frac{1}{2} \right)",
+            r"\left. \frac{1}{2} \right[",
             r"x = \left\llbracket \frac{1}{2} \right.",
         ] {
             let math = parse_latex_to_mathml(latex).expect("parse latex");
@@ -221,7 +308,8 @@ mod tests {
                 .iter()
                 .find(|r| {
                     node_at(&math, &r.path).is_some_and(|n| {
-                        n.tag == "mo" && matches!(n.text.trim(), "⟦" | "⟧" | "(" | ")" | "|")
+                        n.tag == "mo"
+                            && matches!(n.text.trim(), "⟦" | "⟧" | "(" | ")" | "|" | "[" | "]")
                     })
                 })
                 .unwrap_or_else(|| {

@@ -90,6 +90,7 @@ impl Layout {
                         class: Class::Ord,
                         b: self.node(kid, em, ctx)?,
                         delim: None,
+                        fence_role: FenceRole::Neutral,
                         is_table: false,
                     });
                 }
@@ -111,10 +112,11 @@ impl Layout {
                             ..Default::default()
                         },
                         delim: None,
+                        fence_role: FenceRole::Neutral,
                         is_table: false,
                     });
                 }
-                "mo" => self.atoms_mo(&kid.text, em, &mut atoms, ssty),
+                "mo" => self.atoms_mo(&kid.text, kid.attr("form"), em, &mut atoms, ssty),
                 "mi" => self.atoms_mi(kid, em, &mut atoms, ssty),
                 "mn" => {
                     // Strip embedded whitespace inside number runs (e.g. "3 5" -> "35").
@@ -128,6 +130,7 @@ impl Layout {
                             class: Class::Ord,
                             b: self.text_styled(&text_clean, face, em, ssty),
                             delim: None,
+                            fence_role: FenceRole::Neutral,
                             is_table: false,
                         });
                     }
@@ -147,11 +150,12 @@ impl Layout {
                                 class: Class::Ord, // Ord + Ord gets 0.0 spacing (tightly packed)
                                 b: self.text_styled(t, face, em, ssty),
                                 delim: None,
+                                fence_role: FenceRole::Neutral,
                                 is_table: false,
                             });
                         } else if t.chars().count() == 1 {
                             // Single character symbol, operator, relation, or punctuation (e.g. '=', '≈', ',')
-                            self.atoms_mo(t, em, &mut atoms, ssty);
+                            self.atoms_mo(t, None, em, &mut atoms, ssty);
                         } else {
                             // Normal text words (Vietnamese words, text labels); preserve boundary spaces
                             let face = if bold { Face::VectorMatrix } else { Face::Text };
@@ -159,6 +163,7 @@ impl Layout {
                                 class: Class::Ord,
                                 b: self.text_styled(&kid.text, face, em, ssty),
                                 delim: None,
+                                fence_role: FenceRole::Neutral,
                                 is_table: false,
                             });
                         }
@@ -200,6 +205,7 @@ impl Layout {
                         class,
                         b,
                         delim: None,
+                        fence_role: FenceRole::Neutral,
                         is_table: is_wrapped_table(kid),
                     });
                 }
@@ -310,16 +316,31 @@ impl Layout {
         t * em
     }
 
-    pub(super) fn atoms_mo(&self, text: &str, em: f32, out: &mut Vec<Atom>, ssty: u8) {
+    pub(super) fn atoms_mo(
+        &self,
+        text: &str,
+        form: Option<&str>,
+        em: f32,
+        out: &mut Vec<Atom>,
+        ssty: u8,
+    ) {
         for ch in text.trim().chars() {
             if ch == '\u{2061}' || ch.is_whitespace() {
                 continue;
             }
-            let class = class_of(ch);
             let delim = if is_open(ch) || is_close(ch) || is_bar(ch) {
                 Some(ch)
             } else {
                 None
+            };
+            let (fence_role, class) = if delim.is_some() {
+                match form {
+                    Some("prefix") => (FenceRole::Prefix, Class::Open),
+                    Some("postfix") => (FenceRole::Postfix, Class::Close),
+                    _ => (FenceRole::Neutral, class_of(ch)),
+                }
+            } else {
+                (FenceRole::Neutral, class_of(ch))
             };
             let b = if is_integral(ch) {
                 self.integral_without_limits(ch, 1.45 * em, em)
@@ -333,6 +354,7 @@ impl Layout {
                 class,
                 b,
                 delim,
+                fence_role,
                 is_table: false,
             });
         }
@@ -355,6 +377,7 @@ impl Layout {
                 class: Class::Op,
                 b: self.text_styled(t, face, em, ssty),
                 delim: None,
+                fence_role: FenceRole::Neutral,
                 is_table: false,
             });
             return;
@@ -366,6 +389,7 @@ impl Layout {
                 class: Class::Ord,
                 b: self.text_styled(t, face, em, ssty),
                 delim: None,
+                fence_role: FenceRole::Neutral,
                 is_table: false,
             });
             return;
@@ -380,6 +404,7 @@ impl Layout {
                     class: Class::Ord,
                     b: self.glyph_styled(styled_ch, Face::Symbol, em, ssty),
                     delim: None,
+                    fence_role: FenceRole::Neutral,
                     is_table: false,
                 });
             } else if bold {
@@ -387,6 +412,7 @@ impl Layout {
                     class: Class::Ord,
                     b: self.glyph_styled(ch, Face::VectorMatrix, em, ssty),
                     delim: None,
+                    fence_role: FenceRole::Neutral,
                     is_table: false,
                 });
             } else if ch.is_ascii_digit() {
@@ -395,6 +421,7 @@ impl Layout {
                     class: Class::Ord,
                     b: self.glyph_styled(ch, Face::Number, em, ssty),
                     delim: None,
+                    fence_role: FenceRole::Neutral,
                     is_table: false,
                 });
             } else if is_latin_letter(ch) {
@@ -407,6 +434,7 @@ impl Layout {
                     class: Class::Ord,
                     b: self.glyph_styled(ch, face, em, ssty),
                     delim: None,
+                    fence_role: FenceRole::Neutral,
                     is_table: false,
                 });
             } else if is_greek_lower(ch) {
@@ -414,6 +442,7 @@ impl Layout {
                     class: Class::Ord,
                     b: self.glyph_styled(ch, Face::LcGreek, em, ssty),
                     delim: None,
+                    fence_role: FenceRole::Neutral,
                     is_table: false,
                 });
             } else if is_greek_upper(ch) {
@@ -421,10 +450,11 @@ impl Layout {
                     class: Class::Ord,
                     b: self.glyph_styled(ch, Face::UcGreek, em, ssty),
                     delim: None,
+                    fence_role: FenceRole::Neutral,
                     is_table: false,
                 });
             } else {
-                self.atoms_mo(&ch.to_string(), em, out, ssty);
+                self.atoms_mo(&ch.to_string(), None, em, out, ssty);
             }
         }
     }
@@ -433,6 +463,8 @@ impl Layout {
 #[cfg(test)]
 mod wrapped_table_tests {
     use super::*;
+    use crate::render::render_interactive;
+    use crate::service::parse_latex_to_mathml;
 
     #[test]
     fn lone_brace_stretches_identically_around_wrapped_and_direct_tables() {
@@ -467,5 +499,34 @@ mod wrapped_table_tests {
         assert!((l.spacing(Class::Rel, Class::Open, em) - thick).abs() < 1e-4);
         assert!((l.spacing(Class::Close, Class::Op, em) - thin).abs() < 1e-4);
         assert!((l.spacing(Class::Punct, Class::Open, em) - thin).abs() < 1e-4);
+    }
+
+    #[test]
+    fn double_bar_fences_use_open_close_class_without_relation_gap() {
+        let l = Layout {
+            f: fonts(),
+            depth: 0,
+        };
+        let mut atoms = Vec::new();
+        l.atoms_mo("∥", Some("prefix"), 18.0, &mut atoms, 0);
+        l.atoms_mo("∥", Some("postfix"), 18.0, &mut atoms, 0);
+        assert_eq!(atoms[0].fence_role, FenceRole::Prefix);
+        assert_eq!(atoms[0].class, Class::Open);
+        assert_eq!(atoms[1].fence_role, FenceRole::Postfix);
+        assert_eq!(atoms[1].class, Class::Close);
+
+        // Comparing `\left\Vert \frac{1}{2}x \right\Vert` vs `\left| \frac{1}{2}x \right|`:
+        // neither inserts a thick (5/18 em) relation gap inside the fences.
+        let norm_math = parse_latex_to_mathml(r"\left\Vert \frac{1}{2}x \right\Vert").unwrap();
+        let preview = render_interactive(&norm_math, 12.0).unwrap();
+        let left = preview.regions.iter().find(|r| r.path == [0, 0]).unwrap();
+        let inner = preview.regions.iter().find(|r| r.path == [0, 1]).unwrap();
+        let right = preview.regions.iter().find(|r| r.path == [0, 2]).unwrap();
+        let left_gap = inner.x - (left.x + left.width);
+        let right_gap = right.x - (inner.x + inner.width);
+        assert!(
+            left_gap < 0.05 && right_gap < 0.05,
+            "unexpected gap inside norm fences: left={left_gap}, right={right_gap}"
+        );
     }
 }

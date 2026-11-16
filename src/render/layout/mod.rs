@@ -232,11 +232,20 @@ impl MathContext {
     }
 }
 
+/// Role of a delimiter token determined from its MathML `form` attribute.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FenceRole {
+    Neutral,
+    Prefix,
+    Postfix,
+}
+
 /// A run item together with its TeX class, used while spacing a row.
 struct Atom {
     class: Class,
     b: LBox,
     delim: Option<char>,
+    fence_role: FenceRole,
     is_table: bool,
 }
 
