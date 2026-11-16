@@ -1,88 +1,14 @@
-Attribute VB_Name = "EqnTide"
+Attribute VB_Name = "EqnTideMacros"
 Option Explicit
 
 Private Const BRIDGE_ROOT As String = "http://127.0.0.1:17890"
 Private Const BRIDGE_URL As String = "http://127.0.0.1:17890/convert/snippet"
 
-Private mRibbon As IRibbonUI
-Private mWordEvents As EqnTideEvents
-Private mHandlingSelection As Boolean
-Private mLastEquationDoc As Word.Document
-Private mLastEquationStart As Long
-Private mLastEquationEnd As Long
-
-Public Sub RibbonOnLoad(ByVal ribbon As IRibbonUI)
-    Set mRibbon = ribbon
-    InitEquationEvents
-    If Application.Documents.Count > 0 Then HandleEquationSelection Application.Selection
-End Sub
-
-Private Sub InitEquationEvents()
-    If mWordEvents Is Nothing Then Set mWordEvents = New EqnTideEvents
-    Set mWordEvents.App = Application
-End Sub
-
-Public Sub HandleEquationSelection(ByVal Sel As Word.Selection)
-    If mHandlingSelection Then Exit Sub
-    On Error GoTo SelectionFailed
-    If mRibbon Is Nothing Then Exit Sub
-    If Sel.InlineShapes.Count <> 1 Then GoTo NotEquation
-    Dim picture As Word.InlineShape
-    Set picture = Sel.InlineShapes(1)
-    If Sel.Start <> picture.Range.Start Or Sel.End <> picture.Range.End Then GoTo NotEquation
-    If Not IsEquationPicture(picture) Then GoTo NotEquation
-    If Not mLastEquationDoc Is Nothing Then
-        If mLastEquationDoc Is Sel.Document Then
-            If mLastEquationStart = Sel.Start And mLastEquationEnd = Sel.End Then Exit Sub
-        End If
-    End If
-    Set mLastEquationDoc = Sel.Document
-    mLastEquationStart = Sel.Start
-    mLastEquationEnd = Sel.End
-    mHandlingSelection = True
-    mRibbon.ActivateTab "EqnTideTab"
-    mHandlingSelection = False
-    Exit Sub
-NotEquation:
-    Set mLastEquationDoc = Nothing
-    Exit Sub
-SelectionFailed:
-    mHandlingSelection = False
-    Set mLastEquationDoc = Nothing
-End Sub
-
-Private Function IsEquationPicture(ByVal picture As Word.InlineShape) As Boolean
-    On Error GoTo NotEquation
-    If picture.AlternativeText = "EqnTide equation" Then
-        IsEquationPicture = True
-        Exit Function
-    End If
-    Dim progId As String
-    On Error Resume Next
-    progId = picture.OLEFormat.ProgID
-    Err.Clear
-    On Error GoTo NotEquation
-    If LCase$(Left$(progId, 9)) = "equation." Or LCase$(Left$(progId, 8)) = "mathtype" Then
-        IsEquationPicture = True
-        Exit Function
-    End If
-    ' Standalone EMF equations have no OLE object. Recognize the embedded
-    ' MathType comment, not the image extension or generic drawing markup.
-    Dim xml As Object, binary As Object, payload As String
-    Set xml = CreateObject("MSXML2.DOMDocument.6.0")
-    xml.async = False
-    xml.resolveExternals = False
-    If Not xml.LoadXML(picture.Range.WordOpenXML) Then Exit Function
-    For Each binary In xml.SelectNodes("//*[local-name()='binaryData']")
-        binary.DataType = "bin.base64"
-        payload = StrConv(binary.nodeTypedValue, vbUnicode)
-        If InStr(1, payload, "AppsMFCC", vbBinaryCompare) > 0 Then
-            IsEquationPicture = True
-            Exit Function
-        End If
-    Next binary
-NotEquation:
-End Function
+' Word Key and Category Constants
+Private Const wdKeyAlt As Long = 1024
+Private Const wdKeyBackslash As Long = 220
+Private Const wdKeyCategoryMacro As Long = 1
+Private Const wdCollapseEnd As Long = 0
 
 ' =========================================================================
 ' Ribbon Callbacks
@@ -109,12 +35,7 @@ End Sub
 ' =========================================================================
 
 Public Sub AutoExec()
-    On Error Resume Next
-    InitEquationEvents
-    CustomizationContext = NormalTemplate
-    KeyBindings.Add KeyCode:=BuildKeyCode(wdKeyAlt, wdKeyBackslash), _
-                    KeyCategory:=wdKeyCategoryMacro, _
-                    Command:="ToggleLatexMacro"
+    ' Word loads the global template add-in and ribbon tab automatically from STARTUP.
 End Sub
 
 ' =========================================================================
@@ -124,12 +45,12 @@ End Sub
 Public Sub ToggleLatexMacro()
     On Error GoTo ErrorHandler
 
-    Dim sel As Selection
+    Dim sel As Object
     Set sel = Selection
 
     ' Case 1: Cursor is on / inside an existing OMML equation -> Convert to LaTeX text
     If sel.OMaths.Count > 0 Then
-        Dim om As OMath
+        Dim om As Object
         Set om = sel.OMaths(1)
         Dim omXml As String
         omXml = om.Range.WordOpenXML
@@ -145,7 +66,7 @@ Public Sub ToggleLatexMacro()
 
     ' MathType OLE created by Toggle/Insert/Edit must also toggle back to text.
     If sel.InlineShapes.Count = 1 Then
-        Dim shapeRange As Range
+        Dim shapeRange As Object
         Set shapeRange = sel.InlineShapes(1).Range.Duplicate
         latexStr = CallBridge(shapeRange.WordOpenXML, "flat_opc", "latex")
         If Len(latexStr) > 0 Then shapeRange.Text = "$" & latexStr & "$"
@@ -194,7 +115,7 @@ Public Sub ToggleLatexMacro()
             flatOpc = CallBridge(rawLatex, "latex", "flat_opc_mathtype")
 
             If Len(flatOpc) > 0 Then
-                Dim subRng As Range
+                Dim subRng As Object
                 Set subRng = ActiveDocument.Range(startOffset + m.FirstIndex, startOffset + m.FirstIndex + m.Length)
                 InsertFlatOpcInline subRng, flatOpc, False
             End If
@@ -240,7 +161,7 @@ End Sub
 
 Private Sub EditInNativeDesktop(ByVal editExisting As Boolean)
     On Error GoTo EditError
-    Dim target As Range
+    Dim target As Object
     Set target = Selection.Range.Duplicate
     Dim inputData As String, inputFormat As String
     inputFormat = "mathml"
@@ -321,8 +242,8 @@ End Sub
 ' Helper Functions
 ' =========================================================================
 
-Private Sub InsertFlatOpcInline(ByVal target As Range, ByVal flatOpc As String, ByVal moveCursorAfter As Boolean)
-    Dim doc As Document
+Private Sub InsertFlatOpcInline(ByVal target As Object, ByVal flatOpc As String, ByVal moveCursorAfter As Boolean)
+    Dim doc As Object
     Set doc = ActiveDocument
 
     ' Never swallow an existing trailing paragraph mark if the selection ends with one.
@@ -381,7 +302,7 @@ Private Sub InsertFlatOpcInline(ByVal target As Range, ByVal flatOpc As String, 
     End If
 
     If moveCursorAfter And insertedEnd >= insertPos Then
-        Dim afterRng As Range
+        Dim afterRng As Object
         Set afterRng = doc.Range(insertedEnd, insertedEnd)
         afterRng.Select
         On Error Resume Next
