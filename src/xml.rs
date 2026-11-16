@@ -215,7 +215,7 @@ fn default_known_ns(prefix: &str) -> Option<&'static str> {
     }
 }
 
-fn lookup<'a>(scope: &'a [NsDecl], prefix: Option<&str>) -> Option<&'a str> {
+fn lookup_in_scope<'a>(scope: &'a [NsDecl], prefix: Option<&str>) -> Option<&'a str> {
     if prefix == Some("xml") {
         return Some(XML_NS);
     }
@@ -224,10 +224,11 @@ fn lookup<'a>(scope: &'a [NsDecl], prefix: Option<&str>) -> Option<&'a str> {
             return if u.is_empty() { None } else { Some(u.as_str()) };
         }
     }
-    if let Some(p) = prefix {
-        return default_known_ns(p);
-    }
     None
+}
+
+fn lookup_for_parse<'a>(scope: &'a [NsDecl], prefix: Option<&str>) -> Option<&'a str> {
+    lookup_in_scope(scope, prefix).or_else(|| prefix.and_then(default_known_ns))
 }
 
 fn split_qname(q: &str) -> (Option<&str>, &str) {
@@ -272,7 +273,7 @@ fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: usize) -
     let (eprefix, elocal) = split_qname(&qname);
     let ens = match eprefix {
         Some(p) => Some(
-            lookup(scope, Some(p))
+            lookup_for_parse(scope, Some(p))
                 .ok_or_else(|| {
                     Error::Xml(format!(
                         "unbound namespace prefix '{p}' (byte offset {pos})"
@@ -280,7 +281,7 @@ fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: usize) -
                 })?
                 .to_owned(),
         ),
-        None => lookup(scope, None).map(str::to_owned),
+        None => lookup_for_parse(scope, None).map(str::to_owned),
     };
 
     let mut attrs = Vec::with_capacity(raw_attrs.len());
@@ -288,7 +289,7 @@ fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: usize) -
         let (p, l) = split_qname(&key);
         let ns = match p {
             Some(p) => Some(
-                lookup(scope, Some(p))
+                lookup_for_parse(scope, Some(p))
                     .ok_or_else(|| {
                         Error::Xml(format!(
                             "unbound namespace prefix '{p}' (byte offset {pos})"
@@ -524,8 +525,10 @@ impl XmlSerializer {
     ) -> Option<String> {
         // 1. The hinted prefix already means `uri` here.
         match hint {
-            Some(h) if lookup(&self.scope, Some(h)) == Some(uri) => return Some(h.to_owned()),
-            None if !is_attr && lookup(&self.scope, None) == Some(uri) => return None,
+            Some(h) if lookup_in_scope(&self.scope, Some(h)) == Some(uri) => {
+                return Some(h.to_owned());
+            }
+            None if !is_attr && lookup_in_scope(&self.scope, None) == Some(uri) => return None,
             _ => {}
         }
         // 2. Some other (visible) prefix already means `uri`.
@@ -535,13 +538,13 @@ impl XmlSerializer {
             .rev()
             .filter(|(p, u)| p.is_some() && u == uri)
             .map(|(p, _)| p.clone())
-            .find(|p| lookup(&self.scope, p.as_deref()) == Some(uri));
+            .find(|p| lookup_in_scope(&self.scope, p.as_deref()) == Some(uri));
         if let Some(Some(p)) = candidate {
             return Some(p);
         }
         // 3. Declare it here.
         let (prefix, decl): (Option<String>, NsDecl) = match hint {
-            Some(h) if lookup(&self.scope, Some(h)).is_none() => {
+            Some(h) if lookup_in_scope(&self.scope, Some(h)).is_none() => {
                 (Some(h.to_owned()), (Some(h.to_owned()), uri.to_owned()))
             }
             None if !is_attr => (None, (None, uri.to_owned())),
@@ -550,7 +553,7 @@ impl XmlSerializer {
                 loop {
                     self.prefix_counter += 1;
                     p = format!("ns{}", self.prefix_counter);
-                    if lookup(&self.scope, Some(&p)).is_none() {
+                    if lookup_in_scope(&self.scope, Some(&p)).is_none() {
                         break;
                     }
                 }
@@ -568,7 +571,7 @@ impl XmlSerializer {
             Some(uri) => self.pick_prefix(decls, e.prefix.as_deref(), uri, false),
             None => {
                 // No namespace: make sure no default namespace leaks in.
-                if lookup(&self.scope, None).is_some() {
+                if lookup_in_scope(&self.scope, None).is_some() {
                     let d: NsDecl = (None, String::new());
                     self.scope.push(d.clone());
                     decls.push(d);
@@ -715,11 +718,34 @@ mod tests {
 
         assert_eq!(
             to_string(&root),
-            "<w:root xmlns:w=\"urn:word\" plain=\"&lt;&amp;&quot;&#10;&#9;&#13;\"><ns1:math xmlns:ns1=\"urn:math\">x&lt;y &amp; z</ns1:math></w:root>"
+            "<w:root xmlns:w=\"urn:word\" plain=\"&lt;&amp;&quot;&#10;&#9;&#13;\"><m:math xmlns:m=\"urn:math\">x&lt;y &amp; z</m:math></w:root>"
         );
         assert_eq!(
             to_bytes(&root),
-            b"<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n<w:root xmlns:w=\"urn:word\" plain=\"&lt;&amp;&quot;&#10;&#9;&#13;\"><ns1:math xmlns:ns1=\"urn:math\">x&lt;y &amp; z</ns1:math></w:root>"
+            b"<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n<w:root xmlns:w=\"urn:word\" plain=\"&lt;&amp;&quot;&#10;&#9;&#13;\"><m:math xmlns:m=\"urn:math\">x&lt;y &amp; z</m:math></w:root>"
+        );
+    }
+
+    #[test]
+    fn serializer_emits_xmlns_for_undeclared_known_prefix_and_uses_ns_only_on_collision() {
+        let mut root = Element::new(None, None, "root");
+        let omml = Element::new(
+            Some("http://schemas.openxmlformats.org/officeDocument/2006/math"),
+            Some("m"),
+            "oMath",
+        );
+        root.push(omml);
+        assert_eq!(
+            to_string(&root),
+            "<root><m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"/></root>"
+        );
+
+        let mut colliding_root = Element::new(Some("urn:custom"), Some("m"), "root")
+            .with_nsdecl(Some("m"), "urn:custom");
+        colliding_root.push(Element::new(Some("urn:other"), Some("m"), "child"));
+        assert_eq!(
+            to_string(&colliding_root),
+            "<m:root xmlns:m=\"urn:custom\"><ns1:child xmlns:ns1=\"urn:other\"/></m:root>"
         );
     }
 
