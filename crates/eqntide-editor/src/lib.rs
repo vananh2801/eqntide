@@ -356,11 +356,18 @@ impl Editor {
             return None;
         }
         if anchor.node == head.node {
-            return Some((
-                head.node,
-                anchor.offset.min(head.offset),
-                anchor.offset.max(head.offset),
-            ));
+            let node = self.node(head.node)?;
+            let max = if node.token() {
+                node.text.chars().count()
+            } else {
+                node.children.len()
+            };
+            let start = anchor.offset.min(head.offset).min(max);
+            let end = anchor.offset.max(head.offset).min(max);
+            if start >= end {
+                return None;
+            }
+            return Some((head.node, start, end));
         }
         let a = self.path(anchor.node)?;
         let b = self.path(head.node)?;
@@ -373,20 +380,32 @@ impl Editor {
         } else {
             (bi, ai + usize::from(a.len() > common))
         };
-        Some((
-            parent.id,
-            start.min(parent.children.len()),
-            end.min(parent.children.len()),
-        ))
+        let start = start.min(parent.children.len());
+        let end = end.min(parent.children.len());
+        if start >= end {
+            return None;
+        }
+        Some((parent.id, start, end))
     }
     pub fn selected_math(&self) -> Option<MathNode> {
         let (id, start, end) = self.selection_span()?;
         let n = self.node(id)?;
         if n.token() {
+            let count = n.text.chars().count();
+            let start = start.min(count);
+            let end = end.min(count);
+            if start >= end {
+                return None;
+            }
             let mut result = n.math();
             result.text = n.text.chars().skip(start).take(end - start).collect();
             Some(result)
         } else {
+            let start = start.min(n.children.len());
+            let end = end.min(n.children.len());
+            if start >= end {
+                return None;
+            }
             Some(MathNode::with_children(
                 "mrow",
                 n.children[start..end].iter().map(Node::math).collect(),
@@ -403,6 +422,11 @@ impl Editor {
         if n.token() {
             vec![id]
         } else {
+            let start = start.min(n.children.len());
+            let end = end.min(n.children.len());
+            if start >= end {
+                return vec![];
+            }
             n.children[start..end].iter().map(|n| n.id).collect()
         }
     }
@@ -411,6 +435,9 @@ impl Editor {
         let (id, start, end) = self.selection_span()?;
         let n = self.state.root.find_mut(id)?;
         if n.token() {
+            let count = n.text.chars().count();
+            let start = start.min(count);
+            let end = end.min(count);
             n.text = n
                 .text
                 .chars()
@@ -418,14 +445,22 @@ impl Editor {
                 .chain(n.text.chars().skip(end))
                 .collect();
         } else if n.row() {
-            n.children.drain(start..end);
+            let start = start.min(n.children.len());
+            let end = end.min(n.children.len());
+            if start < end {
+                n.children.drain(start..end);
+            }
         } else {
+            let start = start.min(n.children.len());
+            let end = end.min(n.children.len());
             // Fixed arity structures retain their slots when a child is cleared.
-            for child in &mut n.children[start..end] {
-                child.tag = "mrow".into();
-                child.text.clear();
-                child.attrs.clear();
-                child.children.clear();
+            if start < end {
+                for child in &mut n.children[start..end] {
+                    child.tag = "mrow".into();
+                    child.text.clear();
+                    child.attrs.clear();
+                    child.children.clear();
+                }
             }
         }
         self.state.caret = Caret {
@@ -925,5 +960,16 @@ mod regression_tests {
         assert_eq!(math.children.len(), 1);
         assert_eq!(math.children[0].children[0].children[0].text, "x");
         assert!(e.node(e.caret().node).unwrap().children.is_empty());
+    }
+    #[test]
+    fn empty_or_out_of_bounds_selection_never_panics() {
+        let mut e = Editor::default();
+        let root = e.root().id;
+        // Simulating selection on empty root with out-of-bounds offset
+        e.state.anchor = Some(Caret { node: root, offset: 0 });
+        e.state.caret = Caret { node: root, offset: 1 };
+        assert!(e.selected_ids().is_empty());
+        assert!(e.selected_math().is_none());
+        assert!(e.erase_selection().is_none());
     }
 }
