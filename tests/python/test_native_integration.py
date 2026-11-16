@@ -3,10 +3,16 @@ import importlib.util
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
-spec = importlib.util.spec_from_file_location("package_native", Path(__file__).with_name("package_native.py"))
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_DIR = ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+spec = importlib.util.spec_from_file_location("package_native", SCRIPTS_DIR / "package_native.py")
 pack = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pack)
 
@@ -48,7 +54,6 @@ class NativeIntegration(unittest.TestCase):
     def test_windows_repack_removes_stale_web_payload(self):
         from unittest.mock import patch
         import shutil
-        import sys
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             stage = self.stage(base, True)
@@ -71,7 +76,6 @@ class NativeIntegration(unittest.TestCase):
     def test_outputs_are_isolated_by_platform_and_version(self):
         from unittest.mock import patch
         import shutil
-        import sys
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             fixture = self.stage(base, False)
@@ -92,9 +96,9 @@ class NativeIntegration(unittest.TestCase):
                 self.assertEqual(archive.read_bytes(), content)
             self.assertFalse((output / 'windows-stage').exists())
 
-    @unittest.skipIf(__import__('sys').platform == 'win32', 'Linux systemd installer')
+    @unittest.skipIf(sys.platform == 'win32', 'Linux systemd installer')
     def test_portable_service_resolves_bundled_executables(self):
-        if __import__('sys').platform != 'linux':
+        if sys.platform != 'linux':
             self.skipTest('Linux systemd installer')
         with tempfile.TemporaryDirectory() as tmp:
             stage = self.stage(Path(tmp), False)
@@ -126,7 +130,7 @@ class WpsConfig(unittest.TestCase):
             self.assertNotIn('EqnTide', config['wps'])
 
 
-@unittest.skipUnless(__import__('sys').platform == 'linux', 'Linux desktop package layout')
+@unittest.skipUnless(sys.platform == 'linux', 'Linux desktop package layout')
 class LinuxMigration(unittest.TestCase):
     def test_previous_tauri_desktop_id_launches_native_binary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,11 +149,11 @@ class LinuxMigration(unittest.TestCase):
             self.assertTrue((tree / 'usr/bin/eqntide-cli').exists())
 
 
-@unittest.skipUnless(__import__('sys').platform == 'linux', 'Linux package/session setup')
+@unittest.skipUnless(sys.platform == 'linux', 'Linux package/session setup')
 class SessionAddins(unittest.TestCase):
     def test_session_install_retries_and_updates_only_when_needed(self):
         from unittest.mock import patch
-        spec = importlib.util.spec_from_file_location('session_addins', Path(__file__).with_name('install-session-addins.py'))
+        spec = importlib.util.spec_from_file_location('session_addins', SCRIPTS_DIR / 'install-session-addins.py')
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
         with tempfile.TemporaryDirectory() as tmp:
@@ -178,7 +182,7 @@ class SessionAddins(unittest.TestCase):
         from unittest.mock import patch
         from types import SimpleNamespace
         import os
-        spec = importlib.util.spec_from_file_location('session_addins', Path(__file__).with_name('install-session-addins.py'))
+        spec = importlib.util.spec_from_file_location('session_addins', SCRIPTS_DIR / 'install-session-addins.py')
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
         with tempfile.TemporaryDirectory() as tmp:
@@ -193,7 +197,6 @@ class SessionAddins(unittest.TestCase):
 
     def test_deb_configure_hook_and_session_fallback_are_packaged(self):
         from unittest.mock import patch
-        import sys
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'out'
             stage = NativeIntegration().stage(Path(tmp), False)
@@ -251,7 +254,7 @@ class SessionAddins(unittest.TestCase):
     def test_server_failure_does_not_skip_addin_setup(self):
         from unittest.mock import patch
         import os
-        spec = importlib.util.spec_from_file_location('session_addins', Path(__file__).with_name('install-session-addins.py'))
+        spec = importlib.util.spec_from_file_location('session_addins', SCRIPTS_DIR / 'install-session-addins.py')
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
         with tempfile.TemporaryDirectory() as tmp:
@@ -263,7 +266,7 @@ class SessionAddins(unittest.TestCase):
     def test_service_removal_requires_matching_installation_marker(self):
         from unittest.mock import patch
         import os
-        spec = importlib.util.spec_from_file_location('session_addins', Path(__file__).with_name('install-session-addins.py'))
+        spec = importlib.util.spec_from_file_location('session_addins', SCRIPTS_DIR / 'install-session-addins.py')
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
         with tempfile.TemporaryDirectory() as tmp:
@@ -286,7 +289,6 @@ class SupportedPlatforms(unittest.TestCase):
         from unittest.mock import patch
         import contextlib
         import io
-        import sys
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'unsupported-output'
             for target in ('aarch64-apple-darwin', 'x86_64-apple-darwin'):

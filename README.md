@@ -158,7 +158,7 @@ LaTeX extensions preserve structural palette variants when editing the source:
 accents, labeled arrows and aligned arrays. `\enclose{notation}{body}` covers
 partial boxes and strike combinations using MathML notation names (for example,
 `\enclose{top left}{x+1}`); `\boxed`, `\cancel`, `\bcancel` and
-`\xcancel` are convenient aliases. See [palette coverage](desktop/PALETTE_COVERAGE.md)
+`\xcancel` are convenient aliases. See [the palette catalog](src/catalog.rs)
 for the reference-group mapping and export equivalences.
 
 Typing `\` in the canvas opens native LaTeX command suggestions at the caret.
@@ -726,7 +726,7 @@ This project is an independent bidirectional conversion engine and library that 
 5. **[Microsoft OpenType Specification: The `MATH` Table](https://learn.microsoft.com/en-us/typography/opentype/spec/math)**:
    - Specification for OpenType math constants (`MathConstants`), glyph metrics (`MathGlyphInfo`), and extensible delimiter construction (`MathVariants`).
 6. **Donald E. Knuth, *The TeXbook*, Appendix G: "Generating Boxes from Formulas" (Addison-Wesley, 1984)**:
-   - Algorithmic foundations for mathematical typesetting: horizontal/vertical spacing rules, fraction positioning (Rule 15), radical placement, and operator alignments (see [TYPESETTING_ROADMAP.md](TYPESETTING_ROADMAP.md)).
+   - Algorithmic foundations for mathematical typesetting: horizontal/vertical spacing rules, fraction positioning (Rule 15), radical placement, and operator alignments.
 7. **[W3C MathML Core Specification](https://w3c.github.io/mathml-core/)**:
    - Standard reference for MathML mathematical layout and token element formatting.
 8. **[STIX Fonts Project](https://github.com/stipub/stixfonts)** (by The STI Pub Companies):

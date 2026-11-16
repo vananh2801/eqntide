@@ -1,6 +1,6 @@
 """Validate packaged VBA event classes with the dependencies in word-template/test-requirements.txt.
 
-Run: python -m unittest discover -s scripts -p test_word_ribbon.py
+Run: python -m unittest discover -s tests/python -p test_word_ribbon.py
 This verifies the DOTM's XML and VBA streams, not Word runtime behavior.
 """
 from pathlib import Path
@@ -9,10 +9,9 @@ import unittest
 import zipfile
 import xml.etree.ElementTree as ET
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 import olefile
 from oletools.olevba import decompress_stream
-
 
 
 class WordRibbon(unittest.TestCase):

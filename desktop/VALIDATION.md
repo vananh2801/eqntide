@@ -67,7 +67,7 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   The user confirmed that the resulting file opens in MathType. WPS
   scrolling/reopen behavior and repeated MathType editing still need runtime
   checks after changing from standalone EMF to OLE+EMF insertion.
-- `npm ci --prefix scripts && npm test --prefix scripts` exercises the add-in with mocked document
+- `npm ci --prefix tests/wps && npm test --prefix tests/wps` exercises the add-in with mocked document
   ranges: OMML insert/replacement imports Flat OPC (raw XML is literal text in WPS),
   preserves surrounding text and existing paragraph marks, removes a verified
   extra trailing break using document-length deltas (independent of OMath.Range),
@@ -76,7 +76,7 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   Toggle tests reproduce Range.Text preserving the OMML container and verify
   replacing the actual oMath node with a w:r/w:t node in the paragraph package
   in cursor, selected-single and batch paths, without trusting Remove APIs.
-  XML assertions use `scripts/fixtures/bug_toggle_v1.xml` minimized from the
+  XML assertions use `tests/fixtures/bug_toggle_v1.xml` minimized from the
   inspected DOCX sample, preserve other equations and
   bookmarks, and check that imported spacers are removed while original spaces stay.
   EMF positioning retains the WPS calibration from commit `9165468`: rendered
@@ -95,7 +95,7 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   `/proc` entries disappear, covering zombie accumulation after repeated closes.
 - Word's rebuilt DOTM contains the always-on WindowSelectionChange event sink
   and Ribbon onLoad callback. Install `word-template/test-requirements.txt` then
-  run `python -m unittest discover -s scripts -p test_word_ribbon.py` to verify
+  run `python -m unittest discover -s tests/python -p test_word_ribbon.py` to verify
   the event class's non-procedural VBA metadata, packaged source and Ribbon wiring
   with an independent CFB/VBA reader. These checks do not compile VBA or test
   contextual-tab timing in Word; Windows runtime validation remains pending.

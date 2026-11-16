@@ -1,4 +1,4 @@
-// Run via npm test --prefix scripts. No WPS process is controlled by this test.
+// Run via npm test --prefix tests/wps. No WPS process is controlled by this test.
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
@@ -16,7 +16,7 @@ function setup(saved = null) {
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     atob: value => Buffer.from(value, 'base64').toString('latin1')
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../wps-addin/main.js'), 'utf8'), c);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin/main.js'), 'utf8'), c);
   jobs.clear();
   c.wpsLog = () => {};
   const ribbon = { ActivateTab(id) { calls.push(id); }, InvalidateControl() {} };
@@ -83,7 +83,7 @@ for (const kind of ['ordinary', 'plain-emf', 'cursor', 'paragraph', 'multiple', 
   t.select('tagged'); assert.doesNotThrow(t.flush);
 }
 // No user-facing switch or storage callbacks remain.
-const xml = new DOMParser().parseFromString(fs.readFileSync(path.join(__dirname, '../wps-addin/ribbon.xml'), 'utf8'), 'application/xml');
+const xml = new DOMParser().parseFromString(fs.readFileSync(path.join(__dirname, '../../wps-addin/ribbon.xml'), 'utf8'), 'application/xml');
 const toggle = Array.from(xml.getElementsByTagName('toggleButton')).find(n => n.getAttribute('id') === 'btnAutoEquationTab');
 assert.equal(toggle, undefined);
 assert.equal(setup().c.OnAutoEquationTab, undefined);

@@ -1,5 +1,5 @@
-// Install test-only XML DOM: npm ci --prefix scripts
-// Run with: npm test --prefix scripts
+// Install test-only XML DOM: npm ci --prefix tests/wps
+// Run with: npm test --prefix tests/wps
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -9,7 +9,7 @@ const nsM = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
 const nsW = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 function controller() {
   const context = vm.createContext({ console, DOMParser, XMLSerializer, alert: message => { throw Error(message); } });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../wps-addin/main.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin/main.js'), 'utf8'), context);
   context.wpsLog = () => {};
   return context;
 }
@@ -136,7 +136,7 @@ console.log('WPS insertion regression tests passed');
 
 // Use the user's saved XML: it contains a real $...$ run inside oMath,
 // a separate spacer after x, and bookmarks immediately after the second math.
-const documentXml = fs.readFileSync(path.join(__dirname, 'fixtures/bug_toggle_v1.xml'), 'utf8');
+const documentXml = fs.readFileSync(path.join(__dirname, '../fixtures/bug_toggle_v1.xml'), 'utf8');
 const source = '<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage"><pkg:part pkg:name="/word/document.xml"><pkg:xmlData>' +
   documentXml.replace(/<\?xml[^?]*\?>/, '') + '</pkg:xmlData></pkg:part></pkg:package>';
 const c = controller();
@@ -274,7 +274,7 @@ function taskpaneController(targetValue, scopeValue) {
       querySelector: selector => selector.includes('upgrade-scope') ? { value: scopeValue } : null
     }
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../wps-addin/taskpane.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin/taskpane.js'), 'utf8'), context);
   return { context, elements, windowObj };
 }
 

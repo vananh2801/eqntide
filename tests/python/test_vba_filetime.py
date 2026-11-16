@@ -4,7 +4,8 @@ import importlib.util
 from pathlib import Path
 import unittest
 
-spec = importlib.util.spec_from_file_location('filetime_compat', Path(__file__).resolve().parent.parent / 'word-template/filetime_compat.py')
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('filetime_compat', ROOT / 'word-template/filetime_compat.py')
 compat = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compat)
 

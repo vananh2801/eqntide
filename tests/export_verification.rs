@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -11,7 +12,7 @@ use eqntide::render::emf::render_emf_with_mtef;
 use eqntide::render::render_preview;
 use eqntide::service::parse_latex_to_mathml;
 use eqntide::xml;
-use eqntide::MathNode;
+use eqntide::{ole_to_mathml, MathNode};
 
 struct TestCase {
     slug: &'static str,
@@ -19,10 +20,61 @@ struct TestCase {
     latex: &'static str,
 }
 
+/// Convert `render_preview`'s 8-bit indexed black-on-transparent PNG into an opaque
+/// black-on-white PNG so dark-mode viewers and AI vision tools see crisp contrast.
+fn png_to_white_bg(png: &[u8]) -> Vec<u8> {
+    const SIG: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    assert!(png.starts_with(SIG), "not a PNG");
+    let mut out = Vec::with_capacity(png.len());
+    out.extend_from_slice(SIG);
+
+    let mut pos = 8;
+    while pos + 12 <= png.len() {
+        let len = u32::from_be_bytes(png[pos..pos + 4].try_into().unwrap()) as usize;
+        let kind: &[u8; 4] = png[pos + 4..pos + 8].try_into().unwrap();
+        let data = &png[pos + 8..pos + 8 + len];
+        pos += 12 + len;
+
+        if kind == b"tRNS" {
+            continue;
+        }
+
+        let rewritten: Vec<u8>;
+        let payload = if kind == b"PLTE" {
+            let count = data.len() / 3;
+            rewritten = (0..count)
+                .flat_map(|i| {
+                    let g = 255u8.saturating_sub(i as u8);
+                    [g, g, g]
+                })
+                .collect();
+            &rewritten[..]
+        } else {
+            data
+        };
+
+        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(kind);
+        crc.update(payload);
+        out.extend_from_slice(&crc.finalize().to_be_bytes());
+    }
+    out
+}
+
+fn node_with_attr(tag: &str, k: &str, v: &str, children: Vec<MathNode>) -> MathNode {
+    let mut n = MathNode::with_children(tag, children);
+    n.set_attr(k, v);
+    n
+}
+
 #[test]
 fn test_export_all_formats_and_verify_standards() {
     let out_dir = Path::new("target/test_exports");
-    fs::create_dir_all(out_dir).expect("create test_exports dir");
+    let visual_dir = out_dir.join("visual");
+    fs::create_dir_all(&visual_dir).expect("create test_exports/visual dir");
 
     let test_cases = [
         TestCase {
@@ -112,8 +164,6 @@ fn test_export_all_formats_and_verify_standards() {
         let ole_path = out_dir.join(format!("{}.ole", tc.slug));
         fs::write(&ole_path, &ole_bytes).expect("write ole file");
 
-        // Verify standard OLE Compound File Binary (CFB v3) structure:
-        // Magic header: D0 CF 11 E0 A1 B1 1A E1
         assert_eq!(
             &ole_bytes[0..8],
             &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1],
@@ -125,10 +175,8 @@ fn test_export_all_formats_and_verify_standards() {
             "OLE size must be aligned to 512-byte sectors"
         );
 
-        // Read Equation Native stream inside OLE
         let read_native = read_ole_stream(&ole_bytes, &["Equation Native", "contents"])
             .expect("must find Equation Native stream inside OLE");
-        // Standard Equation Native header is 28 bytes: [0x1C, 0x00, 0x00, 0x00, 0x02, 0x00, ...]
         assert_eq!(
             read_native[0..4],
             [0x1C, 0x00, 0x00, 0x00],
@@ -140,7 +188,6 @@ fn test_export_all_formats_and_verify_standards() {
             "Format type = 2 (embedded)"
         );
 
-        // Extract MTEF stream from OLE and decode back to MathML
         let extracted_mtef = extract_mtef_from_ole(&ole_bytes).expect("extract MTEF from OLE");
         assert!(
             extracted_mtef[0] == 3 || extracted_mtef[0] == 5,
@@ -157,22 +204,23 @@ fn test_export_all_formats_and_verify_standards() {
             extracted_mtef[0]
         );
 
-        // 5. Export raster PNG image
+        // 5. Export raster PNG image (transparent for Office + white-bg for visual inspection)
         let preview = render_preview(&math, 12.0)
             .unwrap_or_else(|e| panic!("Render preview PNG failed for {}: {e}", tc.slug));
         let png_path = out_dir.join(format!("{}.png", tc.slug));
         fs::write(&png_path, &preview.png).expect("write png file");
+        fs::write(
+            visual_dir.join(format!("{}.png", tc.slug)),
+            png_to_white_bg(&preview.png),
+        )
+        .expect("write visual white-bg png");
         assert!(png_path.exists());
-        // Verify PNG format:
-        // 8-byte magic header: 89 50 4E 47 0D 0A 1A 0A
         assert_eq!(
             &preview.png[0..8],
             &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
             "PNG magic header must be 89 50 4E 47 0D 0A 1A 0A"
         );
-        // Check IHDR chunk
         assert_eq!(&preview.png[12..16], b"IHDR", "First chunk must be IHDR");
-        // Check trailing IEND chunk
         assert_eq!(
             &preview.png[preview.png.len() - 8..preview.png.len() - 4],
             b"IEND",
@@ -197,15 +245,11 @@ fn test_export_all_formats_and_verify_standards() {
         fs::write(&emf_path, &emf_preview.emf).expect("write emf file");
         assert!(emf_path.exists());
 
-        // Verify standard EMF format:
-        // Record 1 Type = 0x00000001 (EMR_HEADER)
         let rec_type = u32::from_le_bytes(emf_preview.emf[0..4].try_into().unwrap());
         assert_eq!(rec_type, 1, "EMF Record 1 must be EMR_HEADER (type 1)");
-        // Signature at bytes 40..44 must be " EMF" (0x464D4520)
         let sig = &emf_preview.emf[40..44];
         assert_eq!(sig, b" EMF", "EMF signature at offset 40 must be ' EMF'");
 
-        // Verify extracting MTEF from EMF (preserves equation for Office / WPS)
         let emf_mtef =
             extract_mtef_from_emf(&emf_preview.emf).expect("extract embedded MTEF from EMF");
         assert_eq!(
@@ -224,7 +268,8 @@ fn test_export_all_formats_and_verify_standards() {
 #[test]
 fn test_export_visual_layout_sheets() {
     let out_dir = Path::new("target/test_exports");
-    fs::create_dir_all(out_dir).expect("create test_exports dir");
+    let visual_dir = out_dir.join("visual");
+    fs::create_dir_all(&visual_dir).expect("create test_exports/visual dir");
 
     let sheets = [
         (
@@ -264,6 +309,11 @@ fn test_export_visual_layout_sheets() {
             render_preview(&math, 14.0).unwrap_or_else(|e| panic!("Render failed for {slug}: {e}"));
         let path = out_dir.join(format!("{slug}.png"));
         fs::write(&path, &preview.png).expect("write png");
+        fs::write(
+            visual_dir.join(format!("{slug}.png")),
+            png_to_white_bg(&preview.png),
+        )
+        .expect("write visual white-bg png");
         println!(
             "[OK] {slug}.png: {} bytes ({:.1}x{:.1} pt)",
             preview.png.len(),
@@ -271,6 +321,243 @@ fn test_export_visual_layout_sheets() {
             preview.height_pt
         );
     }
+}
+
+#[test]
+fn test_export_ai_visual_layout_suite() {
+    let visual_dir = Path::new("target/test_exports/visual");
+    fs::create_dir_all(visual_dir).expect("create visual dir");
+
+    let mut index = String::new();
+    writeln!(index, "# EqnTide Visual Layout Inspection Index\n").unwrap();
+    writeln!(
+        index,
+        "All PNG files in this folder use an **opaque white background** so AI vision tools and human reviewers can inspect glyph layout without dark-mode transparency artifacts.\n"
+    )
+    .unwrap();
+    writeln!(index, "## Layout Inspection Checklist\n").unwrap();
+    writeln!(index, "1. **Vertical alignment & baselines**: Inline operators (`=`, `+`), arrows, and delimiters sit symmetrically on the math axis; left and right delimiters (`\\left\\| ... \\right\\|`, brackets, braces) have matching top/bottom heights.").unwrap();
+    writeln!(index, "2. **Scripts & limits**: Subscripts, superscripts, prescripts (`\\prescript`), and limits above/below integrals/big-ops do not collide with bases or overlap neighboring terms.").unwrap();
+    writeln!(index, "3. **Matrices & cases**: Columns align cleanly, row spacing prevents vertical collisions, and opening braces span the full height of all rows.").unwrap();
+    writeln!(index, "4. **Accents, bars & enclosures**: Hats, dots, over/underbars, arrows, and boxes span the exact width of their content with no clipped strokes.").unwrap();
+    writeln!(index, "5. **Round-trip parity (`14_roundtrip_comparison.png`)**: `[Orig]`, `[via OMML]`, and `[via OLE/MTEF]` columns render structurally identical formulas.\n").unwrap();
+
+    // 14: Side-by-side round-trip comparison ([Orig] vs [via OMML] vs [via OLE/MTEF])
+    let comparisons = [
+        ("quadratic", r"x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"),
+        (
+            "integral",
+            r"\int_{0}^{\infty} e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}",
+        ),
+        (
+            "norm_half",
+            r"\left\| \frac{1}{2} x \right\| + \left\llbracket \frac{a}{b} \right\rrbracket",
+        ),
+        ("prescript", r"\prescript{235}{92}{U}_{0}^{1}"),
+        ("matrix", r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}"),
+        (
+            "cases",
+            r"|x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}",
+        ),
+        (
+            "arrows",
+            r"A \overset{f}{\underset{g}{\leftrightharpoons}} B + \underleftarrow{CD}",
+        ),
+        (
+            "diacritics",
+            r"\check{a} + \mathring{b} + \underparen{xy} + \mathbb{R}",
+        ),
+    ];
+
+    let mut rt_page_infos = Vec::new();
+    for (page_idx, chunk) in comparisons.chunks(4).enumerate() {
+        let mut rt_rows = vec![MathNode::with_children(
+            "mtr",
+            vec![
+                node_with_attr(
+                    "mtd",
+                    "columnalign",
+                    "left",
+                    vec![MathNode::leaf("mtext", "Case")],
+                ),
+                node_with_attr(
+                    "mtd",
+                    "columnalign",
+                    "center",
+                    vec![MathNode::leaf("mtext", "[Orig]")],
+                ),
+                node_with_attr(
+                    "mtd",
+                    "columnalign",
+                    "center",
+                    vec![MathNode::leaf("mtext", "[via OMML]")],
+                ),
+                node_with_attr(
+                    "mtd",
+                    "columnalign",
+                    "center",
+                    vec![MathNode::leaf("mtext", "[via OLE/MTEF]")],
+                ),
+            ],
+        )];
+
+        for &(label, latex) in chunk {
+            let orig = parse_latex_to_mathml(latex).expect(latex);
+            let omml_xml = mathml_to_omml_xml(&orig).expect(latex);
+            let omml_el = xml::parse(omml_xml.as_bytes()).unwrap();
+            let via_omml = omml_to_mathml(&omml_el).expect(latex);
+
+            let mtef_records = mathml_to_mtef_bytes(&orig).expect(latex);
+            let ole = make_ole(&make_equation_native(&mtef_records)).expect(latex);
+            let via_ole = ole_to_mathml(&ole).expect(latex);
+
+            rt_rows.push(MathNode::with_children(
+                "mtr",
+                vec![
+                    node_with_attr(
+                        "mtd",
+                        "columnalign",
+                        "left",
+                        vec![MathNode::leaf("mtext", label)],
+                    ),
+                    node_with_attr(
+                        "mtd",
+                        "columnalign",
+                        "center",
+                        vec![node_with_attr(
+                            "mstyle",
+                            "displaystyle",
+                            "true",
+                            orig.children,
+                        )],
+                    ),
+                    node_with_attr(
+                        "mtd",
+                        "columnalign",
+                        "center",
+                        vec![node_with_attr(
+                            "mstyle",
+                            "displaystyle",
+                            "true",
+                            via_omml.children,
+                        )],
+                    ),
+                    node_with_attr(
+                        "mtd",
+                        "columnalign",
+                        "center",
+                        vec![node_with_attr(
+                            "mstyle",
+                            "displaystyle",
+                            "true",
+                            via_ole.children,
+                        )],
+                    ),
+                ],
+            ));
+        }
+
+        let rt_math =
+            MathNode::with_children("math", vec![MathNode::with_children("mtable", rt_rows)]);
+        let rt_png = render_preview(&rt_math, 10.0)
+            .unwrap_or_else(|e| panic!("render 14_roundtrip_p{}: {e}", page_idx + 1));
+        let file_name = format!("14_roundtrip_p{}.png", page_idx + 1);
+        fs::write(visual_dir.join(&file_name), png_to_white_bg(&rt_png.png))
+            .expect("write roundtrip comparison");
+        println!(
+            "[OK] visual/{file_name}: {} bytes ({:.1}x{:.1} pt)",
+            rt_png.png.len(),
+            rt_png.width_pt,
+            rt_png.height_pt
+        );
+        rt_page_infos.push((file_name, rt_png.width_pt, rt_png.height_pt));
+    }
+
+    // 15: Tricky layout edge cases (stretchy fences, nested fractions, stacked scripts, longdiv)
+    let edge_cases = [
+        (
+            "norm_asym",
+            r"\left\| \frac{1}{2} x \right\| + \left\langle \frac{a}{b} \middle| c \right\rangle",
+        ),
+        ("nested_frac", r"\frac{1}{1 + \frac{1}{1 + \frac{1}{x}}}"),
+        (
+            "compound_script",
+            r"f'_0^1 + \sqrt{x_a^b}_0^1 + \left. \frac{1}{2} \right|_0^1",
+        ),
+        (
+            "stacked_limits",
+            r"\sum\limits_{i=1}^{n} \prod\limits_{j=1}^{m} \left( \frac{x_i}{y_j} \right)",
+        ),
+        (
+            "longdiv_box",
+            r"\overset{12}{\enclose{longdiv}{144}} + \enclose{roundedbox}{x+y} + \xcancel{z}",
+        ),
+        (
+            "wide_accents",
+            r"\widehat{ABCD} + \widetilde{xyz} + \overbrace{a+b+c}^{n=3} + \underbrace{p+q}_{k}",
+        ),
+    ];
+    let mut edge_rows = Vec::new();
+    for (label, latex) in edge_cases {
+        let m = parse_latex_to_mathml(latex).expect(latex);
+        edge_rows.push(MathNode::with_children(
+            "mtr",
+            vec![
+                node_with_attr(
+                    "mtd",
+                    "columnalign",
+                    "left",
+                    vec![MathNode::leaf("mtext", label)],
+                ),
+                node_with_attr(
+                    "mtd",
+                    "columnalign",
+                    "left",
+                    vec![node_with_attr("mstyle", "displaystyle", "true", m.children)],
+                ),
+            ],
+        ));
+    }
+    let edge_math =
+        MathNode::with_children("math", vec![MathNode::with_children("mtable", edge_rows)]);
+    let edge_png = render_preview(&edge_math, 10.0).expect("render 15_layout_edge_cases");
+    let edge_path = visual_dir.join("15_layout_edge_cases.png");
+    fs::write(&edge_path, png_to_white_bg(&edge_png.png)).expect("write 15_layout_edge_cases");
+    println!(
+        "[OK] visual/15_layout_edge_cases.png: {} bytes ({:.1}x{:.1} pt)",
+        edge_png.png.len(),
+        edge_png.width_pt,
+        edge_png.height_pt
+    );
+
+    writeln!(index, "## Generated Visual Sheets\n").unwrap();
+    writeln!(index, "| File | Size (pt) | Content |").unwrap();
+    writeln!(index, "| --- | --- | --- |").unwrap();
+    for (file_name, w, h) in rt_page_infos {
+        writeln!(
+            index,
+            "| `target/test_exports/visual/{file_name}` | {w:.1}×{h:.1} | Side-by-side `[Orig]` vs `[via OMML]` vs `[via OLE/MTEF]` round-trip comparison |"
+        )
+        .unwrap();
+    }
+    writeln!(
+        index,
+        "| `target/test_exports/visual/15_layout_edge_cases.png` | {:.1}×{:.1} | Edge cases: stretchy fences, nested fractions, compound scripts, stacked limits, longdiv, wide accents |",
+        edge_png.width_pt, edge_png.height_pt
+    )
+    .unwrap();
+    writeln!(
+        index,
+        "| `target/test_exports/visual/01_quadratic.png` .. `13_symbols_greek_spaces.png` | — | White-background versions of core samples & layout sheets |"
+    )
+    .unwrap();
+    writeln!(
+        index,
+        "| `target/test_exports/visual/catalog/*.png` | — | White-background sheets of all 20 UI palette categories |"
+    )
+    .unwrap();
+
+    fs::write(visual_dir.join("INDEX.md"), index).expect("write visual/INDEX.md");
 }
 
 #[test]
@@ -283,15 +570,12 @@ fn test_export_all_catalog_pngs() {
             fill_x(child);
         }
     }
-    fn node_with_attr(tag: &str, k: &str, v: &str, children: Vec<MathNode>) -> MathNode {
-        let mut n = MathNode::with_children(tag, children);
-        n.set_attr(k, v);
-        n
-    }
 
     let catalog_dir = Path::new("target/test_exports/catalog");
+    let visual_catalog_dir = Path::new("target/test_exports/visual/catalog");
     let items_dir = catalog_dir.join("items");
     fs::create_dir_all(&items_dir).expect("create catalog/items dir");
+    fs::create_dir_all(visual_catalog_dir).expect("create visual/catalog dir");
 
     let mut total = 0usize;
     for (g_idx, (group_id, _group_label)) in GROUPS.iter().enumerate() {
@@ -392,15 +676,21 @@ fn test_export_all_catalog_pngs() {
             let sheet_png = render_preview(&sheet_math, sheet_pt).unwrap_or_else(|e| {
                 panic!("render sheet failed {group_id} p{}: {e}", page_idx + 1)
             });
-            let sheet_path = if group_entries.len() > per_page {
-                catalog_dir.join(format!("{:02}_{group_id}_p{}.png", g_idx + 1, page_idx + 1))
+            let file_name = if group_entries.len() > per_page {
+                format!("{:02}_{group_id}_p{}.png", g_idx + 1, page_idx + 1)
             } else {
-                catalog_dir.join(format!("{:02}_{group_id}.png", g_idx + 1))
+                format!("{:02}_{group_id}.png", g_idx + 1)
             };
+            let sheet_path = catalog_dir.join(&file_name);
             fs::write(&sheet_path, &sheet_png.png).expect("write group sheet png");
+            fs::write(
+                visual_catalog_dir.join(&file_name),
+                png_to_white_bg(&sheet_png.png),
+            )
+            .expect("write visual white-bg catalog sheet");
             println!(
                 "[OK] {}: {} entries ({:.1}x{:.1} pt)",
-                sheet_path.file_name().unwrap().to_string_lossy(),
+                file_name,
                 page_entries.len(),
                 sheet_png.width_pt,
                 sheet_png.height_pt

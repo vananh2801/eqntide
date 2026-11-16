@@ -10,6 +10,7 @@ on:
       - 'src/**'
       - 'crates/**'
       - 'desktop/**'
+      - 'tests/**'
       - 'assets/**'
       - 'scripts/**'
       - 'wps-addin/**'
@@ -55,10 +56,13 @@ jobs:
       - name: Python packaging checks
         run: |
           python -m py_compile scripts/package_native.py
-          python -m unittest discover -s scripts -p "test_*.py"
-      - name: Add-in JavaScript syntax
+          python -m unittest discover -s tests/python -p "test_*.py"
+      - name: Add-in JavaScript syntax & WPS tests
         run: |
           node --check wps-addin/main.js
+          node --check wps-addin/taskpane.js
+          npm ci --prefix tests/wps
+          npm test --prefix tests/wps
       - name: Windows installer script syntax
         if: runner.os == 'Windows'
         shell: powershell
