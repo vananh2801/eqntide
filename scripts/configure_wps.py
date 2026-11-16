@@ -24,7 +24,6 @@ def configure(base, uninstall=False):
     wps.pop('MathEditor', None)
     if not uninstall:
         ET.SubElement(root, 'jsplugin', name='EqnTide', type='wps', version='1.0.0', enable='enable_dev', url='EqnTide_1.0.0/')
-        ET.SubElement(root, 'jspluginonline', name='EqnTide', type='wps', enable='enable_dev', debug='true', url='http://127.0.0.1:17890/wps-addin/')
         names.append('EqnTide')
         wps['EqnTide'] = dict(name='EqnTide', enable=True, isload=True, path='EqnTide_1.0.0/', md5='', mode=2)
     wps['namelist'] = ','.join(names)

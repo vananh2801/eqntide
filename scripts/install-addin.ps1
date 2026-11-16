@@ -75,9 +75,6 @@ if ($Uninstall) {
     $entry = $config.CreateElement('jsplugin')
     foreach ($pair in (@{name='EqnTide';type='wps';version='1.0.0';enable='enable_dev';url='EqnTide_1.0.0/'}).GetEnumerator()) { $entry.SetAttribute($pair.Key, $pair.Value) }
     [void]$config.DocumentElement.AppendChild($entry)
-    $online = $config.CreateElement('jspluginonline')
-    foreach ($pair in (@{name='EqnTide';type='wps';enable='enable_dev';debug='true';url='http://127.0.0.1:17890/wps-addin/'}).GetEnumerator()) { $online.SetAttribute($pair.Key, $pair.Value) }
-    [void]$config.DocumentElement.AppendChild($online)
     $config.Save($PublishXml)
 
     $AuthJson = Join-Path $WpsBasePath "authaddin.json"

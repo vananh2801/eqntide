@@ -91,18 +91,27 @@ legacy_done:
     WriteRegStr HKCU "Software\Classes\eqntide" "URL Protocol" ""
     WriteRegStr HKCU "Software\Classes\eqntide\shell\open\command" "" '$\"$INSTDIR\eqntide-desktop.exe$\" $\"%1$\"'
 
-    ; 5. Shortcuts
+    ; 5. Shortcuts (recreate cleanly and flush Start Menu + Explorer icon cache)
+    Delete "$SMPROGRAMS\EqnTide\*.lnk"
+    RMDir /r "$SMPROGRAMS\EqnTide"
+    Delete "$DESKTOP\EqnTide.lnk"
+    System::Call 'shell32::SHChangeNotify(i 0x0001000, i 0x0005, w "$SMPROGRAMS", p 0)'
+
     CreateDirectory "$SMPROGRAMS\EqnTide"
-    CreateShortcut "$SMPROGRAMS\EqnTide\EqnTide.lnk" "$INSTDIR\eqntide-desktop.exe"
-    CreateShortcut "$SMPROGRAMS\EqnTide\Start Bridge Server.lnk" "$INSTDIR\start-server.bat"
-    CreateShortcut "$SMPROGRAMS\EqnTide\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
-    CreateShortcut "$DESKTOP\EqnTide.lnk" "$INSTDIR\eqntide-desktop.exe"
+    CreateShortcut "$SMPROGRAMS\EqnTide\EqnTide.lnk" "$INSTDIR\eqntide-desktop.exe" "" "$INSTDIR\icons\icon.ico" 0
+    CreateShortcut "$SMPROGRAMS\EqnTide\Start Bridge Server.lnk" "$INSTDIR\start-server.bat" "" "$INSTDIR\icons\icon.ico" 0
+    CreateShortcut "$SMPROGRAMS\EqnTide\Uninstall.lnk" "$INSTDIR\Uninstall.exe" "" "$INSTDIR\icons\icon.ico" 0
+    CreateShortcut "$DESKTOP\EqnTide.lnk" "$INSTDIR\eqntide-desktop.exe" "" "$INSTDIR\eqntide-desktop.exe" 0
+    System::Call 'shell32::SHChangeNotify(i 0x0001000, i 0x0005, w "$SMPROGRAMS\EqnTide", p 0)'
+    System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0, p 0, p 0)'
+    IfFileExists "$SYSDIR\ie4uinit.exe" 0 +2
+        ExecWait '"$SYSDIR\ie4uinit.exe" -show'
 
     ; 6. Uninstaller registration
     WriteUninstaller "$INSTDIR\Uninstall.exe"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayName" "EqnTide - Equation Editor & Converter"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayIcon" "$INSTDIR\eqntide-desktop.exe"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayIcon" "$INSTDIR\eqntide-desktop.exe,0"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "Publisher" "EqnTide"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EqnTide" "DisplayVersion" "${APP_VERSION}"
 SectionEnd

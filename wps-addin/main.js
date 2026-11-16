@@ -300,17 +300,33 @@ function initAppEventListeners() {
   }
 }
 
+function unloadWordStartupTemplate() {
+  try {
+    var app = (typeof wps.WpsApplication === "function") ? wps.WpsApplication() : (wps.Application || wps);
+    if (app && app.AddIns) {
+      for (var i = 1; i <= app.AddIns.Count; i++) {
+        var item = app.AddIns.Item(i);
+        if (item && item.Name && item.Name.toLowerCase().indexOf("eqntide.dotm") !== -1) {
+          item.Installed = false;
+        }
+      }
+    }
+  } catch (_) {}
+}
+
 /**
  * Called when WPS loads the add-in
  */
 function OnAddinLoad(ribbonUI) {
   g_ribbonUI = ribbonUI;
   console.log("EqnTide WPS JS Add-in loaded successfully.");
+  unloadWordStartupTemplate();
   initAppEventListeners();
   scheduleEquationTab();
 }
 
 try {
+  unloadWordStartupTemplate();
   setTimeout(initAppEventListeners, 200);
 } catch (_) {}
 
