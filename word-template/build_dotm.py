@@ -396,12 +396,9 @@ content_types_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.template.macroEnabledTemplate.main+xml"/>
   <Override PartName="/word/vbaData.xml" ContentType="application/vnd.ms-word.vbaData+xml"/>
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
-  <Override PartName="/word/styles.xml" ContentType="application/openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/customUI/customUI14.xml" ContentType="application/xml"/>
-</Types>""".replace(
-    "application/openxmlformats-officedocument.wordprocessingml.styles+xml",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml",
-)
+</Types>"""
 
 root_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -427,10 +424,11 @@ vba_data_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <wne:vbaSuppData xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml">
   <wne:mcds>
     <wne:mcd wne:macroName="{p_up}.{m_up}.AUTOEXEC" wne:name="{PROJECT_NAME}.{MODULE_NAME}.AutoExec" wne:bEncrypt="00" wne:cmg="56"/>
-    <wne:mcd wne:macroName="{p_up}.{m_up}.TOGGLELATEXMACRO" wne:name="{PROJECT_NAME}.{MODULE_NAME}.ToggleLatexMacro" wne:bEncrypt="00" wne:cmg="56"/>
     <wne:mcd wne:macroName="{p_up}.{m_up}.INSERTEQUATIONMACRO" wne:name="{PROJECT_NAME}.{MODULE_NAME}.InsertEquationMacro" wne:bEncrypt="00" wne:cmg="56"/>
     <wne:mcd wne:macroName="{p_up}.{m_up}.EDITEQUATIONMACRO" wne:name="{PROJECT_NAME}.{MODULE_NAME}.EditEquationMacro" wne:bEncrypt="00" wne:cmg="56"/>
+    <wne:mcd wne:macroName="{p_up}.{m_up}.TOGGLELATEXMACRO" wne:name="{PROJECT_NAME}.{MODULE_NAME}.ToggleLatexMacro" wne:bEncrypt="00" wne:cmg="56"/>
     <wne:mcd wne:macroName="{p_up}.{m_up}.UPGRADEMATHTYPEMACRO" wne:name="{PROJECT_NAME}.{MODULE_NAME}.UpgradeMathTypeMacro" wne:bEncrypt="00" wne:cmg="56"/>
+    <wne:mcd wne:macroName="{p_up}.{m_up}.BATCHCONVERTERMACRO" wne:name="{PROJECT_NAME}.{MODULE_NAME}.BatchConverterMacro" wne:bEncrypt="00" wne:cmg="56"/>
   </wne:mcds>
 </wne:vbaSuppData>"""
 
@@ -457,10 +455,13 @@ customui14_xml = r"""<customUI xmlns="http://schemas.microsoft.com/office/2009/0
     <tabs>
       <tab id="EqnTideTab" label="EqnTide">
         <group id="EqnTideEqGroup" label="Equations">
-          <button id="btnToggleLatex" label="Toggle LaTeX" size="large" image="eqntideLogo" onAction="RibbonToggleLatex" screentip="Toggle LaTeX (Alt + \)" supertip="Convert LaTeX to MathType OLE with EMF preview, or an equation back to LaTeX text." />
-          <button id="btnInsertEquation" label="Insert Equation" size="large" image="eqntideLogo" onAction="RibbonInsertEquation" screentip="Insert Equation" supertip="Open EqnTide equation editor." />
-          <button id="btnEditEquation" label="Edit Equation" size="large" image="eqntideLogo" onAction="RibbonEditEquation" screentip="Edit Equation" supertip="Edit selected equation." />
-          <button id="btnUpgradeMathType" label="Upgrade MathType" size="large" image="eqntideLogo" onAction="RibbonUpgradeMathType" screentip="Upgrade MathType" supertip="Upgrade legacy MathType equations." />
+          <button id="btnInsertEquation" label="Insert Equation" size="large" image="eqntideLogo" onAction="RibbonInsertEquation" screentip="Insert Equation" supertip="Opens the fast popup EqnTide editor to insert a new equation at current cursor position." />
+          <button id="btnEditEquation" label="Edit Equation" size="large" image="eqntideLogo" onAction="RibbonEditEquation" screentip="Edit Equation" supertip="Reads the selected equation (OMML or MathType) and opens it in the editor." />
+          <button id="btnToggleLatex" label="Toggle LaTeX" size="large" image="eqntideLogo" onAction="RibbonToggleLatex" screentip="Toggle LaTeX (Alt + \)" supertip="Converts selected $...$ or \[...\] text into a native equation, or selected equation into LaTeX text." />
+        </group>
+        <group id="EqnTideToolsGroup" label="Tools &amp; Upgrade">
+          <button id="btnUpgradeMathType" label="Upgrade MathType" size="large" image="eqntideLogo" onAction="RibbonUpgradeMathType" screentip="Upgrade Legacy Equations" supertip="Upgrades all legacy MathType equations in this document." />
+          <button id="btnBatchConverter" label="Batch Converter" size="large" image="eqntideLogo" onAction="RibbonBatchConverter" screentip="Batch Converter" supertip="Launches the desktop batch document converter for bulk .docx processing." />
         </group>
       </tab>
     </tabs>

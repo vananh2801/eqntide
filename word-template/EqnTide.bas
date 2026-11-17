@@ -14,10 +14,6 @@ Private Const wdCollapseEnd As Long = 0
 ' Ribbon Callbacks
 ' =========================================================================
 
-Public Sub RibbonToggleLatex(control As IRibbonControl)
-    ToggleLatexMacro
-End Sub
-
 Public Sub RibbonInsertEquation(control As IRibbonControl)
     InsertEquationMacro
 End Sub
@@ -26,8 +22,16 @@ Public Sub RibbonEditEquation(control As IRibbonControl)
     EditEquationMacro
 End Sub
 
+Public Sub RibbonToggleLatex(control As IRibbonControl)
+    ToggleLatexMacro
+End Sub
+
 Public Sub RibbonUpgradeMathType(control As IRibbonControl)
     UpgradeMathTypeMacro
+End Sub
+
+Public Sub RibbonBatchConverter(control As IRibbonControl)
+    BatchConverterMacro
 End Sub
 
 ' =========================================================================
@@ -152,6 +156,84 @@ Public Sub EditEquationMacro()
 End Sub
 
 Public Sub UpgradeMathTypeMacro()
+    On Error GoTo UpgradeError
+
+    Dim doc As Object
+    Set doc = ActiveDocument
+    If doc Is Nothing Then
+        MsgBox "No active document found.", vbExclamation, "EqnTide"
+        Exit Sub
+    End If
+
+    ' Check if document is saved on disk as .docx
+    Dim docPath As String
+    docPath = doc.FullName
+    If Len(doc.Path) = 0 Or LCase(Right(doc.Name, 5)) <> ".docx" Then
+        Dim answer As VbMsgBoxResult
+        answer = MsgBox("To upgrade all legacy MathType equations with the high-speed converter, please save your document as a .docx file first." & vbCrLf & vbCrLf & _
+                        "Would you like to open the Batch Document Converter instead?", vbYesNo + vbInformation, "EqnTide")
+        If answer = vbYes Then
+            BatchConverterMacro
+        End If
+        Exit Sub
+    End If
+
+    Dim confirmMsg As String
+    confirmMsg = "Upgrade all legacy MathType equations in:" & vbCrLf & docPath & vbCrLf & vbCrLf & _
+                 "Click [Yes] to upgrade to Modern MathType 7 (OLE DSMT4 + EMF-MTEF)." & vbCrLf & _
+                 "Click [No] to upgrade to Native Word OMML (<m:oMath>)." & vbCrLf & _
+                 "Click [Cancel] to abort."
+
+    Dim choice As VbMsgBoxResult
+    choice = MsgBox(confirmMsg, vbYesNoCancel + vbQuestion, "EqnTide - Upgrade Equations")
+    If choice = vbCancel Then Exit Sub
+
+    Dim targetMode As String
+    If choice = vbYes Then
+        targetMode = "upgrade_mathtype"
+    Else
+        targetMode = "upgrade_omml"
+    End If
+
+    ' Save current document state to disk before converting
+    doc.Save
+
+    ' Call bridge /convert/document
+    Dim http As Object
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.Open "POST", BRIDGE_ROOT & "/convert/document", False
+    http.setRequestHeader "Content-Type", "application/json"
+
+    Dim payload As String
+    payload = "{""input_path"":" & JsonEscape(docPath) & ",""target"":" & JsonEscape(targetMode) & "}"
+    http.send payload
+
+    If http.Status = 200 Then
+        Dim resp As String
+        resp = http.responseText
+        Dim found As String, converted As String, errors As String
+        found = ExtractJsonField(resp, "found")
+        converted = ExtractJsonField(resp, "converted")
+        errors = ExtractJsonField(resp, "errors")
+
+        ' Reopen document to display fresh upgraded equations
+        doc.Close 0 ' wdDoNotSaveChanges = 0
+        Documents.Open docPath
+
+        MsgBox "Upgrade Succeeded!" & vbCrLf & vbCrLf & _
+               "Equations Found: " & found & vbCrLf & _
+               "Successfully Upgraded: " & converted & vbCrLf & _
+               "Errors: " & errors, vbInformation, "EqnTide"
+    Else
+        MsgBox "Bridge Server returned HTTP " & http.Status & ": " & http.responseText, vbExclamation, "EqnTide"
+    End If
+    Exit Sub
+
+UpgradeError:
+    MsgBox "Cannot upgrade equations: " & Err.Description, vbExclamation, "EqnTide"
+End Sub
+
+Public Sub BatchConverterMacro()
     On Error GoTo LaunchError
     CreateObject("WScript.Shell").Run "eqntide://open?tab=batch", 1, False
     Exit Sub
