@@ -102,6 +102,20 @@ fn has_wgpu_adapter(config: eframe::egui_wgpu::WgpuConfiguration) -> bool {
     .is_ok()
 }
 
+fn desktop_viewport() -> eframe::egui::ViewportBuilder {
+    let icon =
+        eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icons/icon.png")).ok();
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_app_id("eqntide")
+        .with_title("EqnTide — Equation Editor")
+        .with_inner_size([1100.0, 650.0])
+        .with_min_inner_size(app::MIN_WINDOW_SIZE);
+    if let Some(icon) = icon {
+        viewport = viewport.with_icon(icon);
+    }
+    viewport
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel();
     let tx = EventSender::new(tx);
@@ -113,15 +127,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let Some(instance) = instance::acquire(&args, tx.clone())? else {
         return Ok(());
     };
-    let icon =
-        eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icons/icon.png")).ok();
-    let mut viewport = eframe::egui::ViewportBuilder::default()
-        .with_title("EqnTide — Equation Editor")
-        .with_inner_size([1100.0, 650.0])
-        .with_min_inner_size(app::MIN_WINDOW_SIZE);
-    if let Some(icon) = icon {
-        viewport = viewport.with_icon(icon);
-    }
+    let viewport = desktop_viewport();
 
     let renderer_env = std::env::var("EQNTIDE_RENDERER").unwrap_or_default();
     let use_wgpu = args.iter().any(|a| a == "--wgpu") || renderer_env.eq_ignore_ascii_case("wgpu");
@@ -238,5 +244,17 @@ fn main() {
             .set_description(&msg)
             .show();
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_viewport_sets_app_id_and_icon() {
+        let viewport = desktop_viewport();
+        assert_eq!(viewport.app_id.as_deref(), Some("eqntide"));
+        assert!(viewport.icon.is_some());
     }
 }
