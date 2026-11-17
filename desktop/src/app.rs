@@ -272,6 +272,7 @@ pub struct App {
     batch_running: bool,
     stop: Arc<AtomicBool>,
     warning_cache: Option<(u64, u64, String, Option<String>)>,
+    keyboard_handled: bool,
 }
 
 impl App {
@@ -414,11 +415,10 @@ impl App {
             || self.command_input.is_some()
     }
     pub(crate) fn has_active_animation(&self) -> bool {
-        self.busy
-            || self.render_busy
-            || self.batch_running
-            || self.close_deadline.is_some()
-            || self.latex_deadline.is_some()
+        (self.busy || self.batch_running) && self.gpu_profile != GpuProfile::Software
+    }
+    pub(crate) fn ui_state_token(&self) -> (usize, bool) {
+        (self.tab, self.has_active_overlay())
     }
     fn from_parts(
         instance: Option<Instance>,
@@ -486,6 +486,7 @@ impl App {
             batch_running: false,
             stop: Arc::new(AtomicBool::new(false)),
             warning_cache: None,
+            keyboard_handled: false,
         }
     }
     fn dirty(&self) -> bool {
@@ -743,14 +744,14 @@ impl App {
                     self.render_busy = false;
                     if key == self.render_key {
                         match result {
-                            Ok(rendered) => {
+                            Ok(mut rendered) => {
+                                let image = std::mem::take(&mut rendered.image);
                                 if let Some(texture) = &mut self.texture {
-                                    texture
-                                        .set(rendered.image.clone(), egui::TextureOptions::LINEAR);
+                                    texture.set(image, egui::TextureOptions::LINEAR);
                                 } else {
                                     self.texture = Some(ctx.load_texture(
                                         "equation",
-                                        rendered.image.clone(),
+                                        image,
                                         egui::TextureOptions::LINEAR,
                                     ));
                                 }
@@ -915,40 +916,54 @@ impl App {
         if math.tag != "math" {
             math = MathNode::with_children("math", vec![math]);
         }
-        let _ = ctx;
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let result = eqntide::render::render_interactive(&math, font)
-                .map_err(|e| e.to_string())
-                .and_then(|preview| {
-                    let image = image::load_from_memory(&preview.preview.png)
-                        .map_err(|e| e.to_string())?
-                        .to_rgba8();
-                    let placeholders = preview
-                        .regions
-                        .iter()
-                        .filter(|region| {
-                            region
-                                .path
-                                .iter()
-                                .try_fold(&math, |node, &index| node.children.get(index))
-                                .is_some_and(|node| {
-                                    node.attrs.iter().any(|(key, _)| key == PLACEHOLDER_ATTR)
-                                })
-                        })
-                        .cloned()
-                        .collect();
-                    Ok(Rendered {
-                        placeholders,
-                        image: egui::ColorImage::from_rgba_unmultiplied(
-                            [image.width() as usize, image.height() as usize],
-                            image.as_raw(),
-                        ),
-                        preview,
+        let raster_scale = match self.gpu_profile {
+            GpuProfile::Software | GpuProfile::VirtualGpu => {
+                let ppp = ctx.pixels_per_point().max(1.0);
+                let screen_px_per_pt = self.zoom * (96.0 / 72.0) * ppp;
+                (screen_px_per_pt / eqntide::render::PX_PER_PT).clamp(0.4, 1.0)
+            }
+            GpuProfile::Native => 1.0,
+        };
+        let result = eqntide::render::render_interactive_alpha_scaled(&math, font, raster_scale)
+            .map_err(|e| e.to_string())
+            .map(|(mask, preview)| {
+                let placeholders = preview
+                    .regions
+                    .iter()
+                    .filter(|region| {
+                        region
+                            .path
+                            .iter()
+                            .try_fold(&math, |node, &index| node.children.get(index))
+                            .is_some_and(|node| {
+                                node.attrs.iter().any(|(key, _)| key == PLACEHOLDER_ATTR)
+                            })
                     })
-                });
-            let _ = tx.send(Event::Render(key, result));
-        });
+                    .cloned()
+                    .collect();
+                let pixels = mask
+                    .alpha
+                    .into_iter()
+                    .map(Color32::from_black_alpha)
+                    .collect();
+                let image = egui::ColorImage {
+                    size: [mask.width as usize, mask.height as usize],
+                    source_size: Vec2::new(mask.width as f32, mask.height as f32),
+                    pixels,
+                };
+                Rendered {
+                    placeholders,
+                    image,
+                    preview,
+                }
+            });
+        let _ = self.tx.send_local(Event::Render(key, result));
+    }
+    fn sync_render(&mut self, ctx: &egui::Context) {
+        if !self.render_busy && self.requested_key != self.render_key {
+            self.request_render(ctx);
+            self.events(ctx);
+        }
     }
     fn add_files(&mut self, paths: Vec<PathBuf>) {
         if self.batch_running {
@@ -1327,7 +1342,7 @@ impl App {
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if self.busy || self.render_busy {
+            if self.busy {
                 if self.gpu_profile == GpuProfile::Software {
                     ui.weak("Working…");
                 } else {
@@ -1566,18 +1581,26 @@ impl App {
         let atlas_w = atlas_w.max(1);
         let mut rgba = vec![0u8; atlas_w * atlas_h * 4];
         let mut entries = HashMap::with_capacity(placements.len());
+        let mut gamma_lut = [0u8; 256];
+        for (i, slot) in gamma_lut.iter_mut().enumerate().skip(1) {
+            let a = i as f32 / 255.0;
+            *slot = (a.powf(0.70) * 255.0).round().min(255.0) as u8;
+        }
         for (idx, px, py, w, h) in placements {
             let (source, mask) = &rendered[idx];
             for y in 0..h {
+                let src_row = y * w;
+                let dst_row = (py + y) * atlas_w + px;
                 for x in 0..w {
-                    let alpha = mask.alpha[y * w + x];
-                    let a = alpha as f32 / 255.0;
-                    let boosted = (a.powf(0.70) * 255.0).round().min(255.0) as u8;
-                    let dst = ((py + y) * atlas_w + (px + x)) * 4;
+                    let alpha = mask.alpha[src_row + x];
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let dst = (dst_row + x) * 4;
                     rgba[dst] = 255;
                     rgba[dst + 1] = 255;
                     rgba[dst + 2] = 255;
-                    rgba[dst + 3] = boosted;
+                    rgba[dst + 3] = gamma_lut[alpha as usize];
                 }
             }
             let uv = Rect::from_min_max(
@@ -1656,6 +1679,22 @@ impl App {
 
     fn shell(&mut self, ui: &mut egui::Ui) {
         self.save_clicked = false;
+        self.keyboard_handled = false;
+        if self.tab == 0
+            && !self.draft_dirty
+            && !self.busy
+            && self.pending.is_none()
+            && self.matrix_dialog.is_none()
+            && ui.is_enabled()
+            && ui.memory(|m| m.has_focus(egui::Id::unique("equation-canvas")))
+            && !ui.input(|i| {
+                i.pointer.any_pressed() || i.pointer.any_released() || i.pointer.any_down()
+            })
+        {
+            self.keyboard(ui);
+            self.keyboard_handled = true;
+        }
+        self.sync_render(ui.ctx());
         egui::Panel::bottom("app-status")
             .exact_size(32.0)
             .show(ui, |ui| self.status_bar(ui));
@@ -1809,6 +1848,7 @@ impl App {
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
+        self.sync_render(ui.ctx());
         // A pending/invalid source disables editing, but keeps the last preview legible.
         ui.set_opacity(1.0);
         let scale = self.zoom * 96.0 / 72.0;
@@ -1952,7 +1992,9 @@ impl App {
                                 );
                             }
                         }
-                        if response.has_focus() && ui.is_enabled() {
+                        let has_canvas_focus =
+                            response.has_focus() || ui.memory(|m| m.has_focus(response.id));
+                        if has_canvas_focus && ui.is_enabled() {
                             ui.memory_mut(|m| {
                                 m.set_focus_lock_filter(
                                     response.id,
@@ -1964,6 +2006,10 @@ impl App {
                                     },
                                 )
                             });
+                            if !self.keyboard_handled {
+                                self.keyboard(ui);
+                                self.sync_render(ui.ctx());
+                            }
                             let cursor = self
                                 .caret_rect(origin, scale)
                                 .unwrap_or(Rect::from_min_size(origin, Vec2::new(1.0, 24.0)));
@@ -1988,8 +2034,8 @@ impl App {
                                     Color32::DARK_BLUE,
                                 );
                             }
-                            self.keyboard(ui);
                         }
+                        self.keyboard_handled = false;
                         if self.command_input.is_some() && ui.is_enabled() {
                             let cursor = self
                                 .caret_rect(origin, scale)
@@ -2808,6 +2854,7 @@ impl App {
             ui.set_min_width(ui.available_width().min(520.0));
             ui.label(egui::RichText::new("Canvas zoom").strong());
             ui.add_space(4.0);
+            let prev_zoom = self.zoom;
             ui.horizontal(|ui| {
                 ui.scope(|ui| {
                     ui.spacing_mut().slider_width = 220.0;
@@ -2831,6 +2878,9 @@ impl App {
                     self.zoom = 2.0;
                 }
             });
+            if (self.zoom - prev_zoom).abs() > f32::EPSILON {
+                self.render_key += 1;
+            }
         });
         ui.add_space(10.0);
         ui.group(|ui| {
@@ -2984,12 +3034,13 @@ impl App {
             self.add_files(dropped);
             self.tab = 1;
         }
-        self.request_render(&ctx);
+        self.sync_render(&ctx);
         self.shell(ui);
         if (save_requested || self.save_clicked) && self.save_available() {
             self.finish(true);
         }
         self.matrix_dialog_ui(&ctx);
+        self.sync_render(&ctx);
         self.dialogs(&ctx);
         self.request_latex_parse(&ctx);
         self.drain_before_close(&ctx);

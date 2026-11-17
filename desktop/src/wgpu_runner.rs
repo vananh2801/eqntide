@@ -206,16 +206,11 @@ impl RunningState {
         raw_input.viewports =
             std::iter::once((egui::ViewportId::ROOT, self.viewport_info.clone())).collect();
 
-        let pointer_only_events = !raw_input.events.is_empty()
-            && raw_input
-                .events
-                .iter()
-                .all(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerGone));
-
         let close_requested = raw_input.viewport().close_requested();
+        let prev_ui_state = self.app.ui_state_token();
+        let had_popup = self.egui_ctx.any_popup_open();
 
-        let suppress_echo =
-            self.frame_cap.is_some() && pointer_only_events && !self.app.has_active_animation();
+        let suppress_echo = self.frame_cap.is_some() && !self.app.has_active_animation();
         if suppress_echo {
             self.suppress_zero_delay_repaint
                 .store(true, Ordering::Release);
@@ -224,6 +219,12 @@ impl RunningState {
         if suppress_echo {
             self.suppress_zero_delay_repaint
                 .store(false, Ordering::Release);
+            let needs_followup = self.app.has_active_animation()
+                || self.app.ui_state_token() != prev_ui_state
+                || self.egui_ctx.any_popup_open() != had_popup;
+            if needs_followup {
+                self.schedule_repaint_at(Instant::now().max(self.next_throttled_frame));
+            }
         }
 
         self.viewport_info.events.clear();
@@ -256,8 +257,8 @@ impl RunningState {
                 pixels_per_point.to_bits(),
             )
         });
-        if pointer_only_events && ime_state == self.last_ime_state {
-            // Avoid Win32 IMM32 syscalls inside egui_winit when only the mouse pointer moved.
+        if ime_state == self.last_ime_state {
+            // Avoid redundant Win32 IMM32 syscalls inside egui_winit when IME state is unchanged.
             self.egui_ctx.input_mut(|i| i.events.clear());
         }
         self.last_ime_state = ime_state;
@@ -464,6 +465,9 @@ impl WgpuRunner {
 
         let app = App::new_with_state(&egui_ctx, render_state.as_ref(), instance, tx, rx, args);
         let frame_cap = app.frame_cap();
+        let initial_size = window.inner_size();
+        let initial_dims = (initial_size.width > 0 && initial_size.height > 0)
+            .then_some([initial_size.width, initial_size.height]);
 
         let now = Instant::now();
         self.running = Some(RunningState {
@@ -492,7 +496,7 @@ impl WgpuRunner {
             pending_deltas: egui::TexturesDelta::default(),
             last_shapes: None,
             last_primitives: None,
-            last_surface_dims: None,
+            last_surface_dims: initial_dims,
             last_ppp: None,
             last_clear_color: None,
             last_paint_time: None,
@@ -635,6 +639,20 @@ impl ApplicationHandler<RunnerUserEvent> for WgpuRunner {
                     running.pressed_buttons.retain(|b| b != button);
                 }
             },
+            WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } if key_event.state == ElementState::Released
+                && running.frame_cap.is_some()
+                && running.pressed_buttons.is_empty() =>
+            {
+                let _ = running.egui_winit.on_window_event(&running.window, &event);
+                running
+                    .egui_winit
+                    .egui_input_mut()
+                    .events
+                    .retain(|e| !matches!(e, egui::Event::Key { pressed: false, .. }));
+                return;
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 // Drop winit's synthetic WM_MOUSEMOVE(0, 0) posted on WM_NCLBUTTONDOWN title-bar clicks.
                 let is_synthetic_origin = position.x == 0.0
@@ -731,14 +749,17 @@ impl ApplicationHandler<RunnerUserEvent> for WgpuRunner {
             WindowEvent::Resized(_) => {
                 running.viewport_dirty = true;
                 let size = running.window.inner_size();
-                if let (Some(w), Some(h)) =
-                    (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
-                {
-                    running
-                        .painter
-                        .on_window_resized(egui::ViewportId::ROOT, w, h);
-                    running.force_paint = true;
-                    force_repaint = true;
+                let dims = [size.width, size.height];
+                if running.last_surface_dims != Some(dims) {
+                    if let (Some(w), Some(h)) =
+                        (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+                    {
+                        running
+                            .painter
+                            .on_window_resized(egui::ViewportId::ROOT, w, h);
+                        running.force_paint = true;
+                        force_repaint = true;
+                    }
                 }
             }
             WindowEvent::Occluded(is_occluded) => {
@@ -773,8 +794,14 @@ impl ApplicationHandler<RunnerUserEvent> for WgpuRunner {
         }
 
         let response = running.egui_winit.on_window_event(&running.window, &event);
-        if response.repaint || force_repaint {
+        if force_repaint {
             running.schedule_repaint_now();
+        } else if response.repaint {
+            if running.frame_cap.is_some() {
+                running.schedule_repaint_at(Instant::now().max(running.next_throttled_frame));
+            } else {
+                running.schedule_repaint_now();
+            }
         }
     }
 

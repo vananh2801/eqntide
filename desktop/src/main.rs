@@ -46,6 +46,9 @@ impl<T> EventSender<T> {
         }
         Ok(())
     }
+    fn send_local(&self, event: T) -> Result<(), mpsc::SendError<T>> {
+        self.channel.send(event)
+    }
     fn attach(&self, ctx: eframe::egui::Context) {
         let _ = self.repaint.set(ctx);
     }

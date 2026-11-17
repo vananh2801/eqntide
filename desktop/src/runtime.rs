@@ -48,26 +48,26 @@ fn healthy() -> Result<(), String> {
     }
 }
 pub fn start_bridge(tx: Sender<Event>) {
-    std::thread::spawn(move || {
-        let result: Result<Option<ServerHandle>, String> = if healthy().is_ok() {
-            Ok(None)
-        } else {
-            let events = tx.clone();
-            let callback: WindowRequestCallback = Arc::new(move |r: DesktopWindowRequest| {
-                let _ = events.send(Event::Window(r));
-            });
-            match eqntide::bridge::start_bridge_server_with_window_requests(
-                "127.0.0.1:17890",
-                Some(callback),
-            ) {
-                Ok(handle) => Ok(Some(handle)),
-                Err(e) => healthy()
-                    .map(|_| None)
-                    .map_err(|_| format!("Bridge unavailable: {e}")),
-            }
-        };
-        let _ = tx.send(Event::Bridge(result));
+    let events = tx.clone();
+    let callback: WindowRequestCallback = Arc::new(move |r: DesktopWindowRequest| {
+        let _ = events.send(Event::Window(r));
     });
+    match eqntide::bridge::start_bridge_server_with_window_requests(
+        "127.0.0.1:17890",
+        Some(callback),
+    ) {
+        Ok(handle) => {
+            let _ = tx.send_local(Event::Bridge(Ok(Some(handle))));
+        }
+        Err(e) => {
+            std::thread::spawn(move || {
+                let result = healthy()
+                    .map(|_| None)
+                    .map_err(|_| format!("Bridge unavailable: {e}"));
+                let _ = tx.send(Event::Bridge(result));
+            });
+        }
+    }
 }
 
 pub fn open_folder(path: &std::path::Path) -> Result<(), String> {

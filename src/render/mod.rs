@@ -178,7 +178,7 @@ fn rasterize_alpha(
 
     let (ox, oy) = (pad_x + left_extra, pad_y + asc);
     let mut canvas = Canvas::new(w_px, h_px);
-    let mut ras = Rasterizer::new(w_px, h_px);
+    let mut ras: Option<Rasterizer> = None;
     for it in &b.items {
         match it {
             Item::Glyph {
@@ -197,9 +197,10 @@ fn rasterize_alpha(
                 if signed_area(&p) < 0.0 {
                     p.reverse();
                 }
+                let r = ras.get_or_insert_with(|| Rasterizer::new(w_px, h_px));
                 for i in 0..p.len() {
                     let (a, c) = (p[i], p[(i + 1) % p.len()]);
-                    ras.draw_line(point(a.0, a.1), point(c.0, c.1));
+                    r.draw_line(point(a.0, a.1), point(c.0, c.1));
                 }
             }
             Item::Contours(contours) => {
@@ -223,26 +224,56 @@ fn rasterize_alpha(
                         p.reverse();
                     }
                 }
-                let mut sub_ras = Rasterizer::new(w_px, h_px);
+                let mut min_x = f32::INFINITY;
+                let mut max_x = f32::NEG_INFINITY;
+                let mut min_y = f32::INFINITY;
+                let mut max_y = f32::NEG_INFINITY;
+                for p in &shifted {
+                    for &(px, py) in p {
+                        min_x = min_x.min(px);
+                        max_x = max_x.max(px);
+                        min_y = min_y.min(py);
+                        max_y = max_y.max(py);
+                    }
+                }
+                let bx0 = (min_x.floor().max(0.0) as usize).min(w_px);
+                let by0 = (min_y.floor().max(0.0) as usize).min(h_px);
+                let bx1 = (max_x.ceil().max(0.0) as usize).min(w_px);
+                let by1 = (max_y.ceil().max(0.0) as usize).min(h_px);
+                if bx1 <= bx0 || by1 <= by0 {
+                    continue;
+                }
+                let bw = bx1 - bx0;
+                let bh = by1 - by0;
+                let (fx0, fy0) = (bx0 as f32, by0 as f32);
+                let mut sub_ras = Rasterizer::new(bw, bh);
                 for p in &shifted {
                     for i in 0..p.len() {
                         let (a, c) = (p[i], p[(i + 1) % p.len()]);
-                        sub_ras.draw_line(point(a.0, a.1), point(c.0, c.1));
+                        sub_ras.draw_line(
+                            point(a.0 - fx0, a.1 - fy0),
+                            point(c.0 - fx0, c.1 - fy0),
+                        );
                     }
                 }
                 sub_ras.for_each_pixel(|i, v| {
-                    if let Some(c) = canvas.cov.get_mut(i) {
+                    let lx = i % bw;
+                    let ly = i / bw;
+                    let idx = (by0 + ly) * w_px + (bx0 + lx);
+                    if let Some(c) = canvas.cov.get_mut(idx) {
                         *c = (*c + v).min(1.0);
                     }
                 });
             }
         }
     }
-    ras.for_each_pixel(|i, v| {
-        if let Some(c) = canvas.cov.get_mut(i) {
-            *c = (*c + v).min(1.0);
-        }
-    });
+    if let Some(ras) = ras {
+        ras.for_each_pixel(|i, v| {
+            if let Some(c) = canvas.cov.get_mut(i) {
+                *c = (*c + v).min(1.0);
+            }
+        });
+    }
 
     let alpha: Vec<u8> = canvas.cov.iter().map(|c| (c * 255.0 + 0.5) as u8).collect();
     Ok((w_px, h_px, alpha))
@@ -267,14 +298,29 @@ pub struct InteractivePreview {
     pub regions: Vec<HitRegion>,
 }
 
-/// Raster and hit geometry are generated from exactly the same layout.
-/// Metadata is separate from drawing primitives and cannot change EMF/PNG output.
-pub fn render_interactive(math: &MathNode, font_pt: f32) -> Result<InteractivePreview> {
-    let (b, em) = layout::layout_math(math, font_pt)?;
-    let preview = rasterize(&b, em)?;
-    let (min_x, _, min_y, _) = b.ink_bounds(fonts());
-    let ox = 2.0 + (-min_x).max(0.0);
-    let oy = 2.0 + (-min_y).max(0.70 * em);
+/// Raster and hit geometry are generated from the same layout, returning the raw alpha mask
+/// directly without PNG Zlib compression overhead. `raster_scale` scales output pixel dimensions
+/// (1.0 = full `PX_PER_PT` 576 DPI; smaller values rasterize fewer pixels for software renderers)
+/// while keeping `Preview` point dimensions and `HitRegion` coordinates in standard points.
+pub fn render_interactive_alpha_scaled(
+    math: &MathNode,
+    font_pt: f32,
+    raster_scale: f32,
+) -> Result<(AlphaMask, InteractivePreview)> {
+    let (mut b, em) = layout::layout_math(math, font_pt)?;
+    let f = fonts();
+    let (min_x, max_x, min_y, max_y) = b.ink_bounds(f);
+    let asc = (-min_y).max(0.70 * em);
+    let desc = max_y.max(0.22 * em);
+    let left_extra = (-min_x).max(0.0);
+    let right_extra = (max_x - b.w).max(0.0);
+    let (pad_x, pad_y) = (2.0f32, 2.0f32);
+    let full_w_px = (b.w + left_extra + right_extra + 2.0 * pad_x)
+        .ceil()
+        .max(1.0);
+    let full_h_px = (asc + desc + 2.0 * pad_y).ceil().max(1.0);
+    let ox = pad_x + left_extra;
+    let oy = pad_y + asc;
     let mut paths = std::collections::HashMap::new();
     fn visit(
         n: &MathNode,
@@ -328,7 +374,7 @@ pub fn render_interactive(math: &MathNode, font_pt: f32) -> Result<InteractivePr
         carets: vec![],
         path: vec![],
         x: ox / PX_PER_PT,
-        y: 2.0 / PX_PER_PT,
+        y: pad_y / PX_PER_PT,
         width: b.w / PX_PER_PT,
         height: (b.asc + b.desc) / PX_PER_PT,
         baseline: oy / PX_PER_PT,
@@ -337,7 +383,71 @@ pub fn render_interactive(math: &MathNode, font_pt: f32) -> Result<InteractivePr
         region.carets.sort_by(f32::total_cmp);
         region.carets.dedup_by(|a, b| (*a - *b).abs() < 0.001);
     }
-    Ok(InteractivePreview { preview, regions })
+
+    let scale = raster_scale.clamp(0.25, 1.0);
+    let (w_px, h_px, alpha) = if (scale - 1.0).abs() > 1e-4 {
+        b.w *= scale;
+        b.asc *= scale;
+        b.desc *= scale;
+        for it in &mut b.items {
+            match it {
+                Item::Glyph { em, x, y, .. } => {
+                    *em *= scale;
+                    *x *= scale;
+                    *y *= scale;
+                }
+                Item::Poly(pts) => {
+                    for (x, y) in pts {
+                        *x *= scale;
+                        *y *= scale;
+                    }
+                }
+                Item::Contours(cs) => {
+                    for pts in cs {
+                        for (x, y) in pts {
+                            *x *= scale;
+                            *y *= scale;
+                        }
+                    }
+                }
+            }
+        }
+        rasterize_alpha(
+            &b,
+            pad_x * scale,
+            pad_y * scale,
+            left_extra * scale,
+            right_extra * scale,
+            asc * scale,
+            desc * scale,
+        )?
+    } else {
+        rasterize_alpha(&b, pad_x, pad_y, left_extra, right_extra, asc, desc)?
+    };
+
+    let preview = Preview {
+        png: Vec::new(),
+        width_pt: full_w_px / PX_PER_PT,
+        height_pt: full_h_px / PX_PER_PT,
+        depth_pt: (desc + pad_y) / PX_PER_PT,
+    };
+    Ok((
+        AlphaMask {
+            width: w_px as u32,
+            height: h_px as u32,
+            alpha,
+        },
+        InteractivePreview { preview, regions },
+    ))
+}
+
+/// Raster and hit geometry are generated from exactly the same layout.
+/// Metadata is separate from drawing primitives and cannot change EMF/PNG output.
+pub fn render_interactive(math: &MathNode, font_pt: f32) -> Result<InteractivePreview> {
+    let (mask, mut interactive) = render_interactive_alpha_scaled(math, font_pt, 1.0)?;
+    let ppm = (PX_PER_PT * 72.0 / 0.0254).round() as u32;
+    interactive.preview.png = png::encode_alpha(mask.width, mask.height, &mask.alpha, ppm);
+    Ok(interactive)
 }
 
 #[cfg(test)]
