@@ -12,8 +12,6 @@ use eqntide::bridge::{DesktopWindowRequest, ServerHandle};
 use eqntide::render::InteractivePreview;
 use std::sync::mpsc;
 
-/// Wake the event loop whenever a worker or IPC connection produces a result.
-/// Idle windows do not need to poll a channel or redraw continuously.
 pub struct EventSender<T = Event> {
     channel: mpsc::Sender<T>,
     repaint: std::sync::Arc<std::sync::OnceLock<eframe::egui::Context>>,
@@ -93,14 +91,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
-    #[cfg(target_os = "windows")]
-    let renderer = eframe::Renderer::Wgpu;
-    #[cfg(not(target_os = "windows"))]
-    let renderer = eframe::Renderer::Glow;
+
+    let renderer_env = std::env::var("EQNTIDE_RENDERER").unwrap_or_default();
+    let use_wgpu = args.iter().any(|a| a == "--wgpu") || renderer_env.eq_ignore_ascii_case("wgpu");
+    let use_glow = args.iter().any(|a| a == "--glow") || renderer_env.eq_ignore_ascii_case("glow");
+
+    let renderer = if use_wgpu {
+        eframe::Renderer::Wgpu
+    } else if use_glow {
+        eframe::Renderer::Glow
+    } else {
+        // Default to Glow (OpenGL) across all platforms.
+        // In VMs (VMware, VirtualBox, Hyper-V) and remote sessions, Glow uses direct
+        // guest hardware-accelerated OpenGL / WGL, whereas Wgpu defaults to DirectX 12
+        // which falls back to unaccelerated WARP CPU rasterization and severe lag.
+        eframe::Renderer::Glow
+    };
+
+    let wgpu_options = {
+        let mut config = eframe::egui_wgpu::WgpuConfiguration::default();
+        config.surface.present_mode = eframe::egui_wgpu::wgpu::PresentMode::AutoNoVsync;
+        config
+    };
 
     let options = eframe::NativeOptions {
         viewport,
         renderer,
+        wgpu_options,
         ..Default::default()
     };
     eframe::run_native(
