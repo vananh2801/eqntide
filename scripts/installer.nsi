@@ -31,13 +31,13 @@ RequestExecutionLevel user
 !insertmacro MUI_LANGUAGE "English"
 
 Section "MainSection" SEC01
-    ; Stop only this installation's bridge before replacing its executable.
+    ; Stop only this installation's bridge and desktop before replacing executables.
     InitPluginsDir
     SetOutPath "$PLUGINSDIR"
     File "${PACKAGE_DIR}\windows-stage\scripts\install-bridge-startup.ps1"
-    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\install-bridge-startup.ps1" -BaseDir "$INSTDIR" -Stop' $0
+    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\install-bridge-startup.ps1" -BaseDir "$INSTDIR" -Stop -IncludeDesktop' $0
     ${If} $0 != 0
-        MessageBox MB_ICONEXCLAMATION "Could not stop the old bridge. Close EqnTide bridge processes and run Setup again."
+        MessageBox MB_ICONEXCLAMATION "Could not stop running EqnTide processes. Close EqnTide and run Setup again."
         Abort
     ${EndIf}
     SetOutPath "$INSTDIR"
@@ -119,7 +119,7 @@ SectionEnd
 Section "Uninstall"
     ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1" -Uninstall' $0
     ${If} $0 != 0
-        MessageBox MB_ICONEXCLAMATION "Could not stop the bridge. Close EqnTide bridge processes and retry uninstall."
+        MessageBox MB_ICONEXCLAMATION "Could not stop EqnTide processes. Close EqnTide and retry uninstall."
         Abort
     ${EndIf}
     ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-addin.ps1" -Uninstall' $0

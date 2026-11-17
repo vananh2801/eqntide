@@ -2,12 +2,13 @@
 param(
     [switch]$Uninstall,
     [switch]$Stop,
+    [switch]$IncludeDesktop,
     [switch]$Launch,
     [string]$BaseDir = (Split-Path -Parent $PSScriptRoot)
 )
 $ErrorActionPreference = 'Stop'
 $Exe = [IO.Path]::GetFullPath((Join-Path $BaseDir 'eqntide-cli.exe'))
-$Desktop = Join-Path $BaseDir 'eqntide-desktop.exe'
+$Desktop = [IO.Path]::GetFullPath((Join-Path $BaseDir 'eqntide-desktop.exe'))
 $LaunchScript = Join-Path $BaseDir 'scripts\install-bridge-startup.ps1'
 $Startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\EqnTide Bridge.vbs'
 
@@ -16,6 +17,12 @@ function Get-OwnedBridge {
     @(Get-CimInstance Win32_Process -Filter "Name = 'eqntide-cli.exe'" | Where-Object {
         $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $Exe -and
         $_.CommandLine -match '(?:^|\s)--server(?:\s|$)'
+    })
+}
+
+function Get-OwnedDesktop {
+    @(Get-CimInstance Win32_Process -Filter "Name = 'eqntide-desktop.exe'" | Where-Object {
+        $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $Desktop
     })
 }
 
@@ -29,6 +36,21 @@ if ($Uninstall -or $Stop) {
     })) {
         Stop-Process -Id $Runner.ProcessId -Force -ErrorAction Stop
         Wait-Process -Id $Runner.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+    }
+    if ($Uninstall -or $IncludeDesktop) {
+        foreach ($Process in (Get-OwnedDesktop)) {
+            try {
+                $Proc = Get-Process -Id $Process.ProcessId -ErrorAction SilentlyContinue
+                if ($Proc -and $Proc.MainWindowHandle -ne 0) {
+                    [void]$Proc.CloseMainWindow()
+                    [void]$Proc.WaitForExit(2000)
+                }
+            } catch {}
+            if (Get-Process -Id $Process.ProcessId -ErrorAction SilentlyContinue) {
+                Stop-Process -Id $Process.ProcessId -Force -ErrorAction Stop
+                Wait-Process -Id $Process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+            }
+        }
     }
     foreach ($Process in (Get-OwnedBridge)) {
         Stop-Process -Id $Process.ProcessId -Force -ErrorAction Stop
