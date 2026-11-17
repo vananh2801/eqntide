@@ -54,6 +54,166 @@ enum Intent {
     Next,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GpuProfile {
+    Native,
+    VirtualGpu,
+    Software,
+}
+
+struct PaletteAtlasEntry {
+    uv: Rect,
+    display_size: Vec2,
+}
+
+struct PaletteAtlas {
+    texture: egui::TextureHandle,
+    entries: HashMap<&'static str, PaletteAtlasEntry>,
+}
+
+fn detect_host_vm_profile() -> GpuProfile {
+    if std::env::var("LIBGL_ALWAYS_SOFTWARE")
+        .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes"))
+    {
+        return GpuProfile::Software;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        for path in [
+            "/sys/class/dmi/id/product_name",
+            "/sys/class/dmi/id/sys_vendor",
+            "/sys/class/dmi/id/board_vendor",
+        ] {
+            if let Ok(raw) = std::fs::read_to_string(path) {
+                let lower = raw.to_lowercase();
+                if [
+                    "qemu",
+                    "kvm",
+                    "vmware",
+                    "virtualbox",
+                    "vbox",
+                    "bochs",
+                    "hyper-v",
+                    "parallels",
+                    "xen",
+                    "bhyve",
+                    "microsoft corporation",
+                ]
+                .iter()
+                .any(|k| lower.contains(k))
+                {
+                    return GpuProfile::VirtualGpu;
+                }
+            }
+        }
+        if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+            if cpuinfo.contains("hypervisor") {
+                return GpuProfile::VirtualGpu;
+            }
+        }
+    }
+    GpuProfile::Native
+}
+
+fn detect_gpu_profile(
+    egui_ctx: &egui::Context,
+    wgpu_render_state: Option<&eframe::egui_wgpu::RenderState>,
+) -> GpuProfile {
+    let env_profile = std::env::var("EQNTIDE_GPU_PROFILE").unwrap_or_default();
+    if env_profile.eq_ignore_ascii_case("software") {
+        return GpuProfile::Software;
+    }
+    if env_profile.eq_ignore_ascii_case("virtual") || env_profile.eq_ignore_ascii_case("virtualgpu")
+    {
+        return GpuProfile::VirtualGpu;
+    }
+    if env_profile.eq_ignore_ascii_case("native") {
+        return GpuProfile::Native;
+    }
+
+    let Some(rs) = wgpu_render_state else {
+        let profile = detect_host_vm_profile();
+        if let Some(log_path) = crate::log_file_path("desktop_gpu.log") {
+            let summary = format!(
+                "profile={profile:?} backend=Glow device_type=Unknown ppp={:.2}\n",
+                egui_ctx.pixels_per_point()
+            );
+            let _ = std::fs::write(log_path, summary);
+        }
+        return profile;
+    };
+    let info = rs.adapter.get_info();
+    let name = info.name.to_lowercase();
+
+    let software = info.device_type == eframe::egui_wgpu::wgpu::DeviceType::Cpu
+        || [
+            "llvmpipe",
+            "lavapipe",
+            "swiftshader",
+            "basic render",
+            "basic display",
+            "microsoft basic",
+            "gdi generic",
+            "software",
+        ]
+        .iter()
+        .any(|k| name.contains(k));
+    let profile = if software {
+        GpuProfile::Software
+    } else {
+        let virtual_gpu = info.device_type == eframe::egui_wgpu::wgpu::DeviceType::VirtualGpu
+            || [
+                "virtio",
+                "vmware",
+                "virtualbox",
+                "svga",
+                "qxl",
+                "parallels",
+                "hyper-v",
+                "qemu",
+                "red hat",
+                "bochs",
+                "paravirtual",
+                "remote display",
+            ]
+            .iter()
+            .any(|k| name.contains(k));
+        if virtual_gpu {
+            GpuProfile::VirtualGpu
+        } else {
+            detect_host_vm_profile()
+        }
+    };
+
+    if let Some(log_path) = crate::log_file_path("desktop_gpu.log") {
+        let summary = format!(
+            "profile={profile:?} backend={:?} device_type={:?} name={:?} driver={:?} driver_info={:?} ppp={:.2}\n",
+            info.backend,
+            info.device_type,
+            info.name,
+            info.driver,
+            info.driver_info,
+            egui_ctx.pixels_per_point()
+        );
+        let _ = std::fs::write(log_path, summary);
+    }
+
+    profile
+}
+
+fn frame_cap_for_profile(profile: GpuProfile) -> Option<Duration> {
+    if let Ok(raw) = std::env::var("EQNTIDE_SOFTWARE_FRAME_MS") {
+        if let Ok(ms) = raw.parse::<u64>() {
+            return (ms > 0).then(|| Duration::from_millis(ms));
+        }
+    }
+    match profile {
+        GpuProfile::Native => None,
+        GpuProfile::VirtualGpu => Some(Duration::from_millis(33)),
+        GpuProfile::Software => Some(Duration::from_millis(66)),
+    }
+}
+
 pub struct App {
     _instance: Option<Instance>,
     tx: Sender<Event>,
@@ -86,8 +246,12 @@ pub struct App {
     tab: usize,
     category: String,
     matrix_dialog: Option<MatrixDialog>,
-    palette_textures: HashMap<&'static str, Option<egui::TextureHandle>>,
+    palette_atlases: HashMap<String, PaletteAtlas>,
     palette_ppp: f32,
+    gpu_profile: GpuProfile,
+    software_frame_cap: Option<Duration>,
+    passive_canvas_rect: Option<Rect>,
+    last_enforced_viewport: Option<(Vec2, bool)>,
     logo_texture: Option<egui::TextureHandle>,
     status: String,
     texture: Option<egui::TextureHandle>,
@@ -107,6 +271,7 @@ pub struct App {
     batch_completed: usize,
     batch_running: bool,
     stop: Arc<AtomicBool>,
+    warning_cache: Option<(u64, u64, String, Option<String>)>,
 }
 
 impl App {
@@ -117,9 +282,27 @@ impl App {
         rx: Receiver<Event>,
         args: Vec<String>,
     ) -> Self {
-        cc.egui_ctx.set_theme(egui::ThemePreference::System);
+        Self::new_with_state(
+            &cc.egui_ctx,
+            cc.wgpu_render_state.as_ref(),
+            instance,
+            tx,
+            rx,
+            args,
+        )
+    }
+
+    pub(crate) fn new_with_state(
+        egui_ctx: &egui::Context,
+        wgpu_render_state: Option<&eframe::egui_wgpu::RenderState>,
+        instance: Instance,
+        tx: Sender<Event>,
+        rx: Receiver<Event>,
+        args: Vec<String>,
+    ) -> Self {
+        egui_ctx.set_theme(egui::ThemePreference::System);
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
-            cc.egui_ctx.style_mut_of(theme, |style| {
+            egui_ctx.style_mut_of(theme, |style| {
                 style.spacing.item_spacing = Vec2::new(8.0, 8.0);
                 style.spacing.button_padding = Vec2::new(10.0, 7.0);
                 style.visuals.selection.bg_fill = Color32::from_rgb(40, 157, 207);
@@ -136,9 +319,11 @@ impl App {
                 }
                 style.visuals.window_corner_radius = UI_CORNER_RADIUS;
                 style.visuals.menu_corner_radius = UI_CORNER_RADIUS;
+                style.interaction.show_tooltips_only_when_still = false;
+                style.interaction.tooltip_delay = 0.5;
             });
         }
-        tx.attach(cc.egui_ctx.clone());
+        tx.attach(egui_ctx.clone());
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "nunito".into(),
@@ -178,9 +363,62 @@ impl App {
             family.push("stix-text".into());
             family.push("stix-math".into());
         }
-        cc.egui_ctx.set_fonts(fonts);
+        let gpu_profile = detect_gpu_profile(egui_ctx, wgpu_render_state);
+        if matches!(gpu_profile, GpuProfile::VirtualGpu | GpuProfile::Software) {
+            for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                egui_ctx.style_mut_of(theme, |style| {
+                    style.animation_time = 0.0;
+                    style.visuals.text_cursor.blink = false;
+                    style.visuals.window_shadow = egui::Shadow::NONE;
+                    style.visuals.popup_shadow = egui::Shadow::NONE;
+                    if gpu_profile == GpuProfile::Software {
+                        style.interaction.tooltip_delay = 0.8;
+                    }
+                    style.spacing.scroll.dormant_handle_opacity =
+                        style.spacing.scroll.active_handle_opacity;
+                    style.spacing.scroll.interact_handle_opacity =
+                        style.spacing.scroll.active_handle_opacity;
+                    style.spacing.scroll.dormant_background_opacity =
+                        style.spacing.scroll.active_background_opacity;
+                    style.spacing.scroll.interact_background_opacity =
+                        style.spacing.scroll.active_background_opacity;
+                    style.spacing.scroll.floating_allocated_width = style.spacing.scroll.bar_width;
+                });
+            }
+            egui_ctx.tessellation_options_mut(|o| o.feathering = false);
+        }
+        let force_scale_1 = args.iter().any(|a| a == "--scale1")
+            || std::env::var("EQNTIDE_SOFTWARE_SCALE")
+                .is_ok_and(|v| v.trim() == "1" || v.trim() == "1.0");
+        if gpu_profile == GpuProfile::Software && force_scale_1 {
+            egui_ctx.set_pixels_per_point(1.0);
+        }
+        egui_ctx.set_fonts(fonts);
         runtime::start_bridge(tx.clone());
-        Self::from_parts(Some(instance), tx, rx, args)
+        let mut app = Self::from_parts(Some(instance), tx, rx, args);
+        app.gpu_profile = gpu_profile;
+        app.software_frame_cap = frame_cap_for_profile(gpu_profile);
+        app
+    }
+
+    pub(crate) fn frame_cap(&self) -> Option<Duration> {
+        self.software_frame_cap
+    }
+    pub(crate) fn passive_hover_rect(&self) -> Option<Rect> {
+        self.passive_canvas_rect
+    }
+    pub(crate) fn has_active_overlay(&self) -> bool {
+        self.busy
+            || self.pending.is_some()
+            || self.matrix_dialog.is_some()
+            || self.command_input.is_some()
+    }
+    pub(crate) fn has_active_animation(&self) -> bool {
+        self.busy
+            || self.render_busy
+            || self.batch_running
+            || self.close_deadline.is_some()
+            || self.latex_deadline.is_some()
     }
     fn from_parts(
         instance: Option<Instance>,
@@ -222,8 +460,12 @@ impl App {
             tab: 0,
             category: "Fractions".into(),
             matrix_dialog: None,
-            palette_textures: HashMap::new(),
+            palette_atlases: HashMap::new(),
             palette_ppp: 0.0,
+            gpu_profile: GpuProfile::Native,
+            software_frame_cap: None,
+            passive_canvas_rect: None,
+            last_enforced_viewport: None,
             logo_texture: None,
             status: "Click the canvas to type. Use the palette or Ctrl+F for a fraction.".into(),
             texture: None,
@@ -243,6 +485,7 @@ impl App {
             batch_completed: 0,
             batch_running: false,
             stop: Arc::new(AtomicBool::new(false)),
+            warning_cache: None,
         }
     }
     fn dirty(&self) -> bool {
@@ -501,11 +744,16 @@ impl App {
                     if key == self.render_key {
                         match result {
                             Ok(rendered) => {
-                                self.texture = Some(ctx.load_texture(
-                                    "equation",
-                                    rendered.image.clone(),
-                                    egui::TextureOptions::LINEAR,
-                                ));
+                                if let Some(texture) = &mut self.texture {
+                                    texture
+                                        .set(rendered.image.clone(), egui::TextureOptions::LINEAR);
+                                } else {
+                                    self.texture = Some(ctx.load_texture(
+                                        "equation",
+                                        rendered.image.clone(),
+                                        egui::TextureOptions::LINEAR,
+                                    ));
+                                }
                                 self.rendered = Some(rendered);
                             }
                             Err(e) => {
@@ -667,8 +915,8 @@ impl App {
         if math.tag != "math" {
             math = MathNode::with_children("math", vec![math]);
         }
+        let _ = ctx;
         let tx = self.tx.clone();
-        let context = ctx.clone();
         std::thread::spawn(move || {
             let result = eqntide::render::render_interactive(&math, font)
                 .map_err(|e| e.to_string())
@@ -700,7 +948,6 @@ impl App {
                     })
                 });
             let _ = tx.send(Event::Render(key, result));
-            context.request_repaint();
         });
     }
     fn add_files(&mut self, paths: Vec<PathBuf>) {
@@ -1081,7 +1328,11 @@ impl App {
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if self.busy || self.render_busy {
-                ui.spinner();
+                if self.gpu_profile == GpuProfile::Software {
+                    ui.weak("Working…");
+                } else {
+                    ui.spinner();
+                }
             }
             let ready = if self.bridge_ready { "●" } else { "○" };
             ui.label(ready).on_hover_text(&self.bridge_status);
@@ -1096,36 +1347,50 @@ impl App {
                 self.pending = Some(Intent::Next);
             }
             let target_warning = if self.tab == 0 {
-                let math = self.editor.math();
-                if self.target == "mathtype" {
-                    eqntide::check_mathtype_unsupported(&math)
-                        .or_else(|| eqntide::check_mathtype_unsupported_latex(&self.latex))
-                        .map(|u| format!("Warning: {u} is not supported in MathType."))
-                        .or_else(|| {
-                            eqntide::check_omml_unsupported(&math)
-                                .or_else(|| eqntide::check_omml_unsupported_latex(&self.latex))
-                                .map(|u| {
+                let cache_hit = self.warning_cache.as_ref().is_some_and(
+                    |(rk, lg, t, _)| *rk == self.render_key && *lg == self.latex_generation && *t == self.target,
+                );
+                if !cache_hit {
+                    let math = self.editor.math();
+                    let computed = if self.target == "mathtype" {
+                        eqntide::check_mathtype_unsupported(&math)
+                            .or_else(|| eqntide::check_mathtype_unsupported_latex(&self.latex))
+                            .map(|u| format!("Warning: {u} is not supported in MathType."))
+                            .or_else(|| {
+                                eqntide::check_omml_unsupported(&math)
+                                    .or_else(|| eqntide::check_omml_unsupported_latex(&self.latex))
+                                    .map(|u| {
+                                        format!(
+                                            "Warning: {u} is not supported in OMML (MathType target active)."
+                                        )
+                                    })
+                            })
+                    } else {
+                        eqntide::check_omml_unsupported(&math)
+                            .or_else(|| eqntide::check_omml_unsupported_latex(&self.latex))
+                            .map(|u| {
+                                if eqntide::check_mathtype_unsupported(&math)
+                                    .or_else(|| eqntide::check_mathtype_unsupported_latex(&self.latex))
+                                    .is_some()
+                                {
+                                    format!("Warning: {u} is not supported in OMML or MathType.")
+                                } else {
                                     format!(
-                                        "Warning: {u} is not supported in OMML (MathType target active)."
+                                        "Warning: {u} is not supported in OMML. Switch target to MathType to insert."
                                     )
-                                })
-                        })
-                } else {
-                    eqntide::check_omml_unsupported(&math)
-                        .or_else(|| eqntide::check_omml_unsupported_latex(&self.latex))
-                        .map(|u| {
-                            if eqntide::check_mathtype_unsupported(&math)
-                                .or_else(|| eqntide::check_mathtype_unsupported_latex(&self.latex))
-                                .is_some()
-                            {
-                                format!("Warning: {u} is not supported in OMML or MathType.")
-                            } else {
-                                format!(
-                                    "Warning: {u} is not supported in OMML. Switch target to MathType to insert."
-                                )
-                            }
-                        })
+                                }
+                            })
+                    };
+                    self.warning_cache = Some((
+                        self.render_key,
+                        self.latex_generation,
+                        self.target.clone(),
+                        computed,
+                    ));
                 }
+                self.warning_cache
+                    .as_ref()
+                    .and_then(|(_, _, _, w)| w.clone())
             } else {
                 None
             };
@@ -1182,70 +1447,63 @@ impl App {
                         ui.spacing_mut().item_spacing = Vec2::splat(PALETTE_GAP);
                         let ppp = ui.ctx().pixels_per_point();
                         if (self.palette_ppp - ppp).abs() > f32::EPSILON {
-                            self.palette_textures.clear();
+                            self.palette_atlases.clear();
                             self.palette_ppp = ppp;
+                        }
+                        if !self.palette_atlases.contains_key(&self.category) {
+                            if let Some(atlas) =
+                                Self::build_palette_atlas(ui.ctx(), &self.category, &items, ppp)
+                            {
+                                self.palette_atlases.insert(self.category.clone(), atlas);
+                            }
                         }
                         let icon_color = if ui.visuals().dark_mode {
                             Color32::WHITE
                         } else {
                             Color32::BLACK
                         };
-                        for (index, (_, label, source)) in items.iter().enumerate() {
-                            let texture =
-                                self.palette_textures.entry(source).or_insert_with(|| {
-                                    let math = palette::preview_template(source).ok()?;
-                                    let mask =
-                                        eqntide::render_alpha_fit(&math, 34.0 * ppp, 22.0 * ppp)
-                                            .ok()?;
-                                    let mut rgba = Vec::with_capacity(mask.alpha.len() * 4);
-                                    // White alpha masks can be tinted pure white in dark mode
-                                    // and pure black in light mode at exact 1:1 physical pixels.
-                                    for &alpha in &mask.alpha {
-                                        let a = alpha as f32 / 255.0;
-                                        let boosted =
-                                            (a.powf(0.70) * 255.0).round().min(255.0) as u8;
-                                        rgba.extend_from_slice(&[255, 255, 255, boosted]);
-                                    }
-                                    let image = egui::ColorImage::from_rgba_unmultiplied(
-                                        [mask.width as usize, mask.height as usize],
-                                        &rgba,
-                                    );
-                                    Some(ui.ctx().load_texture(
-                                        *source,
-                                        image,
-                                        egui::TextureOptions::NEAREST,
-                                    ))
+                        let mut clicked_source = None;
+                        {
+                            let atlas = self.palette_atlases.get(&self.category);
+                            for (index, (_, label, source)) in items.iter().enumerate() {
+                                let response = if let Some((atlas, entry)) =
+                                    atlas.and_then(|a| a.entries.get(source).map(|e| (a, e)))
+                                {
+                                    let image =
+                                        egui::Image::new((atlas.texture.id(), entry.display_size))
+                                            .uv(entry.uv)
+                                            .tint(icon_color);
+                                    ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(image))
+                                } else {
+                                    ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(*label))
+                                };
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::Role::Button,
+                                        ui.is_enabled(),
+                                        *label,
+                                    )
                                 });
-                            let response = if let Some(texture) = texture {
-                                let display_size = texture.size_vec2() / ppp;
-                                let image =
-                                    egui::Image::new((texture.id(), display_size)).tint(icon_color);
-                                ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(image))
-                            } else {
-                                ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(*label))
-                            };
-                            response.widget_info(|| {
-                                egui::WidgetInfo::labeled(
-                                    egui::Role::Button,
-                                    ui.is_enabled(),
-                                    *label,
-                                )
-                            });
-                            if response
-                                .on_hover_text(format!("{label}\n{source}"))
-                                .clicked()
-                            {
-                                self.command_input = None;
-                                self.latex_groups.clear();
-                                self.expects_latex_group = false;
-                                self.insert_template(source);
-                                ui.memory_mut(|m| {
-                                    m.request_focus(egui::Id::unique("equation-canvas"))
-                                });
+                                if response
+                                    .on_hover_ui(|ui| {
+                                        ui.label(*label);
+                                        ui.weak(*source);
+                                    })
+                                    .clicked()
+                                {
+                                    clicked_source = Some(*source);
+                                }
+                                if (index + 1) % columns == 0 {
+                                    ui.end_row();
+                                }
                             }
-                            if (index + 1) % columns == 0 {
-                                ui.end_row();
-                            }
+                        }
+                        if let Some(source) = clicked_source {
+                            self.command_input = None;
+                            self.latex_groups.clear();
+                            self.expects_latex_group = false;
+                            self.insert_template(source);
+                            ui.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
                         }
                         if self.category == "Matrices"
                             && ui
@@ -1261,6 +1519,119 @@ impl App {
                         }
                     });
             });
+    }
+
+    fn build_palette_atlas(
+        ctx: &egui::Context,
+        category: &str,
+        items: &[&(&'static str, &'static str, &'static str)],
+        ppp: f32,
+    ) -> Option<PaletteAtlas> {
+        let mut rendered = Vec::new();
+        for (_, _, source) in items {
+            let Ok(math) = palette::preview_template(source) else {
+                continue;
+            };
+            let Ok(mask) = eqntide::render_alpha_fit(&math, 34.0 * ppp, 22.0 * ppp) else {
+                continue;
+            };
+            if mask.width > 0 && mask.height > 0 {
+                rendered.push((*source, mask));
+            }
+        }
+        if rendered.is_empty() {
+            return None;
+        }
+        const PAD: usize = 1;
+        const MAX_ATLAS_W: usize = 512;
+        let mut placements = Vec::with_capacity(rendered.len());
+        let mut cur_x = PAD;
+        let mut cur_y = PAD;
+        let mut row_h = 0usize;
+        let mut atlas_w = 0usize;
+        for (idx, (_, mask)) in rendered.iter().enumerate() {
+            let w = mask.width as usize;
+            let h = mask.height as usize;
+            if cur_x > PAD && cur_x + w + PAD > MAX_ATLAS_W {
+                cur_x = PAD;
+                cur_y += row_h + PAD;
+                row_h = 0;
+            }
+            placements.push((idx, cur_x, cur_y, w, h));
+            cur_x += w + PAD;
+            atlas_w = atlas_w.max(cur_x);
+            row_h = row_h.max(h);
+        }
+        let atlas_h = (cur_y + row_h + PAD).max(1);
+        let atlas_w = atlas_w.max(1);
+        let mut rgba = vec![0u8; atlas_w * atlas_h * 4];
+        let mut entries = HashMap::with_capacity(placements.len());
+        for (idx, px, py, w, h) in placements {
+            let (source, mask) = &rendered[idx];
+            for y in 0..h {
+                for x in 0..w {
+                    let alpha = mask.alpha[y * w + x];
+                    let a = alpha as f32 / 255.0;
+                    let boosted = (a.powf(0.70) * 255.0).round().min(255.0) as u8;
+                    let dst = ((py + y) * atlas_w + (px + x)) * 4;
+                    rgba[dst] = 255;
+                    rgba[dst + 1] = 255;
+                    rgba[dst + 2] = 255;
+                    rgba[dst + 3] = boosted;
+                }
+            }
+            let uv = Rect::from_min_max(
+                Pos2::new(px as f32 / atlas_w as f32, py as f32 / atlas_h as f32),
+                Pos2::new(
+                    (px + w) as f32 / atlas_w as f32,
+                    (py + h) as f32 / atlas_h as f32,
+                ),
+            );
+            entries.insert(
+                *source,
+                PaletteAtlasEntry {
+                    uv,
+                    display_size: Vec2::new(w as f32 / ppp, h as f32 / ppp),
+                },
+            );
+        }
+        let image = egui::ColorImage::from_rgba_unmultiplied([atlas_w, atlas_h], &rgba);
+        let texture = ctx.load_texture(
+            format!("palette-atlas-{category}"),
+            image,
+            egui::TextureOptions::NEAREST,
+        );
+        Some(PaletteAtlas { texture, entries })
+    }
+
+    #[cfg(test)]
+    fn palette_texture_ids(&self) -> std::collections::HashSet<egui::TextureId> {
+        self.palette_atlases
+            .values()
+            .map(|a| a.texture.id())
+            .collect()
+    }
+
+    fn enforce_window_minimum_if_needed(&mut self, ctx: &egui::Context) {
+        let state = ctx.input(|input| {
+            let viewport = input.viewport();
+            let size = viewport.inner_rect.unwrap_or(input.viewport_rect()).size();
+            let fullscreen_or_max =
+                viewport.maximized == Some(true) || viewport.fullscreen == Some(true);
+            (size, fullscreen_or_max)
+        });
+        if self
+            .last_enforced_viewport
+            .is_some_and(|(prev_size, prev_flag)| {
+                prev_flag == state.1
+                    && (prev_size.x - state.0.x).abs() < 0.5
+                    && (prev_size.y - state.0.y).abs() < 0.5
+            })
+        {
+            return;
+        }
+        self.last_enforced_viewport = Some(state);
+        Self::enforce_window_minimum(ctx);
     }
 
     fn enforce_window_minimum(ctx: &egui::Context) {
@@ -1407,7 +1778,16 @@ impl App {
                             }
                         });
                     }
-                    self.canvas(ui);
+                    let scroll_out = self.canvas(ui);
+                    if !self.has_active_overlay() && !self.draft_dirty {
+                        let r = Rect::from_min_max(
+                            scroll_out.inner_rect.min + Vec2::splat(2.0),
+                            scroll_out.inner_rect.max - Vec2::splat(16.0),
+                        );
+                        if r.is_positive() {
+                            self.passive_canvas_rect = Some(r);
+                        }
+                    }
                 });
             });
     }
@@ -1453,12 +1833,25 @@ impl App {
                 ui.visuals_mut().extreme_bg_color = track_blue;
 
                 let scroll = &mut ui.spacing_mut().scroll;
-                scroll.dormant_handle_opacity = 0.5;
-                scroll.active_handle_opacity = 0.85;
-                scroll.interact_handle_opacity = 1.0;
-                scroll.dormant_background_opacity = 0.3;
-                scroll.active_background_opacity = 0.6;
-                scroll.interact_background_opacity = 0.85;
+                if matches!(
+                    self.gpu_profile,
+                    GpuProfile::VirtualGpu | GpuProfile::Software
+                ) {
+                    scroll.dormant_handle_opacity = 0.85;
+                    scroll.active_handle_opacity = 0.85;
+                    scroll.interact_handle_opacity = 0.85;
+                    scroll.dormant_background_opacity = 0.6;
+                    scroll.active_background_opacity = 0.6;
+                    scroll.interact_background_opacity = 0.6;
+                    scroll.floating_allocated_width = scroll.bar_width;
+                } else {
+                    scroll.dormant_handle_opacity = 0.5;
+                    scroll.active_handle_opacity = 0.85;
+                    scroll.interact_handle_opacity = 1.0;
+                    scroll.dormant_background_opacity = 0.3;
+                    scroll.active_background_opacity = 0.6;
+                    scroll.interact_background_opacity = 0.85;
+                }
 
                 egui::ScrollArea::both()
                     .id_salt("formula-scroll")
@@ -2382,14 +2775,26 @@ impl App {
                 self.batch_totals[3]
             ));
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for (path, log) in self.files.iter().zip(&self.batch_logs) {
-                ui.group(|ui| {
-                    ui.label(path.display().to_string());
-                    ui.label(log);
-                });
-            }
-        });
+        let text_h = ui.text_style_height(&egui::TextStyle::Body);
+        let group_margin = egui::Frame::group(ui.style()).inner_margin.sum().y;
+        let row_height = 2.0 * text_h + ui.spacing().item_spacing.y + group_margin + 2.0;
+        egui::ScrollArea::vertical().show_rows(
+            ui,
+            row_height,
+            self.files.len(),
+            |ui, row_range| {
+                for idx in row_range {
+                    let path_str = self.files[idx].display().to_string();
+                    let log = &self.batch_logs[idx];
+                    ui.group(|ui| {
+                        ui.set_width(ui.available_width());
+                        ui.add(egui::Label::new(&path_str).truncate())
+                            .on_hover_text(&path_str);
+                        ui.add(egui::Label::new(log).truncate()).on_hover_text(log);
+                    });
+                }
+            },
+        );
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
@@ -2548,10 +2953,11 @@ impl App {
     }
 }
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+impl App {
+    pub(crate) fn ui_pass(&mut self, ui: &mut egui::Ui) {
+        self.passive_canvas_rect = None;
         let ctx = ui.ctx().clone();
-        Self::enforce_window_minimum(&ctx);
+        self.enforce_window_minimum_if_needed(&ctx);
         self.events(&ctx);
         let save_requested = Self::take_save_shortcut(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
@@ -2587,6 +2993,12 @@ impl eframe::App for App {
         self.dialogs(&ctx);
         self.request_latex_parse(&ctx);
         self.drain_before_close(&ctx);
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.ui_pass(ui);
     }
 }
 
@@ -3278,11 +3690,7 @@ mod tests {
                         },
                         |ui| a.shell(ui),
                     );
-                    let textures: std::collections::HashSet<_> = a
-                        .palette_textures
-                        .values()
-                        .filter_map(|t| t.as_ref().map(egui::TextureHandle::id))
-                        .collect();
+                    let textures = a.palette_texture_ids();
                     let images: Vec<_> = output
                         .shapes
                         .iter()
@@ -3348,11 +3756,7 @@ mod tests {
                             },
                             |ui| a.shell(ui),
                         );
-                        let textures: std::collections::HashSet<_> = a
-                            .palette_textures
-                            .values()
-                            .filter_map(|t| t.as_ref().map(egui::TextureHandle::id))
-                            .collect();
+                        let textures = a.palette_texture_ids();
                         let mut rows = Vec::<f32>::new();
                         for shape in &output.shapes {
                             if let egui::Shape::Rect(r) = &shape.shape {
@@ -4043,11 +4447,7 @@ mod tests {
             ctx.set_theme(theme);
             ctx.set_pixels_per_point(1.5);
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
-            let texture_ids: std::collections::HashSet<_> = a
-                .palette_textures
-                .values()
-                .filter_map(|t| t.as_ref().map(egui::TextureHandle::id))
-                .collect();
+            let texture_ids = a.palette_texture_ids();
             assert!(!texture_ids.is_empty());
             assert!((a.palette_ppp - 1.5).abs() < f32::EPSILON);
             let tinted_match = output.shapes.iter().any(|s| match &s.shape {
