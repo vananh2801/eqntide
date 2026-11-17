@@ -101,16 +101,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else if use_glow {
         eframe::Renderer::Glow
     } else {
-        // Default to Glow (OpenGL) across all platforms.
-        // In VMs (VMware, VirtualBox, Hyper-V) and remote sessions, Glow uses direct
-        // guest hardware-accelerated OpenGL / WGL, whereas Wgpu defaults to DirectX 12
-        // which falls back to unaccelerated WARP CPU rasterization and severe lag.
-        eframe::Renderer::Glow
+        // Windows VMs without 3D OpenGL guest drivers only expose Windows GDI
+        // Generic OpenGL 1.1, which fails egui_glow's OpenGL 2.0+ check.
+        // Default to Wgpu on Windows (DX12/Vulkan/WARP) and Glow elsewhere.
+        #[cfg(target_os = "windows")]
+        {
+            eframe::Renderer::Wgpu
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            eframe::Renderer::Glow
+        }
     };
 
     let wgpu_options = {
         let mut config = eframe::egui_wgpu::WgpuConfiguration::default();
         config.surface.present_mode = eframe::egui_wgpu::wgpu::PresentMode::AutoNoVsync;
+        config.surface.desired_maximum_frame_latency = Some(1);
         config
     };
 
@@ -118,6 +125,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         viewport,
         renderer,
         wgpu_options,
+        dithering: false,
         ..Default::default()
     };
     eframe::run_native(
