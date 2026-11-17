@@ -44,7 +44,11 @@ if ($Uninstall) {
         foreach ($Node in @($config.DocumentElement.ChildNodes)) {
             if ($Node.Attributes -and $Node.Attributes['name'] -and $Node.Attributes['name'].Value -in @('EqnTide','MathEditor')) { [void]$config.DocumentElement.RemoveChild($Node) }
         }
-        $config.Save($PublishXml)
+        if ($config.DocumentElement.ChildNodes.Count -eq 0) {
+            Remove-Item -LiteralPath $PublishXml -Force
+        } else {
+            $config.Save($PublishXml)
+        }
     }
     $AuthJson = Join-Path $WpsBasePath 'authaddin.json'
     if (Test-Path $AuthJson) {
@@ -53,8 +57,24 @@ if ($Uninstall) {
             $auth.wps.PSObject.Properties.Remove('EqnTide')
             $auth.wps.PSObject.Properties.Remove('MathEditor')
             $names = @(([string]$auth.wps.namelist -split '[,; ]+') | Where-Object { $_ -and $_ -notin @('EqnTide','MathEditor') })
-            $auth.wps | Add-Member -NotePropertyName namelist -NotePropertyValue ($names -join ',') -Force
-            $auth | ConvertTo-Json -Depth 20 | Set-Content $AuthJson -Encoding UTF8
+            $remainingWps = @($auth.wps.PSObject.Properties | Where-Object { $_.Name -ne 'namelist' })
+            if ($names.Count -eq 0 -and $remainingWps.Count -eq 0) {
+                $auth.PSObject.Properties.Remove('wps')
+            } else {
+                $auth.wps | Add-Member -NotePropertyName namelist -NotePropertyValue ($names -join ',') -Force
+            }
+        }
+        if (@($auth.PSObject.Properties).Count -eq 0) {
+            Remove-Item -LiteralPath $AuthJson -Force
+        } else {
+            [IO.File]::WriteAllText($AuthJson, ($auth | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+        }
+    }
+    foreach ($EmptyDir in @($WpsBasePath, (Join-Path $env:APPDATA "Kingsoft\wps"), (Join-Path $env:APPDATA "Kingsoft"))) {
+        if ((Test-Path -LiteralPath $EmptyDir) -and @(Get-ChildItem -LiteralPath $EmptyDir -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+            Remove-Item -LiteralPath $EmptyDir -Force -ErrorAction SilentlyContinue
+        } else {
+            break
         }
     }
     Write-Host "[+] EqnTide and legacy MathEditor WPS add-ins removed." -ForegroundColor Green
@@ -104,7 +124,9 @@ Write-Host ""
 $WordStartup = Join-Path $env:APPDATA 'Microsoft\Word\STARTUP'
 $Template = Join-Path $WordStartup 'EqnTide.dotm'
 if ($Uninstall) {
-    Remove-Item $Template -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $Template) {
+        Remove-Item -LiteralPath $Template -Force -ErrorAction Stop
+    }
 } else {
     New-Item -ItemType Directory $WordStartup -Force | Out-Null
     Copy-Item (Join-Path $BaseDir 'word-template\EqnTide.dotm') $Template -Force -ErrorAction Stop

@@ -41,6 +41,9 @@ class NativeIntegration(unittest.TestCase):
                 self.assertTrue(list(stage.glob(path)), path)
             self.assertNotIn("src-tauri", installer)
             self.assertFalse((stage / "word-addin").exists())
+            self.assertIn(r'RMDir /r "$LOCALAPPDATA\EqnTide"', installer)
+            self.assertIn(r'RMDir /r "$LOCALAPPDATA\eqntide\EqnTide"', installer)
+            self.assertIn("addin_uninstall_retry:", installer)
             template = stage / "word-template/EqnTide.dotm"
             import zipfile
             with zipfile.ZipFile(template) as archive:
@@ -50,6 +53,8 @@ class NativeIntegration(unittest.TestCase):
             self.assertIn("word-template\\EqnTide.dotm", ps)
             self.assertNotIn("Set-ItemProperty", ps)
             self.assertNotIn("CheckNetIsolation.exe", ps)
+            bat_uninstall = (stage / "scripts/uninstall-addin.bat").read_text()
+            self.assertIn(r"HKCU\Software\Classes\eqntide", bat_uninstall)
 
     def test_windows_repack_removes_stale_web_payload(self):
         from unittest.mock import patch
@@ -128,6 +133,27 @@ class WpsConfig(unittest.TestCase):
             self.assertEqual(config['wps']['Other'], {'mode': 2})
             self.assertEqual(config['wps']['namelist'], 'Other')
             self.assertNotIn('EqnTide', config['wps'])
+
+    def test_uninstall_removes_empty_wps_files_and_dirs(self):
+        import configure_wps
+        with tempfile.TemporaryDirectory() as tmp:
+            kingsoft = Path(tmp) / 'Kingsoft'
+            jsaddons = kingsoft / 'wps/jsaddons'
+            configure_wps.configure(jsaddons)
+            self.assertTrue((jsaddons / 'publish.xml').exists())
+            self.assertTrue((jsaddons / 'authaddin.json').exists())
+            configure_wps.configure(jsaddons, uninstall=True)
+            self.assertFalse(kingsoft.exists())
+
+    def test_uninstall_on_unconfigured_dir_creates_no_files(self):
+        import configure_wps
+        with tempfile.TemporaryDirectory() as tmp:
+            jsaddons = Path(tmp) / 'Kingsoft/wps/jsaddons'
+            jsaddons.mkdir(parents=True)
+            configure_wps.configure(jsaddons, uninstall=True)
+            self.assertFalse((jsaddons / 'publish.xml').exists())
+            self.assertFalse((jsaddons / 'authaddin.json').exists())
+            self.assertFalse((Path(tmp) / 'Kingsoft').exists())
 
 
 @unittest.skipUnless(sys.platform == 'linux', 'Linux desktop package layout')
@@ -282,6 +308,52 @@ class SessionAddins(unittest.TestCase):
                 helper.remove_server(base)
                 self.assertEqual(run.call_args.args[0][-1], '--uninstall')
                 self.assertFalse(marker.exists())
+
+    def test_session_removal_cleans_addins_markers_and_data_dir(self):
+        from unittest.mock import patch
+        import os
+        spec = importlib.util.spec_from_file_location('session_addins', SCRIPTS_DIR / 'install-session-addins.py')
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage = NativeIntegration().stage(root, False)
+            home = root / 'home'
+            home.mkdir()
+            fake = root / 'tools'
+            fake.mkdir()
+            command = fake / 'systemctl'
+            command.write_text('#!/bin/sh\nexit 0\n')
+            command.chmod(0o755)
+            state_home = home / '.local/state'
+            data_home = home / '.local/share'
+            env = {
+                'HOME': str(home),
+                'XDG_STATE_HOME': str(state_home),
+                'XDG_DATA_HOME': str(data_home),
+                'PATH': str(fake) + ':' + os.environ['PATH'],
+            }
+            with patch.dict(os.environ, env), patch.object(helper.os, 'getuid', return_value=1001):
+                helper.configure_session(stage, refresh=True)
+                data_dir = data_home / 'eqntide'
+                data_dir.mkdir(parents=True, exist_ok=True)
+                (data_dir / 'desktop.lock').write_text('')
+                self.assertTrue((home / '.local/share/Kingsoft/wps/jsaddons/EqnTide/main.js').is_file())
+                self.assertTrue((home / '.config/systemd/user/eqntide.service').is_file())
+
+                # Different installation marker must leave session intact.
+                (state_home / 'eqntide/server-managed').write_text('/other/install')
+                helper.remove_session(stage)
+                self.assertTrue((home / '.local/share/Kingsoft/wps/jsaddons/EqnTide/main.js').is_file())
+                self.assertTrue(data_dir.exists())
+
+                # Matching installation removes service, WPS add-ins, markers, and data dir.
+                (state_home / 'eqntide/server-managed').write_text(str(stage.resolve()))
+                helper.remove_session(stage)
+                self.assertFalse((home / '.config/systemd/user/eqntide.service').exists())
+                self.assertFalse((home / '.local/share/Kingsoft').exists())
+                self.assertFalse((state_home / 'eqntide').exists())
+                self.assertFalse(data_dir.exists())
 
 
 class SupportedPlatforms(unittest.TestCase):

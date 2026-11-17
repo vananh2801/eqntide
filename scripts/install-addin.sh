@@ -39,7 +39,7 @@ install_linux_wps() {
 
     if [[ "${ACTION}" == "uninstall" ]]; then
       for ADDIN_DIR in "${TARGET_DIR}" "${TARGET_VERSION_DIR}" "${LEGACY_DIR}" "${LEGACY_VERSION_DIR}"; do
-        if [[ -e "${ADDIN_DIR}" ]]; then
+        if [[ -e "${ADDIN_DIR}" || -L "${ADDIN_DIR}" ]]; then
           echo "--> Removing WPS Add-in from ${ADDIN_DIR}..."
           rm -rf "${ADDIN_DIR}"
         fi

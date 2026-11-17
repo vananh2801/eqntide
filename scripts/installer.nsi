@@ -120,27 +120,47 @@ legacy_done:
 SectionEnd
 
 Section "Uninstall"
-    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1" -Uninstall'
-    Pop $0
-    ${If} $0 != 0
-        MessageBox MB_ICONEXCLAMATION "Could not stop EqnTide processes. Close EqnTide and retry uninstall."
-        Abort
-    ${EndIf}
-    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-addin.ps1" -Uninstall'
-    Pop $0
-    ; Remove Word Template Add-in
-    Delete "$APPDATA\Microsoft\Word\STARTUP\EqnTide.dotm"
+    IfFileExists "$INSTDIR\scripts\install-bridge-startup.ps1" 0 bridge_uninstall_done
+        nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1" -Uninstall'
+        Pop $0
+        ${If} $0 != 0
+            MessageBox MB_ICONEXCLAMATION "Could not stop EqnTide processes. Close EqnTide and retry uninstall."
+            Abort
+        ${EndIf}
+bridge_uninstall_done:
+    Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\EqnTide Bridge.vbs"
 
-    ; Remove Word Web Add-in registry
+    IfFileExists "$INSTDIR\scripts\install-addin.ps1" 0 addin_uninstall_done
+addin_uninstall_retry:
+        nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-addin.ps1" -Uninstall'
+        Pop $0
+        ${If} $0 != 0
+            MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Could not remove Word or WPS Office add-in files. Close Microsoft Word and WPS Office and retry uninstall." IDRETRY addin_uninstall_retry
+            Abort
+        ${EndIf}
+addin_uninstall_done:
+
+    ; Fallback cleanup for Word Template Add-in and registry
+    Delete "$APPDATA\Microsoft\Word\STARTUP\EqnTide.dotm"
     DeleteRegValue HKCU "Software\Microsoft\Office\16.0\WEF\Developer" "EqnTide"
 
-    ; Remove WPS Office Add-in
+    ; Fallback cleanup for WPS Office Add-in
     RMDir /r "$APPDATA\Kingsoft\wps\jsaddons\EqnTide"
     RMDir /r "$APPDATA\Kingsoft\wps\jsaddons\EqnTide_1.0.0"
+    RMDir "$APPDATA\Kingsoft\wps\jsaddons"
+    RMDir "$APPDATA\Kingsoft\wps"
+    RMDir "$APPDATA\Kingsoft"
 
-    ; Remove shortcuts
+    ; Remove runtime logs and lock/endpoint data
+    RMDir /r "$LOCALAPPDATA\EqnTide"
+    RMDir /r "$LOCALAPPDATA\eqntide\EqnTide"
+    RMDir "$LOCALAPPDATA\eqntide"
+
+    ; Remove shortcuts and refresh shell
     Delete "$DESKTOP\EqnTide.lnk"
     RMDir /r "$SMPROGRAMS\EqnTide"
+    System::Call 'shell32::SHChangeNotify(i 0x0001000, i 0x0005, w "$SMPROGRAMS", p 0)'
+    System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0, p 0, p 0)'
 
     RMDir /r "$INSTDIR\fonts"
     RMDir /r "$INSTDIR\icons"

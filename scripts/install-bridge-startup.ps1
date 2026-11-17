@@ -20,6 +20,12 @@ function Get-OwnedBridge {
     })
 }
 
+function Get-OwnedCli {
+    @(Get-CimInstance Win32_Process -Filter "Name = 'eqntide-cli.exe'" | Where-Object {
+        $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $Exe
+    })
+}
+
 function Get-OwnedDesktop {
     @(Get-CimInstance Win32_Process -Filter "Name = 'eqntide-desktop.exe'" | Where-Object {
         $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $Desktop
@@ -52,9 +58,28 @@ if ($Uninstall -or $Stop) {
             }
         }
     }
-    foreach ($Process in (Get-OwnedBridge)) {
+    $CliTargets = if ($Uninstall) { Get-OwnedCli } else { Get-OwnedBridge }
+    foreach ($Process in $CliTargets) {
         Stop-Process -Id $Process.ProcessId -Force -ErrorAction Stop
         Wait-Process -Id $Process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+    }
+    if ($Uninstall) {
+        $BridgeStateDir = Join-Path $env:LOCALAPPDATA 'EqnTide'
+        if (Test-Path -LiteralPath $BridgeStateDir) {
+            Remove-Item -LiteralPath $BridgeStateDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $DesktopVendorDir = Join-Path $env:LOCALAPPDATA 'eqntide'
+        $DesktopDataDir = Join-Path $DesktopVendorDir 'EqnTide'
+        if (Test-Path -LiteralPath $DesktopDataDir) {
+            Remove-Item -LiteralPath $DesktopDataDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if ((Test-Path -LiteralPath $DesktopVendorDir) -and @(Get-ChildItem -LiteralPath $DesktopVendorDir -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+            Remove-Item -LiteralPath $DesktopVendorDir -Force -ErrorAction SilentlyContinue
+        }
+        $TempStateDir = Join-Path ([IO.Path]::GetTempPath()) 'EqnTide'
+        if (Test-Path -LiteralPath $TempStateDir) {
+            Remove-Item -LiteralPath $TempStateDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
     exit 0
 }

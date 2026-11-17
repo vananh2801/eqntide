@@ -4,6 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 import pwd
+import shutil
 import subprocess
 import sys
 
@@ -44,7 +45,7 @@ def configure_session(base=BASE, refresh=False):
     if os.getuid() == 0:
         raise RuntimeError('Session setup must not run as root')
     # Track server ownership even if no user bus is available yet.
-    state = Path.home() / '.local/state/eqntide'
+    state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'eqntide'
     state.mkdir(parents=True, exist_ok=True)
     (state / 'server-managed').write_text(str(base.resolve()))
     errors = []
@@ -66,10 +67,33 @@ def configure_session(base=BASE, refresh=False):
 def remove_server(base=BASE):
     if os.getuid() == 0:
         raise RuntimeError('Session cleanup must not run as root')
-    marker = Path.home() / '.local/state/eqntide/server-managed'
+    state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'eqntide'
+    marker = state / 'server-managed'
     if marker.exists() and marker.read_text() == str(base.resolve()):
         subprocess.run(['bash', str(base / 'scripts/install-bridge-service.sh'), '--uninstall'], check=True, timeout=30)
         marker.unlink()
+
+
+def remove_session(base=BASE):
+    if os.getuid() == 0:
+        raise RuntimeError('Session cleanup must not run as root')
+    home = Path.home()
+    state = Path(os.environ.get('XDG_STATE_HOME', home / '.local/state')) / 'eqntide'
+    server_marker = state / 'server-managed'
+    if server_marker.exists() and server_marker.read_text() != str(base.resolve()):
+        return
+    remove_server(base)
+    subprocess.run(['bash', str(base / 'scripts/install-addin.sh'), '--uninstall'], check=True, timeout=30)
+    addins_marker = state / 'addins.sha256'
+    if addins_marker.exists():
+        addins_marker.unlink()
+    try:
+        state.rmdir()
+    except OSError:
+        pass
+    data_dir = Path(os.environ.get('XDG_DATA_HOME', home / '.local/share')) / 'eqntide'
+    if data_dir.exists():
+        shutil.rmtree(data_dir, ignore_errors=True)
 
 
 def package_install(remove=False):
@@ -91,8 +115,8 @@ def package_install(remove=False):
     if remove:
         # Only profiles marked by our package setup need offline cleanup.
         for account in pwd.getpwall():
-            marker = Path(account.pw_dir) / '.local/state/eqntide/server-managed'
-            if account.pw_uid >= 1000 and marker.is_file():
+            state = Path(account.pw_dir) / '.local/state/eqntide'
+            if account.pw_uid >= 1000 and any((state / name).is_file() for name in ('server-managed', 'addins.sha256')):
                 uids.add(account.pw_uid)
     for uid in sorted(uids):
         try:
@@ -105,7 +129,7 @@ def package_install(remove=False):
                    'XDG_RUNTIME_DIR': f'/run/user/{uid}',
                    'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{uid}/bus'}
             subprocess.run(['/usr/bin/python3', str(Path(__file__).resolve()),
-                            '--remove-server' if remove else '--refresh-service'],
+                            '--remove-session' if remove else '--refresh-service'],
                            env=env, user=uid, group=account.pw_gid,
                            extra_groups=os.getgrouplist(account.pw_name, account.pw_gid),
                            check=True, timeout=60)
@@ -119,6 +143,8 @@ if __name__ == '__main__':
             package_install(remove=True)
         elif '--package-install' in sys.argv and os.getuid() == 0:
             package_install()
+        elif '--remove-session' in sys.argv:
+            remove_session()
         elif '--remove-server' in sys.argv:
             remove_server()
         else:
