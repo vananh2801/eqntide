@@ -1,7 +1,7 @@
 //! Blocking I/O adapters. All bridge requests run off the GUI thread.
 use crate::Event;
 use crate::EventSender as Sender;
-use eqntide::bridge::{DesktopWindowRequest, HealthResponse, ServerHandle, WindowRequestCallback};
+use eqntide::bridge::{DesktopWindowRequest, HealthResponse, WindowRequestCallback};
 use std::sync::Arc;
 use std::time::Duration;
 

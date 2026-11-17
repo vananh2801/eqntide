@@ -250,10 +250,7 @@ fn rasterize_alpha(
                 for p in &shifted {
                     for i in 0..p.len() {
                         let (a, c) = (p[i], p[(i + 1) % p.len()]);
-                        sub_ras.draw_line(
-                            point(a.0 - fx0, a.1 - fy0),
-                            point(c.0 - fx0, c.1 - fy0),
-                        );
+                        sub_ras.draw_line(point(a.0 - fx0, a.1 - fy0), point(c.0 - fx0, c.1 - fy0));
                     }
                 }
                 sub_ras.for_each_pixel(|i, v| {
