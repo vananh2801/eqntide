@@ -35,7 +35,8 @@ Section "MainSection" SEC01
     InitPluginsDir
     SetOutPath "$PLUGINSDIR"
     File "${PACKAGE_DIR}\windows-stage\scripts\install-bridge-startup.ps1"
-    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\install-bridge-startup.ps1" -BaseDir "$INSTDIR" -Stop -IncludeDesktop' $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$PLUGINSDIR\install-bridge-startup.ps1" -BaseDir "$INSTDIR" -Stop -IncludeDesktop'
+    Pop $0
     ${If} $0 != 0
         MessageBox MB_ICONEXCLAMATION "Could not stop running EqnTide processes. Close EqnTide and run Setup again."
         Abort
@@ -76,13 +77,15 @@ legacy_done:
     SetOutPath "$INSTDIR\word-template"
     File "${PACKAGE_DIR}\windows-stage\word-template\EqnTide.dotm"
 
-    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1"' $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1"'
+    Pop $0
     ${If} $0 != 0
         MessageBox MB_ICONEXCLAMATION "Background bridge setup failed. Run scripts\install-bridge-startup.ps1 to retry."
     ${EndIf}
 
     ; Share add-in installation policy with the portable package.
-    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-addin.ps1"' $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-addin.ps1"'
+    Pop $0
     ${If} $0 != 0
         MessageBox MB_ICONEXCLAMATION "EqnTide desktop was installed. Add-in setup failed; close Office and rerun scripts\install-addin.ps1."
     ${EndIf}
@@ -117,12 +120,14 @@ legacy_done:
 SectionEnd
 
 Section "Uninstall"
-    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1" -Uninstall' $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-bridge-startup.ps1" -Uninstall'
+    Pop $0
     ${If} $0 != 0
         MessageBox MB_ICONEXCLAMATION "Could not stop EqnTide processes. Close EqnTide and retry uninstall."
         Abort
     ${EndIf}
-    ExecWait 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-addin.ps1" -Uninstall' $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$INSTDIR\scripts\install-addin.ps1" -Uninstall'
+    Pop $0
     ; Remove Word Template Add-in
     Delete "$APPDATA\Microsoft\Word\STARTUP\EqnTide.dotm"
 
