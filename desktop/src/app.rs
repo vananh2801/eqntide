@@ -417,9 +417,6 @@ impl App {
     pub(crate) fn has_active_animation(&self) -> bool {
         (self.busy || self.batch_running) && self.gpu_profile != GpuProfile::Software
     }
-    pub(crate) fn ui_state_token(&self) -> (usize, bool) {
-        (self.tab, self.has_active_overlay())
-    }
     fn from_parts(
         instance: Option<Instance>,
         tx: Sender<Event>,
@@ -713,7 +710,9 @@ impl App {
                         self.bridge = handle;
                         self.bridge_ready = true;
                         let args = std::mem::take(&mut self.startup);
-                        self.launch(args, ctx);
+                        if !args.is_empty() {
+                            self.launch(args, ctx);
+                        }
                     }
                     Err(e) => {
                         self.bridge_status = e;
@@ -919,8 +918,7 @@ impl App {
         let raster_scale = match self.gpu_profile {
             GpuProfile::Software | GpuProfile::VirtualGpu => {
                 let ppp = ctx.pixels_per_point().max(1.0);
-                let screen_px_per_pt = self.zoom * (96.0 / 72.0) * ppp;
-                (screen_px_per_pt / eqntide::render::PX_PER_PT).clamp(0.4, 1.0)
+                (ppp * 2.5 / eqntide::render::PX_PER_PT).clamp(0.5, 1.0)
             }
             GpuProfile::Native => 1.0,
         };
@@ -2854,7 +2852,6 @@ impl App {
             ui.set_min_width(ui.available_width().min(520.0));
             ui.label(egui::RichText::new("Canvas zoom").strong());
             ui.add_space(4.0);
-            let prev_zoom = self.zoom;
             ui.horizontal(|ui| {
                 ui.scope(|ui| {
                     ui.spacing_mut().slider_width = 220.0;
@@ -2878,9 +2875,6 @@ impl App {
                     self.zoom = 2.0;
                 }
             });
-            if (self.zoom - prev_zoom).abs() > f32::EPSILON {
-                self.render_key += 1;
-            }
         });
         ui.add_space(10.0);
         ui.group(|ui| {

@@ -133,26 +133,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let wgpu_options = {
         let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
-        if std::env::var_os("WGPU_POWER_PREF").is_none() {
-            setup.power_preference = eframe::egui_wgpu::wgpu::PowerPreference::LowPower;
-        }
         #[cfg(not(debug_assertions))]
         if std::env::var_os("WGPU_VALIDATION").is_none() {
             setup.instance_descriptor.flags = eframe::egui_wgpu::wgpu::InstanceFlags::empty();
         }
         setup.device_descriptor = Arc::new(|adapter| {
+            let info = adapter.get_info();
             let adapter_limits = adapter.limits();
-            let max_dim = adapter_limits.max_texture_dimension_2d.min(8192);
-            let base = if adapter.get_info().backend == eframe::egui_wgpu::wgpu::Backend::Gl {
+            let base = if info.backend == eframe::egui_wgpu::wgpu::Backend::Gl {
                 eframe::egui_wgpu::wgpu::Limits::downlevel_webgl2_defaults()
             } else {
-                eframe::egui_wgpu::wgpu::Limits::downlevel_defaults()
+                eframe::egui_wgpu::wgpu::Limits::default()
             };
-            let mut limits = base.using_resolution(adapter_limits);
-            limits.max_texture_dimension_2d = max_dim;
+            let max_dim = if info.device_type == eframe::egui_wgpu::wgpu::DeviceType::Cpu {
+                adapter_limits.max_texture_dimension_2d.min(8192)
+            } else {
+                adapter_limits.max_texture_dimension_2d
+            };
             eframe::egui_wgpu::wgpu::DeviceDescriptor {
                 label: Some("egui wgpu device"),
-                required_limits: limits,
+                required_limits: eframe::egui_wgpu::wgpu::Limits {
+                    max_texture_dimension_2d: max_dim,
+                    ..base
+                },
                 ..Default::default()
             }
         });
