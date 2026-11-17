@@ -28,6 +28,7 @@ const PALETTE_HEIGHT: f32 =
     3.0 * PALETTE_BUTTON_SIZE.y + 2.0 * PALETTE_GAP + CONTENT_PADDING as f32;
 const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 1.5..=4.0;
 const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";
+const MAX_RECENT_PALETTE: usize = 24;
 
 #[derive(Clone)]
 struct MatrixDialog {
@@ -247,7 +248,9 @@ pub struct App {
     category: String,
     matrix_dialog: Option<MatrixDialog>,
     palette_atlases: HashMap<String, PaletteAtlas>,
+    sidebar_atlas: Option<PaletteAtlas>,
     palette_ppp: f32,
+    recent_palette: Vec<&'static str>,
     gpu_profile: GpuProfile,
     software_frame_cap: Option<Duration>,
     passive_canvas_rect: Option<Rect>,
@@ -455,10 +458,12 @@ impl App {
             target: "omml".into(),
             zoom: 2.0,
             tab: 0,
-            category: "Fractions".into(),
+            category: palette::DEFAULT_GROUP.into(),
             matrix_dialog: None,
             palette_atlases: HashMap::new(),
+            sidebar_atlas: None,
             palette_ppp: 0.0,
+            recent_palette: Vec::new(),
             gpu_profile: GpuProfile::Native,
             software_frame_cap: None,
             passive_canvas_rect: None,
@@ -1208,7 +1213,9 @@ impl App {
         );
     }
 
-    fn sidebar(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
+        const SIDEBAR_GAP: f32 = 6.0;
+        const SIDEBAR_BUTTON_HEIGHT: f32 = 42.0;
         egui::Panel::bottom("sidebar-batch")
             .exact_size(142.0)
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 8)))
@@ -1227,22 +1234,46 @@ impl App {
                 }
             });
         ui.add_space(8.0);
-        egui::ScrollArea::vertical()
-            .id_salt("categories")
-            .auto_shrink([false, false])
+        self.ensure_sidebar_atlas(ui.ctx());
+        let icon_color = Self::icon_tint(ui);
+        let button_width = ((ui.available_width() - SIDEBAR_GAP) / 2.0)
+            .floor()
+            .max(48.0);
+        let button_size = Vec2::new(button_width, SIDEBAR_BUTTON_HEIGHT);
+        let mut clicked_group = None;
+        egui::Grid::new("sidebar-categories")
+            .num_columns(2)
+            .spacing(Vec2::splat(SIDEBAR_GAP))
             .show(ui, |ui| {
-                for (group, label) in palette::GROUPS {
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 42.0],
-                            egui::Button::selectable(self.category == *group, *label),
-                        )
-                        .clicked()
+                ui.spacing_mut().button_padding = Vec2::new(4.0, 4.0);
+                let atlas = self.sidebar_atlas.as_ref();
+                for (index, group) in palette::UI_GROUPS.iter().enumerate() {
+                    let selected = self.category == group.id;
+                    let button = if let Some((atlas, entry)) =
+                        atlas.and_then(|a| a.entries.get(group.id).map(|e| (a, e)))
                     {
-                        self.category = (*group).into();
+                        let image = egui::Image::new((atlas.texture.id(), entry.display_size))
+                            .uv(entry.uv)
+                            .tint(icon_color);
+                        egui::Button::new(image).selected(selected)
+                    } else {
+                        egui::Button::selectable(selected, group.icon_source)
+                    };
+                    let response = ui.add_sized(button_size, button);
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), group.label)
+                    });
+                    if response.on_hover_text(group.label).clicked() {
+                        clicked_group = Some(group.id);
+                    }
+                    if (index + 1) % 2 == 0 {
+                        ui.end_row();
                     }
                 }
-            })
+            });
+        if let Some(group_id) = clicked_group {
+            self.category = group_id.into();
+        }
     }
 
     fn insert_custom_matrix(&mut self, settings: &MatrixDialog) {
@@ -1433,111 +1464,168 @@ impl App {
         });
     }
 
+    fn record_recent_palette(&mut self, source: &'static str) {
+        self.recent_palette.retain(|&existing| existing != source);
+        self.recent_palette.insert(0, source);
+        self.recent_palette.truncate(MAX_RECENT_PALETTE);
+        self.palette_atlases.remove(palette::RECENT_GROUP);
+    }
+
     fn palette_ui(&mut self, ui: &mut egui::Ui) {
         let height = ui.available_height();
-        let items: Vec<_> = palette::PALETTE
-            .iter()
-            .filter(|(group, _, _)| *group == self.category)
-            .collect();
+        let items = palette::items_for_ui_group(&self.category, &self.recent_palette);
+        if self.category == palette::RECENT_GROUP && items.is_empty() {
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), height),
+                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                |ui| {
+                    ui.weak("Click any symbol or template in the palette to pin it here for quick reuse.");
+                },
+            );
+            return;
+        }
+        let has_matrix_tools = palette::group_contains(&self.category, "Matrices");
         let fitting_columns = ((ui.available_width() + PALETTE_GAP)
             / (PALETTE_BUTTON_SIZE.x + PALETTE_GAP))
             .floor() as usize;
         // Native DPI/startup adjustments may briefly give us less than the minimum width.
         // Keep three rows in that frame too, scrolling horizontally if necessary.
-        let item_count = items.len() + usize::from(self.category == "Matrices");
+        let item_count = items.len() + usize::from(has_matrix_tools);
         let columns = fitting_columns.max(item_count.div_ceil(3)).max(1);
-        egui::ScrollArea::horizontal()
-            .id_salt(("palette", &self.category))
-            .vertical_scroll_offset(0.0)
-            .max_height(height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                egui::Grid::new(("palette-grid", &self.category))
-                    .num_columns(columns)
-                    .spacing(Vec2::splat(PALETTE_GAP))
-                    .show(ui, |ui| {
-                        ui.spacing_mut().button_padding = Vec2::new(5.0, 4.0);
-                        ui.spacing_mut().item_spacing = Vec2::splat(PALETTE_GAP);
-                        let ppp = ui.ctx().pixels_per_point();
-                        if (self.palette_ppp - ppp).abs() > f32::EPSILON {
-                            self.palette_atlases.clear();
-                            self.palette_ppp = ppp;
-                        }
-                        if !self.palette_atlases.contains_key(&self.category) {
-                            if let Some(atlas) =
-                                Self::build_palette_atlas(ui.ctx(), &self.category, &items, ppp)
+        ui.scope(|ui| {
+            ui.style_mut().always_scroll_the_only_direction = true;
+            egui::ScrollArea::horizontal()
+                .id_salt(("palette", &self.category))
+                .vertical_scroll_offset(0.0)
+                .max_height(height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    egui::Grid::new(("palette-grid", &self.category))
+                        .num_columns(columns)
+                        .spacing(Vec2::splat(PALETTE_GAP))
+                        .show(ui, |ui| {
+                            ui.spacing_mut().button_padding = Vec2::new(5.0, 4.0);
+                            ui.spacing_mut().item_spacing = Vec2::splat(PALETTE_GAP);
+                            let ppp = ui.ctx().pixels_per_point();
+                            self.sync_atlas_dpi(ppp);
+                            if !self.palette_atlases.contains_key(&self.category) {
+                                if let Some(atlas) =
+                                    Self::build_palette_atlas(ui.ctx(), &self.category, &items, ppp)
+                                {
+                                    self.palette_atlases.insert(self.category.clone(), atlas);
+                                }
+                            }
+                            let icon_color = Self::icon_tint(ui);
+                            let mut clicked_source = None;
                             {
-                                self.palette_atlases.insert(self.category.clone(), atlas);
+                                let atlas = self.palette_atlases.get(&self.category);
+                                for (index, (_, label, source)) in items.iter().enumerate() {
+                                    let response = if let Some((atlas, entry)) =
+                                        atlas.and_then(|a| a.entries.get(source).map(|e| (a, e)))
+                                    {
+                                        let image = egui::Image::new((
+                                            atlas.texture.id(),
+                                            entry.display_size,
+                                        ))
+                                        .uv(entry.uv)
+                                        .tint(icon_color);
+                                        ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(image))
+                                    } else {
+                                        ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(*label))
+                                    };
+                                    response.widget_info(|| {
+                                        egui::WidgetInfo::labeled(
+                                            egui::Role::Button,
+                                            ui.is_enabled(),
+                                            *label,
+                                        )
+                                    });
+                                    if response
+                                        .on_hover_ui(|ui| {
+                                            ui.label(*label);
+                                            ui.weak(*source);
+                                        })
+                                        .clicked()
+                                    {
+                                        clicked_source = Some(*source);
+                                    }
+                                    if (index + 1) % columns == 0 {
+                                        ui.end_row();
+                                    }
+                                }
                             }
-                        }
-                        let icon_color = if ui.visuals().dark_mode {
-                            Color32::WHITE
-                        } else {
-                            Color32::BLACK
-                        };
-                        let mut clicked_source = None;
-                        {
-                            let atlas = self.palette_atlases.get(&self.category);
-                            for (index, (_, label, source)) in items.iter().enumerate() {
-                                let response = if let Some((atlas, entry)) =
-                                    atlas.and_then(|a| a.entries.get(source).map(|e| (a, e)))
-                                {
-                                    let image =
-                                        egui::Image::new((atlas.texture.id(), entry.display_size))
-                                            .uv(entry.uv)
-                                            .tint(icon_color);
-                                    ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(image))
-                                } else {
-                                    ui.add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(*label))
-                                };
-                                response.widget_info(|| {
-                                    egui::WidgetInfo::labeled(
-                                        egui::Role::Button,
-                                        ui.is_enabled(),
-                                        *label,
-                                    )
+                            if let Some(source) = clicked_source {
+                                self.command_input = None;
+                                self.latex_groups.clear();
+                                self.expects_latex_group = false;
+                                self.record_recent_palette(source);
+                                self.insert_template(source);
+                                ui.memory_mut(|m| {
+                                    m.request_focus(egui::Id::unique("equation-canvas"))
                                 });
-                                if response
-                                    .on_hover_ui(|ui| {
-                                        ui.label(*label);
-                                        ui.weak(*source);
-                                    })
-                                    .clicked()
-                                {
-                                    clicked_source = Some(*source);
-                                }
-                                if (index + 1) % columns == 0 {
-                                    ui.end_row();
-                                }
                             }
-                        }
-                        if let Some(source) = clicked_source {
-                            self.command_input = None;
-                            self.latex_groups.clear();
-                            self.expects_latex_group = false;
-                            self.insert_template(source);
-                            ui.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
-                        }
-                        if self.category == "Matrices"
-                            && ui
-                                .add_sized(PALETTE_BUTTON_SIZE, egui::Button::new("⋯"))
-                                .on_hover_text("Custom matrix")
-                                .clicked()
-                        {
-                            self.command_input = None;
-                            self.matrix_dialog = Some(MatrixDialog::default());
-                            ui.memory_mut(|m| {
-                                m.surrender_focus(egui::Id::unique("equation-canvas"))
-                            });
-                        }
-                    });
-            });
+                            if has_matrix_tools
+                                && ui
+                                    .add_sized(PALETTE_BUTTON_SIZE, egui::Button::new("⋯"))
+                                    .on_hover_text("Custom matrix")
+                                    .clicked()
+                            {
+                                self.command_input = None;
+                                self.matrix_dialog = Some(MatrixDialog::default());
+                                ui.memory_mut(|m| {
+                                    m.surrender_focus(egui::Id::unique("equation-canvas"))
+                                });
+                            }
+                        });
+                });
+        });
+    }
+
+    fn icon_tint(ui: &egui::Ui) -> Color32 {
+        if ui.visuals().dark_mode {
+            Color32::WHITE
+        } else {
+            Color32::BLACK
+        }
+    }
+
+    fn sync_atlas_dpi(&mut self, ppp: f32) {
+        if (self.palette_ppp - ppp).abs() > f32::EPSILON {
+            self.palette_atlases.clear();
+            self.sidebar_atlas = None;
+            self.palette_ppp = ppp;
+        }
+    }
+
+    fn ensure_sidebar_atlas(&mut self, ctx: &egui::Context) -> Option<&PaletteAtlas> {
+        let ppp = ctx.pixels_per_point();
+        self.sync_atlas_dpi(ppp);
+        if self.sidebar_atlas.is_none() {
+            self.sidebar_atlas = Self::build_sidebar_atlas(ctx, ppp);
+        }
+        self.sidebar_atlas.as_ref()
+    }
+
+    fn build_sidebar_atlas(ctx: &egui::Context, ppp: f32) -> Option<PaletteAtlas> {
+        let mut rendered = Vec::new();
+        for group in palette::UI_GROUPS {
+            let Ok(math) = palette::icon_math(group) else {
+                continue;
+            };
+            let Ok(mask) = eqntide::render_alpha_fit(&math, 46.0 * ppp, 28.0 * ppp) else {
+                continue;
+            };
+            if mask.width > 0 && mask.height > 0 {
+                rendered.push((group.id, mask));
+            }
+        }
+        Self::build_mask_atlas(ctx, "sidebar-atlas", rendered, ppp)
     }
 
     fn build_palette_atlas(
         ctx: &egui::Context,
         category: &str,
-        items: &[&(&'static str, &'static str, &'static str)],
+        items: &[&palette::PaletteItem],
         ppp: f32,
     ) -> Option<PaletteAtlas> {
         let mut rendered = Vec::new();
@@ -1552,6 +1640,15 @@ impl App {
                 rendered.push((*source, mask));
             }
         }
+        Self::build_mask_atlas(ctx, &format!("palette-atlas-{category}"), rendered, ppp)
+    }
+
+    fn build_mask_atlas(
+        ctx: &egui::Context,
+        texture_name: &str,
+        rendered: Vec<(&'static str, eqntide::AlphaMask)>,
+        ppp: f32,
+    ) -> Option<PaletteAtlas> {
         if rendered.is_empty() {
             return None;
         }
@@ -1585,7 +1682,7 @@ impl App {
             *slot = (a.powf(0.70) * 255.0).round().min(255.0) as u8;
         }
         for (idx, px, py, w, h) in placements {
-            let (source, mask) = &rendered[idx];
+            let (key, mask) = &rendered[idx];
             for y in 0..h {
                 let src_row = y * w;
                 let dst_row = (py + y) * atlas_w + px;
@@ -1609,7 +1706,7 @@ impl App {
                 ),
             );
             entries.insert(
-                *source,
+                *key,
                 PaletteAtlasEntry {
                     uv,
                     display_size: Vec2::new(w as f32 / ppp, h as f32 / ppp),
@@ -1617,11 +1714,7 @@ impl App {
             );
         }
         let image = egui::ColorImage::from_rgba_unmultiplied([atlas_w, atlas_h], &rgba);
-        let texture = ctx.load_texture(
-            format!("palette-atlas-{category}"),
-            image,
-            egui::TextureOptions::NEAREST,
-        );
+        let texture = ctx.load_texture(texture_name, image, egui::TextureOptions::NEAREST);
         Some(PaletteAtlas { texture, entries })
     }
 
@@ -1631,6 +1724,11 @@ impl App {
             .values()
             .map(|a| a.texture.id())
             .collect()
+    }
+
+    #[cfg(test)]
+    fn sidebar_texture_id(&self) -> Option<egui::TextureId> {
+        self.sidebar_atlas.as_ref().map(|a| a.texture.id())
     }
 
     fn enforce_window_minimum_if_needed(&mut self, ctx: &egui::Context) {
@@ -1791,7 +1889,7 @@ impl App {
             .show(ui, |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 ui.add_enabled_ui(!self.draft_dirty, |ui| {
-                    if self.category == "Matrices" {
+                    if palette::group_contains(&self.category, "Matrices") {
                         ui.horizontal(|ui| {
                             for (label, column, grow) in [
                                 ("+ row", false, true),
@@ -3787,8 +3885,11 @@ mod tests {
             let ctx = egui::Context::default();
             ctx.set_pixels_per_point(dpi);
             let mut a = app();
-            for &(group, _) in palette::GROUPS {
-                a.category = group.into();
+            for group in palette::UI_GROUPS {
+                if group.id == palette::RECENT_GROUP {
+                    continue;
+                }
+                a.category = group.id.into();
                 for width in [960.0, MIN_WINDOW_SIZE[0]] {
                     for _ in 0..2 {
                         let mut output = ctx.run_ui(
@@ -3814,10 +3915,15 @@ mod tests {
                                 }
                             }
                         }
-                        assert!(!rows.is_empty(), "{group} must contain rendered buttons");
+                        assert!(
+                            !rows.is_empty(),
+                            "{} must contain rendered buttons",
+                            group.id
+                        );
                         assert!(
                             rows.len() <= 3,
-                            "{group}: {} rows at width {width}, DPI {dpi}",
+                            "{}: {} rows at width {width}, DPI {dpi}",
+                            group.id,
                             rows.len()
                         );
                         let batch = output
@@ -3832,7 +3938,8 @@ mod tests {
                             batch
                                 .clip_rect
                                 .contains_rect(batch.shape.visual_bounding_rect()),
-                            "{group}"
+                            "{}",
+                            group.id
                         );
                         output.textures_delta.clear();
                     }
@@ -3842,82 +3949,62 @@ mod tests {
     }
 
     #[test]
-    fn batch_stays_visible_while_sidebar_groups_scroll() {
-        let ctx = egui::Context::default();
-        let mut a = app();
-        let mut last_position = None;
-        let mut last_scroll = -1.0f32;
-        let mut time = 0.0f64;
-        for step in [0.0, 300.0, 500.0] {
-            time += 0.1;
-            let mut events = vec![egui::Event::PointerMoved(Pos2::new(75.0, 200.0))];
-            if step > 0.0 {
-                events.push(egui::Event::MouseWheel {
-                    unit: egui::MouseWheelUnit::Point,
-                    delta: Vec2::new(0.0, -step),
-                    phase: egui::TouchPhase::Move,
-                    source: egui::MouseWheelSource::Unknown,
-                    modifiers: egui::Modifiers::NONE,
-                });
-            }
-            let mut scroll_y = 0.0f32;
+    fn all_sidebar_categories_and_batch_stay_visible_without_scrolling() {
+        for dpi in [1.0, 1.25, 1.5] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(dpi);
+            let mut a = app();
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
-                    time: Some(time),
-                    predicted_dt: 1.0 / 60.0,
-                    events,
                     ..Default::default()
                 },
-                |ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        ui.set_width(150.0);
-                        let sa = a.sidebar(ui);
-                        scroll_y = sa.state.clamped_offset().y;
-                    });
-                },
+                |ui| a.shell(ui),
             );
-            if step > 0.0 {
-                // Step one settle frame so kinetic/smooth scroll applies.
-                time += 0.05;
-                output.textures_delta.clear();
-                output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(
-                            Pos2::ZERO,
-                            Vec2::from(MIN_WINDOW_SIZE),
-                        )),
-                        time: Some(time),
-                        predicted_dt: 1.0 / 60.0,
-                        events: vec![egui::Event::PointerMoved(Pos2::new(75.0, 200.0))],
-                        ..Default::default()
-                    },
-                    |ui| {
-                        egui::CentralPanel::default().show(ui, |ui| {
-                            ui.set_width(150.0);
-                            let sa = a.sidebar(ui);
-                            scroll_y = sa.state.clamped_offset().y;
-                        });
-                    },
-                );
-                assert!(scroll_y > last_scroll, "expected categories to scroll");
-            }
-            last_scroll = scroll_y;
-            let (rect, clip) = output
+            let sidebar_tex = a.sidebar_texture_id().expect("sidebar texture must exist");
+            let icon_rects: Vec<_> = output
                 .shapes
                 .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(t) if t.galley.text() == "Batch DOCX" => {
-                        Some((shape.shape.visual_bounding_rect(), shape.clip_rect))
+                .filter_map(|shape| {
+                    if let egui::Shape::Rect(r) = &shape.shape {
+                        if r.brush
+                            .as_ref()
+                            .is_some_and(|b| b.fill_texture_id == sidebar_tex)
+                        {
+                            return Some((r.rect, shape.clip_rect));
+                        }
                     }
-                    _ => None,
+                    None
                 })
-                .expect("Batch must be visible even with many groups");
-            assert!(clip.contains_rect(rect));
-            if let Some(previous) = last_position {
-                assert_eq!(rect, previous);
+                .collect();
+            assert_eq!(
+                icon_rects.len(),
+                palette::UI_GROUPS.len(),
+                "all {} category icons must render at DPI {dpi}",
+                palette::UI_GROUPS.len()
+            );
+            for (rect, clip) in icon_rects {
+                assert!(
+                    clip.contains_rect(rect),
+                    "category icon {rect:?} clipped by {clip:?} at DPI {dpi}"
+                );
             }
-            last_position = Some(rect);
+            for nav in ["Batch DOCX", "Settings", "About"] {
+                let (rect, clip) = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(t) if t.galley.text() == nav => {
+                            Some((shape.shape.visual_bounding_rect(), shape.clip_rect))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing sidebar button {nav}"));
+                assert!(
+                    clip.contains_rect(rect),
+                    "{nav} clipped at minimum window size"
+                );
+            }
             output.textures_delta.clear();
         }
     }
@@ -4618,5 +4705,256 @@ mod tests {
         .textures_delta
         .clear();
         assert_eq!(ctx.theme(), egui::Theme::Light);
+    }
+
+    #[test]
+    fn sidebar_icons_regenerate_on_dpi_change_and_tint_across_themes() {
+        let mut a = app();
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(1.0);
+        let mut out1 = ctx.run_ui(egui::RawInput::default(), |ui| {
+            a.ensure_sidebar_atlas(ui.ctx());
+        });
+        out1.textures_delta.clear();
+        let (first_size, first_display) = {
+            let atlas = a.sidebar_atlas.as_ref().expect("sidebar atlas at 1x");
+            assert_eq!(atlas.entries.len(), palette::UI_GROUPS.len());
+            (
+                atlas.texture.size(),
+                atlas.entries["Fractions"].display_size,
+            )
+        };
+
+        ctx.set_pixels_per_point(2.0);
+        let mut out2 = ctx.run_ui(egui::RawInput::default(), |ui| {
+            a.ensure_sidebar_atlas(ui.ctx());
+        });
+        out2.textures_delta.clear();
+        let (second_size, second_display) = {
+            let atlas = a.sidebar_atlas.as_ref().expect("sidebar atlas at 2x");
+            assert_eq!(atlas.entries.len(), palette::UI_GROUPS.len());
+            (
+                atlas.texture.size(),
+                atlas.entries["Fractions"].display_size,
+            )
+        };
+        assert!(
+            second_size[0] > first_size[0] || second_size[1] > first_size[1],
+            "expected higher-resolution sidebar atlas at 2x DPI: {first_size:?} vs {second_size:?}"
+        );
+        assert!(
+            (first_display - second_display).length() <= 1.5,
+            "expected consistent logical icon size: {first_display:?} vs {second_display:?}"
+        );
+        assert!((a.palette_ppp - 2.0).abs() < f32::EPSILON);
+
+        for (theme, expected_tint) in [
+            (egui::Theme::Dark, Color32::WHITE),
+            (egui::Theme::Light, Color32::BLACK),
+        ] {
+            ctx.set_theme(theme);
+            let mut tint = None;
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                tint = Some(App::icon_tint(ui));
+            });
+            out.textures_delta.clear();
+            assert_eq!(tint, Some(expected_tint));
+        }
+    }
+
+    #[test]
+    fn recent_palette_tracks_mru_without_duplicates_and_renders() {
+        let mut a = app();
+        let ctx = egui::Context::default();
+        assert_eq!(a.category, palette::DEFAULT_GROUP);
+        assert!(a.recent_palette.is_empty());
+
+        a.category = palette::RECENT_GROUP.into();
+        let mut empty_out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
+                ..Default::default()
+            },
+            |ui| a.shell(ui),
+        );
+        assert!(empty_out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Text(t) if t.galley.text().contains("Click any symbol"))));
+        empty_out.textures_delta.clear();
+
+        a.category = "Fractions".into();
+        let mut frac_out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
+                ..Default::default()
+            },
+            |ui| a.shell(ui),
+        );
+        let frac_tex = a.palette_atlases["Fractions"].texture.id();
+        let first_pos = frac_out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.brush
+                        .as_ref()
+                        .is_some_and(|b| b.fill_texture_id == frac_tex) =>
+                {
+                    Some(r.rect.center())
+                }
+                _ => None,
+            })
+            .expect("fraction palette button");
+        frac_out.textures_delta.clear();
+
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
+                events: vec![
+                    egui::Event::PointerMoved(first_pos),
+                    egui::Event::PointerButton {
+                        pos: first_pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos: first_pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| a.shell(ui),
+        )
+        .textures_delta
+        .clear();
+        assert_eq!(a.recent_palette.len(), 1);
+        let first_source = a.recent_palette[0];
+
+        a.record_recent_palette(r"\alpha");
+        a.record_recent_palette(first_source);
+        assert_eq!(a.recent_palette, vec![first_source, r"\alpha"]);
+
+        a.category = palette::RECENT_GROUP.into();
+        let mut recent_out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
+                ..Default::default()
+            },
+            |ui| a.shell(ui),
+        );
+        let recent_tex = a.palette_atlases[palette::RECENT_GROUP].texture.id();
+        let rendered_recent = recent_out
+            .shapes
+            .iter()
+            .filter(|s| {
+                matches!(&s.shape, egui::Shape::Rect(r) if r.brush.as_ref().is_some_and(|b| b.fill_texture_id == recent_tex))
+            })
+            .count();
+        assert_eq!(rendered_recent, 2);
+        recent_out.textures_delta.clear();
+    }
+
+    #[test]
+    fn palette_scrolls_horizontally_on_vertical_mouse_wheel() {
+        fn run_wheel_case(category: &str, wheel_delta: Vec2, expected_overflow: bool) {
+            let ctx = egui::Context::default();
+            let mut a = app();
+            a.category = category.into();
+            let hover_pos = Pos2::new(360.0, 48.0);
+            let mut time = 0.0f64;
+
+            // Prime layout and palette rect.
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
+                    time: Some(time),
+                    predicted_dt: 1.0 / 60.0,
+                    events: vec![egui::Event::PointerMoved(hover_pos)],
+                    ..Default::default()
+                },
+                |ui| a.shell(ui),
+            );
+            out.textures_delta.clear();
+
+            // Send mouse-wheel scroll while hovering over palette.
+            time += 0.1;
+            let mut wheel_out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
+                    time: Some(time),
+                    predicted_dt: 1.0 / 60.0,
+                    events: vec![
+                        egui::Event::PointerMoved(hover_pos),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: wheel_delta,
+                            phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| a.shell(ui),
+            );
+            wheel_out.textures_delta.clear();
+
+            // Step settle frames so smooth/kinetic scroll finishes.
+            let mut settle_out = wheel_out;
+            for _ in 0..4 {
+                time += 0.05;
+                settle_out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::from(MIN_WINDOW_SIZE),
+                        )),
+                        time: Some(time),
+                        predicted_dt: 1.0 / 60.0,
+                        events: vec![egui::Event::PointerMoved(hover_pos)],
+                        ..Default::default()
+                    },
+                    |ui| a.shell(ui),
+                );
+                settle_out.textures_delta.clear();
+            }
+
+            let palette_tex = a.palette_atlases[category].texture.id();
+            let first_x = |shapes: &[egui::epaint::ClippedShape]| -> f32 {
+                shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(r)
+                            if r.brush
+                                .as_ref()
+                                .is_some_and(|b| b.fill_texture_id == palette_tex) =>
+                        {
+                            Some(r.rect.left())
+                        }
+                        _ => None,
+                    })
+                    .fold(f32::INFINITY, f32::min)
+            };
+            let initial_x = first_x(&out.shapes);
+            let final_x = first_x(&settle_out.shapes);
+            if expected_overflow {
+                assert!(
+                    final_x < initial_x - 20.0,
+                    "expected overflowing category {category} to pan left (scroll right) with {wheel_delta:?}: {initial_x} -> {final_x}"
+                );
+            } else {
+                assert!(
+                    (final_x - initial_x).abs() < 1.0,
+                    "expected non-overflowing category {category} to stay stationary with {wheel_delta:?}: {initial_x} -> {final_x}"
+                );
+            }
+        }
+
+        run_wheel_case("LogicSetsSymbols", Vec2::new(0.0, -180.0), true);
+        run_wheel_case("LogicSetsSymbols", Vec2::new(-180.0, 0.0), true);
+        run_wheel_case("Fractions", Vec2::new(0.0, -180.0), false);
     }
 }

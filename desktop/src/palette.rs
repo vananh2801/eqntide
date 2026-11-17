@@ -3,8 +3,142 @@
 pub use eqntide::catalog::{
     attaches_to_previous, matrix, preview_template, template, GROUPS, PALETTE,
 };
-#[cfg(test)]
 use eqntide::MathNode;
+
+pub const RECENT_GROUP: &str = "Recent";
+pub const DEFAULT_GROUP: &str = "Fractions";
+
+pub type PaletteItem = (&'static str, &'static str, &'static str);
+
+#[derive(Clone, Copy, Debug)]
+pub struct UiGroup {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub icon_source: &'static str,
+    pub catalog_groups: &'static [&'static str],
+}
+
+pub const UI_GROUPS: &[UiGroup] = &[
+    UiGroup {
+        id: RECENT_GROUP,
+        label: "Recent",
+        icon_source: "★",
+        catalog_groups: &[],
+    },
+    UiGroup {
+        id: "Fractions",
+        label: "Fractions & Radicals",
+        icon_source: r"\frac{#?}{#?}",
+        catalog_groups: &["Fractions"],
+    },
+    UiGroup {
+        id: "Scripts",
+        label: "Scripts",
+        icon_source: "x^{#?}",
+        catalog_groups: &["Scripts"],
+    },
+    UiGroup {
+        id: "Fences",
+        label: "Fences",
+        icon_source: r"\left( #? \right)",
+        catalog_groups: &["Fences"],
+    },
+    UiGroup {
+        id: "Integrals",
+        label: "Integrals",
+        icon_source: r"\int #?",
+        catalog_groups: &["Integrals"],
+    },
+    UiGroup {
+        id: "SumsAndBigOps",
+        label: "Sums & Big Operators",
+        icon_source: r"\sum_{#?}^{#?}",
+        catalog_groups: &["Sums", "BigOperators"],
+    },
+    UiGroup {
+        id: "MatricesAndBoxes",
+        label: "Matrices & Boxes",
+        icon_source: r"\begin{pmatrix} #? & #? \\ #? & #? \end{pmatrix}",
+        catalog_groups: &["Matrices", "Boxes"],
+    },
+    UiGroup {
+        id: "AccentsAndBars",
+        label: "Accents & Bars",
+        icon_source: r"\bar{#?}",
+        catalog_groups: &["Embellishments", "Bars"],
+    },
+    UiGroup {
+        id: "OperatorsAndRelations",
+        label: "Operators & Relations",
+        icon_source: r"\pm\leq",
+        catalog_groups: &["Operators", "Relations"],
+    },
+    UiGroup {
+        id: "Arrows",
+        label: "Arrows",
+        icon_source: r"\rightarrow\Rightarrow",
+        catalog_groups: &["Arrows", "LabeledArrows"],
+    },
+    UiGroup {
+        id: "LogicSetsSymbols",
+        label: "Logic, Sets & Symbols",
+        icon_source: r"\forall\in",
+        catalog_groups: &["Logic", "Sets", "Symbols", "Spaces"],
+    },
+    UiGroup {
+        id: "Greek",
+        label: "Greek Letters",
+        icon_source: r"\alpha\Omega",
+        catalog_groups: &["GreekLower", "GreekUpper"],
+    },
+];
+
+pub fn ui_group(id: &str) -> Option<&'static UiGroup> {
+    UI_GROUPS.iter().find(|group| group.id == id)
+}
+
+pub fn group_contains(ui_group_id: &str, catalog_group: &str) -> bool {
+    ui_group(ui_group_id).is_some_and(|group| group.catalog_groups.contains(&catalog_group))
+        || ui_group_id == catalog_group
+}
+
+pub fn items_for_ui_group(ui_group_id: &str, recent: &[&'static str]) -> Vec<&'static PaletteItem> {
+    if ui_group_id == RECENT_GROUP {
+        return recent
+            .iter()
+            .filter_map(|&source| {
+                PALETTE
+                    .iter()
+                    .find(|(_, _, item_source)| *item_source == source)
+            })
+            .collect();
+    }
+    if let Some(group) = ui_group(ui_group_id) {
+        let mut items = Vec::new();
+        for &catalog_group in group.catalog_groups {
+            items.extend(
+                PALETTE
+                    .iter()
+                    .filter(|(item_group, _, _)| *item_group == catalog_group),
+            );
+        }
+        return items;
+    }
+    PALETTE
+        .iter()
+        .filter(|(item_group, _, _)| *item_group == ui_group_id)
+        .collect()
+}
+
+pub fn icon_math(group: &UiGroup) -> Result<MathNode, String> {
+    if group.id == RECENT_GROUP {
+        return Ok(MathNode::with_children(
+            "math",
+            vec![MathNode::leaf("mo", group.icon_source)],
+        ));
+    }
+    preview_template(group.icon_source)
+}
 
 #[cfg(test)]
 mod tests {
@@ -66,5 +200,37 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    #[test]
+    fn ui_groups_cover_every_catalog_group_and_render_visible_icons() {
+        assert_eq!(UI_GROUPS.len(), 12);
+        assert!(ui_group(DEFAULT_GROUP).is_some());
+        assert!(!items_for_ui_group(DEFAULT_GROUP, &[]).is_empty());
+
+        let mut mapped = Vec::new();
+        for group in UI_GROUPS {
+            let math = icon_math(group).unwrap_or_else(|e| panic!("{}: {e}", group.id));
+            assert_eq!(math.tag, "math", "{}", group.id);
+            let mask = eqntide::render_alpha_fit(&math, 34.0, 22.0)
+                .unwrap_or_else(|e| panic!("{}: {e}", group.id));
+            assert!(
+                mask.width > 0 && mask.height > 0 && mask.alpha.iter().any(|&a| a > 0),
+                "empty sidebar icon for {}",
+                group.id
+            );
+            mapped.extend_from_slice(group.catalog_groups);
+        }
+
+        for &(canonical, _) in GROUPS {
+            let occurrences = mapped.iter().filter(|&&g| g == canonical).count();
+            assert_eq!(
+                occurrences, 1,
+                "canonical group {canonical} mapped {occurrences} times"
+            );
+        }
+        assert!(group_contains("MatricesAndBoxes", "Matrices"));
+        assert!(!group_contains("Fractions", "Matrices"));
+        assert!(items_for_ui_group(RECENT_GROUP, &[r"\frac{#?}{#?}", r"\alpha"]).len() == 2);
     }
 }
