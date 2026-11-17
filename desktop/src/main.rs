@@ -7,20 +7,26 @@ mod commands;
 mod instance;
 mod palette;
 mod runtime;
+mod wgpu_runner;
 
 use eqntide::bridge::{DesktopWindowRequest, ServerHandle};
 use eqntide::render::InteractivePreview;
-use std::sync::mpsc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc,
+};
 
 pub struct EventSender<T = Event> {
     channel: mpsc::Sender<T>,
-    repaint: std::sync::Arc<std::sync::OnceLock<eframe::egui::Context>>,
+    repaint: Arc<std::sync::OnceLock<eframe::egui::Context>>,
+    urgent: Arc<AtomicBool>,
 }
 impl<T> Clone for EventSender<T> {
     fn clone(&self) -> Self {
         Self {
             channel: self.channel.clone(),
             repaint: self.repaint.clone(),
+            urgent: self.urgent.clone(),
         }
     }
 }
@@ -29,10 +35,12 @@ impl<T> EventSender<T> {
         Self {
             channel,
             repaint: Default::default(),
+            urgent: Arc::new(AtomicBool::new(false)),
         }
     }
     fn send(&self, event: T) -> Result<(), mpsc::SendError<T>> {
         self.channel.send(event)?;
+        self.urgent.store(true, Ordering::Release);
         if let Some(ctx) = self.repaint.get() {
             ctx.request_repaint();
         }
@@ -40,6 +48,9 @@ impl<T> EventSender<T> {
     }
     fn attach(&self, ctx: eframe::egui::Context) {
         let _ = self.repaint.set(ctx);
+    }
+    fn urgent_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.urgent)
     }
 }
 
@@ -64,11 +75,28 @@ pub enum Event {
     BatchDone,
 }
 
-fn log_file_path(filename: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn log_file_path(filename: &str) -> Option<std::path::PathBuf> {
     let dirs = directories::ProjectDirs::from("com", "eqntide", "EqnTide")?;
     let log_dir = dirs.data_local_dir().join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
     Some(log_dir.join(filename))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn has_wgpu_adapter(config: eframe::egui_wgpu::WgpuConfiguration) -> bool {
+    let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = config.wgpu_setup else {
+        return true;
+    };
+    let instance = eframe::egui_wgpu::wgpu::Instance::new(setup.instance_descriptor);
+    pollster::block_on(
+        instance.request_adapter(&eframe::egui_wgpu::wgpu::RequestAdapterOptions {
+            power_preference: setup.power_preference,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        }),
+    )
+    .is_ok()
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -96,35 +124,79 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let use_wgpu = args.iter().any(|a| a == "--wgpu") || renderer_env.eq_ignore_ascii_case("wgpu");
     let use_glow = args.iter().any(|a| a == "--glow") || renderer_env.eq_ignore_ascii_case("glow");
 
+    let present_env = std::env::var("EQNTIDE_PRESENT_MODE").unwrap_or_default();
+    let use_novsync =
+        args.iter().any(|a| a == "--novsync") || present_env.eq_ignore_ascii_case("novsync");
+
+    let wgpu_options = {
+        let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+        if std::env::var_os("WGPU_POWER_PREF").is_none() {
+            setup.power_preference = eframe::egui_wgpu::wgpu::PowerPreference::LowPower;
+        }
+        #[cfg(not(debug_assertions))]
+        if std::env::var_os("WGPU_VALIDATION").is_none() {
+            setup.instance_descriptor.flags = eframe::egui_wgpu::wgpu::InstanceFlags::empty();
+        }
+        setup.device_descriptor = Arc::new(|adapter| {
+            let adapter_limits = adapter.limits();
+            let max_dim = adapter_limits.max_texture_dimension_2d.min(8192);
+            let base = if adapter.get_info().backend == eframe::egui_wgpu::wgpu::Backend::Gl {
+                eframe::egui_wgpu::wgpu::Limits::downlevel_webgl2_defaults()
+            } else {
+                eframe::egui_wgpu::wgpu::Limits::downlevel_defaults()
+            };
+            let mut limits = base.using_resolution(adapter_limits);
+            limits.max_texture_dimension_2d = max_dim;
+            eframe::egui_wgpu::wgpu::DeviceDescriptor {
+                label: Some("egui wgpu device"),
+                required_limits: limits,
+                ..Default::default()
+            }
+        });
+
+        let mut config = eframe::egui_wgpu::WgpuConfiguration {
+            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(setup),
+            ..Default::default()
+        };
+        config.surface.present_mode = if use_novsync {
+            eframe::egui_wgpu::wgpu::PresentMode::AutoNoVsync
+        } else {
+            eframe::egui_wgpu::wgpu::PresentMode::AutoVsync
+        };
+        config.surface.desired_maximum_frame_latency = Some(2);
+        config
+    };
+
     let renderer = if use_wgpu {
         eframe::Renderer::Wgpu
     } else if use_glow {
         eframe::Renderer::Glow
     } else {
-        // Windows VMs without 3D OpenGL guest drivers only expose Windows GDI
-        // Generic OpenGL 1.1, which fails egui_glow's OpenGL 2.0+ check.
-        // Default to Wgpu on Windows (DX12/Vulkan/WARP) and Glow elsewhere.
         #[cfg(target_os = "windows")]
         {
             eframe::Renderer::Wgpu
         }
         #[cfg(not(target_os = "windows"))]
         {
-            eframe::Renderer::Glow
+            if has_wgpu_adapter(wgpu_options.clone()) {
+                eframe::Renderer::Wgpu
+            } else {
+                eframe::Renderer::Glow
+            }
         }
     };
 
-    let wgpu_options = {
-        let mut config = eframe::egui_wgpu::WgpuConfiguration::default();
-        config.surface.present_mode = eframe::egui_wgpu::wgpu::PresentMode::AutoNoVsync;
-        config.surface.desired_maximum_frame_latency = Some(1);
-        config
-    };
+    if renderer == eframe::Renderer::Wgpu {
+        return wgpu_runner::run(viewport, wgpu_options, instance, tx, rx, args);
+    }
 
     let options = eframe::NativeOptions {
         viewport,
         renderer,
         wgpu_options,
+        multisampling: 0,
+        depth_buffer: 0,
+        stencil_buffer: 0,
         dithering: false,
         ..Default::default()
     };
