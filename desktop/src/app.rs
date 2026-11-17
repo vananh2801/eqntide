@@ -1,5 +1,11 @@
 use crate::EventSender as Sender;
-use crate::{batch, commands, instance::Instance, palette, runtime, Event, Rendered};
+use crate::{
+    batch, commands,
+    instance::Instance,
+    palette, runtime,
+    settings::{self, Settings, ThemeMode, MAX_RECENT_PALETTE, ZOOM_RANGE},
+    Event, Rendered,
+};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use eqntide::{
     bridge::{DesktopWindowRequest, ServerHandle},
@@ -26,9 +32,7 @@ const PALETTE_BUTTON_SIZE: Vec2 = Vec2::new(44.0, 31.0);
 const PALETTE_GAP: f32 = 6.0;
 const PALETTE_HEIGHT: f32 =
     3.0 * PALETTE_BUTTON_SIZE.y + 2.0 * PALETTE_GAP + CONTENT_PADDING as f32;
-const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 1.5..=4.0;
 const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";
-const MAX_RECENT_PALETTE: usize = 24;
 
 #[derive(Clone)]
 struct MatrixDialog {
@@ -276,6 +280,9 @@ pub struct App {
     stop: Arc<AtomicBool>,
     warning_cache: Option<(u64, u64, String, Option<String>)>,
     keyboard_handled: bool,
+    settings_path: Option<PathBuf>,
+    persisted: Settings,
+    settings_dirty: bool,
 }
 
 impl App {
@@ -402,7 +409,53 @@ impl App {
         let mut app = Self::from_parts(Some(instance), tx, rx, args);
         app.gpu_profile = gpu_profile;
         app.software_frame_cap = frame_cap_for_profile(gpu_profile);
+        if let Some(path) = Settings::default_path() {
+            app = app.with_settings_path(path, Some(egui_ctx));
+        }
         app
+    }
+
+    pub(crate) fn with_settings_path(
+        mut self,
+        path: PathBuf,
+        egui_ctx: Option<&egui::Context>,
+    ) -> Self {
+        let loaded = Settings::load_from_path(&path);
+        self.settings_path = Some(path);
+        self.apply_settings(loaded, egui_ctx);
+        self
+    }
+
+    fn apply_settings(&mut self, settings: Settings, egui_ctx: Option<&egui::Context>) {
+        let settings = settings.sanitized();
+        self.zoom = settings.zoom;
+        self.font_pt = settings.font_pt;
+        self.saved_font = settings.font_pt;
+        self.target = settings.target.clone();
+        self.saved_mode = settings.target.clone();
+        self.category = settings.category.clone();
+        self.recent_palette = settings.resolved_recent_palette();
+        self.batch_target = settings.batch_target;
+        self.batch_overwrite = settings.batch_overwrite;
+        if let Some(ctx) = egui_ctx {
+            ctx.set_theme(settings.theme.to_egui());
+        }
+        self.persisted = settings;
+        self.settings_dirty = false;
+    }
+
+    fn flush_settings(&mut self) {
+        if !self.settings_dirty {
+            return;
+        }
+        self.settings_dirty = false;
+        let Some(path) = self.settings_path.as_deref() else {
+            return;
+        };
+        let to_save = self.persisted.clone().sanitized();
+        if let Err(err) = to_save.save_to_path(path) {
+            eprintln!("Failed to save settings {}: {err}", path.display());
+        }
     }
 
     pub(crate) fn frame_cap(&self) -> Option<Duration> {
@@ -489,6 +542,9 @@ impl App {
             stop: Arc::new(AtomicBool::new(false)),
             warning_cache: None,
             keyboard_handled: false,
+            settings_path: None,
+            persisted: Settings::default(),
+            settings_dirty: false,
         }
     }
     fn dirty(&self) -> bool {
@@ -677,7 +733,9 @@ impl App {
                         return false;
                     }
                 }
-                self.font_pt = font.filter(|f| f.is_finite() && *f > 0.0).unwrap_or(12.0);
+                self.font_pt = font
+                    .filter(|f| f.is_finite() && *f > 0.0)
+                    .unwrap_or(self.persisted.font_pt);
                 self.saved_font = self.font_pt;
                 self.changed();
                 self.saved_xml = self.editor.math().to_xml();
@@ -811,6 +869,7 @@ impl App {
                     self.busy = false;
                     match result {
                         Ok(()) => {
+                            self.flush_settings();
                             self.saved_xml = self.editor.math().to_xml();
                             self.saved_font = self.font_pt;
                             self.saved_mode = self.target.clone();
@@ -1075,6 +1134,7 @@ impl App {
         }
     }
     fn begin_close(&mut self, ctx: &egui::Context) {
+        self.flush_settings();
         self.close_deadline = Some(Instant::now() + Duration::from_secs(3));
         self.busy = true;
         self.status = "Returning the result to Office…".into();
@@ -1144,9 +1204,18 @@ impl App {
                         let color = ui.visuals().widgets.inactive.fg_stroke.color;
                         let caption =
                             |text: &str| egui::RichText::new(text).font(font.clone()).color(color);
-                        ui.radio_value(&mut self.target, "mathtype".into(), caption("MathType"));
+                        let mut target_changed = false;
+                        target_changed |= ui
+                            .radio_value(&mut self.target, "mathtype".into(), caption("MathType"))
+                            .changed();
                         ui.add_space(12.0);
-                        ui.radio_value(&mut self.target, "omml".into(), caption("OMML"));
+                        target_changed |= ui
+                            .radio_value(&mut self.target, "omml".into(), caption("OMML"))
+                            .changed();
+                        if target_changed {
+                            self.persisted.target = self.target.clone();
+                            self.settings_dirty = true;
+                        }
                         ui.separator();
                         ui.label(caption("Font size"));
                         let size_changed = ui
@@ -1159,7 +1228,7 @@ impl App {
                                         }
                                         f64::from(self.font_pt)
                                     })
-                                    .range(6.0..=72.0)
+                                    .range(settings::FONT_PT_RANGE)
                                     .min_size(Vec2::new(
                                         FONT_SIZE_CONTROL_WIDTH,
                                         FOOTER_CONTROL_HEIGHT,
@@ -1175,6 +1244,8 @@ impl App {
                             .inner;
                         if size_changed {
                             self.render_key += 1;
+                            self.persisted.font_pt = self.font_pt;
+                            self.settings_dirty = true;
                         }
                         if ui
                             .add(
@@ -1273,6 +1344,8 @@ impl App {
             });
         if let Some(group_id) = clicked_group {
             self.category = group_id.into();
+            self.persisted.category = self.category.clone();
+            self.settings_dirty = true;
         }
     }
 
@@ -1469,6 +1542,8 @@ impl App {
         self.recent_palette.insert(0, source);
         self.recent_palette.truncate(MAX_RECENT_PALETTE);
         self.palette_atlases.remove(palette::RECENT_GROUP);
+        self.persisted.recent_palette = self.recent_palette.iter().map(|&s| s.to_owned()).collect();
+        self.settings_dirty = true;
     }
 
     fn palette_ui(&mut self, ui: &mut egui::Ui) {
@@ -2849,6 +2924,7 @@ impl App {
                     self.files.clear();
                     self.batch_logs.clear();
                 }
+                let before_batch_target = self.batch_target;
                 egui::ComboBox::from_id_salt("batch-target")
                     .selected_text(batch::TARGETS[self.batch_target].1)
                     .show_ui(ui, |ui| {
@@ -2856,13 +2932,23 @@ impl App {
                             ui.selectable_value(&mut self.batch_target, i, *label);
                         }
                     });
+                if self.batch_target != before_batch_target {
+                    self.persisted.batch_target = self.batch_target;
+                    self.settings_dirty = true;
+                }
             });
         });
         ui.add_enabled_ui(!self.batch_running, |ui| {
-            ui.checkbox(
-                &mut self.batch_overwrite,
-                "Overwrite original documents (replace each selected input)",
-            );
+            if ui
+                .checkbox(
+                    &mut self.batch_overwrite,
+                    "Overwrite original documents (replace each selected input)",
+                )
+                .changed()
+            {
+                self.persisted.batch_overwrite = self.batch_overwrite;
+                self.settings_dirty = true;
+            }
         });
         ui.horizontal(|ui| {
             if ui
@@ -2963,14 +3049,22 @@ impl App {
                     ] {
                         state.corner_radius = egui::CornerRadius::same(4);
                     }
-                    ui.add(
-                        egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
-                            .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
-                            .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
-                    );
+                    let zoom_changed = ui
+                        .add(
+                            egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
+                                .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
+                                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
+                        )
+                        .changed();
+                    if zoom_changed {
+                        self.persisted.zoom = self.zoom;
+                        self.settings_dirty = true;
+                    }
                 });
                 if ui.button("Reset (200%)").clicked() {
-                    self.zoom = 2.0;
+                    self.zoom = settings::DEFAULT_ZOOM;
+                    self.persisted.zoom = self.zoom;
+                    self.settings_dirty = true;
                 }
             });
         });
@@ -2999,6 +3093,8 @@ impl App {
                         egui::Theme::Dark
                     };
                     ui.ctx().set_theme(next);
+                    self.persisted.theme = ThemeMode::from_egui_theme(next);
+                    self.settings_dirty = true;
                 }
             });
         });
@@ -3109,6 +3205,7 @@ impl App {
                 && !self.batch_running
                 && !self.busy
             {
+                self.flush_settings();
                 self.allow_close = true;
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -3136,6 +3233,9 @@ impl App {
         self.dialogs(&ctx);
         self.request_latex_parse(&ctx);
         self.drain_before_close(&ctx);
+        if self.settings_dirty && !ctx.input(|i| i.pointer.any_down()) {
+            self.flush_settings();
+        }
     }
 }
 
@@ -4956,5 +5056,348 @@ mod tests {
         run_wheel_case("LogicSetsSymbols", Vec2::new(0.0, -180.0), true);
         run_wheel_case("LogicSetsSymbols", Vec2::new(-180.0, 0.0), true);
         run_wheel_case("Fractions", Vec2::new(0.0, -180.0), false);
+    }
+
+    fn click_events(pos: Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    fn run_ui_pass_frame(
+        ctx: &egui::Context,
+        app: &mut App,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
+                events,
+                ..Default::default()
+            },
+            |ui| app.ui_pass(ui),
+        );
+        output.textures_delta.clear();
+        output
+    }
+
+    #[track_caller]
+    fn find_text_center(output: &egui::FullOutput, predicate: impl Fn(&str) -> bool) -> Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if predicate(t.galley.text()) => {
+                    Some(s.shape.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("expected matching text shape")
+    }
+
+    #[test]
+    fn with_settings_path_restores_all_persisted_preferences() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let saved = Settings {
+            zoom: 3.0,
+            theme: ThemeMode::Dark,
+            font_pt: 18.5,
+            target: "mathtype".into(),
+            category: palette::RECENT_GROUP.into(),
+            recent_palette: vec![r"\alpha".into(), r"\frac{#?}{#?}".into()],
+            batch_target: 2,
+            batch_overwrite: true,
+        };
+        saved.save_to_path(&path).unwrap();
+
+        let isolated = app();
+        assert!(isolated.settings_path.is_none());
+        assert_eq!(isolated.zoom, settings::DEFAULT_ZOOM);
+        assert_eq!(isolated.font_pt, settings::DEFAULT_FONT_PT);
+
+        let ctx = egui::Context::default();
+        let restored = app().with_settings_path(path, Some(&ctx));
+        assert_eq!(restored.zoom, 3.0);
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        assert_eq!(restored.font_pt, 18.5);
+        assert_eq!(restored.saved_font, 18.5);
+        assert_eq!(restored.target, "mathtype");
+        assert_eq!(restored.saved_mode, "mathtype");
+        assert_eq!(restored.category, palette::RECENT_GROUP);
+        assert_eq!(restored.recent_palette, vec![r"\alpha", r"\frac{#?}{#?}"]);
+        assert_eq!(restored.batch_target, 2);
+        assert!(restored.batch_overwrite);
+        assert!(!restored.dirty());
+        assert!(!restored.settings_dirty);
+    }
+
+    #[test]
+    fn office_session_overrides_do_not_overwrite_saved_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        Settings {
+            font_pt: 16.0,
+            target: "mathtype".into(),
+            ..Settings::default()
+        }
+        .save_to_path(&path)
+        .unwrap();
+
+        let ctx = egui::Context::default();
+        let mut a = app().with_settings_path(path.clone(), Some(&ctx));
+
+        // Standalone load_math with font=None keeps the persisted font_pt.
+        assert!(a.load_math("<math><mi>y</mi></math>", None, None));
+        assert_eq!(a.font_pt, 16.0);
+
+        // Office session overrides live font_pt and target without dirtying persisted settings.
+        a.loading_session = Some("office-1".into());
+        a.tx.send(Event::Session(
+            "office-1".into(),
+            Ok(serde_json::json!({
+                "state": "waiting",
+                "mathml": "<math><mi>x</mi></math>",
+                "font_pt": 24.0,
+                "target_mode": "omml"
+            })),
+        ))
+        .unwrap();
+        a.events(&ctx);
+
+        assert_eq!(a.font_pt, 24.0);
+        assert_eq!(a.target, "omml");
+        assert_eq!(a.session.as_deref(), Some("office-1"));
+        assert!(!a.settings_dirty);
+
+        // Completing/closing the session leaves the saved defaults intact on disk.
+        run_ui_pass_frame(&ctx, &mut a, vec![]);
+        a.tx.send(Event::Finished(Ok(()))).unwrap();
+        a.events(&ctx);
+
+        let on_disk = Settings::load_from_path(&path);
+        assert_eq!(on_disk.font_pt, 16.0);
+        assert_eq!(on_disk.target, "mathtype");
+    }
+
+    #[test]
+    fn user_ui_edits_persist_atomically_and_coalesce_pointer_drag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let ctx = egui::Context::default();
+        ctx.set_theme(egui::Theme::Dark);
+        let mut a = app().with_settings_path(path.clone(), Some(&ctx));
+        // Switch back to Dark explicitly for initial baseline via theme toggle test later.
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+
+        // 1. Click sidebar category "Scripts".
+        let sidebar_atlas = a.sidebar_atlas.as_ref().unwrap();
+        let scripts_uv = sidebar_atlas.entries["Scripts"].uv;
+        let sidebar_tex = sidebar_atlas.texture.id();
+        let scripts_pos = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.brush.as_ref().is_some_and(|b| {
+                        b.fill_texture_id == sidebar_tex
+                            && (b.uv.min - scripts_uv.min).length() < 1e-4
+                    }) =>
+                {
+                    Some(r.rect.center())
+                }
+                _ => None,
+            })
+            .expect("Scripts sidebar icon");
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(scripts_pos));
+        assert_eq!(a.category, "Scripts");
+        assert_eq!(Settings::load_from_path(&path).category, "Scripts");
+
+        // 2. Click a palette item in "Scripts".
+        let scripts_tex = a.palette_atlases["Scripts"].texture.id();
+        let item_pos = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.brush
+                        .as_ref()
+                        .is_some_and(|b| b.fill_texture_id == scripts_tex) =>
+                {
+                    Some(r.rect.center())
+                }
+                _ => None,
+            })
+            .expect("Scripts palette button");
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(item_pos));
+        assert_eq!(a.recent_palette.len(), 1);
+        let clicked_source = a.recent_palette[0];
+        assert_eq!(
+            Settings::load_from_path(&path).recent_palette,
+            vec![clicked_source.to_string()]
+        );
+
+        // 3. Click footer "MathType" radio button.
+        let mathtype_pos = find_text_center(&out, |t| t == "MathType");
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(mathtype_pos));
+        assert_eq!(a.target, "mathtype");
+        assert_eq!(Settings::load_from_path(&path).target, "mathtype");
+
+        // 4. Drag footer Font size DragValue while pointer is down, then release.
+        let font_pos = find_text_center(&out, |t| t.ends_with(" pt"));
+        let drag_to = Pos2::new(font_pos.x + 80.0, font_pos.y);
+        run_ui_pass_frame(
+            &ctx,
+            &mut a,
+            vec![
+                egui::Event::PointerMoved(font_pos),
+                egui::Event::PointerButton {
+                    pos: font_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        run_ui_pass_frame(&ctx, &mut a, vec![egui::Event::PointerMoved(drag_to)]);
+        assert!(a.font_pt > settings::DEFAULT_FONT_PT);
+        assert!(a.settings_dirty);
+        // Disk write is deferred until pointer drag releases.
+        assert_eq!(
+            Settings::load_from_path(&path).font_pt,
+            settings::DEFAULT_FONT_PT
+        );
+        run_ui_pass_frame(
+            &ctx,
+            &mut a,
+            vec![egui::Event::PointerButton {
+                pos: drag_to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!a.settings_dirty);
+        let dragged_font = a.font_pt;
+        assert_eq!(Settings::load_from_path(&path).font_pt, dragged_font);
+
+        // 5. Open Settings tab, adjust zoom and toggle theme.
+        let settings_pos = find_text_center(&out, |t| t == "Settings");
+        run_ui_pass_frame(&ctx, &mut a, click_events(settings_pos));
+        assert_eq!(a.tab, 2);
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+
+        // Drag zoom slider right while pointer is down, then release.
+        let pct_pos = find_text_center(&out, |t| t == "200%");
+        let slider_center = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if (r.rect.center().y - pct_pos.y).abs() < 12.0
+                        && r.rect.width() >= 150.0
+                        && r.rect.width() <= 260.0
+                        && r.rect.height() <= 24.0 =>
+                {
+                    Some(r.rect.center())
+                }
+                _ => None,
+            })
+            .unwrap_or(pct_pos);
+        let slider_drag_end = Pos2::new(slider_center.x + 60.0, slider_center.y);
+        run_ui_pass_frame(
+            &ctx,
+            &mut a,
+            vec![
+                egui::Event::PointerMoved(slider_center),
+                egui::Event::PointerButton {
+                    pos: slider_center,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        run_ui_pass_frame(
+            &ctx,
+            &mut a,
+            vec![egui::Event::PointerMoved(slider_drag_end)],
+        );
+        assert!(a.settings_dirty);
+        assert_eq!(Settings::load_from_path(&path).zoom, settings::DEFAULT_ZOOM);
+        let out = run_ui_pass_frame(
+            &ctx,
+            &mut a,
+            vec![egui::Event::PointerButton {
+                pos: slider_drag_end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!a.settings_dirty);
+        let dragged_zoom = a.zoom;
+        assert!((dragged_zoom - settings::DEFAULT_ZOOM).abs() > 0.05);
+        assert_eq!(Settings::load_from_path(&path).zoom, dragged_zoom);
+
+        // Toggle theme (Dark -> Light).
+        let toggle_pos = find_text_center(&out, |t| t == "Switch to Light mode");
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(toggle_pos));
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        assert_eq!(Settings::load_from_path(&path).theme, ThemeMode::Light);
+
+        // 6. Open Batch DOCX tab, toggle overwrite and change batch target.
+        let back_pos = find_text_center(&out, |t| t == "← Back to equation");
+        run_ui_pass_frame(&ctx, &mut a, click_events(back_pos));
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let batch_pos = find_text_center(&out, |t| t == "Batch DOCX");
+        run_ui_pass_frame(&ctx, &mut a, click_events(batch_pos));
+        assert_eq!(a.tab, 1);
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+
+        let overwrite_pos = find_text_center(&out, |t| t.starts_with("Overwrite original"));
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(overwrite_pos));
+        assert!(a.batch_overwrite);
+        assert!(Settings::load_from_path(&path).batch_overwrite);
+
+        let combo_pos = find_text_center(&out, |t| t == batch::TARGETS[0].1);
+        run_ui_pass_frame(&ctx, &mut a, click_events(combo_pos));
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let option_pos = find_text_center(&out, |t| t == batch::TARGETS[1].1);
+        run_ui_pass_frame(&ctx, &mut a, click_events(option_pos));
+        assert_eq!(a.batch_target, 1);
+        assert_eq!(Settings::load_from_path(&path).batch_target, 1);
+
+        // 7. Reload in a brand new App instance and confirm full restoration.
+        let fresh_ctx = egui::Context::default();
+        let mut reloaded = app().with_settings_path(path.clone(), Some(&fresh_ctx));
+        assert_eq!(reloaded.category, "Scripts");
+        assert_eq!(reloaded.recent_palette, vec![clicked_source]);
+        assert_eq!(reloaded.target, "mathtype");
+        assert_eq!(reloaded.font_pt, dragged_font);
+        assert_eq!(reloaded.zoom, dragged_zoom);
+        assert_eq!(fresh_ctx.theme(), egui::Theme::Light);
+        assert!(reloaded.batch_overwrite);
+        assert_eq!(reloaded.batch_target, 1);
+
+        // 8. Verify "Reset (200%)" persists default zoom back to disk.
+        reloaded.tab = 2;
+        let out = run_ui_pass_frame(&fresh_ctx, &mut reloaded, vec![]);
+        let reset_pos = find_text_center(&out, |t| t == "Reset (200%)");
+        run_ui_pass_frame(&fresh_ctx, &mut reloaded, click_events(reset_pos));
+        assert_eq!(reloaded.zoom, settings::DEFAULT_ZOOM);
+        assert_eq!(Settings::load_from_path(&path).zoom, settings::DEFAULT_ZOOM);
     }
 }

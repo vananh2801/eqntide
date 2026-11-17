@@ -97,6 +97,13 @@ pub fn ui_group(id: &str) -> Option<&'static UiGroup> {
     UI_GROUPS.iter().find(|group| group.id == id)
 }
 
+pub fn canonical_source(source: &str) -> Option<&'static str> {
+    PALETTE
+        .iter()
+        .find(|(_, _, item_source)| *item_source == source)
+        .map(|(_, _, item_source)| *item_source)
+}
+
 pub fn group_contains(ui_group_id: &str, catalog_group: &str) -> bool {
     ui_group(ui_group_id).is_some_and(|group| group.catalog_groups.contains(&catalog_group))
         || ui_group_id == catalog_group
@@ -232,5 +239,28 @@ mod tests {
         assert!(group_contains("MatricesAndBoxes", "Matrices"));
         assert!(!group_contains("Fractions", "Matrices"));
         assert!(items_for_ui_group(RECENT_GROUP, &[r"\frac{#?}{#?}", r"\alpha"]).len() == 2);
+    }
+
+    #[test]
+    fn canonical_source_resolves_valid_unknown_and_duplicate_entries() {
+        let valid_owned = String::from(r"\frac{#?}{#?}");
+        let resolved = canonical_source(&valid_owned).expect("valid palette source");
+        assert_eq!(resolved, r"\frac{#?}{#?}");
+
+        let duplicate_owned = String::from(r"\frac{#?}{#?}");
+        let resolved_again = canonical_source(&duplicate_owned).expect("duplicate palette source");
+        assert!(std::ptr::eq(resolved, resolved_again));
+
+        assert_eq!(canonical_source(r"\not_a_real_palette_entry"), None);
+        assert_eq!(canonical_source(""), None);
+
+        // Every palette entry resolves to itself and repeated lookups return the same canonical slice.
+        for (_, _, source) in PALETTE {
+            let owned = (*source).to_string();
+            let actual = canonical_source(&owned).unwrap();
+            let actual_again = canonical_source(&owned.clone()).unwrap();
+            assert_eq!(actual, *source);
+            assert!(std::ptr::eq(actual, actual_again));
+        }
     }
 }

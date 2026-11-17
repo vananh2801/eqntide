@@ -25,7 +25,7 @@ Each category icon button in the sidebar SHALL render a mathematical symbol or t
 - **THEN** a tooltip displays the category's human-readable name
 
 ### Requirement: Recent category tracking
-The desktop sidebar SHALL include a Recent category that records palette items inserted by the user during the current session in most-recently-used order without duplicates.
+The desktop sidebar SHALL include a Recent category that records palette items inserted by the user in most-recently-used order without duplicates and persists those valid items across application restarts.
 
 #### Scenario: Inserting a palette item adds it to the front of Recent
 - **WHEN** the user clicks a symbol or template button in the palette
@@ -34,6 +34,10 @@ The desktop sidebar SHALL include a Recent category that records palette items i
 #### Scenario: App launches on a populated default category
 - **WHEN** the desktop application starts a new session with no recent history
 - **THEN** the initially active category is a populated structural category rather than an empty Recent list
+
+#### Scenario: Recent palette items persist across restarts
+- **WHEN** the user inserts palette items and restarts the desktop application
+- **THEN** the Recent category restores the previously recorded valid palette items in most-recently-used order
 
 ### Requirement: Matrix controls in consolidated matrix category
 Selecting the consolidated category that contains matrix templates SHALL expose both the custom matrix dialog button and the contextual matrix row and column adjustment controls.
