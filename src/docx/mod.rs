@@ -21,6 +21,7 @@
 //! | `flat_opc`   | single-equation Flat OPC (`pkg:package`) packager & parser|
 
 mod consts;
+mod discovery;
 mod flat_opc;
 mod job;
 mod ole_xml;
@@ -29,6 +30,8 @@ mod package;
 mod pipeline;
 mod to_omml;
 mod upgrade;
+
+pub use discovery::{collect_docx_files_recursive, is_docx_file};
 
 pub use flat_opc::{
     base64_decode, base64_encode, flat_opc_to_mathml, mathml_to_flat_opc, FlatOpcMode,

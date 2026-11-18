@@ -103,3 +103,10 @@ The desktop application SHALL render the **Batch DOCX**, **Settings**, and **Abo
 #### Scenario: Batch DOCX controls and empty state fill the central panel width
 - **WHEN** the user opens the **Batch DOCX** tab with no files queued or with files queued
 - **THEN** the batch control bar sits inside a full-width card surface, and the drop-zone empty state or scrollable file list spans the matching full central-panel width
+
+### Requirement: Consistent selectable theme option buttons in Settings
+The **Settings** view SHALL present **Light** and **Dark** theme choices as a selectable option button group styled identically to the **Startup focus** selector below it, rather than a single toggle button.
+
+#### Scenario: Switching theme via Light and Dark option buttons
+- **WHEN** the user opens **Settings** while Dark mode is active and clicks the **Light** button
+- **THEN** the application switches to Light mode, persists the `Light` theme preference, highlights **Light** as selected, and renders **Dark** unselected using the shared selectable button styling

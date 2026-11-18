@@ -274,8 +274,9 @@ pub struct App {
     command_input: Option<commands::Input>,
     latex_groups: Vec<u64>,
     expects_latex_group: bool,
-    files: Vec<PathBuf>,
+    files: Vec<batch::BatchItem>,
     batch_logs: Vec<String>,
+    batch_output_dir: Option<PathBuf>,
     batch_target: usize,
     batch_overwrite: bool,
     batch_totals: [usize; 4],
@@ -690,6 +691,7 @@ impl App {
             expects_latex_group: false,
             files: vec![],
             batch_logs: vec![],
+            batch_output_dir: None,
             batch_target: 0,
             batch_overwrite: false,
             batch_totals: [0; 4],
@@ -1193,20 +1195,60 @@ impl App {
             self.events(ctx);
         }
     }
+    fn push_batch_item(&mut self, item: batch::BatchItem) -> bool {
+        if self.files.iter().any(|existing| existing.input == item.input) {
+            return false;
+        }
+        self.files.push(item);
+        self.batch_logs.push("Waiting".into());
+        true
+    }
+
     fn add_files(&mut self, paths: Vec<PathBuf>) {
         if self.batch_running {
             return;
         }
+        let mut added = 0usize;
+        let mut saw_empty_dir = false;
         for path in paths {
-            if path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("docx"))
-                && !self.files.contains(&path)
+            if path.is_dir() {
+                let mut found = Vec::new();
+                match eqntide::docx::collect_docx_files_recursive(&path, None, &mut found) {
+                    Ok(()) => {
+                        if found.is_empty() {
+                            saw_empty_dir = true;
+                        }
+                        for file in found {
+                            if self.push_batch_item(batch::BatchItem::from_folder(
+                                file,
+                                path.clone(),
+                            )) {
+                                added += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.status = format!("Failed to scan folder {}: {e}", path.display());
+                    }
+                }
+            } else if eqntide::docx::is_docx_file(&path)
+                && self.push_batch_item(batch::BatchItem::file(path))
             {
-                self.files.push(path);
-                self.batch_logs.push("Waiting".into());
+                added += 1;
             }
         }
+        if added > 0 {
+            self.batch_output_dir = None;
+        } else if saw_empty_dir {
+            self.status = "No .docx files found in selected folder.".into();
+        }
+    }
+
+    fn resolved_batch_output_folder(&self) -> Option<&std::path::Path> {
+        self.batch_output_dir
+            .as_deref()
+            .filter(|dir| dir.exists())
+            .or_else(|| self.files.first().map(|item| item.input.as_path()))
     }
     fn finish(&mut self, save: bool) {
         if self.busy {
@@ -3222,7 +3264,7 @@ impl App {
         ui.heading("Batch document conversion");
         ui.label(
             egui::RichText::new(
-                "Drop .docx files here. By default, a new copy is saved beside each input.",
+                "Drop .docx files or folders here. Files save beside inputs; folders mirror into <folder>_<target>_<time>/.",
             )
             .color(tokens.text_muted),
         );
@@ -3241,9 +3283,18 @@ impl App {
                             }
                         });
                     }
+                    if Self::standard_button(ui, "Add folder…").clicked() {
+                        let tx = self.tx.clone();
+                        std::thread::spawn(move || {
+                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                let _ = tx.send(Event::Paths(vec![folder]));
+                            }
+                        });
+                    }
                     if Self::standard_button(ui, "Clear list").clicked() {
                         self.files.clear();
                         self.batch_logs.clear();
+                        self.batch_output_dir = None;
                     }
                     let before_batch_target = self.batch_target;
                     egui::ComboBox::from_id_salt("batch-target")
@@ -3279,16 +3330,27 @@ impl App {
                 )
                 .clicked()
                 {
+                    let target = batch::TARGETS[self.batch_target].0;
+                    let timestamp = batch::timestamp_now();
+                    self.batch_output_dir = if !self.batch_overwrite {
+                        self.files
+                            .iter()
+                            .find_map(|item| item.source_root.as_deref())
+                            .map(|root| batch::folder_output_dir(root, target, &timestamp))
+                    } else {
+                        None
+                    };
                     self.batch_running = true;
                     self.batch_totals = [0; 4];
                     self.batch_completed = 0;
                     self.stop.store(false, Ordering::Relaxed);
                     self.batch_logs.fill("Waiting".into());
-                    batch::run(
+                    batch::run_items(
                         self.files.clone(),
-                        batch::TARGETS[self.batch_target].0.into(),
+                        target.into(),
                         self.font_pt,
                         self.batch_overwrite,
+                        timestamp,
                         Arc::clone(&self.stop),
                         self.tx.clone(),
                     );
@@ -3304,7 +3366,7 @@ impl App {
                     self.stop.store(true, Ordering::Relaxed);
                 }
                 if Self::standard_button(ui, "Open output folder").clicked() {
-                    if let Some(path) = self.files.first() {
+                    if let Some(path) = self.resolved_batch_output_folder() {
                         if let Err(e) = runtime::open_folder(path) {
                             self.status = e;
                         }
@@ -3328,7 +3390,7 @@ impl App {
                         ui.add_space(theme::SPACE_XS);
                         ui.label(
                             egui::RichText::new(
-                                "Drag and drop .docx files here, or click \"Add DOCX files…\" above.",
+                                "Drag and drop .docx files or folders here, or use \"Add DOCX files…\" / \"Add folder…\" above.",
                             )
                             .color(tokens.text_muted),
                         );
@@ -3354,11 +3416,13 @@ impl App {
             .auto_shrink([false, false])
             .show_rows(ui, row_height, self.files.len(), |ui, row_range| {
                 for idx in row_range {
-                    let path_str = self.files[idx].display().to_string();
+                    let item = &self.files[idx];
+                    let display_str = item.display_label();
+                    let full_path = item.input.display().to_string();
                     let log = &self.batch_logs[idx];
                     Self::full_width_card(ui, tokens, |ui| {
-                        ui.add(egui::Label::new(&path_str).truncate())
-                            .on_hover_text(&path_str);
+                        ui.add(egui::Label::new(&display_str).truncate())
+                            .on_hover_text(&full_path);
                         ui.add(egui::Label::new(log).truncate()).on_hover_text(log);
                     });
                 }
@@ -3473,24 +3537,43 @@ impl App {
                     ui.label(egui::RichText::new("Canvas zoom").strong());
                     ui.add_space(theme::SPACE_XS);
                     ui.horizontal(|ui| {
-                        ui.scope(|ui| {
-                            ui.spacing_mut().slider_width = 220.0;
-                            let zoom_changed = ui
-                                .add(
+                        let slider_changed = ui
+                            .scope(|ui| {
+                                ui.spacing_mut().slider_width = 220.0;
+                                ui.visuals_mut().widgets.inactive.bg_fill = tokens.border;
+                                ui.visuals_mut().selection.bg_fill = tokens.accent;
+                                ui.add(
                                     egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
+                                        .show_value(false)
+                                        .trailing_fill(true)
                                         .handle_shape(egui::style::HandleShape::Rect {
                                             aspect_ratio: 1.0,
-                                        })
-                                        .custom_formatter(|value, _| {
-                                            format!("{:.0}%", value * 100.0)
                                         }),
                                 )
-                                .changed();
-                            if zoom_changed {
-                                self.persisted.zoom = self.zoom;
-                                self.settings_dirty = true;
-                            }
-                        });
+                                .changed()
+                            })
+                            .inner;
+                        let value_changed = ui
+                            .add(
+                                egui::DragValue::new(&mut self.zoom)
+                                    .range(ZOOM_RANGE)
+                                    .speed(0.01)
+                                    .min_size(Vec2::new(60.0, theme::BUTTON_HEIGHT))
+                                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.0))
+                                    .custom_parser(|text| {
+                                        text.trim()
+                                            .trim_end_matches('%')
+                                            .trim()
+                                            .parse::<f64>()
+                                            .ok()
+                                            .map(|pct| pct / 100.0)
+                                    }),
+                            )
+                            .changed();
+                        if slider_changed || value_changed {
+                            self.persisted.zoom = self.zoom;
+                            self.settings_dirty = true;
+                        }
                         if Self::standard_button(ui, "Reset (200%)").clicked() {
                             self.zoom = settings::DEFAULT_ZOOM;
                             self.persisted.zoom = self.zoom;
@@ -3504,26 +3587,20 @@ impl App {
                     ui.add_space(theme::SPACE_XS);
                     let is_dark = ui.visuals().dark_mode;
                     ui.horizontal(|ui| {
-                        ui.label(if is_dark {
-                            "Current theme: Dark mode"
-                        } else {
-                            "Current theme: Light mode"
-                        });
-                        ui.add_space(theme::SPACE_MD);
-                        let toggle_label = if is_dark {
-                            "Switch to Light mode"
-                        } else {
-                            "Switch to Dark mode"
-                        };
-                        if Self::standard_button(ui, toggle_label).clicked() {
-                            let next = if is_dark {
-                                egui::Theme::Light
-                            } else {
-                                egui::Theme::Dark
-                            };
-                            ui.ctx().set_theme(next);
-                            self.persisted.theme = ThemeMode::from_egui_theme(next);
-                            self.settings_dirty = true;
+                        for (choice, label) in
+                            [(egui::Theme::Light, "Light"), (egui::Theme::Dark, "Dark")]
+                        {
+                            let selected = (choice == egui::Theme::Dark) == is_dark;
+                            if Self::with_selectable_style(ui, selected, |ui| {
+                                Self::standard_button(ui, label)
+                            })
+                            .clicked()
+                                && !selected
+                            {
+                                ui.ctx().set_theme(choice);
+                                self.persisted.theme = ThemeMode::from_egui_theme(choice);
+                                self.settings_dirty = true;
+                            }
                         }
                     });
                     ui.add_space(theme::SPACE_MD);
@@ -5360,37 +5437,21 @@ mod tests {
         assert!(texts.iter().any(|t| t == env!("CARGO_PKG_REPOSITORY")));
         assert!(a.logo_texture.is_some());
 
-        // Verify Settings toggles theme from Dark -> Light
+        // Verify Settings switches theme from Dark -> Light via selectable Light/Dark buttons
         a.tab = 2;
         let mut settings_out = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
         settings_out.textures_delta.clear();
-        let toggle_pos = settings_out
-            .shapes
-            .iter()
-            .find_map(|s| match &s.shape {
-                egui::Shape::Text(t) if t.galley.text() == "Switch to Light mode" => {
-                    Some(s.shape.visual_bounding_rect().center())
-                }
-                _ => None,
-            })
-            .expect("missing theme toggle button in Settings");
+        let dark_tokens = ThemeTokens::for_mode(true);
+        let dark_btn_pos = find_text_center(&settings_out, |t| t == "Dark");
+        let light_btn_pos = find_text_center(&settings_out, |t| t == "Light");
+        assert!(settings_out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.rect.contains(dark_btn_pos) && r.fill == dark_tokens.selected_bg)));
+        assert!(!settings_out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.rect.contains(light_btn_pos) && r.fill == dark_tokens.selected_bg)));
+
         ctx.run_ui(
             egui::RawInput {
-                events: vec![
-                    egui::Event::PointerMoved(toggle_pos),
-                    egui::Event::PointerButton {
-                        pos: toggle_pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                    egui::Event::PointerButton {
-                        pos: toggle_pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: false,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
+                events: click_events(light_btn_pos),
                 ..Default::default()
             },
             |ui| a.shell(ui),
@@ -5398,6 +5459,37 @@ mod tests {
         .textures_delta
         .clear();
         assert_eq!(ctx.theme(), egui::Theme::Light);
+
+        let mut after_light = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+        after_light.textures_delta.clear();
+
+        let light_tokens = ThemeTokens::for_mode(false);
+        let light_btn_pos = find_text_center(&after_light, |t| t == "Light");
+        let dark_btn_pos = find_text_center(&after_light, |t| t == "Dark");
+        assert!(after_light.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r)
+                if r.rect.contains(light_btn_pos)
+                    && (r.fill == light_tokens.selected_bg || r.fill == light_tokens.selected_hover_bg)
+                    && r.stroke.color == light_tokens.selected_border)));
+        assert!(!after_light.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r)
+                if r.rect.contains(dark_btn_pos)
+                    && (r.fill == light_tokens.selected_bg || r.fill == light_tokens.selected_hover_bg))));
+        assert!(!after_light.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Text(t) if t.galley.text() == "Theme")));
+        // Zoom slider rail in Light mode contrasts against card_bg (not white-on-white).
+        let pct_pos = find_text_center(&after_light, |t| t == "200%");
+        assert!(after_light.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r)
+                if (r.rect.center().y - pct_pos.y).abs() < 12.0
+                    && r.rect.width() >= 150.0
+                    && r.rect.height() <= 24.0
+                    && r.fill == light_tokens.border)));
+        assert!(after_light.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r)
+                if (r.rect.center().y - pct_pos.y).abs() < 12.0
+                    && r.rect.height() <= 24.0
+                    && r.fill == light_tokens.accent)));
     }
 
     #[test]
@@ -5952,9 +6044,9 @@ mod tests {
         assert!((dragged_zoom - settings::DEFAULT_ZOOM).abs() > 0.05);
         assert_eq!(Settings::load_from_path(&path).zoom, dragged_zoom);
 
-        // Toggle theme (Dark -> Light).
-        let toggle_pos = find_text_center(&out, |t| t == "Switch to Light mode");
-        let out = run_ui_pass_frame(&ctx, &mut a, click_events(toggle_pos));
+        // Select Light theme (Dark -> Light).
+        let light_pos = find_text_center(&out, |t| t == "Light");
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(light_pos));
         assert_eq!(ctx.theme(), egui::Theme::Light);
         assert_eq!(Settings::load_from_path(&path).theme, ThemeMode::Light);
 
@@ -6797,7 +6889,9 @@ mod tests {
             }
 
             // Populated state: controls card + queued file row card span the full panel width.
-            a.files = vec![PathBuf::from("/tmp/sample_document.docx")];
+            a.files = vec![batch::BatchItem::file(PathBuf::from(
+                "/tmp/sample_document.docx",
+            ))];
             a.batch_logs = vec!["Ready".into()];
             let _ = run_ui_pass_sized(&ctx, &mut a, size);
             let out = run_ui_pass_sized(&ctx, &mut a, size);
@@ -6820,5 +6914,97 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn batch_tab_discovers_nested_folder_docx_files_and_targets_output_dir() {
+        use std::io::{Cursor, Write};
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        zip.start_file("[Content_Types].xml", opts).unwrap();
+        zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#).unwrap();
+        zip.start_file("word/document.xml", opts).unwrap();
+        zip.write_all(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMath><m:r><m:t>x</m:t></m:r></m:oMath></w:p></w:body></w:document>"#).unwrap();
+        let docx_bytes = zip.finish().unwrap().into_inner();
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("course_docs");
+        let sub = folder.join("chapter1");
+        let hidden = folder.join(".hidden");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&hidden).unwrap();
+
+        let root_doc = folder.join("intro.docx");
+        let nested_doc = sub.join("lesson1.docx");
+        let lock_doc = sub.join("~$lesson1.docx");
+        let hidden_doc = hidden.join("secret.docx");
+        let extra_doc = dir.path().join("standalone.docx");
+        for (path, bytes) in [
+            (&root_doc, &docx_bytes[..]),
+            (&nested_doc, &docx_bytes[..]),
+            (&lock_doc, b"lock"),
+            (&hidden_doc, &docx_bytes[..]),
+            (&extra_doc, &docx_bytes[..]),
+        ] {
+            std::fs::write(path, bytes).unwrap();
+        }
+
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        a.tab = 1;
+        a.batch_target = 1; // "mathtype"
+        a.add_files(vec![
+            folder.clone(),
+            nested_doc.clone(),
+            extra_doc.clone(),
+        ]);
+
+        assert_eq!(a.files.len(), 3);
+        assert_eq!(a.files[0].input, nested_doc);
+        assert_eq!(a.files[0].source_root.as_deref(), Some(folder.as_path()));
+        assert_eq!(a.files[1].input, root_doc);
+        assert_eq!(a.files[1].source_root.as_deref(), Some(folder.as_path()));
+        assert_eq!(a.files[2].input, extra_doc);
+        assert_eq!(a.files[2].source_root, None);
+
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let add_folder_pos = find_text_center(&out, |t| t == "Add folder…");
+        assert!(add_folder_pos.x > 0.0);
+
+        let convert_pos = find_text_center(&out, |t| t == "Convert");
+        run_ui_pass_frame(&ctx, &mut a, click_events(convert_pos));
+
+        let expected_out_dir = a
+            .batch_output_dir
+            .clone()
+            .expect("folder batch should set timestamped output folder");
+        let out_name = expected_out_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            out_name.starts_with("course_docs_mathtype_"),
+            "unexpected output folder name: {out_name}"
+        );
+        assert_eq!(expected_out_dir.parent(), Some(dir.path()));
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while a.batch_running && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            run_ui_pass_frame(&ctx, &mut a, vec![]);
+        }
+        assert!(!a.batch_running);
+        assert!(expected_out_dir.join("intro.docx").is_file());
+        assert!(expected_out_dir
+            .join("chapter1")
+            .join("lesson1.docx")
+            .is_file());
+        assert!(dir.path().join("standalone_mathtype.docx").is_file());
+        assert_eq!(
+            a.resolved_batch_output_folder(),
+            Some(expected_out_dir.as_path())
+        );
     }
 }
