@@ -1,0 +1,54 @@
+# Spec Delta
+
+## Purpose
+
+Defines the modern slate visual design system, technical corner-radius and spacing rules, unified hover and tinted-accent selection states, and per-mode Equation Canvas color presets for the desktop equation editor.
+
+## ADDED Requirements
+
+### Requirement: Modern slate Light and Dark theme palette
+The desktop application SHALL style both Light and Dark modes using a layered slate neutral palette with soft eye-friendly surfaces, readable foreground contrast, and a consistent accent color across selections, focus rings, sliders, and primary actions.
+
+#### Scenario: Light and Dark modes apply layered neutral surfaces and legible contrast
+- **WHEN** the desktop application renders in either Light mode or Dark mode
+- **THEN** window backgrounds, panels, cards, and interactive controls use distinct layered neutral tones with high-contrast text and icons
+
+### Requirement: Technical corner radii and harmonized spacing
+The desktop application SHALL use two consistent corner-radius tiers (`6px` for interactive controls and inputs, `8px` for canvas, cards, modals, and popups) and a `4px`-based spacing and margin scale while keeping all sidebar controls visible and the palette within three rows at `1040x560`.
+
+#### Scenario: Controls and surfaces follow the two-tier radius scale
+- **WHEN** buttons, sliders, text inputs, palette tiles, sidebar items, cards, and the equation canvas are displayed
+- **THEN** controls share the `6px` corner radius and surface containers share the `8px` corner radius without ad-hoc radius overrides
+
+#### Scenario: Minimum window layout preserves full sidebar and three-row palette visibility
+- **WHEN** the application is rendered at the minimum window size of `1040x560`
+- **THEN** harmonized panel padding and control spacing keep all sidebar buttons unclipped without vertical scrolling and keep the palette within three rows
+
+### Requirement: Unified hover, active, and disabled interaction feedback
+All interactive controls—including primary and secondary buttons, sidebar category tiles, sidebar navigation tabs, palette items, radio buttons, checkboxes, combo boxes, and canvas preset swatches—SHALL use unified hover and press feedback without expanding widget bounds on hover and SHALL display a pointing-hand cursor on hover when enabled.
+
+#### Scenario: Hovering enabled controls applies consistent surface and cursor feedback
+- **WHEN** the user moves the pointer over any enabled button, sidebar item, palette button, radio control, checkbox, combo box, or color swatch
+- **THEN** the control transitions smoothly in background and border tone without growing in size and shows a pointing-hand cursor
+
+#### Scenario: Disabled controls suppress interactive hover styling
+- **WHEN** a control is disabled during busy states or unparsed LaTeX source drafts
+- **THEN** it renders in a muted non-interactive state and does not show active hover emphasis
+
+### Requirement: Tinted-accent selection state with contrasting icons
+Selected navigation tabs and sidebar category buttons SHALL highlight using a tinted accent background paired with a thin accent border and contrasting accent foreground text and icons in both Light and Dark modes.
+
+#### Scenario: Selected sidebar category keeps icon contrast in Light and Dark modes
+- **WHEN** a sidebar category button is selected in either Light mode or Dark mode
+- **THEN** the button displays a tinted accent background and border while its math icon is tinted in the matching high-contrast foreground accent color
+
+### Requirement: Curated per-mode Equation Canvas presets
+The Settings view SHALL provide curated color presets for the Equation Canvas independently for Light mode and Dark mode, defaulting to a soft light paper preset in both modes and adapting equation ink, placeholder styling, caret, selection highlight, scrollbars, and the synchronized LaTeX source box to maintain contrast on every preset.
+
+#### Scenario: Default Equation Canvas uses a soft light paper surface
+- **WHEN** the desktop application starts with default settings in either Light mode or Dark mode
+- **THEN** the Equation Canvas and LaTeX source box render on the soft light paper preset with dark ink and high-contrast caret, selection, and placeholder overlays
+
+#### Scenario: Selecting a Dark mode dark canvas preset adapts ink and overlays
+- **WHEN** the user selects a dark canvas preset for Dark mode in Settings and switches to Dark mode
+- **THEN** the Equation Canvas and LaTeX source box switch to that dark surface and render equation ink, source text, placeholders, caret, selection highlight, and scrollbars in light-on-dark contrasting colors

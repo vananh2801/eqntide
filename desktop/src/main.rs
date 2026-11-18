@@ -8,6 +8,7 @@ mod instance;
 mod palette;
 mod runtime;
 mod settings;
+mod theme;
 mod wgpu_runner;
 
 use eqntide::bridge::{DesktopWindowRequest, ServerHandle};

@@ -1,4 +1,4 @@
-use crate::{batch, palette};
+use crate::{batch, palette, theme::CanvasPreset};
 use directories::ProjectDirs;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,8 @@ impl ThemeMode {
 pub(crate) struct Settings {
     pub(crate) zoom: f32,
     pub(crate) theme: ThemeMode,
+    pub(crate) canvas_light: CanvasPreset,
+    pub(crate) canvas_dark: CanvasPreset,
     pub(crate) font_pt: f32,
     pub(crate) target: String,
     pub(crate) category: String,
@@ -58,6 +60,8 @@ impl Default for Settings {
         Self {
             zoom: DEFAULT_ZOOM,
             theme: ThemeMode::System,
+            canvas_light: CanvasPreset::SoftPaper,
+            canvas_dark: CanvasPreset::SoftPaper,
             font_pt: DEFAULT_FONT_PT,
             target: DEFAULT_TARGET.into(),
             category: palette::DEFAULT_GROUP.into(),
@@ -121,6 +125,9 @@ impl Settings {
         if self.batch_target >= batch::TARGETS.len() {
             self.batch_target = 0;
         }
+
+        self.canvas_light = self.canvas_light.sanitize_for_mode(false);
+        self.canvas_dark = self.canvas_dark.sanitize_for_mode(true);
     }
 
     pub(crate) fn resolved_recent_palette(&self) -> Vec<&'static str> {
@@ -204,6 +211,8 @@ mod tests {
         let raw = Settings {
             zoom: 10.0,
             theme: ThemeMode::Dark,
+            canvas_light: CanvasPreset::DimSlate,
+            canvas_dark: CanvasPreset::PureWhite,
             font_pt: 81.3,
             target: "latex".into(),
             category: "DoesNotExist".into(),
@@ -220,6 +229,8 @@ mod tests {
 
         assert_eq!(raw.zoom, *ZOOM_RANGE.end());
         assert_eq!(raw.theme, ThemeMode::Dark);
+        assert_eq!(raw.canvas_light, CanvasPreset::SoftPaper);
+        assert_eq!(raw.canvas_dark, CanvasPreset::SoftPaper);
         assert_eq!(raw.font_pt, *FONT_PT_RANGE.end());
         assert_eq!(raw.target, "omml");
         assert_eq!(raw.category, palette::DEFAULT_GROUP);
@@ -275,6 +286,8 @@ mod tests {
         let original = Settings {
             zoom: 3.25,
             theme: ThemeMode::Light,
+            canvas_light: CanvasPreset::CoolSlate,
+            canvas_dark: CanvasPreset::DimSlate,
             font_pt: 16.5,
             target: "mathtype".into(),
             category: palette::RECENT_GROUP.into(),
@@ -293,5 +306,25 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(entries, vec!["settings.json"]);
+    }
+
+    #[test]
+    fn unknown_canvas_presets_in_json_fall_back_without_discarding_other_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "zoom": 2.5,
+                "canvas_light": "neon-green",
+                "canvas_dark": "pure-white"
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load_from_path(&path);
+        assert_eq!(loaded.zoom, 2.5);
+        assert_eq!(loaded.canvas_light, CanvasPreset::SoftPaper);
+        assert_eq!(loaded.canvas_dark, CanvasPreset::SoftPaper);
     }
 }

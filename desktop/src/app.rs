@@ -4,6 +4,7 @@ use crate::{
     instance::Instance,
     palette, runtime,
     settings::{self, Settings, ThemeMode, MAX_RECENT_PALETTE, ZOOM_RANGE},
+    theme::{self, CanvasPalette, CanvasPreset, ThemeTokens},
     Event, Rendered,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
@@ -23,8 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const CONTENT_PADDING: i8 = 10;
-const UI_CORNER_RADIUS: egui::CornerRadius = egui::CornerRadius::same(6);
+const CONTENT_PADDING: i8 = theme::SPACE_MD as i8;
 const FONT_SIZE_CONTROL_WIDTH: f32 = 96.0;
 const FOOTER_CONTROL_HEIGHT: f32 = 30.0;
 pub(crate) const MIN_WINDOW_SIZE: [f32; 2] = [1040.0, 560.0];
@@ -283,6 +283,8 @@ pub struct App {
     settings_path: Option<PathBuf>,
     persisted: Settings,
     settings_dirty: bool,
+    canvas_light: CanvasPreset,
+    canvas_dark: CanvasPreset,
 }
 
 impl App {
@@ -312,28 +314,7 @@ impl App {
         args: Vec<String>,
     ) -> Self {
         egui_ctx.set_theme(egui::ThemePreference::System);
-        for theme in [egui::Theme::Light, egui::Theme::Dark] {
-            egui_ctx.style_mut_of(theme, |style| {
-                style.spacing.item_spacing = Vec2::new(8.0, 8.0);
-                style.spacing.button_padding = Vec2::new(10.0, 7.0);
-                style.visuals.selection.bg_fill = Color32::from_rgb(40, 157, 207);
-                style.visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
-                let widgets = &mut style.visuals.widgets;
-                for state in [
-                    &mut widgets.noninteractive,
-                    &mut widgets.inactive,
-                    &mut widgets.hovered,
-                    &mut widgets.active,
-                    &mut widgets.open,
-                ] {
-                    state.corner_radius = UI_CORNER_RADIUS;
-                }
-                style.visuals.window_corner_radius = UI_CORNER_RADIUS;
-                style.visuals.menu_corner_radius = UI_CORNER_RADIUS;
-                style.interaction.show_tooltips_only_when_still = false;
-                style.interaction.tooltip_delay = 0.5;
-            });
-        }
+        ThemeTokens::apply_style(egui_ctx);
         tx.attach(egui_ctx.clone());
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
@@ -437,11 +418,85 @@ impl App {
         self.recent_palette = settings.resolved_recent_palette();
         self.batch_target = settings.batch_target;
         self.batch_overwrite = settings.batch_overwrite;
+        self.canvas_light = settings.canvas_light;
+        self.canvas_dark = settings.canvas_dark;
         if let Some(ctx) = egui_ctx {
             ctx.set_theme(settings.theme.to_egui());
         }
         self.persisted = settings;
         self.settings_dirty = false;
+    }
+
+    fn active_canvas_palette(&self, dark_mode: bool) -> CanvasPalette {
+        let preset = if dark_mode {
+            self.canvas_dark
+        } else {
+            self.canvas_light
+        };
+        preset.palette(dark_mode)
+    }
+
+    fn primary_button(ui: &mut egui::Ui, enabled: bool, label: &str) -> egui::Response {
+        let tokens = ThemeTokens::from_ui(ui);
+        ui.scope(|ui| {
+            let widgets = &mut ui.visuals_mut().widgets;
+            if enabled {
+                widgets.inactive.bg_fill = tokens.primary_bg;
+                widgets.inactive.weak_bg_fill = tokens.primary_bg;
+                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.primary_bg);
+                widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.primary_fg);
+
+                widgets.hovered.bg_fill = tokens.primary_hover_bg;
+                widgets.hovered.weak_bg_fill = tokens.primary_hover_bg;
+                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.primary_hover_bg);
+                widgets.hovered.fg_stroke = Stroke::new(1.0, tokens.primary_fg);
+
+                widgets.active.bg_fill = tokens.primary_active_bg;
+                widgets.active.weak_bg_fill = tokens.primary_active_bg;
+                widgets.active.bg_stroke = Stroke::new(1.0, tokens.primary_active_bg);
+                widgets.active.fg_stroke = Stroke::new(1.0, tokens.primary_fg);
+            } else {
+                widgets.noninteractive.bg_fill = tokens.control_disabled_bg;
+                widgets.noninteractive.weak_bg_fill = tokens.control_disabled_bg;
+                widgets.noninteractive.bg_stroke = Stroke::new(1.0, tokens.border);
+                widgets.noninteractive.fg_stroke = Stroke::new(1.0, tokens.text_disabled);
+                widgets.inactive.bg_fill = tokens.control_disabled_bg;
+                widgets.inactive.weak_bg_fill = tokens.control_disabled_bg;
+                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
+                widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text_disabled);
+            }
+            ui.add_enabled(enabled, egui::Button::new(label))
+        })
+        .inner
+    }
+
+    fn with_selectable_style<R>(
+        ui: &mut egui::Ui,
+        selected: bool,
+        add_contents: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> R {
+        let tokens = ThemeTokens::from_ui(ui);
+        ui.scope(|ui| {
+            if selected {
+                let widgets = &mut ui.visuals_mut().widgets;
+                widgets.inactive.bg_fill = tokens.selected_bg;
+                widgets.inactive.weak_bg_fill = tokens.selected_bg;
+                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.selected_fg);
+
+                widgets.hovered.bg_fill = tokens.selected_hover_bg;
+                widgets.hovered.weak_bg_fill = tokens.selected_hover_bg;
+                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.hovered.fg_stroke = Stroke::new(1.0, tokens.selected_fg);
+
+                widgets.active.bg_fill = tokens.selected_hover_bg;
+                widgets.active.weak_bg_fill = tokens.selected_hover_bg;
+                widgets.active.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.active.fg_stroke = Stroke::new(1.0, tokens.selected_fg);
+            }
+            add_contents(ui)
+        })
+        .inner
     }
 
     fn flush_settings(&mut self) {
@@ -545,6 +600,8 @@ impl App {
             settings_path: None,
             persisted: Settings::default(),
             settings_dirty: false,
+            canvas_light: CanvasPreset::SoftPaper,
+            canvas_dark: CanvasPreset::SoftPaper,
         }
     }
     fn dirty(&self) -> bool {
@@ -1006,7 +1063,7 @@ impl App {
                 let pixels = mask
                     .alpha
                     .into_iter()
-                    .map(Color32::from_black_alpha)
+                    .map(Color32::from_white_alpha)
                     .collect();
                 let image = egui::ColorImage {
                     size: [mask.width as usize, mask.height as usize],
@@ -1181,14 +1238,8 @@ impl App {
         } else {
             "Save MathML (Ctrl+S)"
         };
-        if ui
-            .add_enabled(
-                self.save_available() && !self.draft_dirty && self.command_input.is_none(),
-                egui::Button::new(egui::RichText::new(label).color(Color32::WHITE))
-                    .fill(Color32::from_rgb(25, 135, 190)),
-            )
-            .clicked()
-        {
+        let enabled = self.save_available() && !self.draft_dirty && self.command_input.is_none();
+        if Self::primary_button(ui, enabled, label).clicked() {
             self.save_clicked = true;
         }
     }
@@ -1198,7 +1249,7 @@ impl App {
             !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
             |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 5.0;
+                    ui.spacing_mut().item_spacing.x = theme::SPACE_MD;
                     ui.add_enabled_ui(!self.draft_dirty, |ui| {
                         let font = egui::TextStyle::Body.resolve(ui.style());
                         let color = ui.visuals().widgets.inactive.fg_stroke.color;
@@ -1208,7 +1259,7 @@ impl App {
                         target_changed |= ui
                             .radio_value(&mut self.target, "mathtype".into(), caption("MathType"))
                             .changed();
-                        ui.add_space(12.0);
+                        ui.add_space(theme::SPACE_MD);
                         target_changed |= ui
                             .radio_value(&mut self.target, "omml".into(), caption("OMML"))
                             .changed();
@@ -1285,28 +1336,30 @@ impl App {
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        const SIDEBAR_GAP: f32 = 6.0;
+        const SIDEBAR_GAP: f32 = theme::SPACE_SM;
         const SIDEBAR_BUTTON_HEIGHT: f32 = 42.0;
+        let tokens = ThemeTokens::from_ui(ui);
         egui::Panel::bottom("sidebar-batch")
             .exact_size(142.0)
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 8)))
+            .frame(
+                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, theme::SPACE_MD as i8)),
+            )
+            .show_separator_line(false)
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.spacing_mut().item_spacing.y = theme::SPACE_SM;
                 for (tab, label) in [(1, "Batch DOCX"), (2, "Settings"), (3, "About")] {
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 38.0],
-                            egui::Button::selectable(self.tab == tab, label),
-                        )
-                        .clicked()
+                    let selected = self.tab == tab;
+                    if Self::with_selectable_style(ui, selected, |ui| {
+                        ui.add_sized([ui.available_width(), 38.0], egui::Button::new(label))
+                    })
+                    .clicked()
                     {
                         self.tab = tab;
                     }
                 }
             });
-        ui.add_space(8.0);
+        ui.add_space(theme::SPACE_MD);
         self.ensure_sidebar_atlas(ui.ctx());
-        let icon_color = Self::icon_tint(ui);
         let button_width = ((ui.available_width() - SIDEBAR_GAP) / 2.0)
             .floor()
             .max(48.0);
@@ -1316,23 +1369,27 @@ impl App {
             .num_columns(2)
             .spacing(Vec2::splat(SIDEBAR_GAP))
             .show(ui, |ui| {
-                ui.spacing_mut().button_padding = Vec2::new(4.0, 4.0);
+                ui.spacing_mut().button_padding = Vec2::splat(theme::SPACE_XS);
+                let enabled = ui.is_enabled();
                 let atlas = self.sidebar_atlas.as_ref();
                 for (index, group) in palette::UI_GROUPS.iter().enumerate() {
                     let selected = self.category == group.id;
-                    let button = if let Some((atlas, entry)) =
-                        atlas.and_then(|a| a.entries.get(group.id).map(|e| (a, e)))
-                    {
-                        let image = egui::Image::new((atlas.texture.id(), entry.display_size))
-                            .uv(entry.uv)
-                            .tint(icon_color);
-                        egui::Button::new(image).selected(selected)
-                    } else {
-                        egui::Button::selectable(selected, group.icon_source)
-                    };
-                    let response = ui.add_sized(button_size, button);
+                    let icon_color = tokens.icon_tint(selected, enabled);
+                    let response = Self::with_selectable_style(ui, selected, |ui| {
+                        let button = if let Some((atlas, entry)) =
+                            atlas.and_then(|a| a.entries.get(group.id).map(|e| (a, e)))
+                        {
+                            let image = egui::Image::new((atlas.texture.id(), entry.display_size))
+                                .uv(entry.uv)
+                                .tint(icon_color);
+                            egui::Button::new(image)
+                        } else {
+                            egui::Button::new(group.icon_source)
+                        };
+                        ui.add_sized(button_size, button)
+                    });
                     response.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), group.label)
+                        egui::WidgetInfo::labeled(egui::Role::Button, enabled, group.label)
                     });
                     if response.on_hover_text(group.label).clicked() {
                         clicked_group = Some(group.id);
@@ -1424,9 +1481,9 @@ impl App {
                         });
                     ui.end_row();
                 });
-            ui.add_space(8.0);
+            ui.add_space(theme::SPACE_MD);
             ui.horizontal(|ui| {
-                insert = ui.button("Insert matrix").clicked();
+                insert = Self::primary_button(ui, true, "Insert matrix").clicked();
                 if ui.button("Cancel").clicked() {
                     ui.close();
                 }
@@ -1657,11 +1714,7 @@ impl App {
     }
 
     fn icon_tint(ui: &egui::Ui) -> Color32 {
-        if ui.visuals().dark_mode {
-            Color32::WHITE
-        } else {
-            Color32::BLACK
-        }
+        ThemeTokens::from_ui(ui).icon_tint(false, ui.is_enabled())
     }
 
     fn sync_atlas_dpi(&mut self, ppp: f32) {
@@ -1866,13 +1919,27 @@ impl App {
             self.keyboard_handled = true;
         }
         self.sync_render(ui.ctx());
+        let tokens = ThemeTokens::from_ui(ui);
         egui::Panel::bottom("app-status")
             .exact_size(32.0)
+            .frame(
+                egui::Frame::NONE
+                    .fill(tokens.panel_bg)
+                    .stroke(Stroke::new(1.0, tokens.border))
+                    .inner_margin(egui::Margin::symmetric(
+                        theme::SPACE_LG as i8,
+                        theme::SPACE_XS as i8,
+                    )),
+            )
+            .show_separator_line(false)
             .show(ui, |ui| self.status_bar(ui));
         if self.tab == 0 {
             egui::Panel::left("app-sidebar")
-                .exact_size(150.0)
+                .exact_size(158.0)
                 .resizable(false)
+                .frame(egui::Frame::NONE.fill(tokens.panel_bg).inner_margin(
+                    egui::Margin::symmetric(theme::SPACE_LG as i8, CONTENT_PADDING),
+                ))
                 .show(ui, |ui| {
                     ui.add_enabled_ui(
                         !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
@@ -1883,23 +1950,19 @@ impl App {
         if self.tab == 0 || self.session.is_some() {
             egui::Panel::bottom("app-footer")
                 .exact_size(56.0)
-                .frame(
-                    egui::Frame::NONE
-                        .fill(ui.visuals().panel_fill)
-                        .inner_margin(egui::Margin {
-                            left: CONTENT_PADDING,
-                            right: CONTENT_PADDING,
-                            top: CONTENT_PADDING,
-                            bottom: CONTENT_PADDING,
-                        }),
-                )
+                .frame(egui::Frame::NONE.fill(tokens.panel_bg).inner_margin(
+                    egui::Margin::symmetric(theme::SPACE_LG as i8, CONTENT_PADDING),
+                ))
                 .show(ui, |ui| self.footer(ui));
         }
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
-                    .fill(ui.visuals().panel_fill)
-                    .inner_margin(CONTENT_PADDING),
+                    .fill(tokens.app_bg)
+                    .inner_margin(egui::Margin::symmetric(
+                        theme::SPACE_LG as i8,
+                        CONTENT_PADDING,
+                    )),
             )
             .show(ui, |ui| {
                 ui.add_enabled_ui(
@@ -2003,17 +2066,29 @@ impl App {
     }
 
     fn latex_ui(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .add_sized(
-                [ui.available_width(), 48.0],
-                egui::TextEdit::multiline(&mut self.latex)
-                    .desired_rows(2)
-                    .id(egui::Id::unique("latex-source"))
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Monospace),
-            )
-            .changed()
-        {
+        let pal = self.active_canvas_palette(ui.visuals().dark_mode);
+        let response = ui
+            .scope(|ui| {
+                ui.visuals_mut().extreme_bg_color = pal.bg;
+                ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0, pal.border);
+                ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0, pal.border);
+                ui.visuals_mut().widgets.active.bg_stroke = Stroke::new(1.0, pal.caret);
+                ui.visuals_mut().text_cursor.stroke = Stroke::new(1.5, pal.caret);
+                ui.visuals_mut().selection.bg_fill = pal.selection_bg;
+                ui.visuals_mut().selection.stroke = Stroke::new(1.0, pal.caret);
+                ui.add_sized(
+                    [ui.available_width(), 48.0],
+                    egui::TextEdit::multiline(&mut self.latex)
+                        .desired_rows(2)
+                        .id(egui::Id::unique("latex-source"))
+                        .desired_width(f32::INFINITY)
+                        .font(egui::TextStyle::Monospace)
+                        .text_color(pal.ink)
+                        .background_color(pal.bg),
+                )
+            })
+            .inner;
+        if response.changed() {
             self.source_changed(Instant::now());
         }
     }
@@ -2024,24 +2099,20 @@ impl App {
         ui.set_opacity(1.0);
         let scale = self.zoom * 96.0 / 72.0;
         let height = (ui.available_height() - 26.0).max(12.0);
+        let pal = self.active_canvas_palette(ui.visuals().dark_mode);
         egui::Frame::new()
-            .fill(Color32::WHITE)
-            .corner_radius(UI_CORNER_RADIUS)
-            .stroke(Stroke::new(1.0, Color32::LIGHT_GRAY))
-            .inner_margin(12.0)
+            .fill(pal.bg)
+            .corner_radius(theme::SURFACE_CORNER_RADIUS)
+            .stroke(Stroke::new(1.0, pal.border))
+            .inner_margin(theme::SPACE_LG)
             .show(ui, |ui| {
-                let light_blue = Color32::from_rgb(133, 192, 230);
-                let hover_blue = Color32::from_rgb(40, 157, 207);
-                let active_blue = Color32::from_rgb(25, 135, 190);
-                let track_blue = Color32::from_rgb(238, 246, 253);
-
-                ui.visuals_mut().widgets.inactive.bg_fill = light_blue;
-                ui.visuals_mut().widgets.inactive.fg_stroke.color = light_blue;
-                ui.visuals_mut().widgets.hovered.bg_fill = hover_blue;
-                ui.visuals_mut().widgets.hovered.fg_stroke.color = hover_blue;
-                ui.visuals_mut().widgets.active.bg_fill = active_blue;
-                ui.visuals_mut().widgets.active.fg_stroke.color = active_blue;
-                ui.visuals_mut().extreme_bg_color = track_blue;
+                ui.visuals_mut().widgets.inactive.bg_fill = pal.scroll_inactive;
+                ui.visuals_mut().widgets.inactive.fg_stroke.color = pal.scroll_inactive;
+                ui.visuals_mut().widgets.hovered.bg_fill = pal.scroll_hover;
+                ui.visuals_mut().widgets.hovered.fg_stroke.color = pal.scroll_hover;
+                ui.visuals_mut().widgets.active.bg_fill = pal.scroll_active;
+                ui.visuals_mut().widgets.active.fg_stroke.color = pal.scroll_active;
+                ui.visuals_mut().extreme_bg_color = pal.scroll_track;
 
                 let scroll = &mut ui.spacing_mut().scroll;
                 if matches!(
@@ -2107,7 +2178,7 @@ impl App {
                                 texture.id(),
                                 Rect::from_min_size(origin, size),
                                 Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                                Color32::BLACK,
+                                pal.ink,
                             );
                         }
                         if let Some(rendered) = &self.rendered {
@@ -2116,7 +2187,7 @@ impl App {
                                     origin + Vec2::new(slot.x, slot.y) * scale,
                                     Vec2::new(slot.width, slot.height) * scale,
                                 );
-                                Self::paint_placeholder(ui.painter(), rect);
+                                Self::paint_placeholder(ui.painter(), rect, pal);
                             }
                         }
                         if response.clicked() || response.drag_started() {
@@ -2158,8 +2229,8 @@ impl App {
                             if let Some(r) = self.node_rect(id, origin, scale) {
                                 ui.painter().rect_filled(
                                     r,
-                                    UI_CORNER_RADIUS,
-                                    Color32::from_rgba_unmultiplied(60, 120, 230, 65),
+                                    theme::CONTROL_CORNER_RADIUS,
+                                    pal.selection_bg,
                                 );
                             }
                         }
@@ -2186,7 +2257,7 @@ impl App {
                                 .unwrap_or(Rect::from_min_size(origin, Vec2::new(1.0, 24.0)));
                             ui.painter().line_segment(
                                 [cursor.left_top(), cursor.left_bottom()],
-                                Stroke::new(1.5, Color32::from_rgb(30, 90, 180)),
+                                Stroke::new(1.5, pal.caret),
                             );
                             ui.output_mut(|o| {
                                 o.ime = Some(egui::output::IMEOutput {
@@ -2202,7 +2273,7 @@ impl App {
                                     egui::Align2::LEFT_TOP,
                                     &self.ime,
                                     egui::FontId::proportional(18.0),
-                                    Color32::DARK_BLUE,
+                                    pal.ime_fg,
                                 );
                             }
                         }
@@ -2217,12 +2288,12 @@ impl App {
             })
             .inner
     }
-    fn paint_placeholder(painter: &egui::Painter, rect: Rect) {
+    fn paint_placeholder(painter: &egui::Painter, rect: Rect, pal: CanvasPalette) {
         // Cover only the synthetic square; the formula texture and hit regions stay unchanged.
-        painter.rect_filled(rect.expand(0.5), 0.0, Color32::WHITE);
+        painter.rect_filled(rect.expand(0.5), 0.0, pal.bg);
         let rect = rect.shrink(1.0);
-        let radius = UI_CORNER_RADIUS;
-        painter.rect_filled(rect, radius, Color32::from_rgb(239, 248, 255));
+        let radius = theme::CONTROL_CORNER_RADIUS;
+        painter.rect_filled(rect, radius, pal.placeholder_bg);
         let mut path = vec![];
         egui::epaint::tessellator::path::rounded_rectangle(
             &mut path,
@@ -2233,7 +2304,7 @@ impl App {
         }
         painter.extend(egui::Shape::dashed_line(
             &path,
-            Stroke::new(1.2, Color32::from_rgb(133, 192, 230)),
+            Stroke::new(1.2, pal.placeholder_stroke),
             4.0,
             3.0,
         ));
@@ -2902,11 +2973,19 @@ impl App {
         }
     }
     fn batch_ui(&mut self, ui: &mut egui::Ui) {
+        let tokens = ThemeTokens::from_ui(ui);
         if ui.button("← Back to equation").clicked() {
             self.tab = 0;
         }
+        ui.add_space(theme::SPACE_MD);
         ui.heading("Batch document conversion");
-        ui.label("Drop .docx files here. By default, a new copy is saved beside each input.");
+        ui.label(
+            egui::RichText::new(
+                "Drop .docx files here. By default, a new copy is saved beside each input.",
+            )
+            .color(tokens.text_muted),
+        );
+        ui.add_space(theme::SPACE_XS);
         ui.add_enabled_ui(!self.batch_running, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Add DOCX files…").clicked() {
@@ -2951,11 +3030,7 @@ impl App {
             }
         });
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    !self.batch_running && !self.files.is_empty(),
-                    egui::Button::new("Convert"),
-                )
+            if Self::primary_button(ui, !self.batch_running && !self.files.is_empty(), "Convert")
                 .clicked()
             {
                 self.batch_running = true;
@@ -3004,7 +3079,8 @@ impl App {
             ));
         }
         let text_h = ui.text_style_height(&egui::TextStyle::Body);
-        let group_margin = egui::Frame::group(ui.style()).inner_margin.sum().y;
+        let row_frame = tokens.group_frame();
+        let group_margin = row_frame.inner_margin.sum().y;
         let row_height = 2.0 * text_h + ui.spacing().item_spacing.y + group_margin + 2.0;
         egui::ScrollArea::vertical().show_rows(
             ui,
@@ -3014,7 +3090,7 @@ impl App {
                 for idx in row_range {
                     let path_str = self.files[idx].display().to_string();
                     let log = &self.batch_logs[idx];
-                    ui.group(|ui| {
+                    row_frame.show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.add(egui::Label::new(&path_str).truncate())
                             .on_hover_text(&path_str);
@@ -3025,75 +3101,185 @@ impl App {
         );
     }
 
+    fn canvas_preset_picker(
+        ui: &mut egui::Ui,
+        title: &str,
+        presets: &[CanvasPreset],
+        dark_mode_preview: bool,
+        current: &mut CanvasPreset,
+    ) -> bool {
+        let tokens = ThemeTokens::from_ui(ui);
+        ui.label(egui::RichText::new(title).color(tokens.text_muted));
+        let mut changed = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::splat(theme::SPACE_MD);
+            for &preset in presets {
+                let selected = *current == preset;
+                let pal = preset.palette(dark_mode_preview);
+                let response = Self::with_selectable_style(ui, selected, |ui| {
+                    let (rect, response) =
+                        ui.allocate_exact_size(Vec2::new(116.0, 32.0), egui::Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        let visuals = ui.style().interact(&response);
+                        let bg = if selected {
+                            if response.hovered() {
+                                tokens.selected_hover_bg
+                            } else {
+                                tokens.selected_bg
+                            }
+                        } else {
+                            visuals.bg_fill
+                        };
+                        let stroke = if selected {
+                            Stroke::new(1.0, tokens.selected_border)
+                        } else {
+                            visuals.bg_stroke
+                        };
+                        let fg = if selected {
+                            tokens.selected_fg
+                        } else {
+                            visuals.text_color()
+                        };
+                        ui.painter().rect(
+                            rect,
+                            theme::CONTROL_CORNER_RADIUS,
+                            bg,
+                            stroke,
+                            egui::StrokeKind::Inside,
+                        );
+                        let swatch = Rect::from_min_size(
+                            Pos2::new(rect.left() + theme::SPACE_MD, rect.center().y - 9.0),
+                            Vec2::splat(18.0),
+                        );
+                        ui.painter().rect(
+                            swatch,
+                            theme::CONTROL_CORNER_RADIUS,
+                            pal.bg,
+                            Stroke::new(1.0, pal.border),
+                            egui::StrokeKind::Inside,
+                        );
+                        ui.painter().text(
+                            swatch.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "x",
+                            egui::FontId::proportional(10.0),
+                            pal.ink,
+                        );
+                        ui.painter().text(
+                            Pos2::new(swatch.right() + theme::SPACE_SM, rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            preset.label(),
+                            egui::TextStyle::Body.resolve(ui.style()),
+                            fg,
+                        );
+                    }
+                    response
+                });
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::Role::RadioButton,
+                        ui.is_enabled(),
+                        selected,
+                        preset.label(),
+                    )
+                });
+                if response.clicked() && *current != preset {
+                    *current = preset;
+                    changed = true;
+                }
+            }
+        });
+        changed
+    }
+
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        let tokens = ThemeTokens::from_ui(ui);
         if ui.button("← Back to equation").clicked() {
             self.tab = 0;
         }
-        ui.add_space(10.0);
+        ui.add_space(theme::SPACE_MD);
         ui.heading("Settings");
-        ui.add_space(12.0);
-        ui.group(|ui| {
-            ui.set_min_width(ui.available_width().min(520.0));
-            ui.label(egui::RichText::new("Canvas zoom").strong());
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.scope(|ui| {
-                    ui.spacing_mut().slider_width = 220.0;
-                    let widgets = &mut ui.visuals_mut().widgets;
-                    for state in [
-                        &mut widgets.noninteractive,
-                        &mut widgets.inactive,
-                        &mut widgets.hovered,
-                        &mut widgets.active,
-                        &mut widgets.open,
-                    ] {
-                        state.corner_radius = egui::CornerRadius::same(4);
-                    }
-                    let zoom_changed = ui
-                        .add(
-                            egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
-                                .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
-                                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
-                        )
-                        .changed();
-                    if zoom_changed {
+        ui.add_space(theme::SPACE_LG);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            tokens.group_frame().show(ui, |ui| {
+                ui.set_min_width(ui.available_width().min(540.0));
+                ui.label(egui::RichText::new("Canvas zoom").strong());
+                ui.add_space(theme::SPACE_XS);
+                ui.horizontal(|ui| {
+                    ui.scope(|ui| {
+                        ui.spacing_mut().slider_width = 220.0;
+                        let zoom_changed = ui
+                            .add(
+                                egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
+                                    .handle_shape(egui::style::HandleShape::Rect {
+                                        aspect_ratio: 1.0,
+                                    })
+                                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
+                            )
+                            .changed();
+                        if zoom_changed {
+                            self.persisted.zoom = self.zoom;
+                            self.settings_dirty = true;
+                        }
+                    });
+                    if ui.button("Reset (200%)").clicked() {
+                        self.zoom = settings::DEFAULT_ZOOM;
                         self.persisted.zoom = self.zoom;
                         self.settings_dirty = true;
                     }
                 });
-                if ui.button("Reset (200%)").clicked() {
-                    self.zoom = settings::DEFAULT_ZOOM;
-                    self.persisted.zoom = self.zoom;
+            });
+            ui.add_space(theme::SPACE_MD);
+            tokens.group_frame().show(ui, |ui| {
+                ui.set_min_width(ui.available_width().min(540.0));
+                ui.label(egui::RichText::new("Appearance").strong());
+                ui.add_space(theme::SPACE_XS);
+                let is_dark = ui.visuals().dark_mode;
+                ui.horizontal(|ui| {
+                    ui.label(if is_dark {
+                        "Current theme: Dark mode"
+                    } else {
+                        "Current theme: Light mode"
+                    });
+                    ui.add_space(theme::SPACE_MD);
+                    let toggle_label = if is_dark {
+                        "Switch to Light mode"
+                    } else {
+                        "Switch to Dark mode"
+                    };
+                    if ui.button(toggle_label).clicked() {
+                        let next = if is_dark {
+                            egui::Theme::Light
+                        } else {
+                            egui::Theme::Dark
+                        };
+                        ui.ctx().set_theme(next);
+                        self.persisted.theme = ThemeMode::from_egui_theme(next);
+                        self.settings_dirty = true;
+                    }
+                });
+                ui.add_space(theme::SPACE_MD);
+                ui.label(egui::RichText::new("Equation canvas").strong());
+                ui.add_space(theme::SPACE_XS);
+                if Self::canvas_preset_picker(
+                    ui,
+                    "Light mode canvas",
+                    theme::LIGHT_CANVAS_PRESETS,
+                    false,
+                    &mut self.canvas_light,
+                ) {
+                    self.persisted.canvas_light = self.canvas_light;
                     self.settings_dirty = true;
                 }
-            });
-        });
-        ui.add_space(10.0);
-        ui.group(|ui| {
-            ui.set_min_width(ui.available_width().min(520.0));
-            ui.label(egui::RichText::new("Appearance").strong());
-            ui.add_space(4.0);
-            let is_dark = ui.visuals().dark_mode;
-            ui.horizontal(|ui| {
-                ui.label(if is_dark {
-                    "Current theme: Dark mode"
-                } else {
-                    "Current theme: Light mode"
-                });
-                ui.add_space(8.0);
-                let toggle_label = if is_dark {
-                    "Switch to Light mode"
-                } else {
-                    "Switch to Dark mode"
-                };
-                if ui.button(toggle_label).clicked() {
-                    let next = if is_dark {
-                        egui::Theme::Light
-                    } else {
-                        egui::Theme::Dark
-                    };
-                    ui.ctx().set_theme(next);
-                    self.persisted.theme = ThemeMode::from_egui_theme(next);
+                ui.add_space(theme::SPACE_MD);
+                if Self::canvas_preset_picker(
+                    ui,
+                    "Dark mode canvas",
+                    theme::DARK_CANVAS_PRESETS,
+                    true,
+                    &mut self.canvas_dark,
+                ) {
+                    self.persisted.canvas_dark = self.canvas_dark;
                     self.settings_dirty = true;
                 }
             });
@@ -3104,9 +3290,9 @@ impl App {
         if ui.button("← Back to equation").clicked() {
             self.tab = 0;
         }
-        ui.add_space(10.0);
+        ui.add_space(theme::SPACE_MD);
         ui.heading("About EqnTide");
-        ui.add_space(12.0);
+        ui.add_space(theme::SPACE_LG);
         let logo = self.logo_texture.get_or_insert_with(|| {
             let bytes = include_bytes!("../../assets/icons/icon.png");
             let pixels = image::load_from_memory(bytes)
@@ -3122,21 +3308,21 @@ impl App {
         ui.horizontal(|ui| {
             ui.add(
                 egui::Image::new((logo.id(), Vec2::splat(72.0)))
-                    .corner_radius(egui::CornerRadius::same(12)),
+                    .corner_radius(theme::SURFACE_CORNER_RADIUS),
             );
-            ui.add_space(12.0);
+            ui.add_space(theme::SPACE_LG);
             ui.vertical(|ui| {
                 ui.heading("EqnTide");
                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                 ui.label(env!("CARGO_PKG_DESCRIPTION"));
             });
         });
-        ui.add_space(14.0);
+        ui.add_space(theme::SPACE_XL);
         ui.separator();
-        ui.add_space(10.0);
+        ui.add_space(theme::SPACE_MD);
         egui::Grid::new("about-info")
             .num_columns(2)
-            .spacing([16.0, 8.0])
+            .spacing([theme::SPACE_XL, theme::SPACE_MD])
             .show(ui, |ui| {
                 ui.strong("Author:");
                 ui.label(env!("CARGO_PKG_AUTHORS"));
@@ -3181,9 +3367,15 @@ impl App {
                     }
                     ui.add_enabled_ui(!self.busy && !self.batch_running, |ui| {
                         ui.horizontal(|ui| {
-                            if ui.button("Save").clicked() { self.finish(true); }
-                            if ui.button("Discard / cancel session").clicked() { self.finish(false); }
-                            if ui.button("Continue editing").clicked() { self.pending = None; }
+                            if Self::primary_button(ui, true, "Save").clicked() {
+                                self.finish(true);
+                            }
+                            if ui.button("Discard / cancel session").clicked() {
+                                self.finish(false);
+                            }
+                            if ui.button("Continue editing").clicked() {
+                                self.pending = None;
+                            }
                         });
                     });
                 });
@@ -3808,12 +4000,8 @@ mod tests {
                         a.session = Some("office".into());
                     }
                     let ctx = egui::Context::default();
+                    ThemeTokens::apply_style(&ctx);
                     ctx.set_theme(theme);
-                    // Match the desktop's padding: taller buttons used to misalign earlier labels.
-                    ctx.style_mut_of(theme, |style| {
-                        style.spacing.item_spacing = Vec2::new(8.0, 8.0);
-                        style.spacing.button_padding = Vec2::new(10.0, 7.0);
-                    });
                     let screen = Rect::from_min_size(Pos2::ZERO, size);
                     // Run twice to cover initial panel sizing and the settled layout.
                     for _ in 0..2 {
@@ -3861,10 +4049,12 @@ mod tests {
                                 );
                             }
                             if text == "source-marker" {
+                                let pal = a.active_canvas_palette(theme == egui::Theme::Dark);
                                 for painted in &output.shapes {
                                     if let egui::Shape::Rect(frame) = &painted.shape {
-                                        if frame.fill == Color32::WHITE
-                                            && frame.stroke.color == Color32::LIGHT_GRAY
+                                        if frame.fill == pal.bg
+                                            && frame.stroke.color == pal.border
+                                            && frame.corner_radius == theme::SURFACE_CORNER_RADIUS
                                             && frame.rect.width() > 100.0
                                         {
                                             assert!(
@@ -4319,27 +4509,20 @@ mod tests {
                         scroll.content_size,
                         scroll.inner_rect
                     );
+                    let pal = a.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
                     let canvas = output
                         .shapes
                         .iter()
                         .find_map(|s| match &s.shape {
                             egui::Shape::Rect(r)
-                                if r.fill == Color32::WHITE
-                                    && r.stroke.color == Color32::LIGHT_GRAY =>
+                                if r.fill == pal.bg && r.stroke.color == pal.border =>
                             {
                                 Some(r)
                             }
                             _ => None,
                         })
                         .unwrap();
-                    assert_eq!(
-                        canvas.corner_radius,
-                        ctx.style_of(ctx.theme())
-                            .visuals
-                            .widgets
-                            .inactive
-                            .corner_radius
-                    );
+                    assert_eq!(canvas.corner_radius, theme::SURFACE_CORNER_RADIUS);
                 }
             }
         }
@@ -4385,8 +4568,9 @@ mod tests {
             error.pos.y > 610.0,
             "error must be in the bottom status bar"
         );
+        let pal = a.active_canvas_palette(true);
         assert!(output.shapes.iter().any(|s| matches!(&s.shape,
-            egui::Shape::Rect(r) if r.fill == Color32::WHITE && r.rect.width() > 200.0)));
+            egui::Shape::Rect(r) if r.fill == pal.bg && r.rect.width() > 200.0)));
         assert_eq!(a.editor.math(), before);
         assert!(a.draft_dirty);
     }
@@ -4672,10 +4856,14 @@ mod tests {
     fn palette_icons_use_theme_contrast_and_physical_dpi() {
         let mut a = app();
         for (theme, expected_tint) in [
-            (egui::Theme::Dark, Color32::WHITE),
-            (egui::Theme::Light, Color32::BLACK),
+            (egui::Theme::Dark, ThemeTokens::for_mode(true).text_primary),
+            (
+                egui::Theme::Light,
+                ThemeTokens::for_mode(false).text_primary,
+            ),
         ] {
             let ctx = egui::Context::default();
+            ThemeTokens::apply_style(&ctx);
             ctx.set_theme(theme);
             ctx.set_pixels_per_point(1.5);
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
@@ -4688,11 +4876,11 @@ mod tests {
                 }),
                 _ => false,
             });
+            output.textures_delta.clear();
             assert!(
                 tinted_match,
                 "expected palette icons to tint {expected_tint:?} in {theme:?}"
             );
-            output.textures_delta.clear();
         }
     }
 
@@ -4849,9 +5037,13 @@ mod tests {
         assert!((a.palette_ppp - 2.0).abs() < f32::EPSILON);
 
         for (theme, expected_tint) in [
-            (egui::Theme::Dark, Color32::WHITE),
-            (egui::Theme::Light, Color32::BLACK),
+            (egui::Theme::Dark, ThemeTokens::for_mode(true).text_primary),
+            (
+                egui::Theme::Light,
+                ThemeTokens::for_mode(false).text_primary,
+            ),
         ] {
+            ThemeTokens::apply_style(&ctx);
             ctx.set_theme(theme);
             let mut tint = None;
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -5120,6 +5312,7 @@ mod tests {
             recent_palette: vec![r"\alpha".into(), r"\frac{#?}{#?}".into()],
             batch_target: 2,
             batch_overwrite: true,
+            ..Settings::default()
         };
         saved.save_to_path(&path).unwrap();
 
@@ -5399,5 +5592,181 @@ mod tests {
         run_ui_pass_frame(&fresh_ctx, &mut reloaded, click_events(reset_pos));
         assert_eq!(reloaded.zoom, settings::DEFAULT_ZOOM);
         assert_eq!(Settings::load_from_path(&path).zoom, settings::DEFAULT_ZOOM);
+    }
+
+    #[test]
+    fn modern_theme_applies_zero_hover_expansion_radii_and_tinted_sidebar_selection() {
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let dark_mode = theme == egui::Theme::Dark;
+            let tokens = ThemeTokens::for_mode(dark_mode);
+            let ctx = egui::Context::default();
+            ThemeTokens::apply_style(&ctx);
+            ctx.set_theme(theme);
+
+            let mut a = app();
+            let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+
+            // Selected sidebar category ("Fractions") displays tinted-accent surface and matching icon tint.
+            let sidebar_atlas = a.sidebar_atlas.as_ref().unwrap();
+            let fractions_uv = sidebar_atlas.entries["Fractions"].uv;
+            let sidebar_tex = sidebar_atlas.texture.id();
+            assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+                egui::Shape::Rect(r) if r.fill == tokens.selected_bg && r.stroke.color == tokens.selected_border)));
+            assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+                egui::Shape::Rect(r) if r.brush.as_ref().is_some_and(|b|
+                    b.fill_texture_id == sidebar_tex && (b.uv.min - fractions_uv.min).length() < 1e-4)
+                    && r.fill == tokens.selected_fg)));
+
+            // Primary Save button uses primary_bg at rest, primary_hover_bg on hover without growing, and disabled fill when disabled.
+            let save_pos = find_text_center(&out, |t| t == "Save MathML (Ctrl+S)");
+            let save_rest = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.fill == tokens.primary_bg && r.rect.contains(save_pos) =>
+                    {
+                        Some((r.rect, r.corner_radius))
+                    }
+                    _ => None,
+                })
+                .expect("Save button rest rect");
+            assert_eq!(save_rest.1, theme::CONTROL_CORNER_RADIUS);
+
+            let hover_out =
+                run_ui_pass_frame(&ctx, &mut a, vec![egui::Event::PointerMoved(save_pos)]);
+            let save_hover = hover_out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.fill == tokens.primary_hover_bg && r.rect.contains(save_pos) =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .expect("Save button hover rect");
+            assert_eq!(save_hover, save_rest.0);
+
+            // Disabled Save button suppresses primary/hover blue emphasis.
+            a.draft_dirty = true;
+            let disabled_out =
+                run_ui_pass_frame(&ctx, &mut a, vec![egui::Event::PointerMoved(save_pos)]);
+            assert!(disabled_out.shapes.iter().any(|s| matches!(&s.shape,
+                egui::Shape::Rect(r)
+                    if r.rect.contains(save_pos)
+                        && r.fill != tokens.primary_bg
+                        && r.fill != tokens.primary_hover_bg)));
+            a.draft_dirty = false;
+
+            // Settings zoom slider shares CONTROL_CORNER_RADIUS (no 4px override).
+            a.tab = 2;
+            let _ = run_ui_pass_frame(&ctx, &mut a, vec![]);
+            let style = ctx.style_of(theme);
+            assert_eq!(
+                style.visuals.widgets.inactive.corner_radius,
+                theme::CONTROL_CORNER_RADIUS
+            );
+            assert_eq!(style.visuals.widgets.hovered.expansion, 0.0);
+        }
+    }
+
+    #[test]
+    fn canvas_presets_switch_adapt_ink_and_persist_per_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app().with_settings_path(path.clone(), Some(&ctx));
+        a.load_math("<math><mi>x</mi></math>", None, None);
+
+        // Render preview texture for ink verification.
+        let (mask, preview) =
+            eqntide::render::render_interactive_alpha_scaled(&a.editor.math(), a.font_pt, 1.0)
+                .unwrap();
+        let img = egui::ColorImage {
+            size: [mask.width as usize, mask.height as usize],
+            source_size: Vec2::new(mask.width as f32, mask.height as f32),
+            pixels: mask
+                .alpha
+                .into_iter()
+                .map(Color32::from_white_alpha)
+                .collect(),
+        };
+        a.texture = Some(ctx.load_texture("eq-test", img, egui::TextureOptions::LINEAR));
+        a.rendered = Some(Rendered {
+            placeholders: Vec::new(),
+            preview,
+            image: egui::ColorImage::filled([1, 1], Color32::WHITE),
+        });
+        a.requested_key = a.render_key;
+
+        let has_formula_ink = |output: &egui::FullOutput, tex_id: egui::TextureId, ink: Color32| {
+            output.shapes.iter().any(|s| match &s.shape {
+                egui::Shape::Rect(r) => {
+                    r.fill == ink
+                        && r.brush
+                            .as_ref()
+                            .is_some_and(|b| b.fill_texture_id == tex_id)
+                }
+                egui::Shape::Mesh(m) => {
+                    m.texture_id == tex_id && m.vertices.iter().all(|v| v.color == ink)
+                }
+                _ => false,
+            })
+        };
+
+        // Default in Dark mode still uses SoftPaper (light paper background + dark ink) on both canvas and LaTeX source.
+        ctx.set_theme(egui::Theme::Dark);
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let tex_id = a.texture.as_ref().unwrap().id();
+        let latex_rect = ctx
+            .read_response(egui::Id::unique("latex-source"))
+            .unwrap()
+            .rect;
+        let soft_dark = CanvasPreset::SoftPaper.palette(true);
+        assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.fill == soft_dark.bg && r.stroke.color == soft_dark.border)));
+        assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.fill == soft_dark.bg && r.rect == latex_rect)));
+        assert!(has_formula_ink(&out, tex_id, soft_dark.ink));
+
+        // Open Settings and pick CoolSlate for Light mode and DimSlate for Dark mode.
+        a.tab = 2;
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let cool_pos = find_text_center(&out, |t| t == CanvasPreset::CoolSlate.label());
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(cool_pos));
+        let dim_pos = find_text_center(&out, |t| t == CanvasPreset::DimSlate.label());
+        run_ui_pass_frame(&ctx, &mut a, click_events(dim_pos));
+
+        let on_disk = Settings::load_from_path(&path);
+        assert_eq!(on_disk.canvas_light, CanvasPreset::CoolSlate);
+        assert_eq!(on_disk.canvas_dark, CanvasPreset::DimSlate);
+
+        // Verify Dark mode now uses DimSlate surface + light ink, and Light mode uses CoolSlate surface + dark ink.
+        a.tab = 0;
+        let dark_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let dim_pal = CanvasPreset::DimSlate.palette(true);
+        assert!(dark_out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.fill == dim_pal.bg && r.stroke.color == dim_pal.border)));
+        assert!(dark_out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.fill == dim_pal.bg && r.rect == latex_rect)));
+        assert!(has_formula_ink(&dark_out, tex_id, dim_pal.ink));
+
+        ctx.set_theme(egui::Theme::Light);
+        let light_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let cool_pal = CanvasPreset::CoolSlate.palette(false);
+        assert!(light_out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.fill == cool_pal.bg && r.stroke.color == cool_pal.border)));
+        assert!(light_out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.fill == cool_pal.bg && r.rect == latex_rect)));
+        assert!(has_formula_ink(&light_out, tex_id, cool_pal.ink));
+
+        // Reload in a fresh App instance and confirm presets restored.
+        let fresh_ctx = egui::Context::default();
+        let reloaded = app().with_settings_path(path, Some(&fresh_ctx));
+        assert_eq!(reloaded.canvas_light, CanvasPreset::CoolSlate);
+        assert_eq!(reloaded.canvas_dark, CanvasPreset::DimSlate);
     }
 }
