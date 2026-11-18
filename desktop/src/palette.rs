@@ -219,7 +219,7 @@ mod tests {
         for group in UI_GROUPS {
             let math = icon_math(group).unwrap_or_else(|e| panic!("{}: {e}", group.id));
             assert_eq!(math.tag, "math", "{}", group.id);
-            let mask = eqntide::render_alpha_fit(&math, 34.0, 22.0)
+            let mask = eqntide::render_alpha_at(&math, 18.0, 54.0, 32.0)
                 .unwrap_or_else(|e| panic!("{}: {e}", group.id));
             assert!(
                 mask.width > 0 && mask.height > 0 && mask.alpha.iter().any(|&a| a > 0),

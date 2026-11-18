@@ -71,6 +71,26 @@ pub struct AlphaMask {
 /// Lay out `math` at standard proportions and scale its vector geometry directly
 /// to fit `(max_w_px, max_h_px)` in exact device pixels (1 texel = 1 pixel).
 pub fn render_alpha_fit(math: &MathNode, max_w_px: f32, max_h_px: f32) -> Result<AlphaMask> {
+    render_alpha_scaled(math, None, max_w_px, max_h_px)
+}
+
+/// Lay out `math` at `target_em_px` pixels per em, scaling down only when its
+/// bounds exceed `(max_w_px, max_h_px)`.
+pub fn render_alpha_at(
+    math: &MathNode,
+    target_em_px: f32,
+    max_w_px: f32,
+    max_h_px: f32,
+) -> Result<AlphaMask> {
+    render_alpha_scaled(math, Some(target_em_px), max_w_px, max_h_px)
+}
+
+fn render_alpha_scaled(
+    math: &MathNode,
+    target_em_px: Option<f32>,
+    max_w_px: f32,
+    max_h_px: f32,
+) -> Result<AlphaMask> {
     let (mut b, em) = layout::layout_math(math, 12.0)?;
     let f = fonts();
     let (min_x, max_x, min_y, max_y) = b.ink_bounds(f);
@@ -83,7 +103,11 @@ pub fn render_alpha_fit(math: &MathNode, max_w_px: f32, max_h_px: f32) -> Result
     let pad = 1.0f32;
     let avail_w = (max_w_px - 2.0 * pad - 0.01).max(1.0);
     let avail_h = (max_h_px - 2.0 * pad - 0.01).max(1.0);
-    let scale = (avail_w / box_w).min(avail_h / box_h);
+    let fit_scale = (avail_w / box_w).min(avail_h / box_h);
+    let scale = match target_em_px {
+        Some(target) if target.is_finite() && target > 0.0 => fit_scale.min(target / em),
+        _ => fit_scale,
+    };
 
     b.w *= scale;
     b.asc *= scale;
@@ -632,5 +656,25 @@ mod interactive_tests {
             (mid_arrow - mid_ext).abs() < 1.0 && (mid_arrow - 25.9).abs() < 1.0,
             "arrow axis ({mid_arrow}) and extender axis ({mid_ext}) should match (~25.9px at 100px em)"
         );
+    }
+
+    #[test]
+    fn render_alpha_at_caps_short_symbols_without_upscaling() {
+        let star = MathNode::with_children("math", vec![MathNode::leaf("mo", "★")]);
+        let alpha = MathNode::with_children("math", vec![MathNode::leaf("mi", "α")]);
+        let frac = crate::service::parse_latex_to_mathml(r"\frac{x}{y}").unwrap();
+
+        let fit_star = render_alpha_fit(&star, 54.0, 32.0).unwrap();
+        let at_star = render_alpha_at(&star, 15.0, 54.0, 32.0).unwrap();
+        let at_alpha = render_alpha_at(&alpha, 15.0, 54.0, 32.0).unwrap();
+        let at_frac = render_alpha_at(&frac, 15.0, 54.0, 32.0).unwrap();
+
+        assert!(at_star.height < fit_star.height);
+        assert!(at_star.height <= 20 && at_alpha.height <= 20);
+        assert!((at_star.height as i32 - at_alpha.height as i32).abs() <= 2);
+        assert!(at_frac.width <= 54 && at_frac.height <= 32);
+        assert!(at_star.alpha.iter().any(|&a| a > 0));
+        assert!(at_alpha.alpha.iter().any(|&a| a > 0));
+        assert!(at_frac.alpha.iter().any(|&a| a > 0));
     }
 }

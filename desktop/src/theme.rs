@@ -13,6 +13,11 @@ pub(crate) const RADIUS_SURFACE: u8 = 8;
 pub(crate) const CONTROL_CORNER_RADIUS: CornerRadius = CornerRadius::same(RADIUS_CONTROL);
 pub(crate) const SURFACE_CORNER_RADIUS: CornerRadius = CornerRadius::same(RADIUS_SURFACE);
 
+pub(crate) const UI_FONT_SIZE: f32 = 13.0;
+pub(crate) const BUTTON_HEIGHT: f32 = 30.0;
+pub(crate) const SIDEBAR_TAB_HEIGHT: f32 = 34.0;
+pub(crate) const COMPACT_BUTTON_HEIGHT: f32 = 24.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ThemeTokens {
     pub(crate) dark_mode: bool,
@@ -108,6 +113,24 @@ impl ThemeTokens {
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             let tokens = Self::for_mode(theme == egui::Theme::Dark);
             egui_ctx.style_mut_of(theme, |style| {
+                style.text_styles = [
+                    (egui::TextStyle::Small, egui::FontId::proportional(11.0)),
+                    (
+                        egui::TextStyle::Body,
+                        egui::FontId::proportional(UI_FONT_SIZE),
+                    ),
+                    (
+                        egui::TextStyle::Button,
+                        egui::FontId::proportional(UI_FONT_SIZE),
+                    ),
+                    (egui::TextStyle::Heading, egui::FontId::proportional(18.0)),
+                    (
+                        egui::TextStyle::Monospace,
+                        egui::FontId::monospace(UI_FONT_SIZE),
+                    ),
+                ]
+                .into();
+                style.drag_value_text_style = egui::TextStyle::Button;
                 style.spacing.item_spacing = Vec2::splat(SPACE_MD);
                 style.spacing.button_padding = Vec2::new(10.0, 6.0);
                 style.interaction.show_tooltips_only_when_still = false;
@@ -389,6 +412,15 @@ mod tests {
 
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             let style = ctx.style_of(theme);
+            assert_eq!(
+                style.text_styles.get(&egui::TextStyle::Button),
+                Some(&egui::FontId::proportional(UI_FONT_SIZE))
+            );
+            assert_eq!(
+                style.text_styles.get(&egui::TextStyle::Body),
+                Some(&egui::FontId::proportional(UI_FONT_SIZE))
+            );
+            assert_eq!(style.drag_value_text_style, egui::TextStyle::Button);
             assert_eq!(style.visuals.window_corner_radius, SURFACE_CORNER_RADIUS);
             assert_eq!(style.visuals.menu_corner_radius, SURFACE_CORNER_RADIUS);
             assert_eq!(

@@ -26,10 +26,12 @@ use std::{
 
 const CONTENT_PADDING: i8 = theme::SPACE_MD as i8;
 const FONT_SIZE_CONTROL_WIDTH: f32 = 96.0;
-const FOOTER_CONTROL_HEIGHT: f32 = 30.0;
+const FOOTER_CONTROL_HEIGHT: f32 = theme::BUTTON_HEIGHT;
 pub(crate) const MIN_WINDOW_SIZE: [f32; 2] = [1040.0, 560.0];
-const PALETTE_BUTTON_SIZE: Vec2 = Vec2::new(44.0, 31.0);
-const PALETTE_GAP: f32 = 6.0;
+const PALETTE_BUTTON_SIZE: Vec2 = Vec2::new(46.0, 32.0);
+const PALETTE_GAP: f32 = theme::SPACE_XS;
+const SIDEBAR_ICON_TARGET_EM: f32 = 18.0;
+const PALETTE_ICON_TARGET_EM: f32 = 17.0;
 const PALETTE_HEIGHT: f32 =
     3.0 * PALETTE_BUTTON_SIZE.y + 2.0 * PALETTE_GAP + CONTENT_PADDING as f32;
 const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";
@@ -465,7 +467,22 @@ impl App {
                 widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
                 widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text_disabled);
             }
-            ui.add_enabled(enabled, egui::Button::new(label))
+            ui.add_enabled(
+                enabled,
+                egui::Button::new(label).min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+            )
+        })
+        .inner
+    }
+
+    fn standard_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+        ui.add(egui::Button::new(label).min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)))
+    }
+
+    fn compact_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+        ui.scope(|ui| {
+            ui.spacing_mut().button_padding = Vec2::new(theme::SPACE_MD, 3.0);
+            ui.add(egui::Button::new(label).min_size(Vec2::new(0.0, theme::COMPACT_BUTTON_HEIGHT)))
         })
         .inner
     }
@@ -1300,7 +1317,7 @@ impl App {
                         }
                         if ui
                             .add(
-                                egui::Button::new("↶")
+                                egui::Button::new(egui::RichText::new("↶").size(15.0))
                                     .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
                             )
                             .on_hover_text("Undo (Ctrl+Z)")
@@ -1314,7 +1331,7 @@ impl App {
                         }
                         if ui
                             .add(
-                                egui::Button::new("↷")
+                                egui::Button::new(egui::RichText::new("↷").size(15.0))
                                     .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
                             )
                             .on_hover_text("Redo (Ctrl+Y)")
@@ -1340,7 +1357,7 @@ impl App {
         const SIDEBAR_BUTTON_HEIGHT: f32 = 42.0;
         let tokens = ThemeTokens::from_ui(ui);
         egui::Panel::bottom("sidebar-batch")
-            .exact_size(142.0)
+            .exact_size(130.0)
             .frame(
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, theme::SPACE_MD as i8)),
             )
@@ -1350,7 +1367,10 @@ impl App {
                 for (tab, label) in [(1, "Batch DOCX"), (2, "Settings"), (3, "About")] {
                     let selected = self.tab == tab;
                     if Self::with_selectable_style(ui, selected, |ui| {
-                        ui.add_sized([ui.available_width(), 38.0], egui::Button::new(label))
+                        ui.add_sized(
+                            [ui.available_width(), theme::SIDEBAR_TAB_HEIGHT],
+                            egui::Button::new(label),
+                        )
                     })
                     .clicked()
                     {
@@ -1484,7 +1504,7 @@ impl App {
             ui.add_space(theme::SPACE_MD);
             ui.horizontal(|ui| {
                 insert = Self::primary_button(ui, true, "Insert matrix").clicked();
-                if ui.button("Cancel").clicked() {
+                if Self::standard_button(ui, "Cancel").clicked() {
                     ui.close();
                 }
             });
@@ -1510,12 +1530,11 @@ impl App {
             }
             let ready = if self.bridge_ready { "●" } else { "○" };
             ui.label(ready).on_hover_text(&self.bridge_status);
-            if !self.bridge_ready && ui.small_button("Retry").clicked() {
+            if !self.bridge_ready && Self::compact_button(ui, "Retry").clicked() {
                 runtime::start_bridge(self.tx.clone());
             }
             if !self.queue.is_empty()
-                && ui
-                    .small_button(format!("Next session ({})", self.queue.len()))
+                && Self::compact_button(ui, &format!("Next session ({})", self.queue.len()))
                     .clicked()
             {
                 self.pending = Some(Intent::Next);
@@ -1636,7 +1655,7 @@ impl App {
                         .num_columns(columns)
                         .spacing(Vec2::splat(PALETTE_GAP))
                         .show(ui, |ui| {
-                            ui.spacing_mut().button_padding = Vec2::new(5.0, 4.0);
+                            ui.spacing_mut().button_padding = Vec2::splat(3.0);
                             ui.spacing_mut().item_spacing = Vec2::splat(PALETTE_GAP);
                             let ppp = ui.ctx().pixels_per_point();
                             self.sync_atlas_dpi(ppp);
@@ -1740,7 +1759,12 @@ impl App {
             let Ok(math) = palette::icon_math(group) else {
                 continue;
             };
-            let Ok(mask) = eqntide::render_alpha_fit(&math, 46.0 * ppp, 28.0 * ppp) else {
+            let Ok(mask) = eqntide::render_alpha_at(
+                &math,
+                SIDEBAR_ICON_TARGET_EM * ppp,
+                54.0 * ppp,
+                32.0 * ppp,
+            ) else {
                 continue;
             };
             if mask.width > 0 && mask.height > 0 {
@@ -1761,7 +1785,12 @@ impl App {
             let Ok(math) = palette::preview_template(source) else {
                 continue;
             };
-            let Ok(mask) = eqntide::render_alpha_fit(&math, 34.0 * ppp, 22.0 * ppp) else {
+            let Ok(mask) = eqntide::render_alpha_at(
+                &math,
+                PALETTE_ICON_TARGET_EM * ppp,
+                40.0 * ppp,
+                26.0 * ppp,
+            ) else {
                 continue;
             };
             if mask.width > 0 && mask.height > 0 {
@@ -2035,7 +2064,7 @@ impl App {
                                 ("+ col", true, true),
                                 ("− col", true, false),
                             ] {
-                                if ui.small_button(label).clicked() {
+                                if Self::compact_button(ui, label).clicked() {
                                     let changed = if grow {
                                         self.editor.grow_matrix(column)
                                     } else {
@@ -2974,7 +3003,7 @@ impl App {
     }
     fn batch_ui(&mut self, ui: &mut egui::Ui) {
         let tokens = ThemeTokens::from_ui(ui);
-        if ui.button("← Back to equation").clicked() {
+        if Self::standard_button(ui, "← Back to equation").clicked() {
             self.tab = 0;
         }
         ui.add_space(theme::SPACE_MD);
@@ -2988,7 +3017,7 @@ impl App {
         ui.add_space(theme::SPACE_XS);
         ui.add_enabled_ui(!self.batch_running, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("Add DOCX files…").clicked() {
+                if Self::standard_button(ui, "Add DOCX files…").clicked() {
                     let tx = self.tx.clone();
                     std::thread::spawn(move || {
                         if let Some(paths) = rfd::FileDialog::new()
@@ -2999,7 +3028,7 @@ impl App {
                         }
                     });
                 }
-                if ui.button("Clear list").clicked() {
+                if Self::standard_button(ui, "Clear list").clicked() {
                     self.files.clear();
                     self.batch_logs.clear();
                 }
@@ -3050,13 +3079,14 @@ impl App {
             if ui
                 .add_enabled(
                     self.batch_running,
-                    egui::Button::new("Stop after current file"),
+                    egui::Button::new("Stop after current file")
+                        .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
                 )
                 .clicked()
             {
                 self.stop.store(true, Ordering::Relaxed);
             }
-            if ui.button("Open output folder").clicked() {
+            if Self::standard_button(ui, "Open output folder").clicked() {
                 if let Some(path) = self.files.first() {
                     if let Err(e) = runtime::open_folder(path) {
                         self.status = e;
@@ -3194,7 +3224,7 @@ impl App {
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         let tokens = ThemeTokens::from_ui(ui);
-        if ui.button("← Back to equation").clicked() {
+        if Self::standard_button(ui, "← Back to equation").clicked() {
             self.tab = 0;
         }
         ui.add_space(theme::SPACE_MD);
@@ -3222,7 +3252,7 @@ impl App {
                             self.settings_dirty = true;
                         }
                     });
-                    if ui.button("Reset (200%)").clicked() {
+                    if Self::standard_button(ui, "Reset (200%)").clicked() {
                         self.zoom = settings::DEFAULT_ZOOM;
                         self.persisted.zoom = self.zoom;
                         self.settings_dirty = true;
@@ -3247,7 +3277,7 @@ impl App {
                     } else {
                         "Switch to Dark mode"
                     };
-                    if ui.button(toggle_label).clicked() {
+                    if Self::standard_button(ui, toggle_label).clicked() {
                         let next = if is_dark {
                             egui::Theme::Light
                         } else {
@@ -3287,7 +3317,7 @@ impl App {
     }
 
     fn about_ui(&mut self, ui: &mut egui::Ui) {
-        if ui.button("← Back to equation").clicked() {
+        if Self::standard_button(ui, "← Back to equation").clicked() {
             self.tab = 0;
         }
         ui.add_space(theme::SPACE_MD);
@@ -3361,7 +3391,7 @@ impl App {
                     }
                     if self.batch_running {
                         ui.label("A document is being converted. Stop the batch and wait before closing.");
-                        if ui.button("Stop batch").clicked() {
+                        if Self::standard_button(ui, "Stop batch").clicked() {
                             self.stop.store(true, Ordering::Relaxed);
                         }
                     }
@@ -3370,10 +3400,10 @@ impl App {
                             if Self::primary_button(ui, true, "Save").clicked() {
                                 self.finish(true);
                             }
-                            if ui.button("Discard / cancel session").clicked() {
+                            if Self::standard_button(ui, "Discard / cancel session").clicked() {
                                 self.finish(false);
                             }
-                            if ui.button("Continue editing").clicked() {
+                            if Self::standard_button(ui, "Continue editing").clicked() {
                                 self.pending = None;
                             }
                         });
@@ -5768,5 +5798,110 @@ mod tests {
         let reloaded = app().with_settings_path(path, Some(&fresh_ctx));
         assert_eq!(reloaded.canvas_light, CanvasPreset::CoolSlate);
         assert_eq!(reloaded.canvas_dark, CanvasPreset::DimSlate);
+    }
+
+    #[test]
+    fn sidebar_and_palette_icons_render_at_uniform_base_em_scale() {
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        a.category = "Scripts".into();
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+
+        let sidebar_atlas = a.sidebar_atlas.as_ref().unwrap();
+        let star_h = sidebar_atlas.entries[palette::RECENT_GROUP].display_size.y;
+        let ops_h = sidebar_atlas.entries["OperatorsAndRelations"]
+            .display_size
+            .y;
+        let greek_h = sidebar_atlas.entries["Greek"].display_size.y;
+        assert!(star_h <= 24.0);
+        assert!((star_h - ops_h).abs() <= 3.0);
+        assert!((ops_h - greek_h).abs() <= 3.0);
+
+        let scripts_items = palette::items_for_ui_group("Scripts", &[]);
+        let scripts_atlas = &a.palette_atlases["Scripts"];
+        let first_h = scripts_atlas.entries[scripts_items[0].2].display_size.y;
+        let second_h = scripts_atlas.entries[scripts_items[1].2].display_size.y;
+        assert!(first_h <= 26.0 && second_h <= 26.0);
+        assert!((first_h - second_h).abs() <= 2.0);
+
+        // Verify palette button frames share uniform 46x32 dimensions.
+        let scripts_tex = scripts_atlas.texture.id();
+        let icon_rects: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.brush
+                        .as_ref()
+                        .is_some_and(|b| b.fill_texture_id == scripts_tex) =>
+                {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!icon_rects.is_empty());
+        let first_icon = icon_rects[0];
+        let button_rect = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.brush.is_none()
+                        && r.rect.contains(first_icon.center())
+                        && (r.rect.width() - PALETTE_BUTTON_SIZE.x).abs() < 1.0 =>
+                {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .expect("palette tile rect");
+        assert!((button_rect.width() - PALETTE_BUTTON_SIZE.x).abs() < 1.0);
+        assert!((button_rect.height() - PALETTE_BUTTON_SIZE.y).abs() < 1.0);
+    }
+
+    #[test]
+    fn button_height_tiers_align_footer_tabs_and_compact_controls() {
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        a.category = "MatricesAndBoxes".into();
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+
+        let button_rect_around = |label: &str| -> Rect {
+            let pos = find_text_center(&out, |t| t == label);
+            out.shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.brush.is_none() && r.rect.contains(pos) && r.rect.height() <= 40.0 =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing button rect for {label}"))
+        };
+
+        // Footer standard buttons and DragValue share BUTTON_HEIGHT (30px).
+        let save_rect = button_rect_around("Save MathML (Ctrl+S)");
+        let undo_rect = button_rect_around("↶");
+        let redo_rect = button_rect_around("↷");
+        assert!((save_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
+        assert!((undo_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
+        assert!((redo_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
+
+        // Sidebar navigation tabs share SIDEBAR_TAB_HEIGHT (34px).
+        for tab_label in ["Batch DOCX", "Settings", "About"] {
+            let tab_rect = button_rect_around(tab_label);
+            assert!((tab_rect.height() - theme::SIDEBAR_TAB_HEIGHT).abs() <= 0.5);
+        }
+
+        // Compact matrix controls share COMPACT_BUTTON_HEIGHT (24px).
+        for matrix_label in ["+ row", "− row", "+ col", "− col"] {
+            let rect = button_rect_around(matrix_label);
+            assert!((rect.height() - theme::COMPACT_BUTTON_HEIGHT).abs() <= 0.5);
+        }
     }
 }
