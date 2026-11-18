@@ -34,6 +34,8 @@ const SIDEBAR_ICON_TARGET_EM: f32 = 18.0;
 const PALETTE_ICON_TARGET_EM: f32 = 17.0;
 const PALETTE_HEIGHT: f32 =
     3.0 * PALETTE_BUTTON_SIZE.y + 2.0 * PALETTE_GAP + CONTENT_PADDING as f32;
+const LATEX_PANEL_HEIGHT: f32 = 88.0;
+const LATEX_INPUT_HEIGHT: f32 = LATEX_PANEL_HEIGHT - CONTENT_PADDING as f32;
 const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";
 
 #[derive(Clone)]
@@ -2133,7 +2135,7 @@ impl App {
                 ui.add_enabled_ui(!self.draft_dirty, |ui| self.palette_ui(ui));
             });
         egui::Panel::bottom("latex-panel")
-            .exact_size(60.0)
+            .exact_size(LATEX_PANEL_HEIGHT)
             .show_separator_line(false)
             .frame(egui::Frame::NONE.inner_margin(egui::Margin {
                 top: CONTENT_PADDING,
@@ -2185,30 +2187,83 @@ impl App {
         self.sync_editor_focus(ui);
     }
 
+    fn configure_canvas_scroll_style(&self, ui: &mut egui::Ui, pal: CanvasPalette) {
+        ui.visuals_mut().widgets.inactive.bg_fill = pal.scroll_inactive;
+        ui.visuals_mut().widgets.inactive.fg_stroke.color = pal.scroll_inactive;
+        ui.visuals_mut().widgets.hovered.bg_fill = pal.scroll_hover;
+        ui.visuals_mut().widgets.hovered.fg_stroke.color = pal.scroll_hover;
+        ui.visuals_mut().widgets.active.bg_fill = pal.scroll_active;
+        ui.visuals_mut().widgets.active.fg_stroke.color = pal.scroll_active;
+        ui.visuals_mut().extreme_bg_color = pal.scroll_track;
+
+        let scroll = &mut ui.spacing_mut().scroll;
+        if matches!(
+            self.gpu_profile,
+            GpuProfile::VirtualGpu | GpuProfile::Software
+        ) {
+            scroll.dormant_handle_opacity = 0.85;
+            scroll.active_handle_opacity = 0.85;
+            scroll.interact_handle_opacity = 0.85;
+            scroll.dormant_background_opacity = 0.6;
+            scroll.active_background_opacity = 0.6;
+            scroll.interact_background_opacity = 0.6;
+            scroll.floating_allocated_width = scroll.bar_width;
+        } else {
+            scroll.dormant_handle_opacity = 0.5;
+            scroll.active_handle_opacity = 0.85;
+            scroll.interact_handle_opacity = 1.0;
+            scroll.dormant_background_opacity = 0.3;
+            scroll.active_background_opacity = 0.6;
+            scroll.interact_background_opacity = 0.85;
+        }
+    }
+
     fn latex_ui(&mut self, ui: &mut egui::Ui) {
         let pal = self.active_canvas_palette(ui.visuals().dark_mode);
-        let response = ui
-            .scope(|ui| {
-                ui.visuals_mut().extreme_bg_color = pal.bg;
-                ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0, pal.border);
-                ui.visuals_mut().widgets.hovered.bg_stroke = Stroke::new(1.0, pal.border);
-                ui.visuals_mut().widgets.active.bg_stroke = Stroke::new(1.0, pal.caret);
+        let latex_id = Self::editor_focus_id(StartupFocus::Latex);
+        let box_height = ui.available_height().min(LATEX_INPUT_HEIGHT).max(24.0);
+        let frame_resp = egui::Frame::new()
+            .fill(pal.bg)
+            .corner_radius(theme::CONTROL_CORNER_RADIUS)
+            .show(ui, |ui| {
+                self.configure_canvas_scroll_style(ui, pal);
+                ui.spacing_mut().scroll.floating_allocated_width = 0.0;
+                ui.spacing_mut().scroll.bar_outer_margin = 4.0;
                 ui.visuals_mut().text_cursor.stroke = Stroke::new(1.5, pal.caret);
                 ui.visuals_mut().selection.bg_fill = pal.selection_bg;
                 ui.visuals_mut().selection.stroke = Stroke::new(1.0, pal.caret);
-                ui.add_sized(
-                    [ui.available_width(), 48.0],
-                    egui::TextEdit::multiline(&mut self.latex)
-                        .desired_rows(2)
-                        .id(egui::Id::unique("latex-source"))
-                        .desired_width(f32::INFINITY)
-                        .font(egui::TextStyle::Monospace)
-                        .text_color(pal.ink)
-                        .background_color(pal.bg),
-                )
-            })
-            .inner;
-        if response.changed() {
+                egui::ScrollArea::vertical()
+                    .id_salt("latex-scroll")
+                    .max_height(box_height)
+                    .min_scrolled_height(box_height)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let width = ui.available_width();
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.latex)
+                                .id(latex_id)
+                                .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                                    left: 8,
+                                    right: 12,
+                                    top: 6,
+                                    bottom: 6,
+                                }))
+                                .desired_rows(1)
+                                .desired_width(f32::INFINITY)
+                                .min_size(Vec2::new(width, box_height))
+                                .font(egui::TextStyle::Monospace)
+                                .text_color(pal.ink),
+                        )
+                    })
+                    .inner
+            });
+        ui.painter().rect_stroke(
+            frame_resp.response.rect,
+            theme::CONTROL_CORNER_RADIUS,
+            Stroke::new(1.0, pal.border),
+            egui::StrokeKind::Inside,
+        );
+        if frame_resp.inner.changed() {
             self.source_changed(Instant::now());
         }
     }
@@ -2226,34 +2281,7 @@ impl App {
             .stroke(Stroke::new(1.0, pal.border))
             .inner_margin(theme::SPACE_LG)
             .show(ui, |ui| {
-                ui.visuals_mut().widgets.inactive.bg_fill = pal.scroll_inactive;
-                ui.visuals_mut().widgets.inactive.fg_stroke.color = pal.scroll_inactive;
-                ui.visuals_mut().widgets.hovered.bg_fill = pal.scroll_hover;
-                ui.visuals_mut().widgets.hovered.fg_stroke.color = pal.scroll_hover;
-                ui.visuals_mut().widgets.active.bg_fill = pal.scroll_active;
-                ui.visuals_mut().widgets.active.fg_stroke.color = pal.scroll_active;
-                ui.visuals_mut().extreme_bg_color = pal.scroll_track;
-
-                let scroll = &mut ui.spacing_mut().scroll;
-                if matches!(
-                    self.gpu_profile,
-                    GpuProfile::VirtualGpu | GpuProfile::Software
-                ) {
-                    scroll.dormant_handle_opacity = 0.85;
-                    scroll.active_handle_opacity = 0.85;
-                    scroll.interact_handle_opacity = 0.85;
-                    scroll.dormant_background_opacity = 0.6;
-                    scroll.active_background_opacity = 0.6;
-                    scroll.interact_background_opacity = 0.6;
-                    scroll.floating_allocated_width = scroll.bar_width;
-                } else {
-                    scroll.dormant_handle_opacity = 0.5;
-                    scroll.active_handle_opacity = 0.85;
-                    scroll.interact_handle_opacity = 1.0;
-                    scroll.dormant_background_opacity = 0.3;
-                    scroll.active_background_opacity = 0.6;
-                    scroll.interact_background_opacity = 0.85;
-                }
+                self.configure_canvas_scroll_style(ui, pal);
 
                 egui::ScrollArea::both()
                     .id_salt("formula-scroll")
@@ -6477,5 +6505,102 @@ mod tests {
         a.editor.move_caret(Move::Left, false);
         let sub_rect = a.caret_rect(origin, scale).expect("subscript caret rect");
         assert!(sub_rect.height() < first.height() * 0.8);
+    }
+
+    #[test]
+    fn multiline_latex_scrolls_within_bounds_without_canvas_overlap() {
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        let pal = a.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
+        let latex_id = egui::Id::unique("latex-source");
+
+        let find_canvas_and_latex_frames = |output: &egui::FullOutput| {
+            let canvas = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.fill == pal.bg
+                            && r.corner_radius == theme::SURFACE_CORNER_RADIUS
+                            && r.rect.width() > 100.0 =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .expect("canvas frame");
+            let latex = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.corner_radius == theme::CONTROL_CORNER_RADIUS
+                            && r.stroke == Stroke::new(1.0, pal.border)
+                            && r.rect.width() > 300.0 =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .expect("latex frame");
+            (canvas, latex)
+        };
+
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let (canvas_single, latex_single) = find_canvas_and_latex_frames(&out);
+        assert!(canvas_single.bottom() + CONTENT_PADDING as f32 <= latex_single.top() + 1.0);
+        assert!((canvas_single.left() - latex_single.left()).abs() <= 1.0);
+        assert!((canvas_single.right() - latex_single.right()).abs() <= 1.0);
+        // No scrollbar handle/track appears inside the empty LaTeX box.
+        assert!(!out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if latex_single.contains_rect(r.rect) && r.fill == pal.scroll_track)));
+
+        // Clicking inside the LaTeX box focuses it without adding a bright focus border.
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(latex_single.center()));
+        assert!(ctx.memory(|m| m.has_focus(latex_id)));
+        assert!(!out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.rect == latex_single && r.stroke.color == pal.caret)));
+        assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Rect(r) if r.rect == latex_single && r.stroke.color == pal.border)));
+
+        // Pressing Enter repeatedly to produce many lines keeps the LaTeX box bounded and scrollable.
+        let mut events = Vec::new();
+        for i in 1..=8 {
+            events.push(egui::Event::Text(format!("line{i}")));
+            events.push(egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        run_ui_pass_frame(&ctx, &mut a, events);
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let (canvas_multi, latex_multi) = find_canvas_and_latex_frames(&out);
+        assert_eq!(canvas_multi, canvas_single);
+        assert_eq!(latex_multi, latex_single);
+        assert!(canvas_multi.bottom() + CONTENT_PADDING as f32 <= latex_multi.top() + 1.0);
+
+        let save_center = find_text_center(&out, |t| t == "Save MathML (Ctrl+S)");
+        assert!(latex_multi.bottom() < save_center.y);
+
+        // Rendered LaTeX lines stay clipped inside the bounded ScrollArea, never leaking out.
+        let line_shapes: Vec<_> = out
+            .shapes
+            .iter()
+            .filter(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains("line")))
+            .collect();
+        assert!(!line_shapes.is_empty());
+        for s in line_shapes {
+            assert!(
+                s.clip_rect.top() >= latex_multi.top() - 0.5
+                    && s.clip_rect.bottom() <= latex_multi.bottom() + 0.5,
+                "latex text clip {:?} escaped frame {:?}",
+                s.clip_rect,
+                latex_multi
+            );
+        }
     }
 }

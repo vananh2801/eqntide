@@ -110,7 +110,7 @@ fn desktop_viewport() -> eframe::egui::ViewportBuilder {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_app_id("eqntide")
         .with_title("EqnTide — Equation Editor")
-        .with_inner_size([1100.0, 650.0])
+        .with_inner_size(app::MIN_WINDOW_SIZE)
         .with_min_inner_size(app::MIN_WINDOW_SIZE);
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
@@ -254,9 +254,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_viewport_sets_app_id_and_icon() {
+    fn desktop_viewport_sets_app_id_icon_and_compact_default_size() {
         let viewport = desktop_viewport();
         assert_eq!(viewport.app_id.as_deref(), Some("eqntide"));
         assert!(viewport.icon.is_some());
+        assert_eq!(
+            viewport.inner_size,
+            Some(eframe::egui::Vec2::from(app::MIN_WINDOW_SIZE))
+        );
+        assert_eq!(
+            viewport.min_inner_size,
+            Some(eframe::egui::Vec2::from(app::MIN_WINDOW_SIZE))
+        );
     }
 }
