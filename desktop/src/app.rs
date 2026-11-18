@@ -589,6 +589,17 @@ impl App {
         .inner
     }
 
+    fn full_width_card<R>(
+        ui: &mut egui::Ui,
+        tokens: ThemeTokens,
+        add_contents: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> egui::InnerResponse<R> {
+        tokens.group_frame().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add_contents(ui)
+        })
+    }
+
     fn flush_settings(&mut self) {
         if !self.settings_dirty {
             return;
@@ -2221,7 +2232,7 @@ impl App {
     fn latex_ui(&mut self, ui: &mut egui::Ui) {
         let pal = self.active_canvas_palette(ui.visuals().dark_mode);
         let latex_id = Self::editor_focus_id(StartupFocus::Latex);
-        let box_height = ui.available_height().min(LATEX_INPUT_HEIGHT).max(24.0);
+        let box_height = ui.available_height().clamp(24.0, LATEX_INPUT_HEIGHT);
         let frame_resp = egui::Frame::new()
             .fill(pal.bg)
             .corner_radius(theme::CONTROL_CORNER_RADIUS)
@@ -3215,121 +3226,143 @@ impl App {
             )
             .color(tokens.text_muted),
         );
-        ui.add_space(theme::SPACE_XS);
-        ui.add_enabled_ui(!self.batch_running, |ui| {
-            ui.horizontal(|ui| {
-                if Self::standard_button(ui, "Add DOCX files…").clicked() {
-                    let tx = self.tx.clone();
-                    std::thread::spawn(move || {
-                        if let Some(paths) = rfd::FileDialog::new()
-                            .add_filter("Word documents", &["docx"])
-                            .pick_files()
-                        {
-                            let _ = tx.send(Event::Paths(paths));
-                        }
-                    });
-                }
-                if Self::standard_button(ui, "Clear list").clicked() {
-                    self.files.clear();
-                    self.batch_logs.clear();
-                }
-                let before_batch_target = self.batch_target;
-                egui::ComboBox::from_id_salt("batch-target")
-                    .selected_text(batch::TARGETS[self.batch_target].1)
-                    .show_ui(ui, |ui| {
-                        for (i, (_, label)) in batch::TARGETS.iter().enumerate() {
-                            ui.selectable_value(&mut self.batch_target, i, *label);
-                        }
-                    });
-                if self.batch_target != before_batch_target {
-                    self.persisted.batch_target = self.batch_target;
+        ui.add_space(theme::SPACE_MD);
+        Self::full_width_card(ui, tokens, |ui| {
+            ui.add_enabled_ui(!self.batch_running, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if Self::standard_button(ui, "Add DOCX files…").clicked() {
+                        let tx = self.tx.clone();
+                        std::thread::spawn(move || {
+                            if let Some(paths) = rfd::FileDialog::new()
+                                .add_filter("Word documents", &["docx"])
+                                .pick_files()
+                            {
+                                let _ = tx.send(Event::Paths(paths));
+                            }
+                        });
+                    }
+                    if Self::standard_button(ui, "Clear list").clicked() {
+                        self.files.clear();
+                        self.batch_logs.clear();
+                    }
+                    let before_batch_target = self.batch_target;
+                    egui::ComboBox::from_id_salt("batch-target")
+                        .selected_text(batch::TARGETS[self.batch_target].1)
+                        .show_ui(ui, |ui| {
+                            for (i, (_, label)) in batch::TARGETS.iter().enumerate() {
+                                ui.selectable_value(&mut self.batch_target, i, *label);
+                            }
+                        });
+                    if self.batch_target != before_batch_target {
+                        self.persisted.batch_target = self.batch_target;
+                        self.settings_dirty = true;
+                    }
+                });
+            });
+            ui.add_enabled_ui(!self.batch_running, |ui| {
+                if ui
+                    .checkbox(
+                        &mut self.batch_overwrite,
+                        "Overwrite original documents (replace each selected input)",
+                    )
+                    .changed()
+                {
+                    self.persisted.batch_overwrite = self.batch_overwrite;
                     self.settings_dirty = true;
                 }
             });
-        });
-        ui.add_enabled_ui(!self.batch_running, |ui| {
-            if ui
-                .checkbox(
-                    &mut self.batch_overwrite,
-                    "Overwrite original documents (replace each selected input)",
-                )
-                .changed()
-            {
-                self.persisted.batch_overwrite = self.batch_overwrite;
-                self.settings_dirty = true;
-            }
-        });
-        ui.horizontal(|ui| {
-            if Self::primary_button(ui, !self.batch_running && !self.files.is_empty(), "Convert")
-                .clicked()
-            {
-                self.batch_running = true;
-                self.batch_totals = [0; 4];
-                self.batch_completed = 0;
-                self.stop.store(false, Ordering::Relaxed);
-                self.batch_logs.fill("Waiting".into());
-                batch::run(
-                    self.files.clone(),
-                    batch::TARGETS[self.batch_target].0.into(),
-                    self.font_pt,
-                    self.batch_overwrite,
-                    Arc::clone(&self.stop),
-                    self.tx.clone(),
-                );
-            }
-            if ui
-                .add_enabled(
-                    self.batch_running,
-                    egui::Button::new("Stop after current file")
-                        .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+            ui.horizontal_wrapped(|ui| {
+                if Self::primary_button(
+                    ui,
+                    !self.batch_running && !self.files.is_empty(),
+                    "Convert",
                 )
                 .clicked()
-            {
-                self.stop.store(true, Ordering::Relaxed);
-            }
-            if Self::standard_button(ui, "Open output folder").clicked() {
-                if let Some(path) = self.files.first() {
-                    if let Err(e) = runtime::open_folder(path) {
-                        self.status = e;
+                {
+                    self.batch_running = true;
+                    self.batch_totals = [0; 4];
+                    self.batch_completed = 0;
+                    self.stop.store(false, Ordering::Relaxed);
+                    self.batch_logs.fill("Waiting".into());
+                    batch::run(
+                        self.files.clone(),
+                        batch::TARGETS[self.batch_target].0.into(),
+                        self.font_pt,
+                        self.batch_overwrite,
+                        Arc::clone(&self.stop),
+                        self.tx.clone(),
+                    );
+                }
+                if ui
+                    .add_enabled(
+                        self.batch_running,
+                        egui::Button::new("Stop after current file")
+                            .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+                    )
+                    .clicked()
+                {
+                    self.stop.store(true, Ordering::Relaxed);
+                }
+                if Self::standard_button(ui, "Open output folder").clicked() {
+                    if let Some(path) = self.files.first() {
+                        if let Err(e) = runtime::open_folder(path) {
+                            self.status = e;
+                        }
                     }
                 }
-            }
+            });
         });
-        if !self.files.is_empty() {
-            ui.add(
-                egui::ProgressBar::new(self.batch_completed as f32 / self.files.len() as f32).text(
-                    format!("{}/{} files", self.batch_completed, self.files.len()),
-                ),
-            );
-            ui.label(format!(
-                "Found: {}   Converted: {}   Skipped: {}   Errors: {}",
-                self.batch_totals[0],
-                self.batch_totals[1],
-                self.batch_totals[2],
-                self.batch_totals[3]
-            ));
+        ui.add_space(theme::SPACE_MD);
+        if self.files.is_empty() {
+            tokens.group_frame().show(ui, |ui| {
+                let min_height = ui.available_height().max(120.0);
+                ui.set_min_size(Vec2::new(ui.available_width(), min_height));
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space((min_height * 0.25).max(theme::SPACE_LG));
+                        ui.label(
+                            egui::RichText::new("No .docx files queued")
+                                .strong()
+                                .color(tokens.text_primary),
+                        );
+                        ui.add_space(theme::SPACE_XS);
+                        ui.label(
+                            egui::RichText::new(
+                                "Drag and drop .docx files here, or click \"Add DOCX files…\" above.",
+                            )
+                            .color(tokens.text_muted),
+                        );
+                    });
+                });
+            });
+            return;
         }
+        ui.add(
+            egui::ProgressBar::new(self.batch_completed as f32 / self.files.len() as f32).text(
+                format!("{}/{} files", self.batch_completed, self.files.len()),
+            ),
+        );
+        ui.label(format!(
+            "Found: {}   Converted: {}   Skipped: {}   Errors: {}",
+            self.batch_totals[0], self.batch_totals[1], self.batch_totals[2], self.batch_totals[3]
+        ));
+        ui.add_space(theme::SPACE_XS);
         let text_h = ui.text_style_height(&egui::TextStyle::Body);
-        let row_frame = tokens.group_frame();
-        let group_margin = row_frame.inner_margin.sum().y;
+        let group_margin = tokens.group_frame().inner_margin.sum().y;
         let row_height = 2.0 * text_h + ui.spacing().item_spacing.y + group_margin + 2.0;
-        egui::ScrollArea::vertical().show_rows(
-            ui,
-            row_height,
-            self.files.len(),
-            |ui, row_range| {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show_rows(ui, row_height, self.files.len(), |ui, row_range| {
                 for idx in row_range {
                     let path_str = self.files[idx].display().to_string();
                     let log = &self.batch_logs[idx];
-                    row_frame.show(ui, |ui| {
-                        ui.set_width(ui.available_width());
+                    Self::full_width_card(ui, tokens, |ui| {
                         ui.add(egui::Label::new(&path_str).truncate())
                             .on_hover_text(&path_str);
                         ui.add(egui::Label::new(log).truncate()).on_hover_text(log);
                     });
                 }
-            },
-        );
+            });
     }
 
     fn canvas_preset_picker(
@@ -3433,121 +3466,123 @@ impl App {
         ui.add_space(theme::SPACE_MD);
         ui.heading("Settings");
         ui.add_space(theme::SPACE_LG);
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            tokens.group_frame().show(ui, |ui| {
-                ui.set_min_width(ui.available_width().min(540.0));
-                ui.label(egui::RichText::new("Canvas zoom").strong());
-                ui.add_space(theme::SPACE_XS);
-                ui.horizontal(|ui| {
-                    ui.scope(|ui| {
-                        ui.spacing_mut().slider_width = 220.0;
-                        let zoom_changed = ui
-                            .add(
-                                egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
-                                    .handle_shape(egui::style::HandleShape::Rect {
-                                        aspect_ratio: 1.0,
-                                    })
-                                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
-                            )
-                            .changed();
-                        if zoom_changed {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                Self::full_width_card(ui, tokens, |ui| {
+                    ui.label(egui::RichText::new("Canvas zoom").strong());
+                    ui.add_space(theme::SPACE_XS);
+                    ui.horizontal(|ui| {
+                        ui.scope(|ui| {
+                            ui.spacing_mut().slider_width = 220.0;
+                            let zoom_changed = ui
+                                .add(
+                                    egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
+                                        .handle_shape(egui::style::HandleShape::Rect {
+                                            aspect_ratio: 1.0,
+                                        })
+                                        .custom_formatter(|value, _| {
+                                            format!("{:.0}%", value * 100.0)
+                                        }),
+                                )
+                                .changed();
+                            if zoom_changed {
+                                self.persisted.zoom = self.zoom;
+                                self.settings_dirty = true;
+                            }
+                        });
+                        if Self::standard_button(ui, "Reset (200%)").clicked() {
+                            self.zoom = settings::DEFAULT_ZOOM;
                             self.persisted.zoom = self.zoom;
                             self.settings_dirty = true;
                         }
                     });
-                    if Self::standard_button(ui, "Reset (200%)").clicked() {
-                        self.zoom = settings::DEFAULT_ZOOM;
-                        self.persisted.zoom = self.zoom;
-                        self.settings_dirty = true;
-                    }
                 });
-            });
-            ui.add_space(theme::SPACE_MD);
-            tokens.group_frame().show(ui, |ui| {
-                ui.set_min_width(ui.available_width().min(540.0));
-                ui.label(egui::RichText::new("Appearance").strong());
-                ui.add_space(theme::SPACE_XS);
-                let is_dark = ui.visuals().dark_mode;
-                ui.horizontal(|ui| {
-                    ui.label(if is_dark {
-                        "Current theme: Dark mode"
-                    } else {
-                        "Current theme: Light mode"
+                ui.add_space(theme::SPACE_MD);
+                Self::full_width_card(ui, tokens, |ui| {
+                    ui.label(egui::RichText::new("Appearance").strong());
+                    ui.add_space(theme::SPACE_XS);
+                    let is_dark = ui.visuals().dark_mode;
+                    ui.horizontal(|ui| {
+                        ui.label(if is_dark {
+                            "Current theme: Dark mode"
+                        } else {
+                            "Current theme: Light mode"
+                        });
+                        ui.add_space(theme::SPACE_MD);
+                        let toggle_label = if is_dark {
+                            "Switch to Light mode"
+                        } else {
+                            "Switch to Dark mode"
+                        };
+                        if Self::standard_button(ui, toggle_label).clicked() {
+                            let next = if is_dark {
+                                egui::Theme::Light
+                            } else {
+                                egui::Theme::Dark
+                            };
+                            ui.ctx().set_theme(next);
+                            self.persisted.theme = ThemeMode::from_egui_theme(next);
+                            self.settings_dirty = true;
+                        }
                     });
                     ui.add_space(theme::SPACE_MD);
-                    let toggle_label = if is_dark {
-                        "Switch to Light mode"
-                    } else {
-                        "Switch to Dark mode"
-                    };
-                    if Self::standard_button(ui, toggle_label).clicked() {
-                        let next = if is_dark {
-                            egui::Theme::Light
-                        } else {
-                            egui::Theme::Dark
-                        };
-                        ui.ctx().set_theme(next);
-                        self.persisted.theme = ThemeMode::from_egui_theme(next);
+                    ui.label(egui::RichText::new("Equation canvas").strong());
+                    ui.add_space(theme::SPACE_XS);
+                    if Self::canvas_preset_picker(
+                        ui,
+                        "Light mode canvas",
+                        theme::LIGHT_CANVAS_PRESETS,
+                        false,
+                        &mut self.canvas_light,
+                    ) {
+                        self.persisted.canvas_light = self.canvas_light;
+                        self.settings_dirty = true;
+                    }
+                    ui.add_space(theme::SPACE_MD);
+                    if Self::canvas_preset_picker(
+                        ui,
+                        "Dark mode canvas",
+                        theme::DARK_CANVAS_PRESETS,
+                        true,
+                        &mut self.canvas_dark,
+                    ) {
+                        self.persisted.canvas_dark = self.canvas_dark;
                         self.settings_dirty = true;
                     }
                 });
                 ui.add_space(theme::SPACE_MD);
-                ui.label(egui::RichText::new("Equation canvas").strong());
-                ui.add_space(theme::SPACE_XS);
-                if Self::canvas_preset_picker(
-                    ui,
-                    "Light mode canvas",
-                    theme::LIGHT_CANVAS_PRESETS,
-                    false,
-                    &mut self.canvas_light,
-                ) {
-                    self.persisted.canvas_light = self.canvas_light;
-                    self.settings_dirty = true;
-                }
-                ui.add_space(theme::SPACE_MD);
-                if Self::canvas_preset_picker(
-                    ui,
-                    "Dark mode canvas",
-                    theme::DARK_CANVAS_PRESETS,
-                    true,
-                    &mut self.canvas_dark,
-                ) {
-                    self.persisted.canvas_dark = self.canvas_dark;
-                    self.settings_dirty = true;
-                }
-            });
-            ui.add_space(theme::SPACE_MD);
-            tokens.group_frame().show(ui, |ui| {
-                ui.set_min_width(ui.available_width().min(540.0));
-                ui.label(egui::RichText::new("Startup focus").strong());
-                ui.add_space(theme::SPACE_XS);
-                ui.horizontal(|ui| {
-                    let mut focus_changed = false;
-                    for (choice, label) in [
-                        (StartupFocus::Canvas, "Equation canvas"),
-                        (StartupFocus::Latex, "LaTeX source"),
-                    ] {
-                        let selected = self.startup_focus == choice;
-                        if Self::with_selectable_style(ui, selected, |ui| {
-                            Self::standard_button(ui, label)
-                        })
-                        .clicked()
-                            && !selected
-                        {
-                            self.startup_focus = choice;
-                            focus_changed = true;
+                Self::full_width_card(ui, tokens, |ui| {
+                    ui.label(egui::RichText::new("Startup focus").strong());
+                    ui.add_space(theme::SPACE_XS);
+                    ui.horizontal(|ui| {
+                        let mut focus_changed = false;
+                        for (choice, label) in [
+                            (StartupFocus::Canvas, "Equation canvas"),
+                            (StartupFocus::Latex, "LaTeX source"),
+                        ] {
+                            let selected = self.startup_focus == choice;
+                            if Self::with_selectable_style(ui, selected, |ui| {
+                                Self::standard_button(ui, label)
+                            })
+                            .clicked()
+                                && !selected
+                            {
+                                self.startup_focus = choice;
+                                focus_changed = true;
+                            }
                         }
-                    }
-                    if focus_changed {
-                        self.persisted.startup_focus = self.startup_focus;
-                        self.settings_dirty = true;
-                    }
+                        if focus_changed {
+                            self.persisted.startup_focus = self.startup_focus;
+                            self.settings_dirty = true;
+                        }
+                    });
                 });
             });
-        });
     }
 
     fn about_ui(&mut self, ui: &mut egui::Ui) {
+        let tokens = ThemeTokens::from_ui(ui);
         if Self::standard_button(ui, "← Back to equation").clicked() {
             self.tab = 0;
             self.active_editor_focus = self.startup_focus;
@@ -3556,52 +3591,61 @@ impl App {
         ui.add_space(theme::SPACE_MD);
         ui.heading("About EqnTide");
         ui.add_space(theme::SPACE_LG);
-        let logo = self.logo_texture.get_or_insert_with(|| {
-            let bytes = include_bytes!("../../assets/icons/icon.png");
-            let pixels = image::load_from_memory(bytes)
-                .expect("bundled icon is valid")
-                .to_rgba8();
-            let image = egui::ColorImage::from_rgba_unmultiplied(
-                [pixels.width() as usize, pixels.height() as usize],
-                pixels.as_raw(),
-            );
-            ui.ctx()
-                .load_texture("eqntide-logo", image, egui::TextureOptions::LINEAR)
-        });
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::Image::new((logo.id(), Vec2::splat(72.0)))
-                    .corner_radius(theme::SURFACE_CORNER_RADIUS),
-            );
-            ui.add_space(theme::SPACE_LG);
-            ui.vertical(|ui| {
-                ui.heading("EqnTide");
-                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                ui.label(env!("CARGO_PKG_DESCRIPTION"));
-            });
-        });
-        ui.add_space(theme::SPACE_XL);
-        ui.separator();
-        ui.add_space(theme::SPACE_MD);
-        egui::Grid::new("about-info")
-            .num_columns(2)
-            .spacing([theme::SPACE_XL, theme::SPACE_MD])
+        let logo_id = self
+            .logo_texture
+            .get_or_insert_with(|| {
+                let bytes = include_bytes!("../../assets/icons/icon.png");
+                let pixels = image::load_from_memory(bytes)
+                    .expect("bundled icon is valid")
+                    .to_rgba8();
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [pixels.width() as usize, pixels.height() as usize],
+                    pixels.as_raw(),
+                );
+                ui.ctx()
+                    .load_texture("eqntide-logo", image, egui::TextureOptions::LINEAR)
+            })
+            .id();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.strong("Author:");
-                ui.label(env!("CARGO_PKG_AUTHORS"));
-                ui.end_row();
+                Self::full_width_card(ui, tokens, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::Image::new((logo_id, Vec2::splat(72.0)))
+                                .corner_radius(theme::SURFACE_CORNER_RADIUS),
+                        );
+                        ui.add_space(theme::SPACE_LG);
+                        ui.vertical(|ui| {
+                            ui.heading("EqnTide");
+                            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                            ui.label(env!("CARGO_PKG_DESCRIPTION"));
+                        });
+                    });
+                    ui.add_space(theme::SPACE_XL);
+                    ui.separator();
+                    ui.add_space(theme::SPACE_MD);
+                    egui::Grid::new("about-info")
+                        .num_columns(2)
+                        .spacing([theme::SPACE_XL, theme::SPACE_MD])
+                        .show(ui, |ui| {
+                            ui.strong("Author:");
+                            ui.label(env!("CARGO_PKG_AUTHORS"));
+                            ui.end_row();
 
-                ui.strong("Version:");
-                ui.label(env!("CARGO_PKG_VERSION"));
-                ui.end_row();
+                            ui.strong("Version:");
+                            ui.label(env!("CARGO_PKG_VERSION"));
+                            ui.end_row();
 
-                ui.strong("License:");
-                ui.label(env!("CARGO_PKG_LICENSE"));
-                ui.end_row();
+                            ui.strong("License:");
+                            ui.label(env!("CARGO_PKG_LICENSE"));
+                            ui.end_row();
 
-                ui.strong("GitHub:");
-                ui.hyperlink(env!("CARGO_PKG_REPOSITORY"));
-                ui.end_row();
+                            ui.strong("GitHub:");
+                            ui.hyperlink(env!("CARGO_PKG_REPOSITORY"));
+                            ui.end_row();
+                        });
+                });
             });
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -6590,7 +6634,9 @@ mod tests {
         let line_shapes: Vec<_> = out
             .shapes
             .iter()
-            .filter(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains("line")))
+            .filter(
+                |s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text().contains("line")),
+            )
             .collect();
         assert!(!line_shapes.is_empty());
         for s in line_shapes {
@@ -6601,6 +6647,178 @@ mod tests {
                 s.clip_rect,
                 latex_multi
             );
+        }
+    }
+
+    fn run_ui_pass_sized(ctx: &egui::Context, app: &mut App, size: Vec2) -> egui::FullOutput {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| app.ui_pass(ui),
+        );
+        output.textures_delta.clear();
+        output
+    }
+
+    fn card_rects_for_section_titles(
+        output: &egui::FullOutput,
+        tokens: ThemeTokens,
+        titles: &[&str],
+    ) -> Vec<Rect> {
+        titles
+            .iter()
+            .map(|title| {
+                let title_pos = find_text_center(output, |t| t == *title);
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Rect(r)
+                            if r.fill == tokens.card_bg
+                                && r.corner_radius == theme::SURFACE_CORNER_RADIUS
+                                && r.rect.contains(title_pos) =>
+                        {
+                            Some(r.rect)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing card rect containing '{title}'"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn settings_cards_span_full_central_panel_width() {
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        ctx.set_theme(egui::Theme::Dark);
+        let tokens = ThemeTokens::for_mode(true);
+        let mut a = app();
+        a.tab = 2;
+
+        for width in [MIN_WINDOW_SIZE[0], 1400.0] {
+            let size = Vec2::new(width, MIN_WINDOW_SIZE[1]);
+            let _ = run_ui_pass_sized(&ctx, &mut a, size);
+            let out = run_ui_pass_sized(&ctx, &mut a, size);
+            let expected_width = width - 2.0 * theme::SPACE_LG;
+            let cards = card_rects_for_section_titles(
+                &out,
+                tokens,
+                &["Canvas zoom", "Appearance", "Startup focus"],
+            );
+            for rect in cards {
+                assert!(
+                    rect.width() >= expected_width - 24.0 && rect.width() <= expected_width + 0.5,
+                    "Settings card width {} did not match panel width {} (rect={rect:?})",
+                    rect.width(),
+                    expected_width
+                );
+                assert!(
+                    (rect.left() - theme::SPACE_LG).abs() <= 1.0,
+                    "Settings card left {} misaligned at width {width}",
+                    rect.left()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn about_card_spans_full_central_panel_width() {
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        ctx.set_theme(egui::Theme::Dark);
+        let tokens = ThemeTokens::for_mode(true);
+        let mut a = app();
+        a.tab = 3;
+
+        for width in [MIN_WINDOW_SIZE[0], 1400.0] {
+            let size = Vec2::new(width, MIN_WINDOW_SIZE[1]);
+            let _ = run_ui_pass_sized(&ctx, &mut a, size);
+            let out = run_ui_pass_sized(&ctx, &mut a, size);
+            let expected_width = width - 2.0 * theme::SPACE_LG;
+            let cards = card_rects_for_section_titles(&out, tokens, &["EqnTide"]);
+            let rect = cards[0];
+            assert!(
+                rect.width() >= expected_width - 24.0 && rect.width() <= expected_width + 0.5,
+                "About card width {} did not match panel width {} (rect={rect:?})",
+                rect.width(),
+                expected_width
+            );
+            assert!(
+                (rect.left() - theme::SPACE_LG).abs() <= 1.0,
+                "About card left {} misaligned at width {width}",
+                rect.left()
+            );
+            let github_pos = find_text_center(&out, |t| t == env!("CARGO_PKG_REPOSITORY"));
+            assert!(
+                rect.contains(github_pos),
+                "About metadata grid should sit inside full-width card {rect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_cards_and_empty_state_span_full_central_panel_width() {
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        ctx.set_theme(egui::Theme::Dark);
+        let tokens = ThemeTokens::for_mode(true);
+        let mut a = app();
+        a.tab = 1;
+
+        for width in [MIN_WINDOW_SIZE[0], 1400.0] {
+            let size = Vec2::new(width, MIN_WINDOW_SIZE[1]);
+            let expected_width = width - 2.0 * theme::SPACE_LG;
+
+            // Empty state: controls card + drop-zone empty card both span the full panel width.
+            a.files.clear();
+            a.batch_logs.clear();
+            let _ = run_ui_pass_sized(&ctx, &mut a, size);
+            let out = run_ui_pass_sized(&ctx, &mut a, size);
+            let cards = card_rects_for_section_titles(
+                &out,
+                tokens,
+                &["Add DOCX files…", "No .docx files queued"],
+            );
+            for rect in cards {
+                assert!(
+                    rect.width() >= expected_width - 24.0 && rect.width() <= expected_width + 0.5,
+                    "Batch empty-state card width {} did not match panel width {} (rect={rect:?})",
+                    rect.width(),
+                    expected_width
+                );
+                assert!(
+                    (rect.left() - theme::SPACE_LG).abs() <= 1.0,
+                    "Batch empty-state card left {} misaligned at width {width}",
+                    rect.left()
+                );
+            }
+
+            // Populated state: controls card + queued file row card span the full panel width.
+            a.files = vec![PathBuf::from("/tmp/sample_document.docx")];
+            a.batch_logs = vec!["Ready".into()];
+            let _ = run_ui_pass_sized(&ctx, &mut a, size);
+            let out = run_ui_pass_sized(&ctx, &mut a, size);
+            let cards = card_rects_for_section_titles(
+                &out,
+                tokens,
+                &["Add DOCX files…", "/tmp/sample_document.docx"],
+            );
+            for rect in cards {
+                assert!(
+                    rect.width() >= expected_width - 24.0 && rect.width() <= expected_width + 0.5,
+                    "Batch populated card width {} did not match panel width {} (rect={rect:?})",
+                    rect.width(),
+                    expected_width
+                );
+                assert!(
+                    (rect.left() - theme::SPACE_LG).abs() <= 1.0,
+                    "Batch populated card left {} misaligned at width {width}",
+                    rect.left()
+                );
+            }
         }
     }
 }
