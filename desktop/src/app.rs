@@ -5071,6 +5071,128 @@ mod tests {
     }
 
     #[test]
+    fn canvas_arrow_navigation_a2_fraction_deletion_and_table_row_selection() {
+        let ctx = egui::Context::default();
+        let key_input = |key: egui::Key| egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+
+        // 1) \frac{1}{} with caret in empty denominator: Backspace selects fraction, 2nd deletes it.
+        let mut a = app();
+        a.insert_template(r"\frac{#?}{#?}");
+        a.canvas_text("1");
+        a.editor
+            .move_caret(eqntide_editor::Move::NextPlaceholder, false);
+        a.changed();
+        let frac_id = a.editor.root().children[0].id;
+        ctx.run_ui(key_input(egui::Key::Backspace), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        assert_eq!(a.editor.selected_ids(), vec![frac_id]);
+        assert_eq!(a.editor.math().children.len(), 1);
+        ctx.run_ui(key_input(egui::Key::Backspace), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        assert!(a.editor.math().children.is_empty());
+        assert_eq!(a.latex, "");
+
+        // 2) Single-press ArrowRight traverses `\frac{1}{2}` and `(x)` without duplicate stalls.
+        a.load_math(
+            "<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac><mrow><mo stretchy=\"true\" form=\"prefix\">(</mo><mrow><mi>x</mi></mrow><mo stretchy=\"true\" form=\"postfix\">)</mo></mrow></math>",
+            None,
+            None,
+        );
+        a.editor.move_caret(eqntide_editor::Move::Home, false);
+        let num_mn = a.editor.root().children[0].children[0].children[0].id;
+        let den_mn = a.editor.root().children[0].children[1].children[0].id;
+        let fence_x = a.editor.root().children[1].children[1].children[0].id;
+        let expected = [
+            Caret {
+                node: num_mn,
+                offset: 0,
+            },
+            Caret {
+                node: num_mn,
+                offset: 1,
+            },
+            Caret {
+                node: den_mn,
+                offset: 0,
+            },
+            Caret {
+                node: den_mn,
+                offset: 1,
+            },
+            Caret {
+                node: a.editor.root().id,
+                offset: 1,
+            },
+            Caret {
+                node: fence_x,
+                offset: 0,
+            },
+            Caret {
+                node: fence_x,
+                offset: 1,
+            },
+            Caret {
+                node: a.editor.root().id,
+                offset: 2,
+            },
+        ];
+        for caret in expected {
+            ctx.run_ui(key_input(egui::Key::ArrowRight), |ui| a.keyboard(ui))
+                .textures_delta
+                .clear();
+            assert_eq!(a.editor.caret(), caret);
+        }
+
+        // 3) Partially filled 2x2 matrix row selects row first, then deletes; drag-selecting an
+        // empty 2x2 row removes the <mtr> cleanly and updates LaTeX.
+        a.load_math(
+            "<math><mtable><mtr><mtd><mi>x</mi></mtd><mtd><mi>y</mi></mtd></mtr><mtr><mtd/><mtd><mi>z</mi></mtd></mtr></mtable></math>",
+            None,
+            None,
+        );
+        let r1_c0 = a.editor.root().children[0].children[1].children[0].id;
+        let r1_c1 = a.editor.root().children[0].children[1].children[1].id;
+        a.editor.set_caret(Caret { node: r1_c0, offset: 0 }, false);
+        ctx.run_ui(key_input(egui::Key::Backspace), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        assert_eq!(a.editor.selected_ids(), vec![r1_c0, r1_c1]);
+        ctx.run_ui(key_input(egui::Key::Backspace), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        assert_eq!(a.editor.math().children[0].children.len(), 1);
+        assert_eq!(a.latex, r"\begin{matrix} x & y \end{matrix}");
+
+        a.load_math(
+            "<math><mtable><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd/><mtd/></mtr></mtable></math>",
+            None,
+            None,
+        );
+        let empty_c0 = a.editor.root().children[0].children[1].children[0].id;
+        let empty_c1 = a.editor.root().children[0].children[1].children[1].id;
+        a.editor
+            .set_caret(Caret { node: empty_c0, offset: 0 }, false);
+        a.editor
+            .set_caret(Caret { node: empty_c1, offset: 0 }, true);
+        ctx.run_ui(key_input(egui::Key::Delete), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        assert_eq!(a.editor.math().children[0].children.len(), 1);
+        assert_eq!(a.latex, r"\begin{matrix} a & b \end{matrix}");
+    }
+
+    #[test]
     fn palette_accents_take_previous_expression_in_one_undo_step() {
         for source in [r"\hat{#?}", r"\underline{#?}", r"\boxed{#?}"] {
             let mut a = app();

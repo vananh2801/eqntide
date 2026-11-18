@@ -70,33 +70,227 @@ impl Node {
         path.iter().fold(self, |n, i| &n.children[*i])
     }
     fn stops(&self, out: &mut Vec<Caret>) {
+        let (canonical, _) = self.canonical_stops();
+        *out = canonical;
+    }
+    fn canonical_stops(&self) -> (Vec<Caret>, Vec<(Caret, usize)>) {
+        let mut raw = Vec::new();
+        let mut group = 0;
+        self.collect_stops(0, &mut group, &mut raw);
+        let mut canonical = Vec::new();
+        let mut caret_to_idx = Vec::with_capacity(raw.len());
+        let mut i = 0;
+        while i < raw.len() {
+            let g = raw[i].group;
+            let mut j = i + 1;
+            while j < raw.len() && raw[j].group == g {
+                j += 1;
+            }
+            let best = raw[i..j]
+                .iter()
+                .max_by_key(|entry| entry.preference())
+                .unwrap();
+            let idx = canonical.len();
+            canonical.push(best.caret);
+            for entry in &raw[i..j] {
+                caret_to_idx.push((entry.caret, idx));
+            }
+            i = j;
+        }
+        (canonical, caret_to_idx)
+    }
+    fn collect_stops(&self, depth: usize, group: &mut usize, out: &mut Vec<StopEntry>) {
+        let last_in_group_is_token_or_placeholder = |out: &[StopEntry], group: usize| {
+            out.last().is_some_and(|e| {
+                e.group == group
+                    && matches!(e.kind, StopKind::TokenRest | StopKind::EmptyPlaceholder)
+            })
+        };
+        if self.opaque() {
+            if last_in_group_is_token_or_placeholder(out, *group) {
+                *group += 1;
+            }
+            *group += 1;
+            return;
+        }
         if self.token() {
-            for offset in 0..=self.text.chars().count() {
-                out.push(Caret {
-                    node: self.id,
-                    offset,
-                });
-            }
-        } else if !self.opaque() {
-            if self.row() {
-                out.push(Caret {
-                    node: self.id,
-                    offset: 0,
-                });
-            }
-            for (i, child) in self.children.iter().enumerate() {
-                if !child.opaque() {
-                    child.stops(out);
-                }
-                if self.row() {
-                    out.push(Caret {
+            let char_len = self.text.chars().count();
+            if self.is_fence_delimiter() {
+                out.push(StopEntry {
+                    caret: Caret {
                         node: self.id,
-                        offset: i + 1,
+                        offset: 0,
+                    },
+                    group: *group,
+                    depth,
+                    kind: StopKind::FenceDelimiter,
+                });
+                if !self.text.trim().is_empty() {
+                    for offset in 1..=char_len {
+                        *group += 1;
+                        out.push(StopEntry {
+                            caret: Caret {
+                                node: self.id,
+                                offset,
+                            },
+                            group: *group,
+                            depth,
+                            kind: StopKind::FenceDelimiter,
+                        });
+                    }
+                }
+            } else if char_len == 0 {
+                if last_in_group_is_token_or_placeholder(out, *group) {
+                    *group += 1;
+                }
+                out.push(StopEntry {
+                    caret: Caret {
+                        node: self.id,
+                        offset: 0,
+                    },
+                    group: *group,
+                    depth,
+                    kind: StopKind::EmptyPlaceholder,
+                });
+            } else {
+                if out
+                    .last()
+                    .is_some_and(|e| e.group == *group && e.kind == StopKind::EmptyPlaceholder)
+                {
+                    *group += 1;
+                }
+                out.push(StopEntry {
+                    caret: Caret {
+                        node: self.id,
+                        offset: 0,
+                    },
+                    group: *group,
+                    depth,
+                    kind: StopKind::TokenStart,
+                });
+                for offset in 1..=char_len {
+                    *group += 1;
+                    out.push(StopEntry {
+                        caret: Caret {
+                            node: self.id,
+                            offset,
+                        },
+                        group: *group,
+                        depth,
+                        kind: StopKind::TokenRest,
                     });
                 }
             }
+            return;
+        }
+        if self.row() {
+            let is_radical = self.tag == "msqrt";
+            if self.children.len() <= 1 && is_effectively_empty(self) {
+                if is_radical || last_in_group_is_token_or_placeholder(out, *group) {
+                    *group += 1;
+                }
+                let placeholder_id = deepest_empty_id(self);
+                out.push(StopEntry {
+                    caret: Caret {
+                        node: placeholder_id,
+                        offset: 0,
+                    },
+                    group: *group,
+                    depth,
+                    kind: StopKind::EmptyPlaceholder,
+                });
+                if is_radical {
+                    *group += 1;
+                }
+                return;
+            }
+            if is_radical {
+                *group += 1;
+            }
+            out.push(StopEntry {
+                caret: Caret {
+                    node: self.id,
+                    offset: 0,
+                },
+                group: *group,
+                depth,
+                kind: StopKind::Row,
+            });
+            for (i, child) in self.children.iter().enumerate() {
+                child.collect_stops(depth + 1, group, out);
+                out.push(StopEntry {
+                    caret: Caret {
+                        node: self.id,
+                        offset: i + 1,
+                    },
+                    group: *group,
+                    depth,
+                    kind: StopKind::Row,
+                });
+            }
+            if is_radical {
+                *group += 1;
+            }
+            return;
+        }
+        if matches!(self.tag.as_str(), "mstyle" | "mpadded" | "mphantom") {
+            for child in &self.children {
+                child.collect_stops(depth + 1, group, out);
+            }
+            return;
+        }
+        if self.tag == "mspace" {
+            if last_in_group_is_token_or_placeholder(out, *group) {
+                *group += 1;
+            }
+            *group += 1;
+            return;
+        }
+        // Structural containers (`mfrac`, `mroot`, `msub`, `msup`, `mtable`, etc.)
+        // have visible boundaries around and between their child slots.
+        *group += 1;
+        for child in &self.children {
+            child.collect_stops(depth + 1, group, out);
+            *group += 1;
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StopKind {
+    FenceDelimiter,
+    Row,
+    TokenStart,
+    EmptyPlaceholder,
+    TokenRest,
+}
+
+#[derive(Clone, Copy)]
+struct StopEntry {
+    caret: Caret,
+    group: usize,
+    depth: usize,
+    kind: StopKind,
+}
+
+impl StopEntry {
+    fn preference(&self) -> (u8, isize) {
+        match self.kind {
+            StopKind::TokenRest => (4, self.depth as isize),
+            StopKind::EmptyPlaceholder => (3, self.depth as isize),
+            StopKind::TokenStart => (2, self.depth as isize),
+            StopKind::Row => (1, -(self.depth as isize)),
+            StopKind::FenceDelimiter => (0, 0),
+        }
+    }
+}
+
+fn deepest_empty_id(node: &Node) -> NodeId {
+    let mut cur = node;
+    while let Some(first) = cur.children.first() {
+        cur = first;
+    }
+    cur.id
 }
 
 /// Elements without editing rules remain atomic and are preserved verbatim.
@@ -280,9 +474,12 @@ impl Editor {
         }
     }
     pub fn move_caret(&mut self, movement: Move, extend: bool) {
-        let mut stops = vec![];
-        self.root().stops(&mut stops);
-        let current = stops.iter().position(|c| *c == self.caret()).unwrap_or(0);
+        let (stops, caret_to_idx) = self.root().canonical_stops();
+        let current = caret_to_idx
+            .iter()
+            .find(|(c, _)| *c == self.caret())
+            .map(|(_, idx)| *idx)
+            .unwrap_or(0);
         let target = match movement {
             Move::Left => current.saturating_sub(1),
             Move::Right => (current + 1).min(stops.len().saturating_sub(1)),
@@ -440,6 +637,88 @@ impl Editor {
     fn erase_selection(&mut self) -> Option<MathNode> {
         let selected = self.selected_math()?;
         let (id, start, end) = self.selection_span()?;
+        let tag = self.node(id)?.tag.clone();
+        if tag == "mtable" {
+            let len = self.node(id)?.children.len();
+            let start = start.min(len);
+            let end = end.min(len);
+            if start < end && end - start < len {
+                let table = self.state.root.find_mut(id)?;
+                table.children.drain(start..end);
+                let target_row = start.min(table.children.len() - 1);
+                let target_caret = table
+                    .children
+                    .get(target_row)
+                    .and_then(|r| r.children.first())
+                    .map(|cell| cell_edge_caret(cell, false))
+                    .unwrap_or(Caret {
+                        node: id,
+                        offset: target_row,
+                    });
+                self.state.caret = target_caret;
+                self.state.anchor = None;
+                return Some(selected);
+            } else if start == 0 && end == len && len > 0 {
+                let target = self.enclosing_structure_for_table(id);
+                self.remove_node_and_place_caret(target);
+                return Some(selected);
+            }
+        } else if tag == "mtr" {
+            let len = self.node(id)?.children.len();
+            let start = start.min(len);
+            let end = end.min(len);
+            if start == 0 && end == len && len > 0 {
+                let mut path = self.path(id)?;
+                if let Some(row_idx) = path.pop() {
+                    let table_id = self.id_at_path(&path)?;
+                    if self.node(table_id)?.tag == "mtable" {
+                        let old_len = self.node(table_id)?.children.len();
+                        if old_len >= 2 {
+                            let table = self.state.root.find_mut(table_id)?;
+                            table.children.remove(row_idx);
+                            if let Some(caret) =
+                                adjacent_table_row_caret(table, row_idx, old_len, true)
+                            {
+                                self.state.caret = caret;
+                            }
+                            self.state.anchor = None;
+                            return Some(selected);
+                        } else if self
+                            .node(id)?
+                            .children
+                            .iter()
+                            .all(is_effectively_empty)
+                        {
+                            let target = self.enclosing_structure_for_table(table_id);
+                            self.remove_node_and_place_caret(target);
+                            return Some(selected);
+                        } else {
+                            let row = self.state.root.find_mut(id)?;
+                            for child in &mut row.children {
+                                clear_as_tag(child, "mtd");
+                            }
+                            self.state.caret = Caret {
+                                node: row.children[0].id,
+                                offset: 0,
+                            };
+                            self.state.anchor = None;
+                            return Some(selected);
+                        }
+                    }
+                }
+            } else if start < end {
+                let row = self.state.root.find_mut(id)?;
+                for child in &mut row.children[start..end] {
+                    clear_as_tag(child, "mtd");
+                }
+                self.state.caret = Caret {
+                    node: row.children[start].id,
+                    offset: 0,
+                };
+                self.state.anchor = None;
+                return Some(selected);
+            }
+        }
         let n = self.state.root.find_mut(id)?;
         if n.token() {
             let count = n.text.chars().count();
@@ -451,29 +730,45 @@ impl Editor {
                 .take(start)
                 .chain(n.text.chars().skip(end))
                 .collect();
+            let now_empty = n.text.is_empty() && !n.is_fence_delimiter();
+            self.state.caret = Caret {
+                node: id,
+                offset: start,
+            };
+            self.state.anchor = None;
+            if now_empty {
+                self.prune_empty_token(id, true);
+            }
+            return Some(selected);
         } else if n.row() {
             let start = start.min(n.children.len());
             let end = end.min(n.children.len());
             if start < end {
                 n.children.drain(start..end);
             }
+            self.state.caret = Caret {
+                node: id,
+                offset: start,
+            };
         } else {
             let start = start.min(n.children.len());
             let end = end.min(n.children.len());
             // Fixed arity structures retain their slots when a child is cleared.
             if start < end {
                 for child in &mut n.children[start..end] {
-                    child.tag = "mrow".into();
-                    child.text.clear();
-                    child.attrs.clear();
-                    child.children.clear();
+                    clear_as_tag(child, "mrow");
                 }
+                self.state.caret = Caret {
+                    node: n.children[start].id,
+                    offset: 0,
+                };
+            } else {
+                self.state.caret = Caret {
+                    node: id,
+                    offset: start,
+                };
             }
         }
-        self.state.caret = Caret {
-            node: id,
-            offset: start,
-        };
         self.state.anchor = None;
         Some(selected)
     }
@@ -635,34 +930,345 @@ impl Editor {
                 let count = n.text.chars().count();
                 if (backward && c.offset > 0) || (!backward && c.offset < count) {
                     let start = if backward { c.offset - 1 } else { c.offset };
+                    let is_fence = n.is_fence_delimiter();
                     let n = s.state.root.find_mut(c.node).unwrap();
                     n.text.replace_range(
                         char_byte(&n.text, start)..char_byte(&n.text, start + 1),
                         "",
                     );
+                    let now_empty = n.text.is_empty() && !is_fence;
                     s.state.caret.offset = start;
-                } else {
-                    s.move_caret(if backward { Move::Left } else { Move::Right }, false);
+                    if now_empty {
+                        s.prune_empty_token(c.node, backward);
+                    }
+                    return;
                 }
+                if count == 0 && !n.is_fence_delimiter() {
+                    if let Some(mut path) = s.path(c.node) {
+                        if let Some(child_idx) = path.pop() {
+                            let parent_id = s.id_at_path(&path).unwrap();
+                            if s.node(parent_id).is_some_and(is_effectively_empty) {
+                                s.handle_empty_slot_delete(parent_id, backward);
+                                return;
+                            }
+                            if s.node(parent_id).is_some_and(Node::row) {
+                                s.state
+                                    .root
+                                    .find_mut(parent_id)
+                                    .unwrap()
+                                    .children
+                                    .remove(child_idx);
+                                s.state.caret = Caret {
+                                    node: parent_id,
+                                    offset: child_idx,
+                                };
+                                s.delete_from_row_caret(parent_id, child_idx, backward);
+                                return;
+                            }
+                        }
+                    }
+                }
+                if let Some((parent_id, adj_idx)) = s.adjacent_row_sibling(c.node, backward) {
+                    if !s.node(parent_id).unwrap().children[adj_idx].is_fence_delimiter() {
+                        s.delete_adjacent_node_or_char(parent_id, adj_idx, backward);
+                        return;
+                    }
+                }
+                s.move_caret(if backward { Move::Left } else { Move::Right }, false);
             } else if n.row() {
-                let index = if backward {
-                    c.offset.checked_sub(1)
-                } else {
-                    Some(c.offset)
-                };
-                if let Some(index) = index.filter(|i| *i < n.children.len()) {
-                    s.state
-                        .root
-                        .find_mut(c.node)
-                        .unwrap()
-                        .children
-                        .remove(index);
-                    s.state.caret.offset = index;
-                } else if n.children.is_empty() {
-                    s.try_remove_empty_table_row(backward);
-                }
+                s.delete_from_row_caret(c.node, c.offset, backward);
             }
         });
+    }
+    fn delete_from_row_caret(&mut self, row_id: NodeId, offset: usize, backward: bool) {
+        let Some(n) = self.node(row_id) else { return };
+        let index = if backward {
+            offset.checked_sub(1)
+        } else {
+            Some(offset)
+        };
+        if let Some(index) = index.filter(|i| *i < n.children.len()) {
+            let child_is_fence = n.children[index].is_fence_delimiter();
+            if child_is_fence {
+                let empty_fence_content = n
+                    .children
+                    .iter()
+                    .filter(|c| !c.is_fence_delimiter())
+                    .all(is_effectively_empty);
+                if empty_fence_content && is_fence_mrow(n) {
+                    self.select_node(row_id);
+                } else {
+                    self.move_caret(if backward { Move::Left } else { Move::Right }, false);
+                }
+            } else {
+                self.delete_adjacent_node_or_char(row_id, index, backward);
+            }
+            return;
+        }
+        if is_effectively_empty(n) {
+            self.handle_empty_slot_delete(row_id, backward);
+        } else if let Some((outer_row_id, outer_adj_idx)) =
+            self.climb_plain_row_boundary(row_id, backward)
+        {
+            if !self.node(outer_row_id).unwrap().children[outer_adj_idx].is_fence_delimiter() {
+                self.delete_adjacent_node_or_char(outer_row_id, outer_adj_idx, backward);
+            } else {
+                self.move_caret(if backward { Move::Left } else { Move::Right }, false);
+            }
+        } else {
+            self.move_caret(if backward { Move::Left } else { Move::Right }, false);
+        }
+    }
+    fn prune_empty_token(&mut self, token_id: NodeId, backward: bool) {
+        let Some(mut path) = self.path(token_id) else {
+            return;
+        };
+        let Some(child_idx) = path.pop() else {
+            return;
+        };
+        let Some(parent_id) = self.id_at_path(&path) else {
+            return;
+        };
+        if !self.node(parent_id).is_some_and(Node::row) {
+            return;
+        }
+        let parent = self.state.root.find_mut(parent_id).unwrap();
+        parent.children.remove(child_idx);
+        let new_caret = if backward
+            && child_idx > 0
+            && parent
+                .children
+                .get(child_idx - 1)
+                .is_some_and(|n| n.token() && !n.is_fence_delimiter())
+        {
+            let prev = &parent.children[child_idx - 1];
+            Caret {
+                node: prev.id,
+                offset: prev.text.chars().count(),
+            }
+        } else if !backward
+            && parent
+                .children
+                .get(child_idx)
+                .is_some_and(|n| n.token() && !n.is_fence_delimiter())
+        {
+            Caret {
+                node: parent.children[child_idx].id,
+                offset: 0,
+            }
+        } else {
+            Caret {
+                node: parent_id,
+                offset: child_idx.min(parent.children.len()),
+            }
+        };
+        self.state.caret = new_caret;
+    }
+    fn delete_adjacent_node_or_char(&mut self, row_id: NodeId, index: usize, backward: bool) {
+        let Some(row) = self.state.root.find_mut(row_id) else {
+            return;
+        };
+        let Some(child) = row.children.get_mut(index) else {
+            return;
+        };
+        if child.token() && !child.is_fence_delimiter() {
+            let count = child.text.chars().count();
+            if count > 1 {
+                let del_idx = if backward { count - 1 } else { 0 };
+                child.text.replace_range(
+                    char_byte(&child.text, del_idx)..char_byte(&child.text, del_idx + 1),
+                    "",
+                );
+                self.state.caret = Caret {
+                    node: child.id,
+                    offset: if backward { count - 1 } else { 0 },
+                };
+                return;
+            }
+        }
+        row.children.remove(index);
+        let new_caret = if backward
+            && index > 0
+            && row
+                .children
+                .get(index - 1)
+                .is_some_and(|n| n.token() && !n.is_fence_delimiter())
+        {
+            let prev = &row.children[index - 1];
+            Caret {
+                node: prev.id,
+                offset: prev.text.chars().count(),
+            }
+        } else if !backward
+            && row
+                .children
+                .get(index)
+                .is_some_and(|n| n.token() && !n.is_fence_delimiter())
+        {
+            Caret {
+                node: row.children[index].id,
+                offset: 0,
+            }
+        } else {
+            Caret {
+                node: row_id,
+                offset: index.min(row.children.len()),
+            }
+        };
+        self.state.caret = new_caret;
+    }
+    fn adjacent_row_sibling(&self, node_id: NodeId, backward: bool) -> Option<(NodeId, usize)> {
+        let mut path = self.path(node_id)?;
+        let child_idx = path.pop()?;
+        let parent_id = self.id_at_path(&path)?;
+        let parent = self.node(parent_id)?;
+        if !parent.row() {
+            return None;
+        }
+        let adj = if backward {
+            child_idx.checked_sub(1)
+        } else {
+            (child_idx + 1 < parent.children.len()).then_some(child_idx + 1)
+        };
+        if let Some(idx) = adj {
+            return Some((parent_id, idx));
+        }
+        self.climb_plain_row_boundary(parent_id, backward)
+    }
+    fn climb_plain_row_boundary(
+        &self,
+        mut row_id: NodeId,
+        backward: bool,
+    ) -> Option<(NodeId, usize)> {
+        loop {
+            let cur = self.node(row_id)?;
+            if cur.tag != "mrow" || is_fence_mrow(cur) {
+                return None;
+            }
+            let mut path = self.path(row_id)?;
+            let child_idx = path.pop()?;
+            let parent_id = self.id_at_path(&path)?;
+            let parent = self.node(parent_id)?;
+            if !parent.row() {
+                return None;
+            }
+            let adj = if backward {
+                child_idx.checked_sub(1)
+            } else {
+                (child_idx + 1 < parent.children.len()).then_some(child_idx + 1)
+            };
+            if let Some(idx) = adj {
+                return Some((parent_id, idx));
+            }
+            row_id = parent_id;
+        }
+    }
+    fn handle_empty_slot_delete(&mut self, slot_id: NodeId, backward: bool) {
+        if let Some((table_id, row_idx, cols)) = self.enclosing_table_row() {
+            let Some(table) = self.node(table_id) else {
+                return;
+            };
+            let rows_len = table.children.len();
+            let Some(row) = table.children.get(row_idx) else {
+                return;
+            };
+            let row_empty = row.children.iter().all(is_effectively_empty);
+            if rows_len >= 2 {
+                if row_empty {
+                    self.try_remove_empty_table_row(backward);
+                } else if cols >= 2 {
+                    let first_cell_id = row.children[0].id;
+                    let end_caret = row_end_caret(row);
+                    self.state.anchor = Some(Caret {
+                        node: first_cell_id,
+                        offset: 0,
+                    });
+                    self.state.caret = end_caret;
+                }
+            } else if row_empty {
+                let target = self.enclosing_structure_for_table(table_id);
+                self.select_node(target);
+            } else if cols >= 2 {
+                let first_cell_id = row.children[0].id;
+                let end_caret = row_end_caret(row);
+                self.state.anchor = Some(Caret {
+                    node: first_cell_id,
+                    offset: 0,
+                });
+                self.state.caret = end_caret;
+            }
+            return;
+        }
+        if let Some(struct_id) = self.enclosing_structure(slot_id) {
+            self.select_node(struct_id);
+        }
+    }
+    fn enclosing_structure(&self, slot_id: NodeId) -> Option<NodeId> {
+        let node = self.node(slot_id)?;
+        if node.tag == "msqrt" {
+            return Some(node.id);
+        }
+        let mut path = self.path(slot_id)?;
+        while path.pop().is_some() {
+            let ancestor = self.root().at(&path);
+            if ancestor.tag == "math" {
+                return None;
+            }
+            if ancestor.tag == "mtable" {
+                return Some(self.enclosing_structure_for_table(ancestor.id));
+            }
+            if is_structure_tag(&ancestor.tag) || is_fence_mrow(ancestor) {
+                return Some(ancestor.id);
+            }
+        }
+        None
+    }
+    fn enclosing_structure_for_table(&self, table_id: NodeId) -> NodeId {
+        let Some(mut path) = self.path(table_id) else {
+            return table_id;
+        };
+        if path.pop().is_some() {
+            let parent = self.root().at(&path);
+            if is_fence_mrow(parent)
+                && parent
+                    .children
+                    .iter()
+                    .filter(|c| !c.is_fence_delimiter())
+                    .count()
+                    == 1
+            {
+                return parent.id;
+            }
+        }
+        table_id
+    }
+    fn remove_node_and_place_caret(&mut self, target_id: NodeId) {
+        let Some(mut path) = self.path(target_id) else {
+            return;
+        };
+        let Some(child_idx) = path.pop() else {
+            return;
+        };
+        let Some(parent_id) = self.id_at_path(&path) else {
+            return;
+        };
+        let Some(parent) = self.state.root.find_mut(parent_id) else {
+            return;
+        };
+        if parent.row() {
+            parent.children.remove(child_idx);
+            self.state.caret = Caret {
+                node: parent_id,
+                offset: child_idx.min(parent.children.len()),
+            };
+        } else {
+            clear_as_tag(&mut parent.children[child_idx], "mrow");
+            self.state.caret = Caret {
+                node: parent.children[child_idx].id,
+                offset: 0,
+            };
+        }
+        self.state.anchor = None;
     }
     /// Insert a palette template. The first placeholder receives the selection.
     pub fn insert_template(&mut self, template: &MathNode) {
@@ -865,45 +1471,7 @@ impl Editor {
         }
         let table = self.state.root.find_mut(table_id).unwrap();
         table.children.remove(row_idx);
-        let move_to_prev_end = (backward && row_idx > 0) || (!backward && row_idx + 1 == old_len);
-        let target_row_idx = if move_to_prev_end {
-            row_idx - 1
-        } else {
-            row_idx
-        };
-        let target_cell = if move_to_prev_end {
-            table.children[target_row_idx].children.last()
-        } else {
-            table.children[target_row_idx].children.first()
-        };
-        if let Some(cell) = target_cell {
-            let target_caret = if move_to_prev_end {
-                if let Some(last) = cell.children.last().filter(|n| n.token()) {
-                    Caret {
-                        node: last.id,
-                        offset: last.text.chars().count(),
-                    }
-                } else {
-                    let mut stops = Vec::new();
-                    cell.stops(&mut stops);
-                    stops.last().copied().unwrap_or(Caret {
-                        node: cell.id,
-                        offset: 0,
-                    })
-                }
-            } else if let Some(first) = cell.children.first().filter(|n| n.token()) {
-                Caret {
-                    node: first.id,
-                    offset: 0,
-                }
-            } else {
-                let mut stops = Vec::new();
-                cell.stops(&mut stops);
-                stops.first().copied().unwrap_or(Caret {
-                    node: cell.id,
-                    offset: 0,
-                })
-            };
+        if let Some(target_caret) = adjacent_table_row_caret(table, row_idx, old_len, backward) {
             self.state.caret = target_caret;
         }
         self.state.anchor = None;
@@ -956,9 +1524,106 @@ impl Editor {
 }
 
 fn is_effectively_empty(node: &Node) -> bool {
-    matches!(node.tag.as_str(), "mtd" | "mrow")
-        && node.text.is_empty()
-        && node.children.iter().all(is_effectively_empty)
+    (node.token() && !node.is_fence_delimiter() && node.text.is_empty())
+        || (matches!(node.tag.as_str(), "math" | "mrow" | "mtd" | "msqrt")
+            && node.text.is_empty()
+            && node.children.iter().all(is_effectively_empty))
+}
+
+fn is_structure_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "mfrac"
+            | "mroot"
+            | "msqrt"
+            | "msub"
+            | "msup"
+            | "msubsup"
+            | "munder"
+            | "mover"
+            | "munderover"
+            | "menclose"
+            | "mfenced"
+    )
+}
+
+fn is_fence_mrow(node: &Node) -> bool {
+    node.tag == "mrow"
+        && node.children.first().is_some_and(|c| {
+            c.is_fence_delimiter()
+                && !c
+                    .attrs
+                    .iter()
+                    .any(|(k, v)| k == "form" && v == "postfix")
+        })
+}
+
+fn clear_as_tag(node: &mut Node, tag: &str) {
+    node.tag = tag.into();
+    node.text.clear();
+    node.attrs.clear();
+    node.children.clear();
+}
+
+fn cell_edge_caret(cell: &Node, at_end: bool) -> Caret {
+    if at_end {
+        if let Some(last) = cell.children.last().filter(|n| n.token()) {
+            Caret {
+                node: last.id,
+                offset: last.text.chars().count(),
+            }
+        } else {
+            let mut stops = Vec::new();
+            cell.stops(&mut stops);
+            stops.last().copied().unwrap_or(Caret {
+                node: cell.id,
+                offset: 0,
+            })
+        }
+    } else if let Some(first) = cell.children.first().filter(|n| n.token()) {
+        Caret {
+            node: first.id,
+            offset: 0,
+        }
+    } else {
+        let mut stops = Vec::new();
+        cell.stops(&mut stops);
+        stops.first().copied().unwrap_or(Caret {
+            node: cell.id,
+            offset: 0,
+        })
+    }
+}
+
+fn row_end_caret(row: &Node) -> Caret {
+    row.children
+        .last()
+        .map(|cell| cell_edge_caret(cell, true))
+        .unwrap_or(Caret {
+            node: row.id,
+            offset: row.children.len(),
+        })
+}
+
+fn adjacent_table_row_caret(
+    table: &Node,
+    removed_row_idx: usize,
+    old_len: usize,
+    backward: bool,
+) -> Option<Caret> {
+    let move_to_prev_end =
+        (backward && removed_row_idx > 0) || (!backward && removed_row_idx + 1 == old_len);
+    let target_row_idx = if move_to_prev_end {
+        removed_row_idx - 1
+    } else {
+        removed_row_idx
+    };
+    let target_cell = if move_to_prev_end {
+        table.children.get(target_row_idx)?.children.last()
+    } else {
+        table.children.get(target_row_idx)?.children.first()
+    };
+    target_cell.map(|cell| cell_edge_caret(cell, move_to_prev_end))
 }
 
 fn one_sided_left_fence_bounds(mrow: &Node) -> Option<(usize, bool)> {
@@ -1595,8 +2260,8 @@ mod regression_tests {
             }
         );
 
-        // Single-row empty table must not delete its only remaining row.
-        let before_single = edges.math();
+        // Single-row non-empty table: Backspace at start of cell moves out without removing row;
+        // single-row empty table uses A2 (selects table first, then deletes on second press).
         let only_cell = edges.root().children[0].children[0].children[0].id;
         edges.set_caret(
             Caret {
@@ -1606,11 +2271,28 @@ mod regression_tests {
             false,
         );
         edges.delete(true);
-        edges.delete(false);
         assert_eq!(edges.math().children[0].children.len(), 1);
-        let _ = before_single;
 
-        // Multi-column row where another cell has content must NOT be deleted.
+        let mut single_empty = Editor::new(
+            &MathNode::parse("<math><mtable><mtr><mtd/></mtr></mtable></math>").unwrap(),
+        );
+        let table_id = single_empty.root().children[0].id;
+        let single_cell = single_empty.root().children[0].children[0].children[0].id;
+        single_empty.set_caret(
+            Caret {
+                node: single_cell,
+                offset: 0,
+            },
+            false,
+        );
+        single_empty.delete(true);
+        assert_eq!(single_empty.selected_ids(), vec![table_id]);
+        assert_eq!(single_empty.math().children[0].children.len(), 1);
+        single_empty.delete(true);
+        assert!(single_empty.math().children.is_empty());
+
+        // Multi-column row where another cell has content: first Backspace/Delete selects the row
+        // with caret at row end; second press removes the row.
         let mut multi = Editor::new(
             &MathNode::parse(
                 "<math><mtable><mtr><mtd><mi>x</mi></mtd><mtd><mi>y</mi></mtd></mtr><mtr><mtd/><mtd><mi>z</mi></mtd></mtr></mtable></math>",
@@ -1618,6 +2300,8 @@ mod regression_tests {
             .unwrap(),
         );
         let empty_left = multi.root().children[0].children[1].children[0].id;
+        let right_cell = multi.root().children[0].children[1].children[1].id;
+        let right_mi = multi.root().children[0].children[1].children[1].children[0].id;
         multi.set_caret(
             Caret {
                 node: empty_left,
@@ -1626,7 +2310,267 @@ mod regression_tests {
             false,
         );
         multi.delete(true);
-        multi.delete(false);
         assert_eq!(multi.math().children[0].children.len(), 2);
+        assert_eq!(multi.selected_ids(), vec![empty_left, right_cell]);
+        assert_eq!(
+            multi.caret(),
+            Caret {
+                node: right_mi,
+                offset: 1
+            }
+        );
+        multi.delete(false);
+        assert_eq!(multi.math().children[0].children.len(), 1);
+    }
+
+    #[test]
+    fn horizontal_arrow_stops_skip_redundant_wrappers_and_boundaries() {
+        // Flat expression `x+1` has 4 stops (1 step per character/operator).
+        let mut flat = Editor::new(
+            &MathNode::with_children(
+                "math",
+                vec![
+                    MathNode::leaf("mi", "x"),
+                    MathNode::leaf("mo", "+"),
+                    MathNode::leaf("mn", "1"),
+                ],
+            ),
+        );
+        let mut stops = Vec::new();
+        flat.root().stops(&mut stops);
+        assert_eq!(stops.len(), 4);
+        // Even starting from non-canonical (math, 0), Right moves in 1 step past 'x'.
+        flat.move_caret(Move::Right, false);
+        assert_eq!(
+            flat.caret(),
+            Caret {
+                node: flat.root().children[0].id,
+                offset: 1
+            }
+        );
+        flat.move_caret(Move::Right, false);
+        assert_eq!(
+            flat.caret(),
+            Caret {
+                node: flat.root().children[1].id,
+                offset: 1
+            }
+        );
+        flat.move_caret(Move::Right, false);
+        assert_eq!(
+            flat.caret(),
+            Caret {
+                node: flat.root().children[2].id,
+                offset: 1
+            }
+        );
+
+        // Nested mrow wrappers around `x` still produce only 2 stops.
+        let nested = Editor::new(
+            &MathNode::parse("<math><mrow><mrow><mi>x</mi></mrow></mrow></math>").unwrap(),
+        );
+        nested.root().stops(&mut stops);
+        assert_eq!(stops.len(), 2);
+
+        // Fraction `\frac{1}{2}` has 6 stops: before frac, |1, 1|, |2, 2|, after frac.
+        let mut frac = Editor::new(
+            &MathNode::parse("<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></math>").unwrap(),
+        );
+        frac.root().stops(&mut stops);
+        assert_eq!(stops.len(), 6);
+        // From end of numerator `1|`, one Right enters start of denominator `|2`.
+        let num_mn = frac.root().children[0].children[0].children[0].id;
+        let den_mn = frac.root().children[0].children[1].children[0].id;
+        frac.set_caret(Caret { node: num_mn, offset: 1 }, false);
+        frac.move_caret(Move::Right, false);
+        assert_eq!(frac.caret(), Caret { node: den_mn, offset: 0 });
+        // From end of denominator `2|`, one Right exits fraction.
+        frac.move_caret(Move::Right, false);
+        frac.move_caret(Move::Right, false);
+        assert_eq!(
+            frac.caret(),
+            Caret {
+                node: frac.root().id,
+                offset: 1
+            }
+        );
+
+        // Fenced `(x)` has 4 stops: |(x), (|x), (x|), (x)|.
+        let mut l = MathNode::leaf("mo", "(");
+        l.set_attr("stretchy", "true");
+        l.set_attr("form", "prefix");
+        let mut r = MathNode::leaf("mo", ")");
+        r.set_attr("stretchy", "true");
+        r.set_attr("form", "postfix");
+        let mut fence = Editor::new(&MathNode::with_children(
+            "math",
+            vec![MathNode::with_children(
+                "mrow",
+                vec![l, MathNode::with_children("mrow", vec![MathNode::leaf("mi", "x")]), r],
+            )],
+        ));
+        fence.root().stops(&mut stops);
+        assert_eq!(stops.len(), 4);
+        let x_id = fence.root().children[0].children[1].children[0].id;
+        fence.set_caret(Caret { node: x_id, offset: 1 }, false);
+        fence.move_caret(Move::Right, false);
+        assert_eq!(
+            fence.caret(),
+            Caret {
+                node: fence.root().id,
+                offset: 1
+            }
+        );
+    }
+
+    #[test]
+    fn deleting_last_token_char_prunes_empty_token_and_forward_delete_crosses_tokens() {
+        let mut e = Editor::new(
+            &MathNode::parse("<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></math>")
+                .unwrap(),
+        );
+        let den_mrow = e.root().children[0].children[1].id;
+        let den_mn = e.root().children[0].children[1].children[0].id;
+        e.set_caret(Caret { node: den_mn, offset: 1 }, false);
+        e.delete(true);
+        assert!(e.node(den_mrow).unwrap().children.is_empty());
+        assert_eq!(e.caret(), Caret { node: den_mrow, offset: 0 });
+
+        // Multi-char token followed by another token: Backspace then Backspace deletes char-by-char.
+        let mut seq = Editor::new(
+            &MathNode::with_children(
+                "math",
+                vec![
+                    MathNode::leaf("mi", "ab"),
+                    MathNode::leaf("mo", "+"),
+                    MathNode::leaf("mn", "1"),
+                ],
+            ),
+        );
+        let one_id = seq.root().children[2].id;
+        seq.set_caret(Caret { node: one_id, offset: 1 }, false);
+        seq.delete(true);
+        assert_eq!(seq.math().children.len(), 2);
+        seq.delete(true);
+        assert_eq!(seq.math().children.len(), 1);
+        seq.delete(true);
+        assert_eq!(seq.math().children[0].text, "a");
+
+        // Forward Delete at `a|+` deletes `+` in one step.
+        let mut fwd = Editor::new(
+            &MathNode::with_children(
+                "math",
+                vec![
+                    MathNode::leaf("mi", "a"),
+                    MathNode::leaf("mo", "+"),
+                    MathNode::leaf("mn", "1"),
+                ],
+            ),
+        );
+        let a_id = fwd.root().children[0].id;
+        fwd.set_caret(Caret { node: a_id, offset: 1 }, false);
+        fwd.delete(false);
+        assert_eq!(fwd.math().children.len(), 2);
+        assert_eq!(fwd.math().children[1].text, "1");
+    }
+
+    #[test]
+    fn empty_slot_backspace_and_delete_use_a2_selection_and_nonempty_boundaries_step() {
+        // Empty denominator in `\frac{1}{□}`: 1st Backspace selects fraction, 2nd deletes it.
+        let mut frac = Editor::new(
+            &MathNode::parse("<math><mfrac><mrow><mn>1</mn></mrow><mrow/></mfrac></math>").unwrap(),
+        );
+        let frac_id = frac.root().children[0].id;
+        let den_id = frac.root().children[0].children[1].id;
+        frac.set_caret(Caret { node: den_id, offset: 0 }, false);
+        frac.delete(true);
+        assert_eq!(frac.selected_ids(), vec![frac_id]);
+        assert_eq!(frac.math().children.len(), 1);
+        frac.delete(true);
+        assert!(frac.math().children.is_empty());
+        frac.undo();
+        assert_eq!(frac.math().children.len(), 1);
+
+        // Nested `1 + \frac{2}{□}` selects only inner fraction, not outer expression.
+        let mut nested = Editor::new(
+            &MathNode::parse("<math><mn>1</mn><mo>+</mo><mfrac><mrow><mn>2</mn></mrow><mrow/></mfrac></math>")
+                .unwrap(),
+        );
+        let inner_frac_id = nested.root().children[2].id;
+        let inner_den_id = nested.root().children[2].children[1].id;
+        nested.set_caret(Caret { node: inner_den_id, offset: 0 }, false);
+        nested.delete(false);
+        assert_eq!(nested.selected_ids(), vec![inner_frac_id]);
+        nested.delete(false);
+        assert_eq!(nested.math().children.len(), 2);
+
+        // Non-empty `\frac{1}{|2}` + Backspace moves to `1|` without selecting/deleting.
+        let mut nonempty = Editor::new(
+            &MathNode::parse("<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></math>")
+                .unwrap(),
+        );
+        let num_mn = nonempty.root().children[0].children[0].children[0].id;
+        let den_mn = nonempty.root().children[0].children[1].children[0].id;
+        nonempty.set_caret(Caret { node: den_mn, offset: 0 }, false);
+        nonempty.delete(true);
+        assert!(nonempty.selected_ids().is_empty());
+        assert_eq!(nonempty.caret(), Caret { node: num_mn, offset: 1 });
+        // Forward Delete from `1|` moves to `|2`.
+        nonempty.delete(false);
+        assert!(nonempty.selected_ids().is_empty());
+        assert_eq!(nonempty.caret(), Caret { node: den_mn, offset: 0 });
+
+        // Empty fenced `(□)` and fenced 1-row empty `{□` select the enclosing fence first.
+        let mut l = MathNode::leaf("mo", "(");
+        l.set_attr("stretchy", "true");
+        l.set_attr("form", "prefix");
+        let mut r = MathNode::leaf("mo", ")");
+        r.set_attr("stretchy", "true");
+        r.set_attr("form", "postfix");
+        let mut fence = Editor::new(&MathNode::with_children(
+            "math",
+            vec![MathNode::with_children("mrow", vec![l, MathNode::new("mrow"), r])],
+        ));
+        let fence_id = fence.root().children[0].id;
+        let inner_id = fence.root().children[0].children[1].id;
+        fence.set_caret(Caret { node: inner_id, offset: 0 }, false);
+        fence.delete(true);
+        assert_eq!(fence.selected_ids(), vec![fence_id]);
+        fence.delete(true);
+        assert!(fence.math().children.is_empty());
+    }
+
+    #[test]
+    fn erasing_selected_table_row_removes_row_and_partial_selection_preserves_mtd() {
+        // Drag-selecting an empty row across 2 cells in a 2x2 matrix and pressing Backspace removes the row.
+        let mut mat = Editor::new(
+            &MathNode::parse(
+                "<math><mtable><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr><mtr><mtd/><mtd/></mtr></mtable></math>",
+            )
+            .unwrap(),
+        );
+        let r1_c0 = mat.root().children[0].children[1].children[0].id;
+        let r1_c1 = mat.root().children[0].children[1].children[1].id;
+        mat.set_caret(Caret { node: r1_c0, offset: 0 }, false);
+        mat.set_caret(Caret { node: r1_c1, offset: 0 }, true);
+        mat.delete(true);
+        let math = mat.math();
+        assert_eq!(math.children[0].children.len(), 1);
+        assert_eq!(math.children[0].children[0].tag, "mtr");
+        assert_eq!(math.to_latex(), r"\begin{matrix} a & b \end{matrix}");
+
+        // Partial selection inside a row preserves `mtd` tags (never converts to `mrow`).
+        let mut partial = Editor::new(
+            &MathNode::parse(
+                "<math><mtable><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr></mtable></math>",
+            )
+            .unwrap(),
+        );
+        let c0 = partial.root().children[0].children[0].children[0].id;
+        partial.select_node(c0);
+        partial.delete(true);
+        let cell0 = &partial.math().children[0].children[0].children[0];
+        assert_eq!(cell0.tag, "mtd");
+        assert!(cell0.children.is_empty());
     }
 }
