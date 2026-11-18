@@ -5,3 +5,5 @@ ms_ovba_compression==1.0.1
 ms_ovba_crypto==2.0.1
 PyYAML==6.0.3
 python-red-black-trees==0.0.2
+olefile==0.47
+oletools==0.60.2
