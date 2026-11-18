@@ -837,14 +837,12 @@ impl MathmlEncoder {
 
         // 4. Extensible arrow with label above (<m:groupChr pos="bot" vertJc="bot">)
         if is_arrow_mo(base) {
-            let mut g = m_el("groupChr");
-            let mut g_pr = m_el("groupChrPr");
-            g_pr.push(m_val_el("chr", base.text.trim()));
-            g_pr.push(m_val_el("pos", "bot"));
-            g_pr.push(m_val_el("vertJc", "bot"));
-            g.push(g_pr);
-            g.push(m_el_children("e", self.encode_node(over)?));
-            return Ok(g);
+            return Ok(build_arrow_group_chr(
+                base.text.trim(),
+                "bot",
+                "bot",
+                self.encode_node(over)?,
+            ));
         }
 
         // 5. General upper limit (<m:limUpp>)
@@ -908,14 +906,12 @@ impl MathmlEncoder {
 
         // 4. Extensible arrow with label below (<m:groupChr pos="top" vertJc="top">)
         if is_arrow_mo(base) {
-            let mut g = m_el("groupChr");
-            let mut g_pr = m_el("groupChrPr");
-            g_pr.push(m_val_el("chr", base.text.trim()));
-            g_pr.push(m_val_el("pos", "top"));
-            g_pr.push(m_val_el("vertJc", "top"));
-            g.push(g_pr);
-            g.push(m_el_children("e", self.encode_node(under)?));
-            return Ok(g);
+            return Ok(build_arrow_group_chr(
+                base.text.trim(),
+                "top",
+                "top",
+                self.encode_node(under)?,
+            ));
         }
 
         // 5. General lower limit (<m:limLow>)
@@ -928,6 +924,47 @@ impl MathmlEncoder {
     fn encode_munderover(&mut self, node: &MathNode) -> Result<Element> {
         if let Some((chr, lim_loc, sub_opt, sup_opt)) = as_nary_op(node) {
             return self.build_nary(chr, lim_loc, sub_opt, sup_opt, Vec::new());
+        }
+        if let (Some(base), Some(under), Some(over)) = (
+            node.children.first(),
+            node.children.get(1),
+            node.children.get(2),
+        ) {
+            if is_arrow_mo(base) {
+                let chr = base.text.trim();
+                let under_empty = is_empty_node(under);
+                let over_empty = is_empty_node(over);
+                if under_empty && !over_empty {
+                    return Ok(build_arrow_group_chr(
+                        chr,
+                        "bot",
+                        "bot",
+                        self.encode_node(over)?,
+                    ));
+                }
+                if over_empty && !under_empty {
+                    return Ok(build_arrow_group_chr(
+                        chr,
+                        "top",
+                        "top",
+                        self.encode_node(under)?,
+                    ));
+                }
+                let under_els = self.encode_node(under)?;
+                let over_els = self.encode_node(over)?;
+                if collect_text(under).chars().count() > collect_text(over).chars().count() {
+                    let g = build_arrow_group_chr(chr, "top", "top", under_els);
+                    let mut lim_upp = m_el("limUpp");
+                    lim_upp.push(m_el_children("e", vec![g]));
+                    lim_upp.push(m_el_children("lim", over_els));
+                    return Ok(lim_upp);
+                }
+                let g = build_arrow_group_chr(chr, "bot", "bot", over_els);
+                let mut lim_low = m_el("limLow");
+                lim_low.push(m_el_children("e", vec![g]));
+                lim_low.push(m_el_children("lim", under_els));
+                return Ok(lim_low);
+            }
         }
         let base_els = match node.children.first() {
             Some(c) => self.encode_node(c)?,
@@ -1080,6 +1117,22 @@ impl MathmlEncoder {
     }
 }
 
+fn build_arrow_group_chr(
+    chr: &str,
+    pos: &str,
+    vert_jc: &str,
+    label_els: Vec<Element>,
+) -> Element {
+    let mut g = m_el("groupChr");
+    let mut g_pr = m_el("groupChrPr");
+    g_pr.push(m_val_el("chr", chr));
+    g_pr.push(m_val_el("pos", pos));
+    g_pr.push(m_val_el("vertJc", vert_jc));
+    g.push(g_pr);
+    g.push(m_el_children("e", label_els));
+    g
+}
+
 fn build_delimiter(
     beg_chr: &str,
     end_chr: &str,
@@ -1122,25 +1175,85 @@ pub fn mathml_to_omml_xml(mathml: &MathNode) -> Result<String> {
     String::from_utf8(bytes).map_err(|e| Error::Xml(e.to_string()))
 }
 
+const CTRL_PR_PARENTS: &[&str] = &[
+    "fPr",
+    "dPr",
+    "sSupPr",
+    "sSubPr",
+    "sSubSupPr",
+    "sPrePr",
+    "radPr",
+    "accPr",
+    "barPr",
+    "naryPr",
+    "funcPr",
+    "limLowPr",
+    "limUppPr",
+    "mPr",
+    "eqArrPr",
+    "borderBoxPr",
+    "boxPr",
+    "groupChrPr",
+    "phantPr",
+];
+
+fn make_w_rfonts(font: &str) -> Element {
+    let mut r_fonts = Element::new(Some(NS_W), Some("w"), "rFonts");
+    r_fonts.set_attr(Some(NS_W), Some("w"), "ascii", font);
+    r_fonts.set_attr(Some(NS_W), Some("w"), "hAnsi", font);
+    r_fonts.set_attr(Some(NS_W), Some("w"), "cs", font);
+    r_fonts
+}
+
+fn make_w_rpr(font: &str) -> Element {
+    let mut w_rpr = Element::new(Some(NS_W), Some("w"), "rPr");
+    w_rpr.push(make_w_rfonts(font));
+    w_rpr
+}
+
 /// Inject `<w:rPr><w:rFonts w:ascii="font" w:hAnsi="font" w:cs="font"/></w:rPr>`
-/// into every `<m:r>` element inside `omml`.
+/// into every `<m:r>` element and `<m:ctrlPr><w:rPr><w:rFonts .../></w:rPr></m:ctrlPr>`
+/// into every structural `*Pr` element inside `omml`.
 pub fn apply_math_font(omml: &mut Element, font: &str) {
     fn walk(el: &mut Element, font: &str) {
         if el.is(NS_M, "r") {
-            let has_w_rpr = el.elements().any(|c| c.is(NS_W, "rPr"));
-            if !has_w_rpr {
-                let mut w_rpr = Element::new(Some(NS_W), Some("w"), "rPr");
-                let mut r_fonts = Element::new(Some(NS_W), Some("w"), "rFonts");
-                r_fonts.set_attr(Some(NS_W), Some("w"), "ascii", font);
-                r_fonts.set_attr(Some(NS_W), Some("w"), "hAnsi", font);
-                r_fonts.set_attr(Some(NS_W), Some("w"), "cs", font);
-                w_rpr.push(r_fonts);
+            if let Some(w_rpr) = el
+                .children
+                .iter_mut()
+                .filter_map(|n| match n {
+                    Node::Element(c) if c.is(NS_W, "rPr") => Some(c),
+                    _ => None,
+                })
+                .next()
+            {
+                if !w_rpr.elements().any(|c| c.is(NS_W, "rFonts")) {
+                    w_rpr.push(make_w_rfonts(font));
+                }
+            } else {
                 let insert_pos = el
                     .children
                     .iter()
                     .position(|n| matches!(n, Node::Element(c) if c.is(NS_M, "t")))
                     .unwrap_or(el.children.len());
-                el.children.insert(insert_pos, Node::Element(w_rpr));
+                el.children.insert(insert_pos, Node::Element(make_w_rpr(font)));
+            }
+        } else if el.ns.as_deref() == Some(NS_M) && CTRL_PR_PARENTS.contains(&el.local.as_str()) {
+            if let Some(ctrl_pr) = el
+                .children
+                .iter_mut()
+                .filter_map(|n| match n {
+                    Node::Element(c) if c.is(NS_M, "ctrlPr") => Some(c),
+                    _ => None,
+                })
+                .next()
+            {
+                if !ctrl_pr.elements().any(|c| c.is(NS_W, "rPr")) {
+                    ctrl_pr.push(make_w_rpr(font));
+                }
+            } else {
+                let mut ctrl_pr = m_el("ctrlPr");
+                ctrl_pr.push(make_w_rpr(font));
+                el.push(ctrl_pr);
             }
         }
         for child in &mut el.children {
@@ -1159,7 +1272,7 @@ mod tests {
     fn default_token_styles_are_explicit_in_nested_equations() {
         let math = MathNode::parse("<math><mfrac><mn>1</mn><mn>2</mn></mfrac><mi>x</mi><mo>+</mo><mn>3</mn><mo>=</mo><mn>0</mn><mi>sin</mi><mtext>text</mtext><ms>string</ms></math>").unwrap();
         let omml = mathml_to_omml(&math).unwrap();
-        for run in omml.find_all(NS_M, "r") {
+        for run in omml.iter().into_iter().filter(|e| e.is(NS_M, "r")) {
             let text = run.find(NS_M, "t").unwrap().text();
             let style = run.find(NS_M, "rPr").unwrap().find(NS_M, "sty").unwrap();
             assert_eq!(
@@ -1505,5 +1618,141 @@ mod tests {
             .iter()
             .iter()
             .any(|n| n.tag == "mtable" && n.attr("columnalign") == Some("left right")));
+    }
+
+    #[test]
+    fn apply_math_font_sets_runs_and_ctrl_pr_on_structural_properties() {
+        let mml = MathNode::parse(
+            "<math><mrow><mfrac><mi>a</mi><mi>b</mi></mfrac><mo>+</mo><msqrt><mi>x</mi></msqrt><mo>+</mo><mrow><mo>(</mo><mi>y</mi><mo>)</mo></mrow><mo>+</mo><mover accent=\"true\"><mi>z</mi><mo>^</mo></mover><mo>+</mo><mover><mi>w</mi><mo>¯</mo></mover><mo>+</mo><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>n</mi></munderover><msub><mi>x</mi><mi>i</mi></msub></mrow></math>",
+        )
+        .unwrap();
+        let mut omml = mathml_to_omml(&mml).unwrap();
+        apply_math_font(&mut omml, "Cambria Math");
+
+        for run in omml.iter().into_iter().filter(|e| e.is(NS_M, "r")) {
+            let r_fonts = run
+                .find(NS_W, "rPr")
+                .and_then(|pr| pr.find(NS_W, "rFonts"))
+                .expect("every m:r must have w:rPr/w:rFonts");
+            assert_eq!(r_fonts.attr(Some(NS_W), "ascii"), Some("Cambria Math"));
+            assert_eq!(r_fonts.attr(Some(NS_W), "hAnsi"), Some("Cambria Math"));
+            assert_eq!(r_fonts.attr(Some(NS_W), "cs"), Some("Cambria Math"));
+        }
+
+        // Also cover all structural *Pr element names specified for ctrlPr injection.
+        let mut synthetic = m_el("oMath");
+        for pr_name in [
+            "fPr",
+            "dPr",
+            "sSupPr",
+            "sSubPr",
+            "sSubSupPr",
+            "radPr",
+            "accPr",
+            "barPr",
+            "naryPr",
+            "funcPr",
+            "limLowPr",
+            "limUppPr",
+            "mPr",
+            "eqArrPr",
+            "borderBoxPr",
+            "boxPr",
+        ] {
+            synthetic.push(m_el(pr_name));
+        }
+        apply_math_font(&mut synthetic, "STIX Two Math");
+        for pr_el in synthetic.elements() {
+            let r_fonts = pr_el
+                .find(NS_M, "ctrlPr")
+                .and_then(|c| c.find(NS_W, "rPr"))
+                .and_then(|r| r.find(NS_W, "rFonts"))
+                .unwrap_or_else(|| panic!("{} missing m:ctrlPr/w:rPr/w:rFonts", pr_el.local));
+            assert_eq!(r_fonts.attr(Some(NS_W), "ascii"), Some("STIX Two Math"));
+            assert_eq!(r_fonts.attr(Some(NS_W), "hAnsi"), Some("STIX Two Math"));
+            assert_eq!(r_fonts.attr(Some(NS_W), "cs"), Some("STIX Two Math"));
+        }
+
+        // Calling apply_math_font twice must not duplicate w:rPr or m:ctrlPr.
+        apply_math_font(&mut omml, "Cambria Math");
+        assert!(omml
+            .find_all(NS_M, "fPr")
+            .into_iter()
+            .all(|pr| pr.find_all(NS_M, "ctrlPr").len() == 1));
+    }
+
+    #[test]
+    fn set_minus_backslash_normalizes_to_u2216_and_empty_script_base_avoids_empty_e() {
+        let set_mml = MathNode::parse(
+            "<math><mi>D</mi><mo>=</mo><mi>ℝ</mi><mo>\\</mo><mrow><mo>{</mo><mrow><mo>-</mo><mn>1</mn></mrow><mo>}</mo></mrow><mtext>\\</mtext></math>",
+        )
+        .unwrap();
+        let set_omml = mathml_to_omml(&set_mml).unwrap();
+        let texts: Vec<String> = set_omml
+            .iter()
+            .into_iter()
+            .filter(|e| e.is(NS_M, "t"))
+            .map(|t| t.text())
+            .collect();
+        assert!(texts.iter().any(|t| t == "∖"), "expected U+2216 in {texts:?}");
+        // <mtext>\</mtext> remains literal '\', while <mo>\</mo> was converted to U+2216.
+        assert_eq!(texts.iter().filter(|t| *t == "\\").count(), 1);
+
+        // Empty script base on y_{CT} (where _{CT} has an empty <mrow/> base)
+        let sub_mml = MathNode::parse(
+            "<math><mrow><mi>y</mi><msub><mrow/><mrow><mi>C</mi><mi>T</mi></mrow></msub></mrow></math>",
+        )
+        .unwrap();
+        let sub_omml = mathml_to_omml(&sub_mml).unwrap();
+        let s_sub = sub_omml.find(NS_M, "sSub").expect("should emit m:sSub");
+        let e = s_sub.find(NS_M, "e").expect("m:sSub must have m:e");
+        assert!(
+            !e.children.is_empty(),
+            "empty script base must not produce <m:e/>"
+        );
+        assert_eq!(
+            e.find(NS_M, "r").and_then(|r| r.find(NS_M, "t")).map(|t| t.text()),
+            Some("\u{00A0}".to_string())
+        );
+    }
+
+    #[test]
+    fn encode_munderover_with_arrow_base_emits_stretchy_group_chr_and_roundtrips() {
+        let mml = crate::service::parse_latex_to_mathml(
+            r"A \overset{f}{\underset{g}{\leftrightharpoons}} B",
+        )
+        .unwrap();
+        let omml = mathml_to_omml(&mml).unwrap();
+        let group_chr = omml
+            .iter()
+            .into_iter()
+            .find(|e| e.is(NS_M, "groupChr"))
+            .expect("arrow munderover should emit m:groupChr");
+        let chr = group_chr
+            .find(NS_M, "groupChrPr")
+            .and_then(|pr| pr.find(NS_M, "chr"))
+            .and_then(|c| c.attr(Some(NS_M), "val"));
+        assert_eq!(chr, Some("⇋"));
+
+        let decoded = omml_to_mathml(&omml).unwrap();
+        assert!(
+            decoded
+                .iter()
+                .into_iter()
+                .any(|n| n.tag == "munderover" && n.children[0].text == "⇋"),
+            "roundtrip must preserve <munderover>: {}",
+            decoded.to_xml()
+        );
+
+        // When under-label is longer than over-label, groupChr wraps the under-label inside limUpp
+        let wide_under = crate::service::parse_latex_to_mathml(
+            r"\overset{f}{\underset{catalyst}{\rightarrow}}",
+        )
+        .unwrap();
+        let omml_wide = mathml_to_omml(&wide_under).unwrap();
+        let lim_upp = omml_wide.find(NS_M, "limUpp").expect("should use limUpp");
+        assert!(lim_upp.find(NS_M, "e").unwrap().find(NS_M, "groupChr").is_some());
+        let decoded_wide = omml_to_mathml(&omml_wide).unwrap();
+        assert!(decoded_wide.iter().into_iter().any(|n| n.tag == "munderover"));
     }
 }

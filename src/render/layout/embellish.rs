@@ -323,16 +323,26 @@ impl Layout {
                 ));
             }
             '~' | '\u{0303}' | '\u{02DC}' => {
-                let pts: Vec<(f32, f32)> = (0..=12)
+                let content_w = w - 2.0 * x0;
+                let (span, amp, steps) = if content_w > 0.65 * em {
+                    let span = content_w.max(0.55 * em);
+                    let amp = (0.04 * em + 0.015 * span).min(0.08 * em);
+                    (span, amp, 24usize)
+                } else {
+                    let span = (content_w * 0.75).clamp(0.34 * em, 0.48 * em);
+                    (span, 0.04 * em, 16usize)
+                };
+                let pts: Vec<(f32, f32)> = (0..=steps)
                     .map(|i| {
-                        let t = i as f32 / 12.0;
+                        let t = i as f32 / steps as f32;
                         (
-                            cx - 0.17 * em + 0.34 * em * t,
-                            y - 0.04 * em * (t * std::f32::consts::TAU).sin(),
+                            cx - span / 2.0 + span * t,
+                            y - amp * (t * std::f32::consts::TAU).sin(),
                         )
                     })
                     .collect();
                 polys.extend(stroke(&pts, st));
+                b.asc = b.asc.max(-y + amp + st / 2.0 + 0.04 * em);
             }
             _ => {
                 let r = 0.045 * em;
@@ -448,6 +458,43 @@ mod tests {
         assert!(
             ring_polys > 1,
             "mathring should draw a stroked ring (multiple edge segments), got {ring_polys}"
+        );
+    }
+
+    #[test]
+    fn widetilde_spans_multi_character_base_width() {
+        let base_math = crate::service::parse_latex_to_mathml(r"xyz").unwrap();
+        let tilde_math = crate::service::parse_latex_to_mathml(r"\widetilde{xyz}").unwrap();
+        let hat_math = crate::service::parse_latex_to_mathml(r"\widehat{xyz}").unwrap();
+
+        let (base_box, _) = layout_math(&base_math, 14.0).unwrap();
+        let (tilde_box, _) = layout_math(&tilde_math, 14.0).unwrap();
+        let (hat_box, _) = layout_math(&hat_math, 14.0).unwrap();
+
+        let accent_x_span = |lbox: &LBox| -> f32 {
+            let mut min_x = f32::MAX;
+            let mut max_x = f32::MIN;
+            for item in &lbox.items {
+                if let Item::Poly(pts) = item {
+                    for &(x, _) in pts {
+                        min_x = min_x.min(x);
+                        max_x = max_x.max(x);
+                    }
+                }
+            }
+            max_x - min_x
+        };
+
+        let tilde_span = accent_x_span(&tilde_box);
+        let hat_span = accent_x_span(&hat_box);
+        assert!(
+            tilde_span >= 0.85 * base_box.w,
+            "widetilde span {tilde_span} must cover base width {}",
+            base_box.w
+        );
+        assert!(
+            (tilde_span - hat_span).abs() < 0.25 * base_box.w,
+            "widetilde span {tilde_span} should be comparable to widehat span {hat_span}"
         );
     }
 }

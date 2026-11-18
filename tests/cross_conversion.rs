@@ -260,10 +260,15 @@ fn bug4_bigops_nolimits_and_tm_union_inter_roundtrip() {
 
 #[test]
 fn bug5_combined_over_under_limits_and_leftrightharpoons_roundtrip() {
-    for (latex, base_glyph) in [
-        (r"\overset{a}{\underset{b}{c}}", "c"),
-        (r"\overset{a}{\underset{b}{\Rightarrow}}", "⇒"),
-        (r"\overset{a}{\underset{b}{\leftrightharpoons}}", "⇋"),
+    for (latex, base_glyph, is_arrow) in [
+        (r"\overset{a}{\underset{b}{c}}", "c", false),
+        (r"\overset{a}{\underset{b}{\Rightarrow}}", "⇒", true),
+        (r"\overset{a}{\underset{b}{\leftrightharpoons}}", "⇋", true),
+        (
+            r"A \overset{f}{\underset{g}{\leftrightharpoons}} B",
+            "⇋",
+            true,
+        ),
     ] {
         let (_omml1, from_mtef, omml2, final_mathml) = roundtrip_omml_mtef_omml(latex);
         let omml2_el = xml::parse(omml2.as_bytes()).unwrap();
@@ -271,10 +276,19 @@ fn bug5_combined_over_under_limits_and_leftrightharpoons_roundtrip() {
             count_omml(&omml2_el, "sSubSup") == 0,
             "{latex} downgraded to sSubSup: {omml2}"
         );
-        assert!(
-            count_omml(&omml2_el, "limLow") >= 1 && count_omml(&omml2_el, "limUpp") >= 1,
-            "{latex} expected limLow+limUpp in {omml2}"
-        );
+        if is_arrow {
+            assert!(
+                count_omml(&omml2_el, "groupChr") >= 1
+                    && (count_omml(&omml2_el, "limLow") >= 1
+                        || count_omml(&omml2_el, "limUpp") >= 1),
+                "{latex} expected stretchy groupChr + limit in {omml2}"
+            );
+        } else {
+            assert!(
+                count_omml(&omml2_el, "limLow") >= 1 && count_omml(&omml2_el, "limUpp") >= 1,
+                "{latex} expected limLow+limUpp in {omml2}"
+            );
+        }
         assert!(
             from_mtef.iter().iter().any(|n| n.tag == "munderover"),
             "{latex} from_mtef: {}",

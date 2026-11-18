@@ -31,6 +31,18 @@ pub fn convert_bytes_to_omml(input: &[u8]) -> Result<(Vec<u8>, ConversionSummary
     convert_bytes_to_omml_with(input, &ToOmmlOptions::default())
 }
 
+fn read_document_math_font(pkg: &Package) -> Option<String> {
+    let settings_bytes = pkg.get("word/settings.xml")?;
+    let settings = xml::parse(settings_bytes).ok()?;
+    let math_pr = settings.find(NS_M, "mathPr")?;
+    let math_font = math_pr.find(NS_M, "mathFont")?;
+    let val = math_font
+        .attr(Some(NS_M), "val")
+        .or_else(|| math_font.attr(None, "val"))?
+        .trim();
+    (!val.is_empty()).then(|| val.to_owned())
+}
+
 /// Like [`convert_bytes_to_omml`], with explicit [`ToOmmlOptions`].
 pub fn convert_bytes_to_omml_with(
     input: &[u8],
@@ -41,6 +53,16 @@ pub fn convert_bytes_to_omml_with(
         return Err(Error::MissingPart(DOC_XML_PATH.into()));
     }
 
+    let effective_opts = if opts.math_font.as_deref() == Some("Cambria Math") {
+        ToOmmlOptions {
+            math_font: Some(
+                read_document_math_font(&pkg).unwrap_or_else(|| "Cambria Math".into()),
+            ),
+        }
+    } else {
+        opts.clone()
+    };
+
     let content_parts = discover_content_parts(&pkg);
     let mut summary = ConversionSummary::default();
     let mut candidate_files_to_remove: HashSet<String> = HashSet::new();
@@ -49,7 +71,7 @@ pub fn convert_bytes_to_omml_with(
         convert_content_part(
             &mut pkg,
             &xml_path,
-            opts,
+            &effective_opts,
             &mut summary,
             &mut candidate_files_to_remove,
         )?;
@@ -1021,5 +1043,34 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn test_docx_to_omml_honors_settings_math_font_and_defaults_to_cambria_math() {
+        let omml = r#"<m:oMath><m:f><m:num><m:r><m:t>x</m:t></m:r></m:num><m:den><m:r><m:t>2</m:t></m:r></m:den></m:f></m:oMath>"#;
+        let src_docx = make_minimal_omml_docx(omml);
+        let (mt_docx, _) = convert_bytes_with(&src_docx, &Options::default()).unwrap();
+
+        // 1. Default conversion without settings.xml emits Cambria Math on m:r and m:ctrlPr
+        let (default_omml_docx, _) = convert_bytes_to_omml(&mt_docx).unwrap();
+        let pkg_default = Package::read(&default_omml_docx).unwrap();
+        let doc_default = String::from_utf8(pkg_default.get("word/document.xml").unwrap().to_vec()).unwrap();
+        assert!(doc_default.contains(r#"w:ascii="Cambria Math""#));
+        assert!(doc_default.contains("m:ctrlPr"));
+
+        // 2. Document with word/settings.xml <m:mathFont m:val="Latin Modern Math"/> is honored
+        let mut pkg_with_settings = Package::read(&mt_docx).unwrap();
+        let settings_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+  <m:mathPr><m:mathFont m:val="Latin Modern Math"/></m:mathPr>
+</w:settings>"#;
+        pkg_with_settings.set("word/settings.xml", settings_xml.to_vec());
+        let mt_with_settings = pkg_with_settings.write().unwrap();
+
+        let (honored_omml_docx, _) = convert_bytes_to_omml(&mt_with_settings).unwrap();
+        let pkg_honored = Package::read(&honored_omml_docx).unwrap();
+        let doc_honored = String::from_utf8(pkg_honored.get("word/document.xml").unwrap().to_vec()).unwrap();
+        assert!(doc_honored.contains(r#"w:ascii="Latin Modern Math""#));
+        assert!(!doc_honored.contains("Cambria Math"));
     }
 }

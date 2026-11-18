@@ -28,12 +28,18 @@ pub(super) fn convert_single_file(
                 UpgradeTargetArg::Mathtype => UpgradeTarget::ModernMathType,
             },
             font_pt: args.font_size,
-            math_font: args.math_font.clone(),
+            math_font: args
+                .math_font
+                .clone()
+                .or_else(|| UpgradeOptions::default().math_font),
         };
         upgrade_legacy_mathtype_docx_with(source, destination, &options)
     } else if args.to_omml {
         let options = ToOmmlOptions {
-            math_font: args.math_font.clone(),
+            math_font: args
+                .math_font
+                .clone()
+                .or_else(|| ToOmmlOptions::default().math_font),
         };
         convert_to_omml_with(source, destination, &options)
     } else {

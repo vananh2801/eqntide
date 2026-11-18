@@ -90,9 +90,30 @@ fn prime_text(order: u8) -> &'static str {
     }
 }
 
+fn nbsp_mi() -> MathNode {
+    let mut space = MathNode::leaf("mi", "\u{00A0}");
+    space.set_attr("mathvariant", "normal");
+    space
+}
+
 /// Normalize equivalent MathML forms before structural OMML encoding.
 pub(super) fn normalize_mathml(node: &MathNode) -> MathNode {
+    if node.tag == "mo" && node.text.trim() == "\\" {
+        let mut op = node.clone();
+        op.text = "\u{2216}".to_string();
+        return op;
+    }
+
     let mut children: Vec<MathNode> = node.children.iter().map(normalize_mathml).collect();
+    if matches!(
+        node.tag.as_str(),
+        "msub" | "msup" | "msubsup" | "munder" | "mover" | "munderover"
+    ) && children.len() >= 2
+        && is_empty_node(&children[0])
+        && !children[1..].iter().all(is_empty_node)
+    {
+        children[0] = nbsp_mi();
+    }
     if node.tag == "msup" && children.len() == 2 {
         if let Some(order) = prime_order(&collect_text(&children[1])) {
             let base = children.remove(0);
@@ -176,9 +197,7 @@ pub(super) fn normalize_mathml(node: &MathNode) -> MathNode {
             if !is_empty_node(&base) {
                 cleaned.push(base);
             }
-            let mut space = MathNode::leaf("mi", "\u{00A0}");
-            space.set_attr("mathvariant", "normal");
-            cleaned.push(space);
+            cleaned.push(nbsp_mi());
         } else {
             cleaned.push(child);
         }

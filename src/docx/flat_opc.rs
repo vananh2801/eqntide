@@ -22,7 +22,7 @@ use crate::mtef::encode::mathml_to_mtef_bytes;
 use crate::mtef::make_equation_native;
 use crate::ole::{extract_mtef_from_emf, extract_mtef_from_wmf, make_ole};
 use crate::omml::decode::{omml_to_mathml, NS_M};
-use crate::omml::encode::mathml_to_omml;
+use crate::omml::encode::{apply_math_font, mathml_to_omml};
 use crate::render::emf::render_emf_with_mtef;
 use crate::xml::{self, Element, Node};
 
@@ -234,7 +234,8 @@ fn build_omml_package_parts(pkg: &mut Element, math: &MathNode) -> Result<()> {
         CT_RELATIONSHIPS,
         build_document_rels(FlatOpcMode::ModernOmml, "", "", "", ""),
     ));
-    let omml_el = mathml_to_omml(math)?;
+    let mut omml_el = mathml_to_omml(math)?;
+    apply_math_font(&mut omml_el, "Cambria Math");
     pkg.push(make_xml_part(
         "/word/document.xml",
         CT_DOCUMENT,
@@ -654,6 +655,7 @@ mod tests {
         assert!(opc_xml.contains("pkg:package"));
         assert!(opc_xml.contains("/word/document.xml"));
         assert!(opc_xml.contains("m:oMath"));
+        assert!(opc_xml.contains(r#"w:ascii="Cambria Math""#));
 
         let recovered = flat_opc_to_mathml(&opc_xml).expect("parse OMML flat OPC");
         assert_eq!(recovered.find_all("mi")[0].text, "x");

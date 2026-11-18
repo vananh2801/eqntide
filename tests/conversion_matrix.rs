@@ -486,14 +486,10 @@ fn matrix_docx_end_to_end_forward_reverse_and_upgrade() {
     assert!(fb_doc.contains("Equation.DSMT4"));
     assert!(fb_doc.contains("oMath"));
 
-    // 4. Reverse MathType -> OMML with math_font
-    let (omml_back_docx, rev_summary) = convert_bytes_to_omml_with(
-        &mt_emf_docx,
-        &ToOmmlOptions {
-            math_font: Some("Cambria Math".into()),
-        },
-    )
-    .expect("convert_bytes_to_omml_with");
+    // 4. Reverse MathType -> OMML with default options (defaults to Cambria Math)
+    let (omml_back_docx, rev_summary) =
+        convert_bytes_to_omml_with(&mt_emf_docx, &ToOmmlOptions::default())
+            .expect("convert_bytes_to_omml_with");
     assert_eq!(rev_summary.found, formulas.len());
     assert_eq!(rev_summary.converted, formulas.len());
     let rev_entries = read_zip_entries(&omml_back_docx);
@@ -512,6 +508,7 @@ fn matrix_docx_end_to_end_forward_reverse_and_upgrade() {
         formulas.len()
     );
     assert!(rev_doc.contains("Cambria Math"));
+    assert!(rev_doc.contains("m:ctrlPr"));
     assert!(
         !rev_entries
             .iter()

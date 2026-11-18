@@ -262,7 +262,7 @@ pub fn convert_document(
                 &UpgradeOptions {
                     target: UpgradeTarget::ModernOmml,
                     font_pt: req.font_pt,
-                    math_font: None,
+                    ..Default::default()
                 },
             )
         }
@@ -273,7 +273,7 @@ pub fn convert_document(
                 &UpgradeOptions {
                     target: UpgradeTarget::ModernMathType,
                     font_pt: req.font_pt,
-                    math_font: None,
+                    ..Default::default()
                 },
             )
         }

@@ -27,6 +27,8 @@ pub const TF_USER2: u8 = 10;
 pub const TF_MTEXTRA: u8 = 11;
 /// Expandable characters / fences / arrows (`fnEXPAND`).
 pub const TF_EXPAND: u8 = 22;
+/// Equation Editor 3.0 space font (`fnSPACE`).
+pub const TF_SPACE: u8 = 24;
 
 // ── Explicit Euclid font styles (negative signed typeface: `256 - index`) ────
 

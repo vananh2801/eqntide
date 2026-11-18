@@ -470,6 +470,42 @@ impl OmmlConverter {
                         vec![base, unwrap_mrow(under), unwrap_mrow(over)],
                     ));
                 }
+                if tag == "munder" && inner.is(NS_M, "groupChr") {
+                    let g = self.handle_group_chr(inner)?;
+                    if g.tag == "mover"
+                        && g.attr("accent").is_none()
+                        && g.children.len() == 2
+                        && g.children[0].tag == "mo"
+                    {
+                        let under = self.child_mrow(node, "lim")?;
+                        return Ok(mel(
+                            "munderover",
+                            vec![
+                                g.children[0].clone(),
+                                unwrap_mrow(under),
+                                g.children[1].clone(),
+                            ],
+                        ));
+                    }
+                }
+                if tag == "mover" && inner.is(NS_M, "groupChr") {
+                    let g = self.handle_group_chr(inner)?;
+                    if g.tag == "munder"
+                        && g.attr("accentunder").is_none()
+                        && g.children.len() == 2
+                        && g.children[0].tag == "mo"
+                    {
+                        let over = self.child_mrow(node, "lim")?;
+                        return Ok(mel(
+                            "munderover",
+                            vec![
+                                g.children[0].clone(),
+                                g.children[1].clone(),
+                                unwrap_mrow(over),
+                            ],
+                        ));
+                    }
+                }
             }
         }
         let e = self.get_e(node)?;

@@ -47,10 +47,18 @@ impl Default for Options {
 }
 
 /// Conversion settings for MathType → OMML (`convert_to_omml*`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToOmmlOptions {
-    /// Optional math font name (e.g. `"Cambria Math"`) to apply to `<m:r>` runs.
+    /// Optional math font name (defaults to `"Cambria Math"`) to apply to `<m:r>` runs and `<m:ctrlPr>`.
     pub math_font: Option<String>,
+}
+
+impl Default for ToOmmlOptions {
+    fn default() -> Self {
+        ToOmmlOptions {
+            math_font: Some("Cambria Math".into()),
+        }
+    }
 }
 
 /// Target format for upgrading legacy MathType equations.
@@ -80,7 +88,7 @@ impl Default for UpgradeOptions {
         UpgradeOptions {
             target: UpgradeTarget::ModernMathType,
             font_pt: 12.0,
-            math_font: None,
+            math_font: Some("Cambria Math".into()),
         }
     }
 }

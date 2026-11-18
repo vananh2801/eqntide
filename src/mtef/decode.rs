@@ -8,8 +8,8 @@ use crate::mathml::MathNode;
 use crate::ole::extract_mtef_from_ole;
 
 use super::typeface::{
-    TF_FUNCTION, TF_LCGREEK, TF_MTEXTRA, TF_NUMBER, TF_SYMBOL, TF_TEXT, TF_UCGREEK, TF_USER1,
-    TF_USER2, TF_VARIABLE, TF_VECTOR,
+    TF_FUNCTION, TF_LCGREEK, TF_MTEXTRA, TF_NUMBER, TF_SPACE, TF_SYMBOL, TF_TEXT, TF_UCGREEK,
+    TF_USER1, TF_USER2, TF_VARIABLE, TF_VECTOR,
 };
 
 mod characters;
@@ -607,16 +607,25 @@ pub(super) fn parse_v5_record(
             }
             let tf_signed = stream.int8()?;
             let typeface = (tf_signed as i16 + 128) as u8;
-            let mt_code = if (opts & OPT_CHAR_NO_MT) == 0 {
+            let raw_mt_code = if (opts & OPT_CHAR_NO_MT) == 0 {
                 stream.mtef16()?
             } else {
                 0
             };
-            if (opts & OPT_CHAR_ENC_8) != 0 {
-                let _ = stream.uint8();
+            let enc_char = if (opts & OPT_CHAR_ENC_8) != 0 {
+                Some((stream.uint8()? as u16, false))
             } else if (opts & OPT_CHAR_ENC_16) != 0 {
-                let _ = stream.mtef16();
-            }
+                Some((stream.mtef16()?, true))
+            } else {
+                None
+            };
+            let mt_code = if raw_mt_code == 0 && (opts & OPT_CHAR_NO_MT) != 0 {
+                enc_char
+                    .map(|(code, is_16)| resolve_no_mt_enc(typeface, code, is_16))
+                    .unwrap_or(0)
+            } else {
+                raw_mt_code
+            };
             let is_textmode = matches!(typeface, TF_TEXT | TF_USER1 | TF_USER2);
             let mut embells = Vec::new();
             if (opts & OPT_CHAR_EMBELL) != 0 {
@@ -699,7 +708,10 @@ pub(super) fn parse_v5_record(
             })
         }
         REC_EMBELL => {
-            let _opts = stream.uint8()?;
+            let opts = stream.uint8()?;
+            if (opts & OPT_NUDGE) != 0 {
+                parse_nudge(stream);
+            }
             let code = stream.uint8()?;
             // Represent embell inside char's embellishment list using mt_code = code
             Some(MtefObj::Char {
@@ -943,6 +955,9 @@ pub(super) fn parse_v3_record(
             })
         }
         REC_EMBELL => {
+            if (opts & OPT_NUDGE) != 0 {
+                parse_nudge(stream);
+            }
             let code = stream.uint8()?;
             Some(MtefObj::Char {
                 typeface: 0,
@@ -1113,8 +1128,9 @@ fn is_trailing_single_fence_char(
     (left_only && expected_left == Some(code)) || (right_only && expected_right == Some(code))
 }
 
-fn is_mt_space_code(code: u16) -> bool {
+fn is_mt_space_code(typeface: u8, code: u16) -> bool {
     matches!(code, 0xEF01..=0xEF06 | 0xEF08)
+        || (typeface == TF_SPACE && (0xEB01..=0xEB08).contains(&code))
 }
 
 fn is_non_base_code(code: u16) -> bool {
@@ -1141,7 +1157,9 @@ fn close_open_pair(close: u16) -> Option<u16> {
 
 fn is_suitable_base(obj: &MtefObj) -> bool {
     match obj {
-        MtefObj::Char { mt_code, .. } => !is_mt_space_code(*mt_code) && !is_non_base_code(*mt_code),
+        MtefObj::Char {
+            typeface, mt_code, ..
+        } => !is_mt_space_code(*typeface, *mt_code) && !is_non_base_code(*mt_code),
         MtefObj::Tmpl {
             selector,
             subobjects,
@@ -1360,7 +1378,194 @@ fn convert_char_to_mathnode(
     Some(wrap_embellishments(base, embells))
 }
 
+fn resolve_no_mt_enc(typeface: u8, code: u16, is_16: bool) -> u16 {
+    if is_16 {
+        return code;
+    }
+    let byte = code as u8;
+    if matches!(typeface, TF_SYMBOL | TF_LCGREEK | TF_UCGREEK) {
+        return match byte {
+            0x22 => 0x2200, // ∀
+            0x24 => 0x2203, // ∃
+            0x27 => 0x220D, // ∍
+            0x2A => 0x2217, // ∗
+            0x2D => 0x2212, // −
+            0x40 => 0x2245, // ≅
+            0x41 => 0x0391, // Α
+            0x42 => 0x0392, // Β
+            0x43 => 0x03A7, // Χ
+            0x44 => 0x0394, // Δ
+            0x45 => 0x0395, // Ε
+            0x46 => 0x03A6, // Φ
+            0x47 => 0x0393, // Γ
+            0x48 => 0x0397, // Η
+            0x49 => 0x0399, // Ι
+            0x4A => 0x03D1, // ϑ
+            0x4B => 0x039A, // Κ
+            0x4C => 0x039B, // Λ
+            0x4D => 0x039C, // Μ
+            0x4E => 0x039D, // Ν
+            0x4F => 0x039F, // Ο
+            0x50 => 0x03A0, // Π
+            0x51 => 0x0398, // Θ
+            0x52 => 0x03A1, // Ρ
+            0x53 => 0x03A3, // Σ
+            0x54 => 0x03A4, // Τ
+            0x55 => 0x03A5, // Υ
+            0x56 => 0x03C2, // ς
+            0x57 => 0x03A9, // Ω
+            0x58 => 0x039E, // Ξ
+            0x59 => 0x03A8, // Ψ
+            0x5A => 0x0396, // Ζ
+            0x5C => 0x2234, // ∴
+            0x5E => 0x22A5, // ⊥
+            0x61 => 0x03B1, // α
+            0x62 => 0x03B2, // β
+            0x63 => 0x03C7, // χ
+            0x64 => 0x03B4, // δ
+            0x65 => 0x03B5, // ε
+            0x66 => 0x03C6, // φ
+            0x67 => 0x03B3, // γ
+            0x68 => 0x03B7, // η
+            0x69 => 0x03B9, // ι
+            0x6A => 0x03D5, // ϕ
+            0x6B => 0x03BA, // κ
+            0x6C => 0x03BB, // λ
+            0x6D => 0x03BC, // μ
+            0x6E => 0x03BD, // ν
+            0x6F => 0x03BF, // ο
+            0x70 => 0x03C0, // π
+            0x71 => 0x03B8, // θ
+            0x72 => 0x03C1, // ρ
+            0x73 => 0x03C3, // σ
+            0x74 => 0x03C4, // τ
+            0x75 => 0x03C5, // υ
+            0x76 => 0x03D6, // ϖ
+            0x77 => 0x03C9, // ω
+            0x78 => 0x03BE, // ξ
+            0x79 => 0x03C8, // ψ
+            0x7A => 0x03B6, // ζ
+            0x7E => 0x223C, // ∼
+            0xA0 => 0x20AC, // €
+            0xA1 => 0x03D2, // ϒ
+            0xA2 => 0x2032, // ′
+            0xA3 => 0x2264, // ≤
+            0xA4 => 0x2044, // ⁄
+            0xA5 => 0x221E, // ∞
+            0xA6 => 0x0192, // ƒ
+            0xAB => 0x2194, // ↔
+            0xAC => 0x2190, // ←
+            0xAD => 0x2191, // ↑
+            0xAE => 0x2192, // →
+            0xAF => 0x2193, // ↓
+            0xB0 => 0x00B0, // °
+            0xB1 => 0x00B1, // ±
+            0xB2 => 0x2033, // ″
+            0xB3 => 0x2265, // ≥
+            0xB4 => 0x00D7, // ×
+            0xB5 => 0x221D, // ∝
+            0xB6 => 0x2202, // ∂
+            0xB7 => 0x2022, // •
+            0xB8 => 0x00F7, // ÷
+            0xB9 => 0x2260, // ≠
+            0xBA => 0x2261, // ≡
+            0xBB => 0x2248, // ≈
+            0xBC => 0x2026, // …
+            0xC0 => 0x2135, // ℵ
+            0xC1 => 0x2111, // ℑ
+            0xC2 => 0x211C, // ℜ
+            0xC3 => 0x2118, // ℘
+            0xC4 => 0x2297, // ⊗
+            0xC5 => 0x2295, // ⊕
+            0xC6 => 0x2205, // ∅
+            0xC7 => 0x2229, // ∩
+            0xC8 => 0x222A, // ∪
+            0xC9 => 0x2283, // ⊃
+            0xCA => 0x2287, // ⊇
+            0xCB => 0x2284, // ⊄
+            0xCC => 0x2282, // ⊂
+            0xCD => 0x2286, // ⊆
+            0xCE => 0x2208, // ∈
+            0xCF => 0x2209, // ∉
+            0xD0 => 0x2220, // ∠
+            0xD1 => 0x2207, // ∇
+            0xD5 => 0x220F, // ∏
+            0xD6 => 0x221A, // √
+            0xD7 => 0x22C5, // ⋅
+            0xD8 => 0x00AC, // ¬
+            0xD9 => 0x2227, // ∧
+            0xDA => 0x2228, // ∨
+            0xDB => 0x21D4, // ⇔
+            0xDC => 0x21D0, // ⇐
+            0xDD => 0x21D1, // ⇑
+            0xDE => 0x21D2, // ⇒
+            0xDF => 0x21D3, // ⇓
+            0xE0 => 0x25CA, // ◊
+            0xE1 => 0x2329, // ⟨
+            0xE5 => 0x2211, // ∑
+            0xF1 => 0x232A, // ⟩
+            0xF2 => 0x222B, // ∫
+            _ => code,
+        };
+    }
+    match byte {
+        0x80 => 0x20AC,
+        0x82 => 0x201A,
+        0x83 => 0x0192,
+        0x84 => 0x201E,
+        0x85 => 0x2026,
+        0x86 => 0x2020,
+        0x87 => 0x2021,
+        0x88 => 0x02C6,
+        0x89 => 0x2030,
+        0x8A => 0x0160,
+        0x8B => 0x2039,
+        0x8C => 0x0152,
+        0x8E => 0x017D,
+        0x91 => 0x2018,
+        0x92 => 0x2019,
+        0x93 => 0x201C,
+        0x94 => 0x201D,
+        0x95 => 0x2022,
+        0x96 => 0x2013,
+        0x97 => 0x2014,
+        0x98 => 0x02DC,
+        0x99 => 0x2122,
+        0x9A => 0x0161,
+        0x9B => 0x203A,
+        0x9C => 0x0153,
+        0x9E => 0x017E,
+        0x9F => 0x0178,
+        _ => code,
+    }
+}
+
+fn map_space_code(mt_code: u16) -> Option<MathNode> {
+    match mt_code {
+        0xEF00 | 0xEF01 | 0xEB00 => None,
+        0xEB01..=0xEB08 | 0xEF02..=0xEF08 => {
+            let width = match mt_code {
+                0xEB02 | 0xEF02 => "0.166667em",
+                0xEB03 | 0xEF03 => "0.222222em",
+                0xEB04 | 0xEF04 => "0.277778em",
+                0xEB05 | 0xEF05 => "1em",
+                0xEB06 | 0xEF06 => "2em",
+                _ => "0.083333em",
+            };
+            let mut space = MathNode::new("mspace");
+            space.set_attr("width", width);
+            Some(space)
+        }
+        _ => None,
+    }
+}
+
 fn map_mt_char_token(typeface: u8, mt_code: u16, is_textmode: bool) -> Option<MathNode> {
+    // 0. Equation Editor 3.0 `fnSPACE` (typeface 24) uses 0xEB01..=0xEB08 for spacing
+    if typeface == TF_SPACE && (0xEB00..=0xEB08).contains(&mt_code) {
+        return map_space_code(mt_code);
+    }
+
     // 1. Check MathType Private Use Area (0xE000..=0xF8FF)
     if (0xE000..=0xF8FF).contains(&mt_code) {
         return map_pua_char(mt_code, is_textmode);
@@ -1381,7 +1586,13 @@ fn map_mt_char_token(typeface: u8, mt_code: u16, is_textmode: bool) -> Option<Ma
         // for Windows font-linking should decode as `<mo>` rather than literal text.
         if matches!(
             mt_code,
-            0x02C6..=0x02DC | 0x2032..=0x2037 | 0x2057 | 0x20D0..=0x20FF | 0x2190..=0x2BFF | 0x3008..=0x301B
+            0x005C
+                | 0x02C6..=0x02DC
+                | 0x2032..=0x2037
+                | 0x2057
+                | 0x20D0..=0x20FF
+                | 0x2190..=0x2BFF
+                | 0x3008..=0x301B
         ) {
             return Some(MathNode::leaf("mo", &s));
         }
@@ -1663,10 +1874,10 @@ fn wrap_embellishments(mut node: MathNode, embells: &[u8]) -> MathNode {
             23 => menclose(node, "downdiagonalstrike"),
 
             // Under dots / accents / arrows
-            25 => munder(node, "\u{02D9}", false),
-            26 => munder(node, "\u{00A8}", false),
-            27 => munder(node, "\u{20DB}", false),
-            28 => munder(node, "\u{20DC}", false),
+            25 => munder(node, "\u{02D9}", true),
+            26 => munder(node, "\u{00A8}", true),
+            27 => munder(node, "\u{20DB}", true),
+            28 => munder(node, "\u{20DC}", true),
             29 => munder(node, "_", true),
             30 => munder(node, "\u{02DC}", true),
             31 => munder(node, "\u{2322}", true),
@@ -2053,8 +2264,8 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
             let is_top = has_var("tvHB_TOP");
             let s0 = slot_to_node(slots.first());
             let ch = match (selector, is_top) {
-                ("tmHBRACE", true) => "\u{FE37}",
-                ("tmHBRACE", false) => "\u{FE38}",
+                ("tmHBRACE", true) => "\u{23DE}",
+                ("tmHBRACE", false) => "\u{23DF}",
                 (_, true) => "\u{23B4}",
                 (_, false) => "\u{23B5}",
             };
@@ -2395,9 +2606,29 @@ fn convert_tmpl(selector: &str, variations: &[&str], subobjects: &[MtefObj]) -> 
             let is_bottom = has_var("tvAR_BOTTOM");
 
             let arrow_ch = if is_harpoon {
-                "\u{21CC}"
+                if is_double && is_left && !is_right {
+                    "\u{21CB}"
+                } else if is_left && !is_right {
+                    if is_bottom && !is_topbottom {
+                        "\u{21BD}"
+                    } else {
+                        "\u{21BC}"
+                    }
+                } else if is_right && !is_left {
+                    if is_bottom && !is_topbottom {
+                        "\u{21C1}"
+                    } else {
+                        "\u{21C0}"
+                    }
+                } else {
+                    "\u{21CC}"
+                }
             } else if is_double {
-                "\u{21C4}"
+                if is_left && !is_right {
+                    "\u{21C6}"
+                } else {
+                    "\u{21C4}"
+                }
             } else if is_left && is_right {
                 "\u{2194}"
             } else if is_left {
@@ -2457,5 +2688,134 @@ mod tests {
         assert!(xml.starts_with("<math"));
         assert!(xml.contains("<mi>x</mi>"));
         assert!(xml.contains("<mfrac>"));
+    }
+
+    #[test]
+    fn equation3_fnspace_eb_codes_decode_to_mspace_while_mtextra_keeps_arrows() {
+        // Real Equation.3 (MTEF v3) stream for `[0 ; π/2]` using typeface 24 (0x98) + 0xEB02
+        let eq3_interval: &[u8] = &[
+            0x03, 0x01, 0x01, 0x03, 0x0a, // v3 header
+            0x0a, // REC_FULL
+            0x01, // REC_LINE
+            0x03, 0x03, 0x00, 0x00, // REC_TMPL tmBRACK
+            0x01, // REC_LINE
+            0x02, 0x88, 0x30, 0x00, // '0'
+            0x02, 0x98, 0x02, 0xeb, // TF_SPACE (24), 0xEB02
+            0x02, 0x82, 0x3b, 0x00, // ';'
+            0x02, 0x98, 0x02, 0xeb, // TF_SPACE (24), 0xEB02
+            0x03, 0x0e, 0x00, 0x00, // REC_TMPL tmFRACT
+            0x01, 0x02, 0x84, 0xc0, 0x03, 0x00, // π
+            0x01, 0x02, 0x88, 0x32, 0x00, // 2
+            0x00, // end tmFRACT
+            0x00, // end tmBRACK line
+            0x02, 0x96, 0x5b, 0x00, // '['
+            0x02, 0x96, 0x5d, 0x00, // ']'
+            0x00, // end tmBRACK
+            0x00, // end top line
+        ];
+        let mml = mtef_to_mathml(eq3_interval).expect("Equation.3 interval should decode");
+        let xml = mml.to_xml();
+        assert!(!xml.contains('\u{2944}'), "unexpected ⥄ in {xml}");
+        assert!(
+            mml.find_all("mspace").len() == 2
+                || mml.iter().into_iter().filter(|n| n.tag == "mspace").count() == 2,
+            "expected 2 mspace nodes in {xml}"
+        );
+        let omml = crate::omml::mathml_to_omml_xml(&mml).unwrap();
+        assert!(!omml.contains('\u{2944}'), "unexpected ⥄ in {omml}");
+
+        // Check all 0xEB01..=0xEB08 under TF_SPACE decode to <mspace>, while TF_MTEXTRA keeps arrows.
+        for code in 0xEB01u16..=0xEB08 {
+            let node = map_mt_char_token(TF_SPACE, code, false)
+                .unwrap_or_else(|| panic!("TF_SPACE 0x{code:04X} should decode to spacing"));
+            assert_eq!(node.tag, "mspace", "0x{code:04X}");
+        }
+        assert_eq!(
+            map_mt_char_token(TF_MTEXTRA, 0xEB01, false).unwrap().text,
+            "\u{2942}"
+        );
+        assert_eq!(
+            map_mt_char_token(TF_MTEXTRA, 0xEB02, false).unwrap().text,
+            "\u{2944}"
+        );
+    }
+
+    #[test]
+    fn opt_char_no_mt_falls_back_to_enc_and_rec_embell_consumes_nudge() {
+        // 1. OPT_CHAR_NO_MT (0x20) + OPT_CHAR_ENC_8 (0x04) with ASCII 'x' (TF_VARIABLE)
+        //    and Symbol 0x61 -> 'α' (TF_SYMBOL), plus OPT_CHAR_ENC_16 (0x10) 'β' (0x03B2).
+        let records_no_mt: Vec<u8> = vec![
+            0x02, OPT_CHAR_NO_MT | OPT_CHAR_ENC_8, TF_VARIABLE | 0x80, b'x',
+            0x02, OPT_CHAR_NO_MT | OPT_CHAR_ENC_8, TF_SYMBOL | 0x80, 0x61,
+            0x02, OPT_CHAR_NO_MT | OPT_CHAR_ENC_16, TF_LCGREEK | 0x80, 0xB2, 0x03,
+        ];
+        let mtef_no_mt = super::super::build_mtef(&records_no_mt);
+        let mml_no_mt = mtef_to_mathml(&mtef_no_mt).expect("OPT_CHAR_NO_MT should decode");
+        let xml_no_mt = mml_no_mt.to_xml();
+        assert!(xml_no_mt.contains("<mi>x</mi>"), "{xml_no_mt}");
+        assert!(xml_no_mt.contains("α"), "{xml_no_mt}");
+        assert!(xml_no_mt.contains("β"), "{xml_no_mt}");
+
+        // 2. REC_CHAR with OPT_CHAR_EMBELL followed by REC_EMBELL with OPT_NUDGE (0x08) and trailing 'y'
+        let records_nudge: Vec<u8> = vec![
+            0x02, OPT_CHAR_EMBELL, TF_VARIABLE | 0x80, b'x', 0x00, // CHAR 'x' with embell
+            0x06, OPT_NUDGE, 0x02, 0xFE, 0x02, // REC_EMBELL, opts=OPT_NUDGE, dx=2, dy=-2, code=EMB_1DOT (2)
+            0x00, // end embell list
+            0x02, 0x00, TF_VARIABLE | 0x80, b'y', 0x00, // trailing CHAR 'y'
+        ];
+        let mtef_nudge = super::super::build_mtef(&records_nudge);
+        let mml_nudge = mtef_to_mathml(&mtef_nudge).expect("nudged REC_EMBELL should decode");
+        let xml_nudge = mml_nudge.to_xml();
+        assert!(xml_nudge.contains("<mover accent=\"true\"><mi>x</mi><mo>\u{02D9}</mo></mover>"), "{xml_nudge}");
+        assert!(xml_nudge.contains("<mi>y</mi>"), "trailing sibling 'y' corrupted: {xml_nudge}");
+    }
+
+    #[test]
+    fn hbrace_under_accents_and_tm_arrow_directionality() {
+        // 1. tmHBRACE emits U+23DE / U+23DF
+        let over_bytes = super::super::build_mtef(&[
+            0x03, 0x00, 24, 0x01, 0x00, // tmHBRACE, tvHB_TOP (0x01), tmpl_opts=0
+            0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'a', 0x00, 0x00, // slot 0: 'a'
+            0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'n', 0x00, 0x00, // slot 1: 'n'
+            0x00, // end tmHBRACE
+        ]);
+        let over_mml = mtef_to_mathml(&over_bytes).unwrap();
+        assert!(over_mml.to_xml().contains('\u{23DE}'), "{}", over_mml.to_xml());
+
+        let under_bytes = super::super::build_mtef(&[
+            0x03, 0x00, 24, 0x00, 0x00, // tmHBRACE, bottom (0x00)
+            0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'a', 0x00, 0x00,
+            0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'm', 0x00, 0x00,
+            0x00,
+        ]);
+        let under_mml = mtef_to_mathml(&under_bytes).unwrap();
+        assert!(under_mml.to_xml().contains('\u{23DF}'), "{}", under_mml.to_xml());
+
+        // 2. Under-accent embellishments 25..=28 have accentunder="true"
+        for code in 25u8..=28 {
+            let wrapped = wrap_embellishments(MathNode::leaf("mi", "x"), &[code]);
+            assert_eq!(wrapped.tag, "munder");
+            assert_eq!(wrapped.attr("accentunder"), Some("true"), "embell {code}");
+        }
+
+        // 3. tmARROW distinguishes left/right harpoons and double arrows
+        let make_tm_arrow = |var: u8| {
+            super::super::build_mtef(&[
+                0x03, 0x00, 14, var, 0x00, // tmARROW
+                0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'f', 0x00, 0x00, // top slot
+                0x01, 0x01, // null bottom slot
+                0x00,
+            ])
+        };
+        let left_harpoon = mtef_to_mathml(&make_tm_arrow(0x02 | 0x04 | 0x10)).unwrap();
+        let right_harpoon = mtef_to_mathml(&make_tm_arrow(0x02 | 0x04 | 0x20)).unwrap();
+        let eq_harpoon = mtef_to_mathml(&make_tm_arrow(0x02 | 0x04)).unwrap();
+        let left_double = mtef_to_mathml(&make_tm_arrow(0x01 | 0x04 | 0x10)).unwrap();
+        let right_double = mtef_to_mathml(&make_tm_arrow(0x01 | 0x04 | 0x20)).unwrap();
+        assert!(left_harpoon.to_xml().contains('\u{21BC}'));
+        assert!(right_harpoon.to_xml().contains('\u{21C0}'));
+        assert!(eq_harpoon.to_xml().contains('\u{21CC}'));
+        assert!(left_double.to_xml().contains('\u{21C6}'));
+        assert!(right_double.to_xml().contains('\u{21C4}'));
     }
 }
