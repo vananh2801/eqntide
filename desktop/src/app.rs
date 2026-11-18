@@ -4456,6 +4456,7 @@ mod tests {
                         },
                         |ui| a.shell(ui),
                     );
+                    output.textures_delta.clear();
                     let textures = a.palette_texture_ids();
                     let images: Vec<_> = output
                         .shapes
@@ -4496,7 +4497,6 @@ mod tests {
                         assert!(images.iter().all(|r| output.shapes.iter().any(|s|
                             matches!(&s.shape, egui::Shape::Rect(p) if p.rect == *r && s.clip_rect.contains_rect(*r)))));
                     }
-                    output.textures_delta.clear();
                 }
             }
         }
@@ -4525,6 +4525,7 @@ mod tests {
                             },
                             |ui| a.shell(ui),
                         );
+                        output.textures_delta.clear();
                         let textures = a.palette_texture_ids();
                         let mut rows = Vec::<f32>::new();
                         for shape in &output.shapes {
@@ -4564,7 +4565,6 @@ mod tests {
                             "{}",
                             group.id
                         );
-                        output.textures_delta.clear();
                     }
                 }
             }
@@ -4584,6 +4584,7 @@ mod tests {
                 },
                 |ui| a.shell(ui),
             );
+            output.textures_delta.clear();
             let sidebar_tex = a.sidebar_texture_id().expect("sidebar texture must exist");
             let icon_rects: Vec<_> = output
                 .shapes
@@ -4628,7 +4629,6 @@ mod tests {
                     "{nav} clipped at minimum window size"
                 );
             }
-            output.textures_delta.clear();
         }
     }
 
@@ -4738,6 +4738,7 @@ mod tests {
                 viewport.monitor_size = Some(monitor);
                 viewport.maximized = Some(maximized);
                 let mut output = ctx.run_ui(input, |ui| App::enforce_window_minimum(ui.ctx()));
+                output.textures_delta.clear();
                 let requested = output.viewport_output[&egui::ViewportId::ROOT]
                     .commands
                     .iter()
@@ -4749,7 +4750,6 @@ mod tests {
                         }
                     });
                 assert_eq!(requested, expected, "Wayland fallback: {wayland}");
-                output.textures_delta.clear();
             }
         }
     }
@@ -4918,6 +4918,7 @@ mod tests {
         let ctx = egui::Context::default();
         for (label, expected_tab) in [("Batch DOCX", 1), ("← Back to equation", 0)] {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+            output.textures_delta.clear();
             let pos = output
                 .shapes
                 .iter()
@@ -4930,7 +4931,6 @@ mod tests {
                     None
                 })
                 .unwrap();
-            output.textures_delta.clear();
             ctx.run_ui(
                 egui::RawInput {
                     events: vec![
@@ -5200,6 +5200,7 @@ mod tests {
             ctx.set_theme(theme);
             ctx.set_pixels_per_point(1.5);
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+            output.textures_delta.clear();
             let texture_ids = a.palette_texture_ids();
             assert!(!texture_ids.is_empty());
             assert!((a.palette_ppp - 1.5).abs() < f32::EPSILON);
@@ -5209,7 +5210,6 @@ mod tests {
                 }),
                 _ => false,
             });
-            output.textures_delta.clear();
             assert!(
                 tinted_match,
                 "expected palette icons to tint {expected_tint:?} in {theme:?}"
@@ -5231,6 +5231,7 @@ mod tests {
             ("← Back to equation", 0),
         ] {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+            output.textures_delta.clear();
             let pos = output
                 .shapes
                 .iter()
@@ -5243,7 +5244,6 @@ mod tests {
                     None
                 })
                 .unwrap_or_else(|| panic!("missing button {label}"));
-            output.textures_delta.clear();
             ctx.run_ui(
                 egui::RawInput {
                     events: vec![
@@ -5273,6 +5273,7 @@ mod tests {
         // Verify About displays logo, version, author, and GitHub link
         a.tab = 3;
         let mut about_out = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+        about_out.textures_delta.clear();
         let texts: Vec<_> = about_out
             .shapes
             .iter()
@@ -5286,11 +5287,11 @@ mod tests {
         assert!(texts.iter().any(|t| t == env!("CARGO_PKG_VERSION")));
         assert!(texts.iter().any(|t| t == env!("CARGO_PKG_REPOSITORY")));
         assert!(a.logo_texture.is_some());
-        about_out.textures_delta.clear();
 
         // Verify Settings toggles theme from Dark -> Light
         a.tab = 2;
         let mut settings_out = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+        settings_out.textures_delta.clear();
         let toggle_pos = settings_out
             .shapes
             .iter()
@@ -5301,7 +5302,6 @@ mod tests {
                 _ => None,
             })
             .expect("missing theme toggle button in Settings");
-        settings_out.textures_delta.clear();
         ctx.run_ui(
             egui::RawInput {
                 events: vec![
@@ -5402,9 +5402,9 @@ mod tests {
             },
             |ui| a.shell(ui),
         );
+        empty_out.textures_delta.clear();
         assert!(empty_out.shapes.iter().any(|s| matches!(&s.shape,
             egui::Shape::Text(t) if t.galley.text().contains("Click any symbol"))));
-        empty_out.textures_delta.clear();
 
         a.category = "Fractions".into();
         let mut frac_out = ctx.run_ui(
@@ -5414,6 +5414,7 @@ mod tests {
             },
             |ui| a.shell(ui),
         );
+        frac_out.textures_delta.clear();
         let frac_tex = a.palette_atlases["Fractions"].texture.id();
         let first_pos = frac_out
             .shapes
@@ -5429,7 +5430,6 @@ mod tests {
                 _ => None,
             })
             .expect("fraction palette button");
-        frac_out.textures_delta.clear();
 
         ctx.run_ui(
             egui::RawInput {
@@ -5470,6 +5470,7 @@ mod tests {
             },
             |ui| a.shell(ui),
         );
+        recent_out.textures_delta.clear();
         let recent_tex = a.palette_atlases[palette::RECENT_GROUP].texture.id();
         let rendered_recent = recent_out
             .shapes
@@ -5479,7 +5480,6 @@ mod tests {
             })
             .count();
         assert_eq!(rendered_recent, 2);
-        recent_out.textures_delta.clear();
     }
 
     #[test]
