@@ -40,6 +40,24 @@ impl ThemeMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum StartupFocus {
+    #[default]
+    Canvas,
+    Latex,
+}
+
+impl<'de> Deserialize<'de> for StartupFocus {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = Option::<String>::deserialize(deserializer)?;
+        Ok(match raw.as_deref() {
+            Some("latex") => Self::Latex,
+            _ => Self::Canvas,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
@@ -47,6 +65,7 @@ pub(crate) struct Settings {
     pub(crate) theme: ThemeMode,
     pub(crate) canvas_light: CanvasPreset,
     pub(crate) canvas_dark: CanvasPreset,
+    pub(crate) startup_focus: StartupFocus,
     pub(crate) font_pt: f32,
     pub(crate) target: String,
     pub(crate) category: String,
@@ -62,6 +81,7 @@ impl Default for Settings {
             theme: ThemeMode::System,
             canvas_light: CanvasPreset::SoftPaper,
             canvas_dark: CanvasPreset::SoftPaper,
+            startup_focus: StartupFocus::Canvas,
             font_pt: DEFAULT_FONT_PT,
             target: DEFAULT_TARGET.into(),
             category: palette::DEFAULT_GROUP.into(),
@@ -213,6 +233,7 @@ mod tests {
             theme: ThemeMode::Dark,
             canvas_light: CanvasPreset::DimSlate,
             canvas_dark: CanvasPreset::PureWhite,
+            startup_focus: StartupFocus::Latex,
             font_pt: 81.3,
             target: "latex".into(),
             category: "DoesNotExist".into(),
@@ -288,6 +309,7 @@ mod tests {
             theme: ThemeMode::Light,
             canvas_light: CanvasPreset::CoolSlate,
             canvas_dark: CanvasPreset::DimSlate,
+            startup_focus: StartupFocus::Latex,
             font_pt: 16.5,
             target: "mathtype".into(),
             category: palette::RECENT_GROUP.into(),
@@ -326,5 +348,24 @@ mod tests {
         assert_eq!(loaded.zoom, 2.5);
         assert_eq!(loaded.canvas_light, CanvasPreset::SoftPaper);
         assert_eq!(loaded.canvas_dark, CanvasPreset::SoftPaper);
+        assert_eq!(loaded.startup_focus, StartupFocus::Canvas);
+    }
+
+    #[test]
+    fn unknown_startup_focus_in_json_falls_back_to_canvas() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "zoom": 3.0,
+                "startup_focus": "sidebar"
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load_from_path(&path);
+        assert_eq!(loaded.zoom, 3.0);
+        assert_eq!(loaded.startup_focus, StartupFocus::Canvas);
     }
 }

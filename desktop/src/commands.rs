@@ -15,6 +15,12 @@ pub struct Input {
     pub selected: usize,
 }
 
+impl Input {
+    pub fn is_command_prefix(&self) -> bool {
+        self.name.bytes().all(|b| b.is_ascii_alphabetic())
+    }
+}
+
 const COMMANDS: &[(&str, &str, &str)] = eqntide::catalog::COMMANDS;
 
 pub fn suggestions(prefix: &str) -> Vec<Command> {

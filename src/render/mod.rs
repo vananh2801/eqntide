@@ -395,7 +395,7 @@ pub fn render_interactive_alpha_scaled(
         carets: vec![],
         path: vec![],
         x: ox / PX_PER_PT,
-        y: pad_y / PX_PER_PT,
+        y: (oy - b.asc) / PX_PER_PT,
         width: b.w / PX_PER_PT,
         height: (b.asc + b.desc) / PX_PER_PT,
         baseline: oy / PX_PER_PT,
@@ -676,5 +676,33 @@ mod interactive_tests {
         assert!(at_star.alpha.iter().any(|&a| a > 0));
         assert!(at_alpha.alpha.iter().any(|&a| a > 0));
         assert!(at_frac.alpha.iter().any(|&a| a > 0));
+    }
+
+    #[test]
+    fn root_region_y_aligns_with_tallest_child_relative_to_baseline() {
+        let math = MathNode::with_children(
+            "math",
+            vec![
+                MathNode::leaf("mi", "x"),
+                MathNode::leaf("mo", "+"),
+                MathNode::leaf("mn", "1"),
+            ],
+        );
+        let preview = render_interactive(&math, 12.0).unwrap();
+        let root = preview.regions.iter().find(|r| r.path.is_empty()).unwrap();
+        let plus = preview.regions.iter().find(|r| r.path == [1]).unwrap();
+        let num = preview.regions.iter().find(|r| r.path == [2]).unwrap();
+        assert!(
+            (root.y - num.y).abs() < 0.05,
+            "root y ({}) must align with tallest child top ({})",
+            root.y,
+            num.y
+        );
+        assert!(
+            ((root.y + root.height) - (plus.y + plus.height)).abs() < 0.05,
+            "root bottom ({}) must align with lowest child bottom ({})",
+            root.y + root.height,
+            plus.y + plus.height
+        );
     }
 }

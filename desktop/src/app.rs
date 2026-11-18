@@ -3,7 +3,7 @@ use crate::{
     batch, commands,
     instance::Instance,
     palette, runtime,
-    settings::{self, Settings, ThemeMode, MAX_RECENT_PALETTE, ZOOM_RANGE},
+    settings::{self, Settings, StartupFocus, ThemeMode, MAX_RECENT_PALETTE, ZOOM_RANGE},
     theme::{self, CanvasPalette, CanvasPreset, ThemeTokens},
     Event, Rendered,
 };
@@ -287,6 +287,10 @@ pub struct App {
     settings_dirty: bool,
     canvas_light: CanvasPreset,
     canvas_dark: CanvasPreset,
+    startup_focus: StartupFocus,
+    active_editor_focus: StartupFocus,
+    pending_focus_restore: Option<StartupFocus>,
+    caret_blink: Option<(Caret, u64, usize, f64)>,
 }
 
 impl App {
@@ -422,6 +426,9 @@ impl App {
         self.batch_overwrite = settings.batch_overwrite;
         self.canvas_light = settings.canvas_light;
         self.canvas_dark = settings.canvas_dark;
+        self.startup_focus = settings.startup_focus;
+        self.active_editor_focus = settings.startup_focus;
+        self.pending_focus_restore = Some(settings.startup_focus);
         if let Some(ctx) = egui_ctx {
             ctx.set_theme(settings.theme.to_egui());
         }
@@ -436,6 +443,70 @@ impl App {
             self.canvas_light
         };
         preset.palette(dark_mode)
+    }
+
+    fn editor_focus_id(target: StartupFocus) -> egui::Id {
+        match target {
+            StartupFocus::Canvas => egui::Id::unique("equation-canvas"),
+            StartupFocus::Latex => egui::Id::unique("latex-source"),
+        }
+    }
+
+    fn sync_editor_focus(&mut self, ui: &mut egui::Ui) {
+        if self.tab != 0 || !ui.is_enabled() {
+            return;
+        }
+        let canvas_id = Self::editor_focus_id(StartupFocus::Canvas);
+        let latex_id = Self::editor_focus_id(StartupFocus::Latex);
+        let (has_canvas, has_latex) =
+            ui.memory(|m| (m.has_focus(canvas_id), m.has_focus(latex_id)));
+        if let Some(target) = self.pending_focus_restore.take() {
+            if has_canvas {
+                self.active_editor_focus = StartupFocus::Canvas;
+            } else if has_latex {
+                self.active_editor_focus = StartupFocus::Latex;
+            } else {
+                ui.memory_mut(|m| m.request_focus(Self::editor_focus_id(target)));
+                self.active_editor_focus = target;
+            }
+        } else if has_canvas {
+            self.active_editor_focus = StartupFocus::Canvas;
+        } else if has_latex {
+            self.active_editor_focus = StartupFocus::Latex;
+        }
+    }
+
+    fn canvas_caret_visible(&mut self, ui: &egui::Ui) -> bool {
+        let style = ui.visuals().text_cursor.clone();
+        if !style.blink {
+            self.caret_blink = None;
+            return true;
+        }
+        let now = ui.input(|i| i.time);
+        let caret = self.editor.caret();
+        let revision = self.editor.revision;
+        let command_len = self.command_input.as_ref().map_or(0, |c| c.name.len() + 1);
+        let start = match self.caret_blink {
+            Some((prev_caret, prev_rev, prev_cmd, start))
+                if prev_caret == caret && prev_rev == revision && prev_cmd == command_len =>
+            {
+                start
+            }
+            _ => {
+                self.caret_blink = Some((caret, revision, command_len, now));
+                now
+            }
+        };
+        let on = f64::from(style.on_duration.max(0.05));
+        let off = f64::from(style.off_duration.max(0.05));
+        let period = on + off;
+        let elapsed = (now - start).max(0.0);
+        let phase = elapsed % period;
+        let visible = phase < on;
+        let next_toggle = if visible { on - phase } else { period - phase };
+        ui.ctx()
+            .request_repaint_after(Duration::from_secs_f64(next_toggle.max(0.01)));
+        visible
     }
 
     fn primary_button(ui: &mut egui::Ui, enabled: bool, label: &str) -> egui::Response {
@@ -619,6 +690,10 @@ impl App {
             settings_dirty: false,
             canvas_light: CanvasPreset::SoftPaper,
             canvas_dark: CanvasPreset::SoftPaper,
+            startup_focus: StartupFocus::Canvas,
+            active_editor_focus: StartupFocus::Canvas,
+            pending_focus_restore: Some(StartupFocus::Canvas),
+            caret_blink: None,
         }
     }
     fn dirty(&self) -> bool {
@@ -758,6 +833,8 @@ impl App {
         self.pending = None;
         if let Some(request) = self.queue.pop_front() {
             self.tab = 0;
+            self.active_editor_focus = self.startup_focus;
+            self.pending_focus_restore = Some(self.startup_focus);
             if request.session_id.is_empty() {
                 if self.load_math(
                     request.mathml.as_deref().unwrap_or(""),
@@ -801,6 +878,8 @@ impl App {
                         self.command_input = None;
                         self.latex_groups.clear();
                         self.expects_latex_group = false;
+                        self.active_editor_focus = self.startup_focus;
+                        self.pending_focus_restore = Some(self.startup_focus);
                     }
                     Err(e) => {
                         self.status = e.into();
@@ -1272,21 +1351,24 @@ impl App {
                         let color = ui.visuals().widgets.inactive.fg_stroke.color;
                         let caption =
                             |text: &str| egui::RichText::new(text).font(font.clone()).color(color);
-                        let mut target_changed = false;
-                        target_changed |= ui
-                            .radio_value(&mut self.target, "mathtype".into(), caption("MathType"))
-                            .changed();
+                        let mt_resp = ui.radio_value(
+                            &mut self.target,
+                            "mathtype".into(),
+                            caption("MathType"),
+                        );
                         ui.add_space(theme::SPACE_MD);
-                        target_changed |= ui
-                            .radio_value(&mut self.target, "omml".into(), caption("OMML"))
-                            .changed();
-                        if target_changed {
+                        let omml_resp =
+                            ui.radio_value(&mut self.target, "omml".into(), caption("OMML"));
+                        if mt_resp.changed() || omml_resp.changed() {
                             self.persisted.target = self.target.clone();
                             self.settings_dirty = true;
                         }
+                        if mt_resp.clicked() || omml_resp.clicked() {
+                            self.pending_focus_restore = Some(self.active_editor_focus);
+                        }
                         ui.separator();
                         ui.label(caption("Font size"));
-                        let size_changed = ui
+                        let drag_resp = ui
                             .scope(|ui| {
                                 ui.style_mut().explanation_tooltips = false;
                                 ui.add(
@@ -1307,13 +1389,15 @@ impl App {
                                     .suffix(" pt"),
                                 )
                                 .on_hover_text("Click and drag left/right to adjust")
-                                .changed()
                             })
                             .inner;
-                        if size_changed {
+                        if drag_resp.changed() {
                             self.render_key += 1;
                             self.persisted.font_pt = self.font_pt;
                             self.settings_dirty = true;
+                        }
+                        if drag_resp.drag_stopped() && !drag_resp.has_focus() {
+                            self.pending_focus_restore = Some(self.active_editor_focus);
                         }
                         if ui
                             .add(
@@ -1328,6 +1412,7 @@ impl App {
                             self.expects_latex_group = false;
                             self.editor.undo();
                             self.changed();
+                            self.pending_focus_restore = Some(self.active_editor_focus);
                         }
                         if ui
                             .add(
@@ -1342,6 +1427,7 @@ impl App {
                             self.expects_latex_group = false;
                             self.editor.redo();
                             self.changed();
+                            self.pending_focus_restore = Some(self.active_editor_focus);
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1423,6 +1509,7 @@ impl App {
             self.category = group_id.into();
             self.persisted.category = self.category.clone();
             self.settings_dirty = true;
+            self.pending_focus_restore = Some(self.active_editor_focus);
         }
     }
 
@@ -1511,11 +1598,11 @@ impl App {
         });
         if insert {
             self.insert_custom_matrix(&settings);
-            ctx.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
+            self.pending_focus_restore = Some(self.active_editor_focus);
         } else if !response.should_close() {
             self.matrix_dialog = Some(settings);
         } else {
-            ctx.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
+            self.pending_focus_restore = Some(self.active_editor_focus);
         }
     }
 
@@ -1532,12 +1619,14 @@ impl App {
             ui.label(ready).on_hover_text(&self.bridge_status);
             if !self.bridge_ready && Self::compact_button(ui, "Retry").clicked() {
                 runtime::start_bridge(self.tx.clone());
+                self.pending_focus_restore = Some(self.active_editor_focus);
             }
             if !self.queue.is_empty()
                 && Self::compact_button(ui, &format!("Next session ({})", self.queue.len()))
                     .clicked()
             {
                 self.pending = Some(Intent::Next);
+                self.pending_focus_restore = Some(self.active_editor_focus);
             }
             let target_warning = if self.tab == 0 {
                 let cache_hit = self.warning_cache.as_ref().is_some_and(
@@ -1711,9 +1800,7 @@ impl App {
                                 self.expects_latex_group = false;
                                 self.record_recent_palette(source);
                                 self.insert_template(source);
-                                ui.memory_mut(|m| {
-                                    m.request_focus(egui::Id::unique("equation-canvas"))
-                                });
+                                self.pending_focus_restore = Some(self.active_editor_focus);
                             }
                             if has_matrix_tools
                                 && ui
@@ -1724,7 +1811,9 @@ impl App {
                                 self.command_input = None;
                                 self.matrix_dialog = Some(MatrixDialog::default());
                                 ui.memory_mut(|m| {
-                                    m.surrender_focus(egui::Id::unique("equation-canvas"))
+                                    m.surrender_focus(Self::editor_focus_id(
+                                        self.active_editor_focus,
+                                    ))
                                 });
                             }
                         });
@@ -2076,6 +2165,7 @@ impl App {
                                         self.status =
                                             "Place the caret inside a matrix first.".into();
                                     }
+                                    self.pending_focus_restore = Some(self.active_editor_focus);
                                 }
                             }
                         });
@@ -2092,6 +2182,7 @@ impl App {
                     }
                 });
             });
+        self.sync_editor_focus(ui);
     }
 
     fn latex_ui(&mut self, ui: &mut egui::Ui) {
@@ -2284,10 +2375,18 @@ impl App {
                             let cursor = self
                                 .caret_rect(origin, scale)
                                 .unwrap_or(Rect::from_min_size(origin, Vec2::new(1.0, 24.0)));
-                            ui.painter().line_segment(
-                                [cursor.left_top(), cursor.left_bottom()],
-                                Stroke::new(1.5, pal.caret),
-                            );
+                            if self.canvas_caret_visible(ui) {
+                                let ppp = ui.ctx().pixels_per_point();
+                                let snap = |v: f32| (v * ppp).round() / ppp;
+                                let x = snap(cursor.left());
+                                ui.painter().line_segment(
+                                    [
+                                        Pos2::new(x, snap(cursor.top())),
+                                        Pos2::new(x, snap(cursor.bottom())),
+                                    ],
+                                    Stroke::new(1.5, pal.caret),
+                                );
+                            }
                             ui.output_mut(|o| {
                                 o.ime = Some(egui::output::IMEOutput {
                                     purpose: egui::IMEPurpose::Normal,
@@ -2305,6 +2404,8 @@ impl App {
                                     pal.ime_fg,
                                 );
                             }
+                        } else {
+                            self.caret_blink = None;
                         }
                         self.keyboard_handled = false;
                         if self.command_input.is_some() && ui.is_enabled() {
@@ -2372,10 +2473,72 @@ impl App {
             Vec2::new(r.width.max(2.0) * scale, r.height.max(6.0) * scale),
         ))
     }
+    fn caret_em_pt(&self, id: u64) -> f32 {
+        let Some(path) = self.editor.path(id) else {
+            return self.font_pt;
+        };
+        let mut node = self.editor.root();
+        let mut em = self.font_pt;
+        let mut display = true;
+        for &child_idx in &path {
+            let ds = node
+                .attrs
+                .iter()
+                .find(|(k, _)| k == "displaystyle")
+                .map(|(_, v)| v.as_str());
+            match node.tag.as_str() {
+                "mstyle" => {
+                    if ds == Some("false") {
+                        display = false;
+                    } else if ds == Some("true") {
+                        display = true;
+                    }
+                }
+                "mfrac" => {
+                    if ds == Some("false") || !display {
+                        em *= 0.71;
+                    }
+                    display = false;
+                }
+                "msub" | "msup" | "msubsup" | "munder" | "mover" | "munderover"
+                    if child_idx >= 1 =>
+                {
+                    em *= 0.71;
+                    display = false;
+                }
+                "mroot" if child_idx == 1 => {
+                    em *= 0.71;
+                    display = false;
+                }
+                "msqrt" => {
+                    display = false;
+                }
+                _ => {}
+            }
+            let Some(next) = node.children.get(child_idx) else {
+                break;
+            };
+            node = next;
+        }
+        em.max(self.font_pt * 0.45)
+    }
+
     fn caret_rect(&self, origin: Pos2, scale: f32) -> Option<Rect> {
         let caret = self.editor.caret();
         let node = self.editor.node(caret.node)?;
         let region = self.region(caret.node)?;
+        let is_placeholder =
+            caret.node != self.editor.root().id && node.text.is_empty() && node.children.is_empty();
+        if is_placeholder {
+            let inset_x = (region.width * 0.5).min(2.5 / scale);
+            let inset_y = (2.0 / scale).min(region.height * 0.25);
+            let top = region.y + inset_y;
+            let height = (region.height - 2.0 * inset_y).max(4.0 / scale);
+            return Some(Rect::from_min_size(
+                origin + Vec2::new((region.x + inset_x) * scale, top * scale),
+                Vec2::new(1.0, height * scale),
+            ));
+        }
         let x = if node.token() {
             if region.carets.len() == node.text.chars().count() + 1 {
                 region.carets[caret.offset.min(region.carets.len() - 1)]
@@ -2391,9 +2554,12 @@ impl App {
         } else {
             region.x
         };
+        let em_pt = self.caret_em_pt(caret.node);
+        let top = region.baseline - 0.72 * em_pt;
+        let height = (0.72 + 0.22) * em_pt;
         Some(Rect::from_min_size(
-            origin + Vec2::new(x * scale, region.y * scale),
-            Vec2::new(1.0, region.height.max(8.0) * scale),
+            origin + Vec2::new(x * scale, top * scale),
+            Vec2::new(1.0, (height * scale).max(6.0)),
         ))
     }
     fn hit(&self, pos: Pos2, origin: Pos2, scale: f32) -> Option<Caret> {
@@ -2598,7 +2764,13 @@ impl App {
         let Some(input) = &self.command_input else {
             return true;
         };
-        let command = if choose_suggestion {
+        if input.name.trim().is_empty() {
+            self.command_input = None;
+            return true;
+        }
+        let command = if !input.is_command_prefix() {
+            None
+        } else if choose_suggestion {
             commands::suggestions(&input.name)
                 .get(input.selected)
                 .copied()
@@ -2642,29 +2814,9 @@ impl App {
     fn canvas_text(&mut self, text: &str) {
         for ch in text.chars() {
             if let Some(input) = &mut self.command_input {
-                if ch.is_ascii_alphabetic() || input.name.chars().any(|c| !c.is_ascii_alphabetic())
-                {
-                    input.name.push(ch);
-                    input.selected = 0;
-                    continue;
-                }
-                if input.name.is_empty() && matches!(ch, '{' | '}' | ' ' | ',' | ';' | '!') {
-                    self.command_input = None;
-                    let text = if matches!(ch, ',' | ';' | '!') {
-                        " ".into()
-                    } else {
-                        ch.to_string()
-                    };
-                    self.editor.insert_text(&text);
-                    continue;
-                }
-                if !self.commit_command(false) {
-                    self.command_input.as_mut().unwrap().name.push(ch);
-                    continue;
-                }
-                if ch.is_whitespace() {
-                    continue;
-                }
+                input.name.push(ch);
+                input.selected = 0;
+                continue;
             }
             match ch {
                 '\\' => {
@@ -2779,17 +2931,28 @@ impl App {
         };
         match key {
             Key::ArrowDown | Key::ArrowUp => {
-                let count = commands::suggestions(&input.name).len();
-                if count > 0 {
-                    input.selected = if key == Key::ArrowDown {
-                        (input.selected + 1) % count
-                    } else {
-                        (input.selected + count - 1) % count
-                    };
+                if input.is_command_prefix() {
+                    let count = commands::suggestions(&input.name).len();
+                    if count > 0 {
+                        input.selected = if key == Key::ArrowDown {
+                            (input.selected + 1) % count
+                        } else {
+                            (input.selected + count - 1) % count
+                        };
+                    }
                 }
                 true
             }
-            Key::Tab | Key::Enter => {
+            Key::Tab => {
+                if input.is_command_prefix() {
+                    if let Some(command) = commands::suggestions(&input.name).get(input.selected) {
+                        input.name = command.name.to_owned();
+                        input.selected = 0;
+                    }
+                }
+                true
+            }
+            Key::Enter => {
                 self.commit_command(true);
                 true
             }
@@ -2806,8 +2969,7 @@ impl App {
                 }
                 true
             }
-            Key::Delete => true,
-            Key::ArrowLeft | Key::ArrowRight | Key::Home | Key::End => !self.commit_command(false),
+            Key::Delete | Key::ArrowLeft | Key::ArrowRight | Key::Home | Key::End => true,
             _ => false,
         }
     }
@@ -2818,7 +2980,12 @@ impl App {
         };
         let name = input.name.clone();
         let selected = input.selected;
-        let candidates = commands::suggestions(&name);
+        let is_prefix = input.is_command_prefix();
+        let candidates = if is_prefix {
+            commands::suggestions(&name)
+        } else {
+            Vec::new()
+        };
         let mut accept = None;
         egui::Area::new(egui::Id::unique("canvas-command-popup"))
             .order(egui::Order::Foreground)
@@ -2826,10 +2993,10 @@ impl App {
             .constrain(true)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(230.0);
+                    ui.set_min_width(240.0);
                     ui.monospace(format!("\\{name}"));
-                    if candidates.is_empty() {
-                        ui.label("No suggestions — Backspace to edit, Esc to cancel");
+                    if is_prefix && candidates.is_empty() {
+                        ui.label("No matching command — Backspace to edit, Esc to cancel");
                     }
                     for (index, command) in candidates.iter().enumerate() {
                         if ui
@@ -2842,7 +3009,11 @@ impl App {
                             accept = Some(index);
                         }
                     }
-                    ui.weak("↑↓ select · Tab/Enter insert · Esc cancel");
+                    if is_prefix {
+                        ui.weak("↑↓ select · Tab complete · Enter insert · Esc cancel");
+                    } else {
+                        ui.weak("Enter insert · Backspace to edit · Esc cancel");
+                    }
                 });
             });
         if let Some(index) = accept {
@@ -3005,6 +3176,8 @@ impl App {
         let tokens = ThemeTokens::from_ui(ui);
         if Self::standard_button(ui, "← Back to equation").clicked() {
             self.tab = 0;
+            self.active_editor_focus = self.startup_focus;
+            self.pending_focus_restore = Some(self.startup_focus);
         }
         ui.add_space(theme::SPACE_MD);
         ui.heading("Batch document conversion");
@@ -3226,6 +3399,8 @@ impl App {
         let tokens = ThemeTokens::from_ui(ui);
         if Self::standard_button(ui, "← Back to equation").clicked() {
             self.tab = 0;
+            self.active_editor_focus = self.startup_focus;
+            self.pending_focus_restore = Some(self.startup_focus);
         }
         ui.add_space(theme::SPACE_MD);
         ui.heading("Settings");
@@ -3313,12 +3488,42 @@ impl App {
                     self.settings_dirty = true;
                 }
             });
+            ui.add_space(theme::SPACE_MD);
+            tokens.group_frame().show(ui, |ui| {
+                ui.set_min_width(ui.available_width().min(540.0));
+                ui.label(egui::RichText::new("Startup focus").strong());
+                ui.add_space(theme::SPACE_XS);
+                ui.horizontal(|ui| {
+                    let mut focus_changed = false;
+                    for (choice, label) in [
+                        (StartupFocus::Canvas, "Equation canvas"),
+                        (StartupFocus::Latex, "LaTeX source"),
+                    ] {
+                        let selected = self.startup_focus == choice;
+                        if Self::with_selectable_style(ui, selected, |ui| {
+                            Self::standard_button(ui, label)
+                        })
+                        .clicked()
+                            && !selected
+                        {
+                            self.startup_focus = choice;
+                            focus_changed = true;
+                        }
+                    }
+                    if focus_changed {
+                        self.persisted.startup_focus = self.startup_focus;
+                        self.settings_dirty = true;
+                    }
+                });
+            });
         });
     }
 
     fn about_ui(&mut self, ui: &mut egui::Ui) {
         if Self::standard_button(ui, "← Back to equation").clicked() {
             self.tab = 0;
+            self.active_editor_focus = self.startup_focus;
+            self.pending_focus_restore = Some(self.startup_focus);
         }
         ui.add_space(theme::SPACE_MD);
         ui.heading("About EqnTide");
@@ -3761,10 +3966,15 @@ mod tests {
     #[test]
     fn typed_latex_commands_build_real_math_and_keep_source_in_sync() {
         let mut a = app();
-        // Separate keystrokes exercise the command buffer rather than the paste parser.
+        // Separate keystrokes exercise the buffered command input without early placeholder jumps.
         for ch in r"\lim_{x\rightarrow+\infty}".chars() {
             type_canvas(&mut a, &ch.to_string());
         }
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some(r"lim_{x\rightarrow+\infty}")
+        );
+        assert!(a.command_key(egui::Key::Enter, egui::Modifiers::NONE));
         let xml = a.editor.math().to_xml();
         assert!(xml.contains("lim"), "{xml}");
         assert!(xml.contains('→') && xml.contains('∞'), "{xml}");
@@ -3780,7 +3990,10 @@ mod tests {
     #[test]
     fn typed_fraction_groups_fill_slots_and_exit_back_to_the_outer_equation() {
         let mut a = app();
-        type_canvas(&mut a, r"\frac{1}{\sqrt{2}}+x");
+        type_canvas(&mut a, r"\frac{1}{\sqrt{2}}");
+        assert!(a.command_input.is_some());
+        assert!(a.command_key(egui::Key::Enter, egui::Modifiers::NONE));
+        type_canvas(&mut a, "+x");
         assert_eq!(a.editor.math().to_latex(), r"\frac{1}{\sqrt{2}}+x");
         assert!(a.command_input.is_none());
         assert!(a.latex_groups.is_empty());
@@ -3816,6 +4029,13 @@ mod tests {
         type_canvas(&mut a, r"\alp");
         assert_eq!(a.editor.math(), before);
         assert!(a.command_key(egui::Key::Tab, egui::Modifiers::NONE));
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("alpha"),
+            "Tab only completes the command name in the buffer without committing"
+        );
+        assert_eq!(a.editor.math(), before);
+        assert!(a.command_key(egui::Key::Enter, egui::Modifiers::NONE));
         assert!(a.editor.math().to_xml().contains('α'));
         let accepted = a.editor.math();
         type_canvas(&mut a, r"\nosuchcommand+1");
@@ -3841,13 +4061,7 @@ mod tests {
 
     #[test]
     fn completion_accept_keys_work_through_the_focused_canvas() {
-        for (key, prefix) in [
-            (egui::Key::Enter, "alp"),
-            (egui::Key::Tab, "alp"),
-            (egui::Key::Space, "alpha"),
-        ] {
-            let mut a = app();
-            let ctx = egui::Context::default();
+        let setup_focused = |a: &mut App, ctx: &egui::Context| {
             let input = |events| egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
                 events,
@@ -3859,34 +4073,123 @@ mod tests {
             })
             .textures_delta
             .clear();
+        };
+        let send_events = |a: &mut App, ctx: &egui::Context, events: Vec<egui::Event>| {
             ctx.run_ui(
-                input(vec![egui::Event::Text(format!("\\{prefix}"))]),
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                    events,
+                    ..Default::default()
+                },
                 |ui| a.shell(ui),
             )
             .textures_delta
             .clear();
-            assert!(a.command_input.is_some());
-            assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("equation-canvas"))));
-            let mut events = vec![egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }];
-            if key == egui::Key::Space {
-                events.push(egui::Event::Text(" ".into()));
-            }
-            ctx.run_ui(input(events), |ui| a.shell(ui))
-                .textures_delta
-                .clear();
-            assert!(
-                a.editor.math().to_xml().contains('α'),
-                "{key:?} must insert the completion"
-            );
-            assert!(a.command_input.is_none());
-            assert_eq!(a.latex, a.editor.math().to_latex());
+        };
+        let key_event = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        // Enter commits buffered command.
+        let mut a = app();
+        let ctx = egui::Context::default();
+        setup_focused(&mut a, &ctx);
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\alp".into())]);
+        assert!(a.command_input.is_some());
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("equation-canvas"))));
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Enter)]);
+        assert!(a.editor.math().to_xml().contains('α'));
+        assert!(a.command_input.is_none());
+        assert_eq!(a.latex, a.editor.math().to_latex());
+
+        // Tab completes command name without committing; Enter commits afterwards.
+        let mut a = app();
+        let ctx = egui::Context::default();
+        setup_focused(&mut a, &ctx);
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\math".into())]);
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Tab)]);
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("mathbb")
+        );
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("equation-canvas"))));
+        send_events(&mut a, &ctx, vec![egui::Event::Text("{R}".into())]);
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("mathbb{R}")
+        );
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Enter)]);
+        assert!(a.command_input.is_none());
+        assert!(a.editor.math().to_latex().contains(r"\mathbb{R}"));
+
+        // Space remains literal inside the command buffer until Enter commits.
+        let mut a = app();
+        let ctx = egui::Context::default();
+        setup_focused(&mut a, &ctx);
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\lim_{x".into())]);
+        send_events(
+            &mut a,
+            &ctx,
+            vec![key_event(egui::Key::Space), egui::Event::Text(" ".into())],
+        );
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("lim_{x ")
+        );
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\to 0}".into())]);
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Enter)]);
+        assert!(a.command_input.is_none());
+        let xml = a.editor.math().to_xml();
+        assert!(xml.contains("lim") && xml.contains('→'), "{xml}");
+    }
+
+    #[test]
+    fn completion_buffered_latex_handles_mathbb_braces_and_integrals() {
+        // \math + { stays buffered, Backspace + Tab completes \mathbb, then {R} + Enter commits.
+        let mut a = app();
+        for ch in r"\math{".chars() {
+            type_canvas(&mut a, &ch.to_string());
         }
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("math{")
+        );
+        assert!(a.latex_groups.is_empty());
+        assert!(a.command_key(egui::Key::Backspace, egui::Modifiers::NONE));
+        assert!(a.command_key(egui::Key::Tab, egui::Modifiers::NONE));
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("mathbb")
+        );
+        for ch in "{R}".chars() {
+            type_canvas(&mut a, &ch.to_string());
+        }
+        assert!(a.command_key(egui::Key::Enter, egui::Modifiers::NONE));
+        assert!(a.command_input.is_none());
+        assert!(a.editor.math().to_latex().contains(r"\mathbb{R}"));
+
+        // \int_0^1 x dx stays buffered across '_', '^', and spaces until Enter commits once.
+        let mut a = app();
+        for ch in r"\int_0^1 x dx".chars() {
+            type_canvas(&mut a, &ch.to_string());
+        }
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("int_0^1 x dx")
+        );
+        assert!(a.command_key(egui::Key::Enter, egui::Modifiers::NONE));
+        assert!(a.command_input.is_none());
+        let xml = a.editor.math().to_xml();
+        assert!(
+            xml.contains('∫') && (xml.contains("msubsup") || xml.contains("munderover")),
+            "{xml}"
+        );
+        a.editor.undo();
+        assert!(a.editor.math().children.is_empty());
     }
 
     #[test]
@@ -5336,6 +5639,7 @@ mod tests {
         let saved = Settings {
             zoom: 3.0,
             theme: ThemeMode::Dark,
+            startup_focus: StartupFocus::Latex,
             font_pt: 18.5,
             target: "mathtype".into(),
             category: palette::RECENT_GROUP.into(),
@@ -5355,6 +5659,7 @@ mod tests {
         let restored = app().with_settings_path(path, Some(&ctx));
         assert_eq!(restored.zoom, 3.0);
         assert_eq!(ctx.theme(), egui::Theme::Dark);
+        assert_eq!(restored.startup_focus, StartupFocus::Latex);
         assert_eq!(restored.font_pt, 18.5);
         assert_eq!(restored.saved_font, 18.5);
         assert_eq!(restored.target, "mathtype");
@@ -5903,5 +6208,274 @@ mod tests {
             let rect = button_rect_around(matrix_label);
             assert!((rect.height() - theme::COMPACT_BUTTON_HEIGHT).abs() <= 0.5);
         }
+    }
+
+    #[test]
+    fn settings_ui_startup_focus_selector_persists_preference() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app().with_settings_path(path.clone(), Some(&ctx));
+        assert_eq!(a.startup_focus, StartupFocus::Canvas);
+
+        a.tab = 2;
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let latex_btn = find_text_center(&out, |t| t == "LaTeX source");
+        run_ui_pass_frame(&ctx, &mut a, click_events(latex_btn));
+
+        assert_eq!(a.startup_focus, StartupFocus::Latex);
+        let on_disk = Settings::load_from_path(&path);
+        assert_eq!(on_disk.startup_focus, StartupFocus::Latex);
+
+        let fresh_ctx = egui::Context::default();
+        let reloaded = app().with_settings_path(path, Some(&fresh_ctx));
+        assert_eq!(reloaded.startup_focus, StartupFocus::Latex);
+    }
+
+    #[test]
+    fn startup_focus_applies_on_launch_and_return_to_editor() {
+        let canvas_id = egui::Id::unique("equation-canvas");
+        let latex_id = egui::Id::unique("latex-source");
+
+        // Default startup focus activates Equation Canvas immediately.
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert!(ctx.memory(|m| m.has_focus(canvas_id)));
+        assert!(!ctx.memory(|m| m.has_focus(latex_id)));
+
+        // Configured StartupFocus::Latex activates LaTeX source on launch and when returning from Settings.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        Settings {
+            startup_focus: StartupFocus::Latex,
+            ..Settings::default()
+        }
+        .save_to_path(&path)
+        .unwrap();
+
+        let latex_ctx = egui::Context::default();
+        ThemeTokens::apply_style(&latex_ctx);
+        let mut b = app().with_settings_path(path, Some(&latex_ctx));
+        run_ui_pass_frame(&latex_ctx, &mut b, vec![]);
+        assert!(latex_ctx.memory(|m| m.has_focus(latex_id)));
+        assert!(!latex_ctx.memory(|m| m.has_focus(canvas_id)));
+
+        // Open Settings and click "← Back to equation" -> focuses LaTeX source again.
+        let out = run_ui_pass_frame(&latex_ctx, &mut b, vec![]);
+        let settings_btn = find_text_center(&out, |t| t == "Settings");
+        run_ui_pass_frame(&latex_ctx, &mut b, click_events(settings_btn));
+        assert_eq!(b.tab, 2);
+        let out = run_ui_pass_frame(&latex_ctx, &mut b, vec![]);
+        let back_btn = find_text_center(&out, |t| t == "← Back to equation");
+        run_ui_pass_frame(&latex_ctx, &mut b, click_events(back_btn));
+        assert_eq!(b.tab, 0);
+        run_ui_pass_frame(&latex_ctx, &mut b, vec![]);
+        assert!(latex_ctx.memory(|m| m.has_focus(latex_id)));
+    }
+
+    #[test]
+    fn editor_controls_preserve_active_focus_for_canvas_and_latex() {
+        let canvas_id = egui::Id::unique("equation-canvas");
+        let latex_id = egui::Id::unique("latex-source");
+
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert!(ctx.memory(|m| m.has_focus(canvas_id)));
+
+        // Click a sidebar category tile ("Symbols") -> Equation Canvas retains focus.
+        let symbols_pos = out
+            .shapes
+            .iter()
+            .find_map(|s| {
+                let rect = s.shape.visual_bounding_rect();
+                if rect.min.x < 160.0
+                    && rect.min.y > 40.0
+                    && rect.min.y < 360.0
+                    && (rect.height() - 42.0).abs() <= 1.0
+                {
+                    Some(rect.center())
+                } else {
+                    None
+                }
+            })
+            .expect("sidebar category rect");
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(symbols_pos));
+        assert!(ctx.memory(|m| m.has_focus(canvas_id)));
+
+        // Click Undo and MathType radio -> Equation Canvas retains focus.
+        let undo_pos = find_text_center(&out, |t| t == "↶");
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(undo_pos));
+        assert!(ctx.memory(|m| m.has_focus(canvas_id)));
+        let mt_pos = find_text_center(&out, |t| t == "MathType");
+        let _out = run_ui_pass_frame(&ctx, &mut a, click_events(mt_pos));
+        assert!(ctx.memory(|m| m.has_focus(canvas_id)));
+
+        // Click into LaTeX source box to switch active focus there.
+        let latex_rect = ctx.read_response(latex_id).unwrap().rect;
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(latex_rect.center()));
+        assert!(ctx.memory(|m| m.has_focus(latex_id)));
+
+        // Click palette button, Undo, Redo, and OMML radio -> focus stays on LaTeX source.
+        let palette_pos = out
+            .shapes
+            .iter()
+            .find_map(|s| {
+                let rect = s.shape.visual_bounding_rect();
+                if rect.min.x > 160.0
+                    && rect.min.y < 140.0
+                    && (rect.width() - PALETTE_BUTTON_SIZE.x).abs() <= 1.0
+                    && (rect.height() - PALETTE_BUTTON_SIZE.y).abs() <= 1.0
+                {
+                    Some(rect.center())
+                } else {
+                    None
+                }
+            })
+            .expect("palette button rect");
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(palette_pos));
+        assert!(ctx.memory(|m| m.has_focus(latex_id)));
+
+        let undo_pos = find_text_center(&out, |t| t == "↶");
+        let out = run_ui_pass_frame(&ctx, &mut a, click_events(undo_pos));
+        assert!(ctx.memory(|m| m.has_focus(latex_id)));
+
+        let omml_pos = find_text_center(&out, |t| t == "OMML");
+        run_ui_pass_frame(&ctx, &mut a, click_events(omml_pos));
+        assert!(ctx.memory(|m| m.has_focus(latex_id)));
+    }
+
+    #[test]
+    fn canvas_caret_blinks_when_idle_and_resets_on_activity() {
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        let caret_stroke = CanvasPreset::SoftPaper.palette(false).caret;
+        let run_at = |a: &mut App, time: f64, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| a.ui_pass(ui),
+            );
+            out.textures_delta.clear();
+            out.shapes.iter().any(|s| matches!(&s.shape,
+                egui::Shape::LineSegment { stroke, .. } if stroke.color == caret_stroke && (stroke.width - 1.5).abs() <= 0.1
+            ))
+        };
+
+        // Initial frame focuses canvas and shows caret ON.
+        assert!(run_at(&mut a, 0.0, vec![]));
+        let cursor_style = ctx.style_of(ctx.theme()).visuals.text_cursor.clone();
+        let (on_dur, off_dur) = (
+            f64::from(cursor_style.on_duration),
+            f64::from(cursor_style.off_duration),
+        );
+        // Midway through OFF phase -> caret hidden.
+        assert!(!run_at(&mut a, on_dur + off_dur * 0.5, vec![]));
+        // Typing resets blink phase immediately to ON even inside what was OFF window.
+        assert!(run_at(
+            &mut a,
+            on_dur + off_dur * 0.6,
+            vec![egui::Event::Text("x".into())]
+        ));
+        // After full on + off period from the activity timestamp -> ON again.
+        assert!(run_at(
+            &mut a,
+            on_dur + off_dur * 0.6 + on_dur + off_dur + 0.05,
+            vec![]
+        ));
+    }
+
+    #[test]
+    fn caret_rect_aligns_consistently_across_tokens_and_row_stops() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let math = MathNode::with_children(
+            "math",
+            vec![
+                MathNode::leaf("mi", "x"),
+                MathNode::leaf("mo", "+"),
+                MathNode::leaf("mn", "1"),
+            ],
+        );
+        a.editor.replace(&math);
+        a.changed();
+        a.sync_render(&ctx);
+
+        let origin = Pos2::new(20.0, 40.0);
+        let scale = 2.0 * 96.0 / 72.0;
+
+        let root_id = a.editor.root().id;
+        let x_id = a.editor.root().children[0].id;
+        let plus_id = a.editor.root().children[1].id;
+        let one_id = a.editor.root().children[2].id;
+
+        let mut rects = Vec::new();
+        for caret in [
+            Caret {
+                node: root_id,
+                offset: 0,
+            },
+            Caret {
+                node: x_id,
+                offset: 0,
+            },
+            Caret {
+                node: x_id,
+                offset: 1,
+            },
+            Caret {
+                node: plus_id,
+                offset: 0,
+            },
+            Caret {
+                node: plus_id,
+                offset: 1,
+            },
+            Caret {
+                node: one_id,
+                offset: 0,
+            },
+            Caret {
+                node: one_id,
+                offset: 1,
+            },
+            Caret {
+                node: root_id,
+                offset: 3,
+            },
+        ] {
+            a.editor.set_caret(caret, false);
+            rects.push(a.caret_rect(origin, scale).expect("caret rect"));
+        }
+
+        let first = rects[0];
+        for rect in &rects[1..] {
+            assert!((rect.top() - first.top()).abs() < 0.01);
+            assert!((rect.bottom() - first.bottom()).abs() < 0.01);
+        }
+        // End of <mn>1</mn> and end of <math> share the exact same X and Y coordinates.
+        let end_of_one = rects[6];
+        let end_of_root = rects[7];
+        assert!((end_of_one.left() - end_of_root.left()).abs() < 0.01);
+        assert!((end_of_one.top() - end_of_root.top()).abs() < 0.01);
+        assert!((end_of_one.bottom() - end_of_root.bottom()).abs() < 0.01);
+
+        // Subscript caret scales down proportionally to script size.
+        let sub_math = eqntide::service::parse_latex_to_mathml("x_2").unwrap();
+        a.editor.replace(&sub_math);
+        a.changed();
+        a.sync_render(&ctx);
+        a.editor.move_caret(Move::Left, false);
+        let sub_rect = a.caret_rect(origin, scale).expect("subscript caret rect");
+        assert!(sub_rect.height() < first.height() * 0.8);
     }
 }
