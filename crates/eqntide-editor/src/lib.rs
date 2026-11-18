@@ -658,6 +658,8 @@ impl Editor {
                         .children
                         .remove(index);
                     s.state.caret.offset = index;
+                } else if n.children.is_empty() {
+                    s.try_remove_empty_table_row(backward);
                 }
             }
         });
@@ -780,6 +782,218 @@ impl Editor {
             }
         }
     }
+    /// Insert a new row below the caret's current table row, or promote a
+    /// one-sided `{` / `[` fence slot into a two-row left-aligned system.
+    pub fn insert_row_or_promote_fence(&mut self) -> bool {
+        if let Some((table_id, row_idx, cols)) = self.enclosing_table_row() {
+            self.transact(|s| {
+                let row = MathNode::with_children(
+                    "mtr",
+                    (0..cols).map(|_| MathNode::new("mtd")).collect(),
+                );
+                let imported_row = import(&row, &mut s.next_id);
+                let first_cell_id = imported_row.children[0].id;
+                let table = s.state.root.find_mut(table_id).unwrap();
+                table.children.insert(row_idx + 1, imported_row);
+                s.state.caret = Caret {
+                    node: first_cell_id,
+                    offset: 0,
+                };
+                s.state.anchor = None;
+            });
+            return true;
+        }
+        if let Some((fence_id, content_end, has_empty_close)) =
+            self.enclosing_one_sided_left_fence()
+        {
+            self.transact(|s| {
+                let fence_mrow = s.state.root.find_mut(fence_id).unwrap();
+                let slot_nodes: Vec<Node> = fence_mrow.children.drain(1..content_end).collect();
+                let row1_children: Vec<MathNode> =
+                    if slot_nodes.len() == 1 && slot_nodes[0].tag == "mrow" {
+                        slot_nodes[0].children.iter().map(Node::math).collect()
+                    } else {
+                        slot_nodes.iter().map(Node::math).collect()
+                    };
+                let mut table_math = MathNode::with_children(
+                    "mtable",
+                    vec![
+                        MathNode::with_children(
+                            "mtr",
+                            vec![MathNode::with_children("mtd", row1_children)],
+                        ),
+                        MathNode::with_children("mtr", vec![MathNode::new("mtd")]),
+                    ],
+                );
+                table_math.set_attr("columnalign", "left");
+                let imported_table = import(&table_math, &mut s.next_id);
+                let row2_cell_id = imported_table.children[1].children[0].id;
+                let fence_mrow = s.state.root.find_mut(fence_id).unwrap();
+                fence_mrow.children.insert(1, imported_table);
+                if !has_empty_close {
+                    let mut right = MathNode::leaf("mo", "");
+                    right.set_attr("stretchy", "true");
+                    right.set_attr("form", "postfix");
+                    fence_mrow.children.push(import(&right, &mut s.next_id));
+                }
+                s.state.caret = Caret {
+                    node: row2_cell_id,
+                    offset: 0,
+                };
+                s.state.anchor = None;
+            });
+            return true;
+        }
+        false
+    }
+    fn try_remove_empty_table_row(&mut self, backward: bool) -> bool {
+        let Some((table_id, row_idx, _)) = self.enclosing_table_row() else {
+            return false;
+        };
+        let Some(table) = self.node(table_id) else {
+            return false;
+        };
+        let old_len = table.children.len();
+        if old_len <= 1 {
+            return false;
+        }
+        let Some(row) = table.children.get(row_idx) else {
+            return false;
+        };
+        if !row.children.iter().all(is_effectively_empty) {
+            return false;
+        }
+        let table = self.state.root.find_mut(table_id).unwrap();
+        table.children.remove(row_idx);
+        let move_to_prev_end = (backward && row_idx > 0) || (!backward && row_idx + 1 == old_len);
+        let target_row_idx = if move_to_prev_end {
+            row_idx - 1
+        } else {
+            row_idx
+        };
+        let target_cell = if move_to_prev_end {
+            table.children[target_row_idx].children.last()
+        } else {
+            table.children[target_row_idx].children.first()
+        };
+        if let Some(cell) = target_cell {
+            let target_caret = if move_to_prev_end {
+                if let Some(last) = cell.children.last().filter(|n| n.token()) {
+                    Caret {
+                        node: last.id,
+                        offset: last.text.chars().count(),
+                    }
+                } else {
+                    let mut stops = Vec::new();
+                    cell.stops(&mut stops);
+                    stops.last().copied().unwrap_or(Caret {
+                        node: cell.id,
+                        offset: 0,
+                    })
+                }
+            } else if let Some(first) = cell.children.first().filter(|n| n.token()) {
+                Caret {
+                    node: first.id,
+                    offset: 0,
+                }
+            } else {
+                let mut stops = Vec::new();
+                cell.stops(&mut stops);
+                stops.first().copied().unwrap_or(Caret {
+                    node: cell.id,
+                    offset: 0,
+                })
+            };
+            self.state.caret = target_caret;
+        }
+        self.state.anchor = None;
+        true
+    }
+    fn enclosing_table_row(&self) -> Option<(NodeId, usize, usize)> {
+        let mut path = self.path(self.caret().node)?;
+        while let Some(child_idx) = path.pop() {
+            let parent = self.root().at(&path);
+            if parent.tag == "mtr" {
+                if let Some(row_idx) = path.pop() {
+                    let table = self.root().at(&path);
+                    if table.tag == "mtable" {
+                        let cols = table
+                            .children
+                            .get(row_idx)
+                            .map_or(1, |r| r.children.len())
+                            .max(1);
+                        return Some((table.id, row_idx, cols));
+                    }
+                }
+                return None;
+            }
+            let _ = child_idx;
+        }
+        None
+    }
+    fn enclosing_one_sided_left_fence(&self) -> Option<(NodeId, usize, bool)> {
+        let caret = self.caret();
+        let mut path = self.path(caret.node)?;
+        let mut child_idx_from_below: Option<usize> = None;
+        loop {
+            let candidate = self.root().at(&path);
+            if candidate.tag == "mrow" && !candidate.children.is_empty() {
+                if let Some((content_end, has_empty_close)) = one_sided_left_fence_bounds(candidate)
+                {
+                    let inside = match child_idx_from_below {
+                        Some(idx) => idx >= 1 && idx < content_end,
+                        None => caret.offset >= 1 && caret.offset <= content_end,
+                    };
+                    if inside {
+                        return Some((candidate.id, content_end, has_empty_close));
+                    }
+                }
+            }
+            child_idx_from_below = path.pop();
+            child_idx_from_below?;
+        }
+    }
+}
+
+fn is_effectively_empty(node: &Node) -> bool {
+    matches!(node.tag.as_str(), "mtd" | "mrow")
+        && node.text.is_empty()
+        && node.children.iter().all(is_effectively_empty)
+}
+
+fn one_sided_left_fence_bounds(mrow: &Node) -> Option<(usize, bool)> {
+    let first = mrow.children.first()?;
+    if first.tag != "mo"
+        || !first.is_fence_delimiter()
+        || !matches!(first.text.trim(), "{" | "[")
+        || first
+            .attrs
+            .iter()
+            .any(|(k, v)| k == "form" && v == "postfix")
+    {
+        return None;
+    }
+    if mrow.children.iter().any(|c| c.tag == "mtable") {
+        return None;
+    }
+    let last = mrow.children.last()?;
+    let has_empty_close = mrow.children.len() >= 2
+        && last.tag == "mo"
+        && last.is_fence_delimiter()
+        && last.text.trim().is_empty();
+    let has_non_empty_close = mrow.children.len() >= 2
+        && last.tag == "mo"
+        && last.is_fence_delimiter()
+        && !last.text.trim().is_empty();
+    if has_non_empty_close {
+        return None;
+    }
+    let content_end = if has_empty_close {
+        mrow.children.len() - 1
+    } else {
+        mrow.children.len()
+    };
+    (content_end >= 2).then_some((content_end, has_empty_close))
 }
 
 fn char_byte(text: &str, index: usize) -> usize {
@@ -1160,5 +1374,259 @@ mod regression_tests {
         assert_eq!(row[3].attr("form"), Some("postfix"));
         assert_eq!(row[4].tag, "msup");
         assert!(row[4].children[0].children.is_empty());
+    }
+    #[test]
+    fn insert_row_or_promote_fence_adds_row_below_caret_and_undoes_in_one_step() {
+        let mut e = Editor::new(
+            &MathNode::parse(
+                "<math><mtable columnalign=\"left\"><mtr><mtd><mi>a</mi></mtd></mtr><mtr><mtd><mi>b</mi></mtd></mtr></mtable></math>",
+            )
+            .unwrap(),
+        );
+        // Place caret inside row 0 cell (`a`).
+        let row0_mi = e.root().children[0].children[0].children[0].children[0].id;
+        e.set_caret(
+            Caret {
+                node: row0_mi,
+                offset: 1,
+            },
+            false,
+        );
+        assert!(e.insert_row_or_promote_fence());
+
+        let math = e.math();
+        assert_eq!(math.children[0].children.len(), 3);
+        assert_eq!(
+            math.children[0].children[0].children[0].children[0].text,
+            "a"
+        );
+        assert!(math.children[0].children[1].children[0].children.is_empty());
+        assert_eq!(
+            math.children[0].children[2].children[0].children[0].text,
+            "b"
+        );
+        assert_eq!(
+            e.caret().node,
+            e.root().children[0].children[1].children[0].id
+        );
+
+        e.undo();
+        assert_eq!(e.math().children[0].children.len(), 2);
+        e.redo();
+        assert_eq!(e.math().children[0].children.len(), 3);
+
+        // Multi-column table and nested fraction inside a cell preserve column count.
+        let mut multi = Editor::new(
+            &MathNode::parse(
+                "<math><mtable><mtr><mtd><mfrac><mi>x</mi><mi>y</mi></mfrac></mtd><mtd><mi>z</mi></mtd></mtr></mtable></math>",
+            )
+            .unwrap(),
+        );
+        let frac_num = multi.root().children[0].children[0].children[0].children[0].children[0].id;
+        multi.set_caret(
+            Caret {
+                node: frac_num,
+                offset: 0,
+            },
+            false,
+        );
+        assert!(multi.insert_row_or_promote_fence());
+        assert_eq!(multi.math().children[0].children.len(), 2);
+        assert_eq!(multi.math().children[0].children[1].children.len(), 2);
+
+        // Outside a table or left fence: no-op.
+        let mut plain = Editor::default();
+        plain.insert_text("x");
+        assert!(!plain.insert_row_or_promote_fence());
+    }
+    #[test]
+    fn insert_row_or_promote_fence_promotes_single_sided_brace_and_bracket_only() {
+        for open in ["{", "["] {
+            let mut l = MathNode::leaf("mo", open);
+            l.set_attr("stretchy", "true");
+            l.set_attr("form", "prefix");
+            let mut r = MathNode::leaf("mo", "");
+            r.set_attr("stretchy", "true");
+            r.set_attr("form", "postfix");
+            let tpl = MathNode::with_children("mrow", vec![l, MathNode::new("mrow"), r]);
+
+            // Non-empty single-slot left fence promotes to 2x1 left-aligned table.
+            let mut e = Editor::default();
+            e.insert_template(&tpl);
+            e.insert_text("x+2=1");
+            assert!(e.insert_row_or_promote_fence());
+            let math = e.math();
+            let fence_row = &math.children[0].children;
+            assert_eq!(fence_row[0].text, open);
+            assert_eq!(fence_row[1].tag, "mtable");
+            assert_eq!(fence_row[1].attr("columnalign"), Some("left"));
+            assert_eq!(fence_row[1].children.len(), 2);
+            assert_eq!(fence_row[1].children[0].children[0].children.len(), 5);
+            assert!(fence_row[1].children[1].children[0].children.is_empty());
+            assert_eq!(fence_row[2].text, "");
+            assert_eq!(
+                e.caret().node,
+                e.root().children[0].children[1].children[1].children[0].id
+            );
+
+            // Undo restores the single-slot fenced expression in one step.
+            e.undo();
+            assert_eq!(e.math().children[0].children[1].tag, "mrow");
+
+            // Empty slot also promotes cleanly.
+            let mut empty = Editor::default();
+            empty.insert_template(&tpl);
+            assert!(empty.insert_row_or_promote_fence());
+            assert_eq!(empty.math().children[0].children[1].tag, "mtable");
+            assert_eq!(empty.math().children[0].children[1].children.len(), 2);
+        }
+
+        // Paired fences `( x )` or `{ x }` and one-sided `(` must not promote.
+        for (open, close) in [("{", "}"), ("[", "]"), ("(", "")] {
+            let mut l = MathNode::leaf("mo", open);
+            l.set_attr("stretchy", "true");
+            l.set_attr("form", "prefix");
+            let mut r = MathNode::leaf("mo", close);
+            r.set_attr("stretchy", "true");
+            r.set_attr("form", "postfix");
+            let mut e = Editor::default();
+            e.insert_template(&MathNode::with_children(
+                "mrow",
+                vec![l, MathNode::new("mrow"), r],
+            ));
+            e.insert_text("x");
+            assert!(!e.insert_row_or_promote_fence());
+        }
+    }
+    #[test]
+    fn backspace_and_delete_remove_empty_table_rows_and_guard_nonempty_or_single_row() {
+        // 3-row system: row 0 = `a`, row 1 = empty, row 2 = `b`.
+        let mut e = Editor::new(
+            &MathNode::parse(
+                "<math><mtable columnalign=\"left\"><mtr><mtd><mi>a</mi></mtd></mtr><mtr><mtd/></mtr><mtr><mtd><mi>b</mi></mtd></mtr></mtable></math>",
+            )
+            .unwrap(),
+        );
+        // Backspace in middle empty row removes row 1 and moves caret to end of row 0 (`a|`).
+        let row1_cell = e.root().children[0].children[1].children[0].id;
+        e.set_caret(
+            Caret {
+                node: row1_cell,
+                offset: 0,
+            },
+            false,
+        );
+        e.delete(true);
+        assert_eq!(e.math().children[0].children.len(), 2);
+        assert_eq!(
+            e.math().children[0].children[0].children[0].children[0].text,
+            "a"
+        );
+        assert_eq!(
+            e.math().children[0].children[1].children[0].children[0].text,
+            "b"
+        );
+        let row0_mi = e.root().children[0].children[0].children[0].children[0].id;
+        assert_eq!(
+            e.caret(),
+            Caret {
+                node: row0_mi,
+                offset: 1
+            }
+        );
+
+        // Undo restores row 1 in one step; Delete removes row 1 and moves caret to start of row 2 (`|b`).
+        e.undo();
+        assert_eq!(e.math().children[0].children.len(), 3);
+        e.delete(false);
+        assert_eq!(e.math().children[0].children.len(), 2);
+        let row1_mi_b = e.root().children[0].children[1].children[0].children[0].id;
+        assert_eq!(
+            e.caret(),
+            Caret {
+                node: row1_mi_b,
+                offset: 0
+            }
+        );
+        e.redo();
+        assert_eq!(e.math().children[0].children.len(), 2);
+
+        // Removing the first row when empty moves caret to start of new first row;
+        // removing the last row when empty moves caret to end of previous row.
+        let mut edges = Editor::new(
+            &MathNode::parse(
+                "<math><mtable><mtr><mtd/></mtr><mtr><mtd><mi>m</mi></mtd></mtr><mtr><mtd/></mtr></mtable></math>",
+            )
+            .unwrap(),
+        );
+        let first_cell = edges.root().children[0].children[0].children[0].id;
+        edges.set_caret(
+            Caret {
+                node: first_cell,
+                offset: 0,
+            },
+            false,
+        );
+        edges.delete(true);
+        assert_eq!(edges.math().children[0].children.len(), 2);
+        let new_first_mi = edges.root().children[0].children[0].children[0].children[0].id;
+        assert_eq!(
+            edges.caret(),
+            Caret {
+                node: new_first_mi,
+                offset: 0
+            }
+        );
+        let last_cell = edges.root().children[0].children[1].children[0].id;
+        edges.set_caret(
+            Caret {
+                node: last_cell,
+                offset: 0,
+            },
+            false,
+        );
+        edges.delete(false);
+        assert_eq!(edges.math().children[0].children.len(), 1);
+        assert_eq!(
+            edges.caret(),
+            Caret {
+                node: new_first_mi,
+                offset: 1
+            }
+        );
+
+        // Single-row empty table must not delete its only remaining row.
+        let before_single = edges.math();
+        let only_cell = edges.root().children[0].children[0].children[0].id;
+        edges.set_caret(
+            Caret {
+                node: only_cell,
+                offset: 0,
+            },
+            false,
+        );
+        edges.delete(true);
+        edges.delete(false);
+        assert_eq!(edges.math().children[0].children.len(), 1);
+        let _ = before_single;
+
+        // Multi-column row where another cell has content must NOT be deleted.
+        let mut multi = Editor::new(
+            &MathNode::parse(
+                "<math><mtable><mtr><mtd><mi>x</mi></mtd><mtd><mi>y</mi></mtd></mtr><mtr><mtd/><mtd><mi>z</mi></mtd></mtr></mtable></math>",
+            )
+            .unwrap(),
+        );
+        let empty_left = multi.root().children[0].children[1].children[0].id;
+        multi.set_caret(
+            Caret {
+                node: empty_left,
+                offset: 0,
+            },
+            false,
+        );
+        multi.delete(true);
+        multi.delete(false);
+        assert_eq!(multi.math().children[0].children.len(), 2);
     }
 }

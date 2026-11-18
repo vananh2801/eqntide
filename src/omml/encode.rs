@@ -1117,12 +1117,7 @@ impl MathmlEncoder {
     }
 }
 
-fn build_arrow_group_chr(
-    chr: &str,
-    pos: &str,
-    vert_jc: &str,
-    label_els: Vec<Element>,
-) -> Element {
+fn build_arrow_group_chr(chr: &str, pos: &str, vert_jc: &str, label_els: Vec<Element>) -> Element {
     let mut g = m_el("groupChr");
     let mut g_pr = m_el("groupChrPr");
     g_pr.push(m_val_el("chr", chr));
@@ -1235,7 +1230,8 @@ pub fn apply_math_font(omml: &mut Element, font: &str) {
                     .iter()
                     .position(|n| matches!(n, Node::Element(c) if c.is(NS_M, "t")))
                     .unwrap_or(el.children.len());
-                el.children.insert(insert_pos, Node::Element(make_w_rpr(font)));
+                el.children
+                    .insert(insert_pos, Node::Element(make_w_rpr(font)));
             }
         } else if el.ns.as_deref() == Some(NS_M) && CTRL_PR_PARENTS.contains(&el.local.as_str()) {
             if let Some(ctrl_pr) = el
@@ -1694,7 +1690,10 @@ mod tests {
             .filter(|e| e.is(NS_M, "t"))
             .map(|t| t.text())
             .collect();
-        assert!(texts.iter().any(|t| t == "∖"), "expected U+2216 in {texts:?}");
+        assert!(
+            texts.iter().any(|t| t == "∖"),
+            "expected U+2216 in {texts:?}"
+        );
         // <mtext>\</mtext> remains literal '\', while <mo>\</mo> was converted to U+2216.
         assert_eq!(texts.iter().filter(|t| *t == "\\").count(), 1);
 
@@ -1711,7 +1710,9 @@ mod tests {
             "empty script base must not produce <m:e/>"
         );
         assert_eq!(
-            e.find(NS_M, "r").and_then(|r| r.find(NS_M, "t")).map(|t| t.text()),
+            e.find(NS_M, "r")
+                .and_then(|r| r.find(NS_M, "t"))
+                .map(|t| t.text()),
             Some("\u{00A0}".to_string())
         );
     }
@@ -1745,14 +1746,20 @@ mod tests {
         );
 
         // When under-label is longer than over-label, groupChr wraps the under-label inside limUpp
-        let wide_under = crate::service::parse_latex_to_mathml(
-            r"\overset{f}{\underset{catalyst}{\rightarrow}}",
-        )
-        .unwrap();
+        let wide_under =
+            crate::service::parse_latex_to_mathml(r"\overset{f}{\underset{catalyst}{\rightarrow}}")
+                .unwrap();
         let omml_wide = mathml_to_omml(&wide_under).unwrap();
         let lim_upp = omml_wide.find(NS_M, "limUpp").expect("should use limUpp");
-        assert!(lim_upp.find(NS_M, "e").unwrap().find(NS_M, "groupChr").is_some());
+        assert!(lim_upp
+            .find(NS_M, "e")
+            .unwrap()
+            .find(NS_M, "groupChr")
+            .is_some());
         let decoded_wide = omml_to_mathml(&omml_wide).unwrap();
-        assert!(decoded_wide.iter().into_iter().any(|n| n.tag == "munderover"));
+        assert!(decoded_wide
+            .iter()
+            .into_iter()
+            .any(|n| n.tag == "munderover"));
     }
 }

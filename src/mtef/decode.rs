@@ -2745,9 +2745,19 @@ mod tests {
         // 1. OPT_CHAR_NO_MT (0x20) + OPT_CHAR_ENC_8 (0x04) with ASCII 'x' (TF_VARIABLE)
         //    and Symbol 0x61 -> 'α' (TF_SYMBOL), plus OPT_CHAR_ENC_16 (0x10) 'β' (0x03B2).
         let records_no_mt: Vec<u8> = vec![
-            0x02, OPT_CHAR_NO_MT | OPT_CHAR_ENC_8, TF_VARIABLE | 0x80, b'x',
-            0x02, OPT_CHAR_NO_MT | OPT_CHAR_ENC_8, TF_SYMBOL | 0x80, 0x61,
-            0x02, OPT_CHAR_NO_MT | OPT_CHAR_ENC_16, TF_LCGREEK | 0x80, 0xB2, 0x03,
+            0x02,
+            OPT_CHAR_NO_MT | OPT_CHAR_ENC_8,
+            TF_VARIABLE | 0x80,
+            b'x',
+            0x02,
+            OPT_CHAR_NO_MT | OPT_CHAR_ENC_8,
+            TF_SYMBOL | 0x80,
+            0x61,
+            0x02,
+            OPT_CHAR_NO_MT | OPT_CHAR_ENC_16,
+            TF_LCGREEK | 0x80,
+            0xB2,
+            0x03,
         ];
         let mtef_no_mt = super::super::build_mtef(&records_no_mt);
         let mml_no_mt = mtef_to_mathml(&mtef_no_mt).expect("OPT_CHAR_NO_MT should decode");
@@ -2758,38 +2768,100 @@ mod tests {
 
         // 2. REC_CHAR with OPT_CHAR_EMBELL followed by REC_EMBELL with OPT_NUDGE (0x08) and trailing 'y'
         let records_nudge: Vec<u8> = vec![
-            0x02, OPT_CHAR_EMBELL, TF_VARIABLE | 0x80, b'x', 0x00, // CHAR 'x' with embell
-            0x06, OPT_NUDGE, 0x02, 0xFE, 0x02, // REC_EMBELL, opts=OPT_NUDGE, dx=2, dy=-2, code=EMB_1DOT (2)
+            0x02,
+            OPT_CHAR_EMBELL,
+            TF_VARIABLE | 0x80,
+            b'x',
+            0x00, // CHAR 'x' with embell
+            0x06,
+            OPT_NUDGE,
+            0x02,
+            0xFE,
+            0x02, // REC_EMBELL, opts=OPT_NUDGE, dx=2, dy=-2, code=EMB_1DOT (2)
             0x00, // end embell list
-            0x02, 0x00, TF_VARIABLE | 0x80, b'y', 0x00, // trailing CHAR 'y'
+            0x02,
+            0x00,
+            TF_VARIABLE | 0x80,
+            b'y',
+            0x00, // trailing CHAR 'y'
         ];
         let mtef_nudge = super::super::build_mtef(&records_nudge);
         let mml_nudge = mtef_to_mathml(&mtef_nudge).expect("nudged REC_EMBELL should decode");
         let xml_nudge = mml_nudge.to_xml();
-        assert!(xml_nudge.contains("<mover accent=\"true\"><mi>x</mi><mo>\u{02D9}</mo></mover>"), "{xml_nudge}");
-        assert!(xml_nudge.contains("<mi>y</mi>"), "trailing sibling 'y' corrupted: {xml_nudge}");
+        assert!(
+            xml_nudge.contains("<mover accent=\"true\"><mi>x</mi><mo>\u{02D9}</mo></mover>"),
+            "{xml_nudge}"
+        );
+        assert!(
+            xml_nudge.contains("<mi>y</mi>"),
+            "trailing sibling 'y' corrupted: {xml_nudge}"
+        );
     }
 
     #[test]
     fn hbrace_under_accents_and_tm_arrow_directionality() {
         // 1. tmHBRACE emits U+23DE / U+23DF
         let over_bytes = super::super::build_mtef(&[
-            0x03, 0x00, 24, 0x01, 0x00, // tmHBRACE, tvHB_TOP (0x01), tmpl_opts=0
-            0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'a', 0x00, 0x00, // slot 0: 'a'
-            0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'n', 0x00, 0x00, // slot 1: 'n'
+            0x03,
+            0x00,
+            24,
+            0x01,
+            0x00, // tmHBRACE, tvHB_TOP (0x01), tmpl_opts=0
+            0x01,
+            0x00,
+            0x02,
+            0x00,
+            TF_VARIABLE | 0x80,
+            b'a',
+            0x00,
+            0x00, // slot 0: 'a'
+            0x01,
+            0x00,
+            0x02,
+            0x00,
+            TF_VARIABLE | 0x80,
+            b'n',
+            0x00,
+            0x00, // slot 1: 'n'
             0x00, // end tmHBRACE
         ]);
         let over_mml = mtef_to_mathml(&over_bytes).unwrap();
-        assert!(over_mml.to_xml().contains('\u{23DE}'), "{}", over_mml.to_xml());
+        assert!(
+            over_mml.to_xml().contains('\u{23DE}'),
+            "{}",
+            over_mml.to_xml()
+        );
 
         let under_bytes = super::super::build_mtef(&[
-            0x03, 0x00, 24, 0x00, 0x00, // tmHBRACE, bottom (0x00)
-            0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'a', 0x00, 0x00,
-            0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'm', 0x00, 0x00,
+            0x03,
+            0x00,
+            24,
+            0x00,
+            0x00, // tmHBRACE, bottom (0x00)
+            0x01,
+            0x00,
+            0x02,
+            0x00,
+            TF_VARIABLE | 0x80,
+            b'a',
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x02,
+            0x00,
+            TF_VARIABLE | 0x80,
+            b'm',
+            0x00,
+            0x00,
             0x00,
         ]);
         let under_mml = mtef_to_mathml(&under_bytes).unwrap();
-        assert!(under_mml.to_xml().contains('\u{23DF}'), "{}", under_mml.to_xml());
+        assert!(
+            under_mml.to_xml().contains('\u{23DF}'),
+            "{}",
+            under_mml.to_xml()
+        );
 
         // 2. Under-accent embellishments 25..=28 have accentunder="true"
         for code in 25u8..=28 {
@@ -2801,9 +2873,21 @@ mod tests {
         // 3. tmARROW distinguishes left/right harpoons and double arrows
         let make_tm_arrow = |var: u8| {
             super::super::build_mtef(&[
-                0x03, 0x00, 14, var, 0x00, // tmARROW
-                0x01, 0x00, 0x02, 0x00, TF_VARIABLE | 0x80, b'f', 0x00, 0x00, // top slot
-                0x01, 0x01, // null bottom slot
+                0x03,
+                0x00,
+                14,
+                var,
+                0x00, // tmARROW
+                0x01,
+                0x00,
+                0x02,
+                0x00,
+                TF_VARIABLE | 0x80,
+                b'f',
+                0x00,
+                0x00, // top slot
+                0x01,
+                0x01, // null bottom slot
                 0x00,
             ])
         };

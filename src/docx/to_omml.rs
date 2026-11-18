@@ -55,9 +55,7 @@ pub fn convert_bytes_to_omml_with(
 
     let effective_opts = if opts.math_font.as_deref() == Some("Cambria Math") {
         ToOmmlOptions {
-            math_font: Some(
-                read_document_math_font(&pkg).unwrap_or_else(|| "Cambria Math".into()),
-            ),
+            math_font: Some(read_document_math_font(&pkg).unwrap_or_else(|| "Cambria Math".into())),
         }
     } else {
         opts.clone()
@@ -1054,7 +1052,8 @@ mod tests {
         // 1. Default conversion without settings.xml emits Cambria Math on m:r and m:ctrlPr
         let (default_omml_docx, _) = convert_bytes_to_omml(&mt_docx).unwrap();
         let pkg_default = Package::read(&default_omml_docx).unwrap();
-        let doc_default = String::from_utf8(pkg_default.get("word/document.xml").unwrap().to_vec()).unwrap();
+        let doc_default =
+            String::from_utf8(pkg_default.get("word/document.xml").unwrap().to_vec()).unwrap();
         assert!(doc_default.contains(r#"w:ascii="Cambria Math""#));
         assert!(doc_default.contains("m:ctrlPr"));
 
@@ -1069,7 +1068,8 @@ mod tests {
 
         let (honored_omml_docx, _) = convert_bytes_to_omml(&mt_with_settings).unwrap();
         let pkg_honored = Package::read(&honored_omml_docx).unwrap();
-        let doc_honored = String::from_utf8(pkg_honored.get("word/document.xml").unwrap().to_vec()).unwrap();
+        let doc_honored =
+            String::from_utf8(pkg_honored.get("word/document.xml").unwrap().to_vec()).unwrap();
         assert!(doc_honored.contains(r#"w:ascii="Latin Modern Math""#));
         assert!(!doc_honored.contains("Cambria Math"));
     }

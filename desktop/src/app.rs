@@ -1196,7 +1196,11 @@ impl App {
         }
     }
     fn push_batch_item(&mut self, item: batch::BatchItem) -> bool {
-        if self.files.iter().any(|existing| existing.input == item.input) {
+        if self
+            .files
+            .iter()
+            .any(|existing| existing.input == item.input)
+        {
             return false;
         }
         self.files.push(item);
@@ -1219,10 +1223,9 @@ impl App {
                             saw_empty_dir = true;
                         }
                         for file in found {
-                            if self.push_batch_item(batch::BatchItem::from_folder(
-                                file,
-                                path.clone(),
-                            )) {
+                            if self
+                                .push_batch_item(batch::BatchItem::from_folder(file, path.clone()))
+                            {
                                 added += 1;
                             }
                         }
@@ -1627,6 +1630,8 @@ impl App {
                         ("braces", "Braces { }"),
                         ("bars", "Bars | |"),
                         ("double-bars", "Double bars ‖ ‖"),
+                        ("left-brace", "Left brace {"),
+                        ("left-bracket", "Left bracket ["),
                     ];
                     egui::ComboBox::from_id_salt("matrix-fence")
                         .selected_text(
@@ -3239,6 +3244,12 @@ impl App {
                                 },
                                 false,
                             ),
+                            Key::Enter if !modifiers.alt => {
+                                if self.editor.insert_row_or_promote_fence() {
+                                    self.latex_groups.clear();
+                                    self.expects_latex_group = false;
+                                }
+                            }
                             Key::Backspace => self.editor.delete(true),
                             Key::Delete => self.editor.delete(false),
                             Key::Escape => self.pending = Some(Intent::Close),
@@ -4829,6 +4840,234 @@ mod tests {
         assert_eq!(a.editor.math(), before);
         a.editor.redo();
         assert_eq!(a.editor.math(), math);
+
+        for (fence, open_ch) in [("left-brace", "{"), ("left-bracket", "[")] {
+            let mut b = app();
+            b.matrix_dialog = Some(MatrixDialog {
+                rows: 4,
+                columns: 1,
+                alignment: "left",
+                fence,
+            });
+            for _ in 0..2 {
+                ctx.run_ui(egui::RawInput::default(), |ui| b.matrix_dialog_ui(ui.ctx()))
+                    .textures_delta
+                    .clear();
+            }
+            assert!(
+                b.matrix_dialog.is_some(),
+                "dialog should remain open before clicking Insert matrix"
+            );
+            b.insert_custom_matrix(&MatrixDialog {
+                rows: 4,
+                columns: 1,
+                alignment: "left",
+                fence,
+            });
+            let sys = b.editor.math();
+            let row = &sys.children[0].children;
+            assert_eq!(row[0].text, open_ch);
+            assert_eq!(row[1].tag, "mtable");
+            assert_eq!(row[1].children.len(), 4);
+            assert!(row[1].children.iter().all(|r| r.children.len() == 1));
+            assert_eq!(row[1].attr("columnalign"), Some("left"));
+            assert_eq!(row[2].text, "");
+            assert_eq!(b.latex, sys.to_latex());
+        }
+    }
+
+    #[test]
+    fn enter_on_canvas_inserts_or_promotes_system_rows_and_preserves_command_commit() {
+        let ctx = egui::Context::default();
+        let enter_input = |modifiers: egui::Modifiers| egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        };
+
+        // 1. Inside a single-slot left brace `{□`, Enter promotes to a 2x1 left-aligned system.
+        let mut a = app();
+        a.insert_template(r"\left\{ #? \right.");
+        a.canvas_text("x+2=1");
+        a.changed();
+        let before_promote = a.editor.math();
+        ctx.run_ui(enter_input(egui::Modifiers::NONE), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        let promoted = a.editor.math();
+        let table = promoted
+            .iter()
+            .into_iter()
+            .find(|n| n.tag == "mtable")
+            .unwrap();
+        assert_eq!(table.children.len(), 2);
+        assert_eq!(table.attr("columnalign"), Some("left"));
+        assert_eq!(a.latex, promoted.to_latex());
+
+        // 2. Pressing Enter inside row 2 inserts row 3 right below and moves the caret there.
+        a.canvas_text("y=3");
+        a.changed();
+        ctx.run_ui(enter_input(egui::Modifiers::NONE), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        let grown = a.editor.math();
+        let table = grown
+            .iter()
+            .into_iter()
+            .find(|n| n.tag == "mtable")
+            .unwrap();
+        assert_eq!(table.children.len(), 3);
+        assert_eq!(a.latex, grown.to_latex());
+
+        // Undo steps back cleanly.
+        a.editor.undo();
+        assert_eq!(
+            a.editor
+                .math()
+                .iter()
+                .into_iter()
+                .find(|n| n.tag == "mtable")
+                .unwrap()
+                .children
+                .len(),
+            2
+        );
+        // Undo typing `y=3`, then undo promotion.
+        a.editor.undo();
+        a.editor.undo();
+        a.editor.undo();
+        a.editor.undo();
+        assert_eq!(a.editor.math(), before_promote);
+
+        // 3. Active `\` command buffer still commits on Enter without adding a table row.
+        let mut b = app();
+        b.insert_template(r"\left\{ \begin{array}{l} #? \\ #? \end{array} \right.");
+        b.canvas_text(r"\alpha");
+        assert!(b.command_input.is_some());
+        ctx.run_ui(enter_input(egui::Modifiers::NONE), |ui| b.keyboard(ui))
+            .textures_delta
+            .clear();
+        assert!(b.command_input.is_none());
+        let math_b = b.editor.math();
+        assert_eq!(
+            math_b
+                .iter()
+                .into_iter()
+                .find(|n| n.tag == "mtable")
+                .unwrap()
+                .children
+                .len(),
+            2
+        );
+        assert!(math_b.to_xml().contains("α"));
+
+        // 4. At the root row, Enter is a no-op.
+        let mut c = app();
+        c.canvas_text("x+1");
+        c.changed();
+        let before_root = c.editor.math();
+        ctx.run_ui(enter_input(egui::Modifiers::NONE), |ui| c.keyboard(ui))
+            .textures_delta
+            .clear();
+        assert_eq!(c.editor.math(), before_root);
+    }
+
+    #[test]
+    fn backspace_and_delete_on_canvas_remove_empty_system_rows() {
+        let ctx = egui::Context::default();
+        let key_input = |key: egui::Key| egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+
+        let mut a = app();
+        a.insert_template(r"\left\{ \begin{array}{l} #? \\ #? \end{array} \right.");
+        a.canvas_text("x=1");
+        // Insert an extra empty row in the middle, then fill row 3.
+        ctx.run_ui(key_input(egui::Key::Enter), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        a.editor
+            .move_caret(eqntide_editor::Move::NextPlaceholder, false);
+        a.canvas_text("y=2");
+        a.changed();
+        assert_eq!(
+            a.editor
+                .math()
+                .iter()
+                .into_iter()
+                .find(|n| n.tag == "mtable")
+                .unwrap()
+                .children
+                .len(),
+            3
+        );
+
+        // Move caret into the empty middle row (row 1) and press Backspace.
+        let row1_cell = a.editor.root().children[0].children[1].children[1].children[0].id;
+        a.editor.set_caret(
+            eqntide_editor::Caret {
+                node: row1_cell,
+                offset: 0,
+            },
+            false,
+        );
+        ctx.run_ui(key_input(egui::Key::Backspace), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        let after_bs = a.editor.math();
+        assert_eq!(
+            after_bs
+                .iter()
+                .into_iter()
+                .find(|n| n.tag == "mtable")
+                .unwrap()
+                .children
+                .len(),
+            2
+        );
+        assert_eq!(a.latex, after_bs.to_latex());
+
+        // Undo restores the empty middle row, then Delete removes it as well.
+        a.editor.undo();
+        a.changed();
+        assert_eq!(
+            a.editor
+                .math()
+                .iter()
+                .into_iter()
+                .find(|n| n.tag == "mtable")
+                .unwrap()
+                .children
+                .len(),
+            3
+        );
+        ctx.run_ui(key_input(egui::Key::Delete), |ui| a.keyboard(ui))
+            .textures_delta
+            .clear();
+        let after_del = a.editor.math();
+        assert_eq!(
+            after_del
+                .iter()
+                .into_iter()
+                .find(|n| n.tag == "mtable")
+                .unwrap()
+                .children
+                .len(),
+            2
+        );
+        assert_eq!(a.latex, after_del.to_latex());
     }
 
     #[test]
@@ -6954,11 +7193,7 @@ mod tests {
         let mut a = app();
         a.tab = 1;
         a.batch_target = 1; // "mathtype"
-        a.add_files(vec![
-            folder.clone(),
-            nested_doc.clone(),
-            extra_doc.clone(),
-        ]);
+        a.add_files(vec![folder.clone(), nested_doc.clone(), extra_doc.clone()]);
 
         assert_eq!(a.files.len(), 3);
         assert_eq!(a.files[0].input, nested_doc);

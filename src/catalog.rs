@@ -356,6 +356,10 @@ catalog! {
         ("double-bracket-right", "Fences", "Right double bracket", "\\left. #? \\right\\rrbracket"),
         ("cases-two", "Fences", "Two-case piecewise (Ctrl+Shift+C)", "\\begin{cases} #? & #? \\\\ #? & #? \\end{cases}"),
         ("cases-three", "Fences", "Three-case piecewise", "\\begin{cases} #? & #? \\\\ #? & #? \\\\ #? & #? \\end{cases}"),
+        ("system-brace-two", "Fences", "Two-equation system (brace)", "\\left\\{ \\begin{array}{l} #? \\\\ #? \\end{array} \\right."),
+        ("system-brace-three", "Fences", "Three-equation system (brace)", "\\left\\{ \\begin{array}{l} #? \\\\ #? \\\\ #? \\end{array} \\right."),
+        ("system-bracket-two", "Fences", "Two-equation system (bracket)", "\\left[ \\begin{array}{l} #? \\\\ #? \\end{array} \\right."),
+        ("system-bracket-three", "Fences", "Three-equation system (bracket)", "\\left[ \\begin{array}{l} #? \\\\ #? \\\\ #? \\end{array} \\right."),
         ("evaluation", "Fences", "Evaluation bar", "\\left. #? \\right|_{#?}^{#?}"),
         ("bra-ket", "Fences", "Bra–ket", "\\left\\langle #? \\middle| #? \\right\\rangle"),
         ("frac", "Fractions", "Fraction (Ctrl+F or /)", "\\frac{#?}{#?}"),
@@ -676,6 +680,8 @@ catalog! {
         ("pmatrix", "Parenthesized matrix", "\\begin{pmatrix} #? & #? \\\\ #? & #? \\end{pmatrix}"),
         ("bmatrix", "Bracketed matrix", "\\begin{bmatrix} #? & #? \\\\ #? & #? \\end{bmatrix}"),
         ("cases", "Piecewise cases", "\\begin{cases} #? & #? \\\\ #? & #? \\end{cases}"),
+        ("system", "System of equations (brace)", "\\left\\{ \\begin{array}{l} #? \\\\ #? \\end{array} \\right."),
+        ("systembracket", "System of equations (bracket)", "\\left[ \\begin{array}{l} #? \\\\ #? \\end{array} \\right."),
     ]
 }
 
@@ -762,7 +768,8 @@ pub fn attaches_to_previous(source: &str) -> bool {
 }
 
 /// Construct an editable matrix. Inputs are bounded to the desktop dialog's limits.
-/// `fence` is `none`, `parentheses`, `brackets`, `braces`, `bars`, or `double-bars`.
+/// `fence` is `none`, `parentheses`, `brackets`, `braces`, `bars`, `double-bars`,
+/// `left-brace`, or `left-bracket`.
 pub fn matrix(rows: usize, columns: usize, alignment: &str, fence: &str) -> MathNode {
     let rows = rows.clamp(1, 20);
     let columns = columns.clamp(1, 20);
@@ -788,12 +795,16 @@ pub fn matrix(rows: usize, columns: usize, alignment: &str, fence: &str) -> Math
         "braces" => ("{", "}"),
         "bars" => ("|", "|"),
         "double-bars" => ("‖", "‖"),
+        "left-brace" => ("{", ""),
+        "left-bracket" => ("[", ""),
         _ => return table,
     };
     let mut left = MathNode::leaf("mo", open);
     left.set_attr("stretchy", "true");
+    left.set_attr("form", "prefix");
     let mut right = MathNode::leaf("mo", close);
     right.set_attr("stretchy", "true");
+    right.set_attr("form", "postfix");
     MathNode::with_children("mrow", vec![left, table, right])
 }
 
@@ -881,6 +892,51 @@ mod tests {
         assert_eq!(table.tag, "mtable");
         assert_eq!(table.children.len(), 2);
         assert_eq!(table.children[0].children.len(), 3);
+
+        for (fence_key, expected_open) in [("left-brace", "{"), ("left-bracket", "[")] {
+            let mut sys = matrix(3, 1, "left", fence_key);
+            assert_eq!(sys.children[0].text, expected_open);
+            assert_eq!(sys.children[0].attr("form"), Some("prefix"));
+            assert_eq!(sys.children[2].text, "");
+            assert_eq!(sys.children[2].attr("form"), Some("postfix"));
+            assert_eq!(sys.children[1].tag, "mtable");
+            assert_eq!(sys.children[1].children.len(), 3);
+            assert_eq!(sys.children[1].children[0].children.len(), 1);
+            assert_eq!(sys.children[1].attr("columnalign"), Some("left"));
+
+            fill_slots(&mut sys);
+            let math = MathNode::with_children("math", vec![sys]);
+            let latex = math.to_latex();
+            assert!(
+                latex.contains(r"\begin{array}{l}") && latex.ends_with(r"\right."),
+                "unexpected latex for {fence_key}: {latex}"
+            );
+            let re_latex = crate::service::parse_latex_to_mathml(&latex).unwrap();
+            assert!(find_node(&re_latex, &|n| n.tag == "mtable").is_some());
+
+            let omml_back = roundtrip_omml(&math);
+            assert!(
+                find_node(&omml_back, &|n| n.tag == "mo"
+                    && n.text.trim() == expected_open)
+                .is_some(),
+                "omml lost {expected_open}: {}",
+                omml_back.to_xml()
+            );
+            assert!(find_node(&omml_back, &|n| n.tag == "mtable").is_some());
+
+            let mtef_back = roundtrip_mtef(&math);
+            assert!(
+                find_node(&mtef_back, &|n| n.tag == "mo"
+                    && n.text.trim() == expected_open)
+                .is_some(),
+                "mtef lost {expected_open}: {}",
+                mtef_back.to_xml()
+            );
+            assert!(find_node(&mtef_back, &|n| n.tag == "mtable").is_some());
+
+            let preview = crate::render::render_interactive(&math, 12.0).unwrap();
+            assert!(!preview.preview.png.is_empty());
+        }
     }
 
     #[test]
