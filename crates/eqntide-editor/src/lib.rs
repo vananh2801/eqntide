@@ -683,12 +683,7 @@ impl Editor {
                             }
                             self.state.anchor = None;
                             return Some(selected);
-                        } else if self
-                            .node(id)?
-                            .children
-                            .iter()
-                            .all(is_effectively_empty)
-                        {
+                        } else if self.node(id)?.children.iter().all(is_effectively_empty) {
                             let target = self.enclosing_structure_for_table(table_id);
                             self.remove_node_and_place_caret(target);
                             return Some(selected);
@@ -1550,11 +1545,7 @@ fn is_structure_tag(tag: &str) -> bool {
 fn is_fence_mrow(node: &Node) -> bool {
     node.tag == "mrow"
         && node.children.first().is_some_and(|c| {
-            c.is_fence_delimiter()
-                && !c
-                    .attrs
-                    .iter()
-                    .any(|(k, v)| k == "form" && v == "postfix")
+            c.is_fence_delimiter() && !c.attrs.iter().any(|(k, v)| k == "form" && v == "postfix")
         })
 }
 
@@ -2326,16 +2317,14 @@ mod regression_tests {
     #[test]
     fn horizontal_arrow_stops_skip_redundant_wrappers_and_boundaries() {
         // Flat expression `x+1` has 4 stops (1 step per character/operator).
-        let mut flat = Editor::new(
-            &MathNode::with_children(
-                "math",
-                vec![
-                    MathNode::leaf("mi", "x"),
-                    MathNode::leaf("mo", "+"),
-                    MathNode::leaf("mn", "1"),
-                ],
-            ),
-        );
+        let mut flat = Editor::new(&MathNode::with_children(
+            "math",
+            vec![
+                MathNode::leaf("mi", "x"),
+                MathNode::leaf("mo", "+"),
+                MathNode::leaf("mn", "1"),
+            ],
+        ));
         let mut stops = Vec::new();
         flat.root().stops(&mut stops);
         assert_eq!(stops.len(), 4);
@@ -2374,16 +2363,31 @@ mod regression_tests {
 
         // Fraction `\frac{1}{2}` has 6 stops: before frac, |1, 1|, |2, 2|, after frac.
         let mut frac = Editor::new(
-            &MathNode::parse("<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></math>").unwrap(),
+            &MathNode::parse(
+                "<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></math>",
+            )
+            .unwrap(),
         );
         frac.root().stops(&mut stops);
         assert_eq!(stops.len(), 6);
         // From end of numerator `1|`, one Right enters start of denominator `|2`.
         let num_mn = frac.root().children[0].children[0].children[0].id;
         let den_mn = frac.root().children[0].children[1].children[0].id;
-        frac.set_caret(Caret { node: num_mn, offset: 1 }, false);
+        frac.set_caret(
+            Caret {
+                node: num_mn,
+                offset: 1,
+            },
+            false,
+        );
         frac.move_caret(Move::Right, false);
-        assert_eq!(frac.caret(), Caret { node: den_mn, offset: 0 });
+        assert_eq!(
+            frac.caret(),
+            Caret {
+                node: den_mn,
+                offset: 0
+            }
+        );
         // From end of denominator `2|`, one Right exits fraction.
         frac.move_caret(Move::Right, false);
         frac.move_caret(Move::Right, false);
@@ -2406,13 +2410,23 @@ mod regression_tests {
             "math",
             vec![MathNode::with_children(
                 "mrow",
-                vec![l, MathNode::with_children("mrow", vec![MathNode::leaf("mi", "x")]), r],
+                vec![
+                    l,
+                    MathNode::with_children("mrow", vec![MathNode::leaf("mi", "x")]),
+                    r,
+                ],
             )],
         ));
         fence.root().stops(&mut stops);
         assert_eq!(stops.len(), 4);
         let x_id = fence.root().children[0].children[1].children[0].id;
-        fence.set_caret(Caret { node: x_id, offset: 1 }, false);
+        fence.set_caret(
+            Caret {
+                node: x_id,
+                offset: 1,
+            },
+            false,
+        );
         fence.move_caret(Move::Right, false);
         assert_eq!(
             fence.caret(),
@@ -2426,29 +2440,47 @@ mod regression_tests {
     #[test]
     fn deleting_last_token_char_prunes_empty_token_and_forward_delete_crosses_tokens() {
         let mut e = Editor::new(
-            &MathNode::parse("<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></math>")
-                .unwrap(),
+            &MathNode::parse(
+                "<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></math>",
+            )
+            .unwrap(),
         );
         let den_mrow = e.root().children[0].children[1].id;
         let den_mn = e.root().children[0].children[1].children[0].id;
-        e.set_caret(Caret { node: den_mn, offset: 1 }, false);
+        e.set_caret(
+            Caret {
+                node: den_mn,
+                offset: 1,
+            },
+            false,
+        );
         e.delete(true);
         assert!(e.node(den_mrow).unwrap().children.is_empty());
-        assert_eq!(e.caret(), Caret { node: den_mrow, offset: 0 });
+        assert_eq!(
+            e.caret(),
+            Caret {
+                node: den_mrow,
+                offset: 0
+            }
+        );
 
         // Multi-char token followed by another token: Backspace then Backspace deletes char-by-char.
-        let mut seq = Editor::new(
-            &MathNode::with_children(
-                "math",
-                vec![
-                    MathNode::leaf("mi", "ab"),
-                    MathNode::leaf("mo", "+"),
-                    MathNode::leaf("mn", "1"),
-                ],
-            ),
-        );
+        let mut seq = Editor::new(&MathNode::with_children(
+            "math",
+            vec![
+                MathNode::leaf("mi", "ab"),
+                MathNode::leaf("mo", "+"),
+                MathNode::leaf("mn", "1"),
+            ],
+        ));
         let one_id = seq.root().children[2].id;
-        seq.set_caret(Caret { node: one_id, offset: 1 }, false);
+        seq.set_caret(
+            Caret {
+                node: one_id,
+                offset: 1,
+            },
+            false,
+        );
         seq.delete(true);
         assert_eq!(seq.math().children.len(), 2);
         seq.delete(true);
@@ -2457,18 +2489,22 @@ mod regression_tests {
         assert_eq!(seq.math().children[0].text, "a");
 
         // Forward Delete at `a|+` deletes `+` in one step.
-        let mut fwd = Editor::new(
-            &MathNode::with_children(
-                "math",
-                vec![
-                    MathNode::leaf("mi", "a"),
-                    MathNode::leaf("mo", "+"),
-                    MathNode::leaf("mn", "1"),
-                ],
-            ),
-        );
+        let mut fwd = Editor::new(&MathNode::with_children(
+            "math",
+            vec![
+                MathNode::leaf("mi", "a"),
+                MathNode::leaf("mo", "+"),
+                MathNode::leaf("mn", "1"),
+            ],
+        ));
         let a_id = fwd.root().children[0].id;
-        fwd.set_caret(Caret { node: a_id, offset: 1 }, false);
+        fwd.set_caret(
+            Caret {
+                node: a_id,
+                offset: 1,
+            },
+            false,
+        );
         fwd.delete(false);
         assert_eq!(fwd.math().children.len(), 2);
         assert_eq!(fwd.math().children[1].text, "1");
@@ -2482,7 +2518,13 @@ mod regression_tests {
         );
         let frac_id = frac.root().children[0].id;
         let den_id = frac.root().children[0].children[1].id;
-        frac.set_caret(Caret { node: den_id, offset: 0 }, false);
+        frac.set_caret(
+            Caret {
+                node: den_id,
+                offset: 0,
+            },
+            false,
+        );
         frac.delete(true);
         assert_eq!(frac.selected_ids(), vec![frac_id]);
         assert_eq!(frac.math().children.len(), 1);
@@ -2493,12 +2535,20 @@ mod regression_tests {
 
         // Nested `1 + \frac{2}{□}` selects only inner fraction, not outer expression.
         let mut nested = Editor::new(
-            &MathNode::parse("<math><mn>1</mn><mo>+</mo><mfrac><mrow><mn>2</mn></mrow><mrow/></mfrac></math>")
-                .unwrap(),
+            &MathNode::parse(
+                "<math><mn>1</mn><mo>+</mo><mfrac><mrow><mn>2</mn></mrow><mrow/></mfrac></math>",
+            )
+            .unwrap(),
         );
         let inner_frac_id = nested.root().children[2].id;
         let inner_den_id = nested.root().children[2].children[1].id;
-        nested.set_caret(Caret { node: inner_den_id, offset: 0 }, false);
+        nested.set_caret(
+            Caret {
+                node: inner_den_id,
+                offset: 0,
+            },
+            false,
+        );
         nested.delete(false);
         assert_eq!(nested.selected_ids(), vec![inner_frac_id]);
         nested.delete(false);
@@ -2506,19 +2556,39 @@ mod regression_tests {
 
         // Non-empty `\frac{1}{|2}` + Backspace moves to `1|` without selecting/deleting.
         let mut nonempty = Editor::new(
-            &MathNode::parse("<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></math>")
-                .unwrap(),
+            &MathNode::parse(
+                "<math><mfrac><mrow><mn>1</mn></mrow><mrow><mn>2</mn></mrow></mfrac></math>",
+            )
+            .unwrap(),
         );
         let num_mn = nonempty.root().children[0].children[0].children[0].id;
         let den_mn = nonempty.root().children[0].children[1].children[0].id;
-        nonempty.set_caret(Caret { node: den_mn, offset: 0 }, false);
+        nonempty.set_caret(
+            Caret {
+                node: den_mn,
+                offset: 0,
+            },
+            false,
+        );
         nonempty.delete(true);
         assert!(nonempty.selected_ids().is_empty());
-        assert_eq!(nonempty.caret(), Caret { node: num_mn, offset: 1 });
+        assert_eq!(
+            nonempty.caret(),
+            Caret {
+                node: num_mn,
+                offset: 1
+            }
+        );
         // Forward Delete from `1|` moves to `|2`.
         nonempty.delete(false);
         assert!(nonempty.selected_ids().is_empty());
-        assert_eq!(nonempty.caret(), Caret { node: den_mn, offset: 0 });
+        assert_eq!(
+            nonempty.caret(),
+            Caret {
+                node: den_mn,
+                offset: 0
+            }
+        );
 
         // Empty fenced `(□)` and fenced 1-row empty `{□` select the enclosing fence first.
         let mut l = MathNode::leaf("mo", "(");
@@ -2529,11 +2599,20 @@ mod regression_tests {
         r.set_attr("form", "postfix");
         let mut fence = Editor::new(&MathNode::with_children(
             "math",
-            vec![MathNode::with_children("mrow", vec![l, MathNode::new("mrow"), r])],
+            vec![MathNode::with_children(
+                "mrow",
+                vec![l, MathNode::new("mrow"), r],
+            )],
         ));
         let fence_id = fence.root().children[0].id;
         let inner_id = fence.root().children[0].children[1].id;
-        fence.set_caret(Caret { node: inner_id, offset: 0 }, false);
+        fence.set_caret(
+            Caret {
+                node: inner_id,
+                offset: 0,
+            },
+            false,
+        );
         fence.delete(true);
         assert_eq!(fence.selected_ids(), vec![fence_id]);
         fence.delete(true);
@@ -2551,8 +2630,20 @@ mod regression_tests {
         );
         let r1_c0 = mat.root().children[0].children[1].children[0].id;
         let r1_c1 = mat.root().children[0].children[1].children[1].id;
-        mat.set_caret(Caret { node: r1_c0, offset: 0 }, false);
-        mat.set_caret(Caret { node: r1_c1, offset: 0 }, true);
+        mat.set_caret(
+            Caret {
+                node: r1_c0,
+                offset: 0,
+            },
+            false,
+        );
+        mat.set_caret(
+            Caret {
+                node: r1_c1,
+                offset: 0,
+            },
+            true,
+        );
         mat.delete(true);
         let math = mat.math();
         assert_eq!(math.children[0].children.len(), 1);

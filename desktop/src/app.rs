@@ -5163,7 +5163,13 @@ mod tests {
         );
         let r1_c0 = a.editor.root().children[0].children[1].children[0].id;
         let r1_c1 = a.editor.root().children[0].children[1].children[1].id;
-        a.editor.set_caret(Caret { node: r1_c0, offset: 0 }, false);
+        a.editor.set_caret(
+            Caret {
+                node: r1_c0,
+                offset: 0,
+            },
+            false,
+        );
         ctx.run_ui(key_input(egui::Key::Backspace), |ui| a.keyboard(ui))
             .textures_delta
             .clear();
@@ -5181,10 +5187,20 @@ mod tests {
         );
         let empty_c0 = a.editor.root().children[0].children[1].children[0].id;
         let empty_c1 = a.editor.root().children[0].children[1].children[1].id;
-        a.editor
-            .set_caret(Caret { node: empty_c0, offset: 0 }, false);
-        a.editor
-            .set_caret(Caret { node: empty_c1, offset: 0 }, true);
+        a.editor.set_caret(
+            Caret {
+                node: empty_c0,
+                offset: 0,
+            },
+            false,
+        );
+        a.editor.set_caret(
+            Caret {
+                node: empty_c1,
+                offset: 0,
+            },
+            true,
+        );
         ctx.run_ui(key_input(egui::Key::Delete), |ui| a.keyboard(ui))
             .textures_delta
             .clear();
