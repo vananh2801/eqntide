@@ -14,8 +14,8 @@ use eqntide::{
 };
 use eqntide_editor::{Caret, Editor, Move};
 use std::{
-    collections::{HashMap, VecDeque},
-    path::PathBuf,
+    collections::{HashMap, HashSet, VecDeque},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::Receiver,
@@ -32,7 +32,6 @@ const PALETTE_BUTTON_SIZE: Vec2 = Vec2::new(46.0, 32.0);
 const PALETTE_GAP: f32 = theme::SPACE_XS;
 const SIDEBAR_CATEGORY_ICON_SIZE: f32 = 22.0;
 const UI_ICON_SIZE: f32 = 16.0;
-const EMPTY_STATE_ICON_SIZE: f32 = 32.0;
 const PALETTE_ICON_TARGET_EM: f32 = 17.0;
 const PALETTE_HEIGHT: f32 =
     3.0 * PALETTE_BUTTON_SIZE.y + 2.0 * PALETTE_GAP + CONTENT_PADDING as f32;
@@ -311,12 +310,18 @@ pub struct App {
     latex_groups: Vec<u64>,
     expects_latex_group: bool,
     files: Vec<batch::BatchItem>,
+    batch_rows: Vec<batch::BatchRowState>,
+    batch_selection_mode: batch::BatchSelectionMode,
+    batch_collapsed_dirs: HashSet<String>,
     batch_logs: Vec<String>,
-    batch_output_dir: Option<PathBuf>,
     batch_target: usize,
     batch_overwrite: bool,
     batch_totals: [usize; 4],
     batch_completed: usize,
+    batch_run_total: usize,
+    batch_run_target: String,
+    batch_run_overwrite: bool,
+    batch_run_timestamp: String,
     batch_running: bool,
     stop: Arc<AtomicBool>,
     warning_cache: Option<(u64, u64, String, Option<String>)>,
@@ -572,14 +577,14 @@ impl App {
                 widgets.active.bg_stroke = Stroke::new(1.0, tokens.primary_active_bg);
                 widgets.active.fg_stroke = Stroke::new(1.0, tokens.primary_fg);
             } else {
-                widgets.noninteractive.bg_fill = tokens.control_disabled_bg;
-                widgets.noninteractive.weak_bg_fill = tokens.control_disabled_bg;
+                widgets.noninteractive.bg_fill = tokens.control_bg;
+                widgets.noninteractive.weak_bg_fill = tokens.control_bg;
                 widgets.noninteractive.bg_stroke = Stroke::new(1.0, tokens.border);
-                widgets.noninteractive.fg_stroke = Stroke::new(1.0, tokens.text_disabled);
-                widgets.inactive.bg_fill = tokens.control_disabled_bg;
-                widgets.inactive.weak_bg_fill = tokens.control_disabled_bg;
+                widgets.noninteractive.fg_stroke = Stroke::new(1.0, tokens.text_primary);
+                widgets.inactive.bg_fill = tokens.control_bg;
+                widgets.inactive.weak_bg_fill = tokens.control_bg;
                 widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
-                widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text_disabled);
+                widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text_primary);
             }
             ui.add_enabled_ui(enabled, add_button).inner
         })
@@ -603,7 +608,7 @@ impl App {
         let tint = if enabled {
             tokens.primary_fg
         } else {
-            tokens.text_disabled
+            tokens.text_primary
         };
         let image = self.ui_icon(ui.ctx(), icon, UI_ICON_SIZE, tint);
         Self::primary_button_with(ui, enabled, |ui| {
@@ -769,12 +774,18 @@ impl App {
             latex_groups: vec![],
             expects_latex_group: false,
             files: vec![],
+            batch_rows: vec![],
+            batch_selection_mode: batch::BatchSelectionMode::default(),
+            batch_collapsed_dirs: HashSet::new(),
             batch_logs: vec![],
-            batch_output_dir: None,
             batch_target: 0,
             batch_overwrite: false,
             batch_totals: [0; 4],
             batch_completed: 0,
+            batch_run_total: 0,
+            batch_run_target: String::new(),
+            batch_run_overwrite: false,
+            batch_run_timestamp: String::new(),
             batch_running: false,
             stop: Arc::new(AtomicBool::new(false)),
             warning_cache: None,
@@ -1142,6 +1153,7 @@ impl App {
                 Event::Paths(paths) => self.add_files(paths),
                 Event::Batch(i, result) => {
                     self.batch_completed += 1;
+                    self.sync_batch_row_state();
                     let log = match result {
                         Ok(r) => {
                             for (total, value) in self.batch_totals.iter_mut().zip([
@@ -1152,6 +1164,17 @@ impl App {
                             ]) {
                                 *total += value;
                             }
+                            if let (Some(item), Some(row_state)) =
+                                (self.files.get(i), self.batch_rows.get_mut(i))
+                            {
+                                row_state.last_output = Some(batch::BatchRowOutput::from_conversion(
+                                    item,
+                                    Path::new(&r.output_path),
+                                    &self.batch_run_target,
+                                    self.batch_run_overwrite,
+                                    &self.batch_run_timestamp,
+                                ));
+                            }
                             format!(
                                 "{} converted, {} skipped, {} errors → {}",
                                 r.converted, r.skipped, r.errors, r.output_path
@@ -1159,6 +1182,9 @@ impl App {
                         }
                         Err(e) => {
                             self.batch_totals[3] += 1;
+                            if let Some(row_state) = self.batch_rows.get_mut(i) {
+                                row_state.last_output = None;
+                            }
                             format!("Error: {e}")
                         }
                     };
@@ -1274,16 +1300,42 @@ impl App {
             self.events(ctx);
         }
     }
+    fn sync_batch_row_state(&mut self) {
+        let len = self.files.len();
+        if self.batch_rows.len() < len {
+            self.batch_rows.resize_with(len, batch::BatchRowState::default);
+        } else if self.batch_rows.len() > len {
+            self.batch_rows.truncate(len);
+        }
+        if self.batch_logs.len() < len {
+            self.batch_logs.resize_with(len, || "Ready".into());
+        } else if self.batch_logs.len() > len {
+            self.batch_logs.truncate(len);
+        }
+    }
+
+    fn selected_batch_count(&self) -> usize {
+        self.batch_rows
+            .iter()
+            .take(self.files.len())
+            .filter(|row| row.is_selected(self.batch_selection_mode))
+            .count()
+    }
+
     fn push_batch_item(&mut self, item: batch::BatchItem) -> bool {
-        if self
+        if let Some(idx) = self
             .files
             .iter()
-            .any(|existing| existing.input == item.input)
+            .position(|existing| existing.input == item.input)
         {
+            if self.files[idx].source_root.is_none() && item.source_root.is_some() {
+                self.files[idx].source_root = item.source_root;
+            }
             return false;
         }
         self.files.push(item);
-        self.batch_logs.push("Waiting".into());
+        self.batch_rows.push(batch::BatchRowState::default());
+        self.batch_logs.push("Ready".into());
         true
     }
 
@@ -1320,17 +1372,11 @@ impl App {
             }
         }
         if added > 0 {
-            self.batch_output_dir = None;
+            self.batch_run_total = 0;
+            self.batch_completed = 0;
         } else if saw_empty_dir {
             self.status = "No .docx files found in selected folder.".into();
         }
-    }
-
-    fn resolved_batch_output_folder(&self) -> Option<&std::path::Path> {
-        self.batch_output_dir
-            .as_deref()
-            .filter(|dir| dir.exists())
-            .or_else(|| self.files.first().map(|item| item.input.as_path()))
     }
     fn finish(&mut self, save: bool) {
         if self.busy {
@@ -3380,18 +3426,13 @@ impl App {
     }
 
     fn batch_ui(&mut self, ui: &mut egui::Ui) {
+        self.sync_batch_row_state();
         let tokens = ThemeTokens::from_ui(ui);
         self.back_to_editor_button(ui);
-        ui.label(
-            egui::RichText::new(
-                "Drop .docx files or folders here. Files save beside inputs; folders mirror into <folder>_<target>_<time>/.",
-            )
-            .color(tokens.text_muted),
-        );
-        ui.add_space(theme::SPACE_MD);
         Self::full_width_card(ui, tokens, |ui| {
-            ui.add_enabled_ui(!self.batch_running, |ui| {
-                ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new("Input").small().color(tokens.text_muted));
+            ui.horizontal_wrapped(|ui| {
+                ui.add_enabled_ui(!self.batch_running, |ui| {
                     if self
                         .icon_standard_button(ui, "file", "Add DOCX files…")
                         .clicked()
@@ -3417,11 +3458,34 @@ impl App {
                             }
                         });
                     }
-                    if Self::standard_button(ui, "Clear list").clicked() {
-                        self.files.clear();
-                        self.batch_logs.clear();
-                        self.batch_output_dir = None;
-                    }
+                });
+                if ui
+                    .add_enabled(
+                        !self.batch_running && !self.files.is_empty(),
+                        egui::Button::new("Clear list")
+                            .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+                    )
+                    .clicked()
+                {
+                    self.files.clear();
+                    self.batch_rows.clear();
+                    self.batch_collapsed_dirs.clear();
+                    self.batch_logs.clear();
+                    self.batch_run_total = 0;
+                    self.batch_completed = 0;
+                    self.batch_totals = [0; 4];
+                }
+            });
+            ui.add_space(theme::SPACE_XS);
+            ui.separator();
+            ui.add_space(theme::SPACE_XS);
+            ui.label(
+                egui::RichText::new("Options & Actions")
+                    .small()
+                    .color(tokens.text_muted),
+            );
+            ui.add_enabled_ui(!self.batch_running, |ui| {
+                ui.horizontal_wrapped(|ui| {
                     let before_batch_target = self.batch_target;
                     egui::ComboBox::from_id_salt("batch-target")
                         .selected_text(batch::TARGETS[self.batch_target].1)
@@ -3434,25 +3498,24 @@ impl App {
                         self.persisted.batch_target = self.batch_target;
                         self.settings_dirty = true;
                     }
+                    if ui
+                        .checkbox(
+                            &mut self.batch_overwrite,
+                            "Overwrite original documents (replace each selected input)",
+                        )
+                        .changed()
+                    {
+                        self.persisted.batch_overwrite = self.batch_overwrite;
+                        self.settings_dirty = true;
+                    }
                 });
             });
-            ui.add_enabled_ui(!self.batch_running, |ui| {
-                if ui
-                    .checkbox(
-                        &mut self.batch_overwrite,
-                        "Overwrite original documents (replace each selected input)",
-                    )
-                    .changed()
-                {
-                    self.persisted.batch_overwrite = self.batch_overwrite;
-                    self.settings_dirty = true;
-                }
-            });
             ui.horizontal_wrapped(|ui| {
+                let selected_count = self.selected_batch_count();
                 if self
                     .icon_primary_button(
                         ui,
-                        !self.batch_running && !self.files.is_empty(),
+                        !self.batch_running && selected_count > 0,
                         "arrows-left-right",
                         "Convert",
                     )
@@ -3460,21 +3523,34 @@ impl App {
                 {
                     let target = batch::TARGETS[self.batch_target].0;
                     let timestamp = batch::timestamp_now();
-                    self.batch_output_dir = if !self.batch_overwrite {
-                        self.files
-                            .iter()
-                            .find_map(|item| item.source_root.as_deref())
-                            .map(|root| batch::folder_output_dir(root, target, &timestamp))
-                    } else {
-                        None
-                    };
+                    let mode = self.batch_selection_mode;
+                    let selected_items: Vec<(usize, batch::BatchItem)> = self
+                        .files
+                        .iter()
+                        .zip(self.batch_rows.iter())
+                        .enumerate()
+                        .filter_map(|(idx, (item, row))| {
+                            row.is_selected(mode).then(|| (idx, item.clone()))
+                        })
+                        .collect();
                     self.batch_running = true;
                     self.batch_totals = [0; 4];
                     self.batch_completed = 0;
+                    self.batch_run_total = selected_items.len();
+                    self.batch_run_target = target.into();
+                    self.batch_run_overwrite = self.batch_overwrite;
+                    self.batch_run_timestamp = timestamp.clone();
                     self.stop.store(false, Ordering::Relaxed);
-                    self.batch_logs.fill("Waiting".into());
+                    for (idx, _) in &selected_items {
+                        if let Some(log) = self.batch_logs.get_mut(*idx) {
+                            *log = "Waiting".into();
+                        }
+                        if let Some(row_state) = self.batch_rows.get_mut(*idx) {
+                            row_state.last_output = None;
+                        }
+                    }
                     batch::run_items(
-                        self.files.clone(),
+                        selected_items,
                         target.into(),
                         self.font_pt,
                         self.batch_overwrite,
@@ -3493,79 +3569,433 @@ impl App {
                 {
                     self.stop.store(true, Ordering::Relaxed);
                 }
-                if self
-                    .icon_standard_button(ui, "folder-open", "Open output folder")
-                    .clicked()
-                {
-                    if let Some(path) = self.resolved_batch_output_folder() {
-                        if let Err(e) = runtime::open_folder(path) {
-                            self.status = e;
-                        }
-                    }
-                }
             });
         });
         ui.add_space(theme::SPACE_MD);
         if self.files.is_empty() {
-            let empty_icon = self.ui_icon(
-                ui.ctx(),
-                "file-upload",
-                EMPTY_STATE_ICON_SIZE,
-                tokens.text_muted,
-            );
-            tokens.group_frame().show(ui, |ui| {
-                let min_height = ui.available_height().max(120.0);
-                ui.set_min_size(Vec2::new(ui.available_width(), min_height));
-                ui.centered_and_justified(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space((min_height * 0.18).max(theme::SPACE_MD));
-                        ui.add(empty_icon);
-                        ui.add_space(theme::SPACE_XS);
-                        ui.label(
-                            egui::RichText::new("No .docx files queued")
-                                .strong()
-                                .color(tokens.text_primary),
-                        );
-                        ui.add_space(theme::SPACE_XS);
-                        ui.label(
-                            egui::RichText::new(
-                                "Drag and drop .docx files or folders here, or use \"Add DOCX files…\" / \"Add folder…\" above.",
-                            )
-                            .color(tokens.text_muted),
-                        );
-                    });
-                });
-            });
             return;
         }
-        ui.add(
-            egui::ProgressBar::new(self.batch_completed as f32 / self.files.len() as f32).text(
-                format!("{}/{} files", self.batch_completed, self.files.len()),
-            ),
+        let selected_count = self.selected_batch_count();
+        let (display_completed, display_total) = if self.batch_run_total > 0 {
+            (self.batch_completed, self.batch_run_total)
+        } else {
+            (0, selected_count)
+        };
+        let progress_fraction = if display_total > 0 && self.batch_run_total > 0 {
+            display_completed as f32 / display_total as f32
+        } else {
+            0.0
+        };
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), theme::COMPACT_BUTTON_HEIGHT),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.add_enabled_ui(!self.batch_running, |ui| {
+                    if Self::compact_button(ui, "Deselect all").clicked() {
+                        let mode = self.batch_selection_mode;
+                        for row in &mut self.batch_rows {
+                            row.set_selected(mode, false);
+                        }
+                        self.batch_run_total = 0;
+                        self.batch_completed = 0;
+                    }
+                    if Self::compact_button(ui, "Select all").clicked() {
+                        let mode = self.batch_selection_mode;
+                        for row in &mut self.batch_rows {
+                            row.set_selected(mode, true);
+                        }
+                        self.batch_run_total = 0;
+                        self.batch_completed = 0;
+                    }
+                });
+                let bar_width = ui.available_width().max(80.0);
+                ui.add(
+                    egui::ProgressBar::new(progress_fraction)
+                        .desired_width(bar_width)
+                        .desired_height(theme::COMPACT_BUTTON_HEIGHT)
+                        .text(format!("{display_completed}/{display_total} files")),
+                );
+            },
         );
-        ui.label(format!(
-            "Found: {}   Converted: {}   Skipped: {}   Errors: {}",
-            self.batch_totals[0], self.batch_totals[1], self.batch_totals[2], self.batch_totals[3]
-        ));
+        ui.add_space(theme::SPACE_XS);
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), theme::COMPACT_BUTTON_HEIGHT),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                for (mode, label) in [
+                    (batch::BatchSelectionMode::FlatList, "File tree"),
+                    (batch::BatchSelectionMode::FolderTree, "Folder tree"),
+                ] {
+                    let active = self.batch_selection_mode == mode;
+                    if Self::with_selectable_style(ui, active, |ui| Self::compact_button(ui, label))
+                        .clicked()
+                    {
+                        self.batch_selection_mode = mode;
+                        if !self.batch_running {
+                            self.batch_run_total = 0;
+                            self.batch_completed = 0;
+                        }
+                    }
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.label(format!(
+                        "Found: {}   Converted: {}   Skipped: {}   Errors: {}",
+                        self.batch_totals[0],
+                        self.batch_totals[1],
+                        self.batch_totals[2],
+                        self.batch_totals[3]
+                    ));
+                });
+            },
+        );
         ui.add_space(theme::SPACE_XS);
         let text_h = ui.text_style_height(&egui::TextStyle::Body);
-        let group_margin = tokens.group_frame().inner_margin.sum().y;
-        let row_height = 2.0 * text_h + ui.spacing().item_spacing.y + group_margin + 2.0;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show_rows(ui, row_height, self.files.len(), |ui, row_range| {
-                for idx in row_range {
-                    let item = &self.files[idx];
-                    let display_str = item.display_label();
-                    let full_path = item.input.display().to_string();
-                    let log = &self.batch_logs[idx];
-                    Self::full_width_card(ui, tokens, |ui| {
-                        ui.add(egui::Label::new(&display_str).truncate())
-                            .on_hover_text(&full_path);
-                        ui.add(egui::Label::new(log).truncate()).on_hover_text(log);
+        let header_h = text_h.max(theme::COMPACT_BUTTON_HEIGHT);
+        let row_height = header_h + theme::SPACE_MD;
+        let outer_h = ui.available_height().max(140.0);
+        const TREE_INDENT: f32 = 24.0;
+        tokens.group_frame().show(ui, |ui| {
+            let inner_h = (outer_h - 2.0 * theme::SPACE_LG).max(116.0);
+            ui.set_min_size(Vec2::new(ui.available_width(), inner_h));
+            ui.set_max_height(inner_h);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let scroll = egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
+            match self.batch_selection_mode {
+                batch::BatchSelectionMode::FlatList => {
+                    scroll.show_rows(ui, row_height, self.files.len(), |ui, row_range| {
+                        for idx in row_range {
+                            let display_str = self.files[idx].display_label();
+                            self.render_batch_file_row(
+                                ui,
+                                tokens,
+                                idx,
+                                &display_str,
+                                0,
+                                TREE_INDENT,
+                                row_height,
+                                None,
+                            );
+                        }
                     });
                 }
-            });
+                batch::BatchSelectionMode::FolderTree => {
+                    let tree_rows = batch::build_tree_rows(&self.files, &self.batch_collapsed_dirs);
+                    let guides = batch::compute_tree_guides(&tree_rows);
+                    scroll.show_rows(ui, row_height, tree_rows.len(), |ui, row_range| {
+                        for row_idx in row_range {
+                            let guide = Some(&guides[row_idx]);
+                            match &tree_rows[row_idx] {
+                                batch::TreeRow::Group {
+                                    key,
+                                    label,
+                                    hover_path,
+                                    depth,
+                                    collapsed,
+                                    descendant_indices,
+                                } => {
+                                    self.render_batch_tree_group_row(
+                                        ui,
+                                        tokens,
+                                        key,
+                                        label,
+                                        hover_path.as_deref(),
+                                        *depth,
+                                        *collapsed,
+                                        descendant_indices,
+                                        TREE_INDENT,
+                                        row_height,
+                                        guide,
+                                    );
+                                }
+                                batch::TreeRow::File {
+                                    item_index,
+                                    label,
+                                    depth,
+                                } => {
+                                    self.render_batch_file_row(
+                                        ui,
+                                        tokens,
+                                        *item_index,
+                                        label,
+                                        *depth,
+                                        TREE_INDENT,
+                                        row_height,
+                                        guide,
+                                    );
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_batch_row_chrome(
+        ui: &egui::Ui,
+        tokens: ThemeTokens,
+        rect: Rect,
+        depth: usize,
+        indent_step: f32,
+        guide: Option<&batch::TreeGuide>,
+        branch_end_offset: f32,
+        is_group: bool,
+        has_expanded_children: bool,
+    ) {
+        let painter = ui.painter();
+        let tree_stroke = Stroke::new(1.25, tokens.border_hover);
+        let divider_stroke = Stroke::new(1.0, tokens.border.gamma_multiply(0.85));
+
+        let divider_left = if guide.is_some() {
+            let content_depth = if is_group { depth + 1 } else { depth };
+            rect.left() + content_depth as f32 * indent_step + theme::COMPACT_BUTTON_HEIGHT
+        } else {
+            rect.left()
+        };
+        painter.hline(divider_left..=rect.right(), rect.bottom(), divider_stroke);
+
+        if let Some(guide) = guide {
+            for (d, &continues) in guide.ancestor_continues.iter().enumerate() {
+                if continues {
+                    let x = rect.left() + d as f32 * indent_step + 10.0;
+                    painter.vline(x, rect.y_range(), tree_stroke);
+                }
+            }
+            if depth > 0 {
+                let parent_x = rect.left() + (depth - 1) as f32 * indent_step + 10.0;
+                let mid_y = rect.center().y;
+                let v_end = if guide.is_last_sibling {
+                    mid_y
+                } else {
+                    rect.bottom()
+                };
+                painter.vline(parent_x, rect.top()..=v_end, tree_stroke);
+                painter.hline(
+                    parent_x..=(parent_x + branch_end_offset),
+                    mid_y,
+                    tree_stroke,
+                );
+            }
+        }
+
+        if has_expanded_children {
+            let trunk_x = rect.left() + depth as f32 * indent_step + 10.0;
+            let trunk_start =
+                (rect.center().y + theme::COMPACT_BUTTON_HEIGHT * 0.5).min(rect.bottom());
+            painter.vline(trunk_x, trunk_start..=rect.bottom(), tree_stroke);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_batch_tree_group_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: ThemeTokens,
+        key: &str,
+        label: &str,
+        hover_path: Option<&str>,
+        depth: usize,
+        collapsed: bool,
+        descendant_indices: &[usize],
+        indent_step: f32,
+        row_height: f32,
+        guide: Option<&batch::TreeGuide>,
+    ) {
+        let total_desc = descendant_indices.len();
+        let selected_desc = descendant_indices
+            .iter()
+            .filter(|&&i| self.batch_rows[i].tree_selected)
+            .count();
+        let mut all_checked = total_desc > 0 && selected_desc == total_desc;
+        let partial = selected_desc > 0 && selected_desc < total_desc;
+        let folder_icon = self.ui_icon(ui.ctx(), "folder", UI_ICON_SIZE, tokens.text_muted);
+
+        let resp = ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), row_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                let indent = depth as f32 * indent_step;
+                if indent > 0.0 {
+                    ui.add_space(indent);
+                }
+                let toggle_label = if collapsed { "+" } else { "-" };
+                if Self::compact_button(ui, toggle_label).clicked() {
+                    if collapsed {
+                        self.batch_collapsed_dirs.remove(key);
+                    } else {
+                        self.batch_collapsed_dirs.insert(key.to_owned());
+                    }
+                }
+                ui.add_enabled_ui(!self.batch_running, |ui| {
+                    if ui
+                        .add(egui::Checkbox::new(&mut all_checked, "").indeterminate(partial))
+                        .changed()
+                    {
+                        let target = all_checked;
+                        for &idx in descendant_indices {
+                            self.batch_rows[idx].tree_selected = target;
+                        }
+                        self.batch_run_total = 0;
+                        self.batch_completed = 0;
+                    }
+                });
+                ui.add(folder_icon);
+                let group_output_dir = hover_path.and_then(|source_dir| {
+                    descendant_indices.iter().find_map(|&i| {
+                        let out = self.batch_rows[i].last_output.as_ref()?;
+                        let root_out = out.root_output_dir.as_deref()?;
+                        let source_root = self.files[i].source_root.as_deref()?;
+                        let rel = Path::new(source_dir)
+                            .strip_prefix(source_root)
+                            .unwrap_or(Path::new(""));
+                        Some(if rel.as_os_str().is_empty() {
+                            root_out.to_path_buf()
+                        } else {
+                            root_out.join(rel)
+                        })
+                    })
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(dir_path) = group_output_dir.as_deref() {
+                        if Self::compact_button(ui, "Open folder")
+                            .on_hover_text(dir_path.display().to_string())
+                            .clicked()
+                        {
+                            if let Err(e) = runtime::open_folder(dir_path) {
+                                self.status = e;
+                            }
+                        }
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("{selected_desc}/{total_desc} selected"))
+                            .small()
+                            .color(tokens.text_muted),
+                    );
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let lbl = ui.add(
+                            egui::Label::new(egui::RichText::new(label).strong()).truncate(),
+                        );
+                        if let Some(hover) = hover_path {
+                            lbl.on_hover_text(hover);
+                        }
+                    });
+                });
+            },
+        );
+        Self::paint_batch_row_chrome(
+            ui,
+            tokens,
+            resp.response.rect,
+            depth,
+            indent_step,
+            guide,
+            11.0,
+            true,
+            !collapsed && !descendant_indices.is_empty(),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_batch_file_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: ThemeTokens,
+        idx: usize,
+        display_str: &str,
+        depth: usize,
+        indent_step: f32,
+        row_height: f32,
+        guide: Option<&batch::TreeGuide>,
+    ) {
+        let full_path = self.files[idx].input.display().to_string();
+        let log = self.batch_logs[idx].clone();
+        let mode = self.batch_selection_mode;
+        let mut checked = self.batch_rows[idx].is_selected(mode);
+        let output_meta = self.batch_rows[idx].last_output.clone();
+
+        let resp = ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), row_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                let indent = depth as f32 * indent_step;
+                if indent > 0.0 {
+                    ui.add_space(indent);
+                }
+                if depth > 0 {
+                    // Align file checkboxes and labels past the parent folder's collapse toggle.
+                    ui.add_space(theme::COMPACT_BUTTON_HEIGHT);
+                }
+                ui.add_enabled_ui(!self.batch_running, |ui| {
+                    if ui.checkbox(&mut checked, "").changed() {
+                        self.batch_rows[idx].set_selected(mode, checked);
+                        self.batch_run_total = 0;
+                        self.batch_completed = 0;
+                    }
+                });
+                if depth > 0 {
+                    let file_icon =
+                        self.ui_icon(ui.ctx(), "file", UI_ICON_SIZE, tokens.text_muted);
+                    ui.add(file_icon);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(out) = output_meta.as_ref() {
+                        let show_open_folder = match mode {
+                            batch::BatchSelectionMode::FlatList => true,
+                            batch::BatchSelectionMode::FolderTree => out.root_output_dir.is_none(),
+                        };
+                        if show_open_folder
+                            && Self::compact_button(ui, "Open folder")
+                                .on_hover_text(out.file_dir.display().to_string())
+                                .clicked()
+                        {
+                            if let Err(e) = runtime::open_folder(&out.file_dir) {
+                                self.status = e;
+                            }
+                        }
+                    }
+                    if log != "Ready" && log != "Waiting" {
+                        let (status_text, status_color) = if log.starts_with("Error:") {
+                            (log.as_str(), tokens.error_fg)
+                        } else if log == "Stopped" {
+                            ("Stopped", tokens.text_muted)
+                        } else {
+                            (
+                                log.split(" → ").next().unwrap_or(log.as_str()),
+                                tokens.text_muted,
+                            )
+                        };
+                        ui.label(egui::RichText::new(status_text).small().color(status_color))
+                            .on_hover_text(&log);
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let name_color = if checked {
+                            tokens.text_primary
+                        } else {
+                            tokens.text_disabled
+                        };
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(display_str).color(name_color))
+                                .truncate(),
+                        )
+                        .on_hover_text(&full_path);
+                    });
+                });
+            },
+        );
+        Self::paint_batch_row_chrome(
+            ui,
+            tokens,
+            resp.response.rect,
+            depth,
+            indent_step,
+            guide,
+            30.0,
+            false,
+            false,
+        );
     }
 
     fn canvas_preset_picker(
@@ -3950,17 +4380,6 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.pending = Some(Intent::Close);
             }
-        }
-        let dropped = ctx.input(|i| {
-            i.raw
-                .dropped_files
-                .iter()
-                .map(|f| f.path().to_path_buf())
-                .collect::<Vec<_>>()
-        });
-        if !dropped.is_empty() {
-            self.add_files(dropped);
-            self.tab = 1;
         }
         self.sync_render(&ctx);
         self.shell(ui);
@@ -7656,16 +8075,16 @@ mod tests {
             let size = Vec2::new(width, MIN_WINDOW_SIZE[1]);
             let expected_width = width - 2.0 * theme::SPACE_LG;
 
-            // Empty state: controls card + drop-zone empty card both span the full panel width.
+            // Empty state: only controls card renders (no empty drop-zone frame).
             a.files.clear();
             a.batch_logs.clear();
             let _ = run_ui_pass_sized(&ctx, &mut a, size);
             let out = run_ui_pass_sized(&ctx, &mut a, size);
-            let cards = card_rects_for_section_titles(
-                &out,
-                tokens,
-                &["Add DOCX files…", "No .docx files queued"],
-            );
+            assert!(!out.shapes.iter().any(|s| match &s.shape {
+                egui::Shape::Text(t) => t.galley.text() == "No .docx files queued",
+                _ => false,
+            }));
+            let cards = card_rects_for_section_titles(&out, tokens, &["Add DOCX files…"]);
             for rect in cards {
                 assert!(
                     rect.width() >= expected_width - 24.0 && rect.width() <= expected_width + 0.5,
@@ -7763,10 +8182,21 @@ mod tests {
         let convert_pos = find_text_center(&out, |t| t == "Convert");
         run_ui_pass_frame(&ctx, &mut a, click_events(convert_pos));
 
-        let expected_out_dir = a
-            .batch_output_dir
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while a.batch_running && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            run_ui_pass_frame(&ctx, &mut a, vec![]);
+        }
+        assert!(!a.batch_running);
+
+        let nested_out = a.batch_rows[0]
+            .last_output
+            .as_ref()
+            .expect("nested folder item should record output metadata");
+        let expected_out_dir = nested_out
+            .root_output_dir
             .clone()
-            .expect("folder batch should set timestamped output folder");
+            .expect("folder batch should set timestamped root output folder");
         let out_name = expected_out_dir
             .file_name()
             .unwrap()
@@ -7777,13 +8207,7 @@ mod tests {
             "unexpected output folder name: {out_name}"
         );
         assert_eq!(expected_out_dir.parent(), Some(dir.path()));
-
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while a.batch_running && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-            run_ui_pass_frame(&ctx, &mut a, vec![]);
-        }
-        assert!(!a.batch_running);
+        assert_eq!(nested_out.file_dir, expected_out_dir.join("chapter1"));
         assert!(expected_out_dir.join("intro.docx").is_file());
         assert!(expected_out_dir
             .join("chapter1")
@@ -7791,9 +8215,58 @@ mod tests {
             .is_file());
         assert!(dir.path().join("standalone_mathtype.docx").is_file());
         assert_eq!(
-            a.resolved_batch_output_folder(),
-            Some(expected_out_dir.as_path())
+            a.batch_rows[2].last_output.as_ref().unwrap().root_output_dir,
+            None
         );
+        assert_eq!(
+            a.batch_rows[2].last_output.as_ref().unwrap().file_dir,
+            dir.path()
+        );
+
+        // Default mode is Folder tree: root folder, subfolder, and standalone file show "Open folder";
+        // folder-derived file rows (both under root and under subfolders) and Individual files header do not.
+        let tree_out = run_ui_pass_sized(&ctx, &mut a, Vec2::new(1056.0, 900.0));
+        let has_label_near_y = |frame: &egui::FullOutput, label: &str, y: f32| {
+            frame.shapes.iter().any(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => {
+                    (s.shape.visual_bounding_rect().center().y - y).abs() <= 14.0
+                }
+                _ => false,
+            })
+        };
+        assert!(!tree_out.shapes.iter().any(|s| match &s.shape {
+            egui::Shape::Text(t) => {
+                t.galley.text() == "Open output folder"
+                    || t.galley.text() == "Open root output folder"
+            }
+            _ => false,
+        }));
+        let root_group_y = find_text_center(&tree_out, |t| t == "course_docs").y;
+        let sub_group_y = find_text_center(&tree_out, |t| t == "chapter1").y;
+        let tree_nested_y = find_text_center(&tree_out, |t| t == "lesson1.docx").y;
+        let tree_intro_y = find_text_center(&tree_out, |t| t == "intro.docx").y;
+        let individual_group_y = find_text_center(&tree_out, |t| t == "Individual files").y;
+        let tree_solo_y = find_text_center(&tree_out, |t| t.ends_with("standalone.docx")).y;
+        assert!(has_label_near_y(&tree_out, "Open folder", root_group_y));
+        assert!(has_label_near_y(&tree_out, "Open folder", sub_group_y));
+        assert!(!has_label_near_y(&tree_out, "Open folder", tree_nested_y));
+        assert!(!has_label_near_y(&tree_out, "Open folder", tree_intro_y));
+        assert!(!has_label_near_y(
+            &tree_out,
+            "Open folder",
+            individual_group_y
+        ));
+        assert!(has_label_near_y(&tree_out, "Open folder", tree_solo_y));
+
+        // Switch to File tree: every converted file row shows one "Open folder" button.
+        a.batch_selection_mode = batch::BatchSelectionMode::FlatList;
+        let post_out = run_ui_pass_sized(&ctx, &mut a, Vec2::new(1056.0, 900.0));
+        let nested_y = find_text_center(&post_out, |t| t.ends_with("lesson1.docx")).y;
+        let root_file_y = find_text_center(&post_out, |t| t.ends_with("intro.docx")).y;
+        let solo_y = find_text_center(&post_out, |t| t.ends_with("standalone.docx")).y;
+        assert!(has_label_near_y(&post_out, "Open folder", nested_y));
+        assert!(has_label_near_y(&post_out, "Open folder", root_file_y));
+        assert!(has_label_near_y(&post_out, "Open folder", solo_y));
     }
 
     #[test]
@@ -7835,7 +8308,7 @@ mod tests {
             // Batch DOCX view (empty drop-zone + buttons).
             a.tab = 1;
             let batch_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
-            for icon in ["chevron-left", "file", "folder", "folder-open"] {
+            for icon in ["chevron-left", "file", "folder"] {
                 assert_painted(&a, &batch_out, icon, tokens.text_primary);
             }
             assert_painted(
@@ -7843,10 +8316,9 @@ mod tests {
                 &batch_out,
                 "arrows-left-right",
                 tokens
-                    .text_disabled
+                    .text_primary
                     .gamma_multiply(ctx.style_of(theme).visuals.disabled_alpha()),
             );
-            assert_painted(&a, &batch_out, "file-upload", tokens.text_muted);
 
             // Settings view.
             a.tab = 2;
@@ -7861,5 +8333,310 @@ mod tests {
                 assert_painted(&a, &about_out, icon, tokens.text_muted);
             }
         }
+    }
+
+    #[test]
+    fn batch_subset_execution_upgrades_source_root_and_tracks_multi_folder_outputs() {
+        use std::io::{Cursor, Write};
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        zip.start_file("[Content_Types].xml", opts).unwrap();
+        zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#).unwrap();
+        zip.start_file("word/document.xml", opts).unwrap();
+        zip.write_all(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMath><m:r><m:t>x</m:t></m:r></m:oMath></w:p></w:body></w:document>"#).unwrap();
+        let docx_bytes = zip.finish().unwrap().into_inner();
+
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let folder_a = dir_a.path().join("folder_a");
+        let sub_a = folder_a.join("ch1");
+        let folder_b = dir_b.path().join("folder_b");
+        std::fs::create_dir_all(&sub_a).unwrap();
+        std::fs::create_dir_all(&folder_b).unwrap();
+
+        let doc_a1 = folder_a.join("a1.docx");
+        let doc_a2 = sub_a.join("a2.docx");
+        let doc_b1 = folder_b.join("b1.docx");
+        for path in [&doc_a1, &doc_a2, &doc_b1] {
+            std::fs::write(path, &docx_bytes).unwrap();
+        }
+
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        a.tab = 1;
+        a.batch_target = 1; // "mathtype"
+        // Add doc_a1 individually first, then add folder_a (should upgrade source_root), then folder_b.
+        a.add_files(vec![doc_a1.clone()]);
+        assert_eq!(a.files[0].source_root, None);
+        a.add_files(vec![folder_a.clone()]);
+        assert_eq!(a.files.len(), 2);
+        assert_eq!(a.files[0].source_root.as_deref(), Some(folder_a.as_path()));
+        a.add_files(vec![folder_b.clone()]);
+        assert_eq!(a.files.len(), 3);
+
+        // Uncheck doc_a1 (index 0) in default FolderTree mode; run only doc_a2 (1) and doc_b1 (2).
+        a.batch_rows[0].set_selected(batch::BatchSelectionMode::FolderTree, false);
+        assert_eq!(a.selected_batch_count(), 2);
+
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let convert_pos = find_text_center(&out, |t| t == "Convert");
+        run_ui_pass_frame(&ctx, &mut a, click_events(convert_pos));
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while a.batch_running && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            run_ui_pass_frame(&ctx, &mut a, vec![]);
+        }
+        assert!(!a.batch_running);
+        assert_eq!(a.batch_run_total, 2);
+        assert_eq!(a.batch_completed, 2);
+        assert_eq!(a.batch_rows[0].last_output, None);
+        assert_eq!(a.batch_logs[0], "Ready");
+
+        let out_a2 = a.batch_rows[1].last_output.as_ref().expect("a2 output");
+        assert_eq!(
+            out_a2.file_dir,
+            out_a2.root_output_dir.as_ref().unwrap().join("ch1")
+        );
+        assert_eq!(
+            out_a2.root_output_dir.as_ref().unwrap().parent(),
+            Some(dir_a.path())
+        );
+
+        let out_b1 = a.batch_rows[2].last_output.as_ref().expect("b1 output");
+        assert_eq!(
+            out_b1.file_dir,
+            out_b1.root_output_dir.as_ref().unwrap().to_path_buf()
+        );
+        assert_eq!(
+            out_b1.root_output_dir.as_ref().unwrap().parent(),
+            Some(dir_b.path())
+        );
+    }
+
+    #[test]
+    fn batch_toolbar_groups_and_disabled_states_are_consistent() {
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        ctx.set_theme(egui::Theme::Dark);
+        let tokens = ThemeTokens::for_mode(true);
+        let disabled_alpha = ctx.style_of(egui::Theme::Dark).visuals.disabled_alpha();
+        let expected_disabled_text = tokens.text_primary.gamma_multiply(disabled_alpha);
+
+        let mut a = app();
+        a.tab = 1;
+        let _ = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let empty_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+
+        // Toolbar sections exist; global "Open output folder" button is removed.
+        assert!(find_text_center(&empty_out, |t| t == "Input").x > 0.0);
+        assert!(find_text_center(&empty_out, |t| t == "Options & Actions").x > 0.0);
+        assert!(!empty_out.shapes.iter().any(|s| match &s.shape {
+            egui::Shape::Text(t) => t.galley.text() == "Open output folder",
+            _ => false,
+        }));
+
+        // Disabled Convert, Stop after current file, and Clear list share identical text color.
+        let text_color_for = |out: &egui::FullOutput, label: &str| {
+            out.shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == label => {
+                        Some(t.override_text_color.unwrap_or(t.fallback_color))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing rendered text {label:?}"))
+        };
+        assert_eq!(
+            text_color_for(&empty_out, "Convert"),
+            expected_disabled_text
+        );
+        assert_eq!(
+            text_color_for(&empty_out, "Stop after current file"),
+            expected_disabled_text
+        );
+        assert_eq!(
+            text_color_for(&empty_out, "Clear list"),
+            expected_disabled_text
+        );
+
+        // Populated queue with all items unchecked: Clear list enabled, Convert disabled.
+        a.files = vec![batch::BatchItem::file(PathBuf::from("/tmp/doc1.docx"))];
+        a.sync_batch_row_state();
+        a.batch_rows[0].set_selected(batch::BatchSelectionMode::FolderTree, false);
+        let unchecked_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert_eq!(
+            text_color_for(&unchecked_out, "Clear list"),
+            tokens.text_primary
+        );
+        assert_eq!(
+            text_color_for(&unchecked_out, "Convert"),
+            expected_disabled_text
+        );
+
+        // Clicking Clear list clears everything; re-selecting enables Convert.
+        a.batch_rows[0].set_selected(batch::BatchSelectionMode::FolderTree, true);
+        let ready_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert_eq!(text_color_for(&ready_out, "Convert"), tokens.primary_fg);
+        let clear_pos = find_text_center(&ready_out, |t| t == "Clear list");
+        let _ = run_ui_pass_frame(&ctx, &mut a, click_events(clear_pos));
+        assert!(a.files.is_empty());
+        assert!(a.batch_rows.is_empty());
+    }
+
+    #[test]
+    fn batch_dual_selection_modes_preserve_independent_state_and_tree_controls() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("course");
+        let sub = folder.join("ch1");
+        std::fs::create_dir_all(&sub).unwrap();
+        let f_root = folder.join("intro.docx");
+        let f_sub1 = sub.join("a.docx");
+        let f_sub2 = sub.join("b.docx");
+        let f_solo = dir.path().join("solo.docx");
+        for p in [&f_root, &f_sub1, &f_sub2, &f_solo] {
+            std::fs::write(p, b"placeholder").unwrap();
+        }
+
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        a.tab = 1;
+        a.add_files(vec![folder.clone(), f_solo.clone()]);
+        assert_eq!(a.files.len(), 4);
+        assert_eq!(a.batch_selection_mode, batch::BatchSelectionMode::FolderTree);
+        assert_eq!(a.selected_batch_count(), 4);
+
+        // Default Folder tree layout & header assertions.
+        let tree_out = run_ui_pass_sized(&ctx, &mut a, Vec2::new(1056.0, 900.0));
+        assert!(!tree_out.shapes.iter().any(|s| match &s.shape {
+            egui::Shape::Text(t) => {
+                let txt = t.galley.text();
+                txt == "Ready"
+                    || txt == "Waiting"
+                    || txt == "View:"
+                    || txt.starts_with("Selected:")
+            }
+            _ => false,
+        }));
+        let progress_pos = find_text_center(&tree_out, |t| t == "0/4 files");
+        let deselect_pos = find_text_center(&tree_out, |t| t == "Deselect all");
+        let found_pos = find_text_center(&tree_out, |t| t.starts_with("Found:"));
+        let flat_pos = find_text_center(&tree_out, |t| t == "File tree");
+        assert!((progress_pos.y - deselect_pos.y).abs() <= 2.0);
+        assert!(deselect_pos.x > progress_pos.x);
+        assert!((found_pos.y - flat_pos.y).abs() <= 2.0);
+        assert!(flat_pos.x > found_pos.x);
+        assert!(found_pos.y > progress_pos.y);
+
+        // Folder tree renders root, subfolder, and Individual files headers with clear indentation.
+        let text_left = |frame: &egui::FullOutput, label: &str| {
+            frame
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == label => {
+                        Some(s.shape.visual_bounding_rect().left())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing label {label:?}"))
+        };
+        let course_left = text_left(&tree_out, "course");
+        let ch1_left = text_left(&tree_out, "ch1");
+        let leaf_left = text_left(&tree_out, "a.docx");
+        assert!(ch1_left > course_left + 16.0);
+        assert!(leaf_left > ch1_left);
+        assert!(find_text_center(&tree_out, |t| t == "Individual files").x > 0.0);
+
+        // Collapse ch1 by clicking its "-" button.
+        let ch1_y = find_text_center(&tree_out, |t| t == "ch1").y;
+        let ch1_toggle_pos = tree_out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t)
+                    if t.galley.text() == "-"
+                        && (s.shape.visual_bounding_rect().center().y - ch1_y).abs() <= 14.0 =>
+                {
+                    Some(s.shape.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("ch1 collapse toggle");
+        let _ = run_ui_pass_frame(&ctx, &mut a, click_events(ch1_toggle_pos));
+        let collapsed_out = run_ui_pass_sized(&ctx, &mut a, Vec2::new(1056.0, 900.0));
+        assert!(!collapsed_out.shapes.iter().any(|s| match &s.shape {
+            egui::Shape::Text(t) => t.galley.text() == "a.docx" || t.galley.text() == "b.docx",
+            _ => false,
+        }));
+
+        // Click ch1's parent checkbox to uncheck both files inside ch1 -> course shows 1/3 selected.
+        let ch1_row_y = find_text_center(&collapsed_out, |t| t == "ch1").y;
+        let toggle_x = ch1_toggle_pos.x;
+        // Checkbox sits immediately to the right of the +/- compact button on the ch1 row.
+        let ch1_checkbox_pos = Pos2::new(toggle_x + 22.0, ch1_row_y);
+        let _ = run_ui_pass_frame(&ctx, &mut a, click_events(ch1_checkbox_pos));
+        let after_ch1_uncheck = run_ui_pass_sized(&ctx, &mut a, Vec2::new(1056.0, 900.0));
+        assert_eq!(a.selected_batch_count(), 2); // intro.docx + solo.docx
+        assert!(find_text_center(&after_ch1_uncheck, |t| t == "1/3 selected").x > 0.0);
+
+        // Click course's indeterminate parent checkbox -> selects all 3 files in course (4 total).
+        let course_row_y = find_text_center(&after_ch1_uncheck, |t| t == "course").y;
+        let course_toggle_x = after_ch1_uncheck
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t)
+                    if t.galley.text() == "-"
+                        && (s.shape.visual_bounding_rect().center().y - course_row_y).abs()
+                            <= 14.0 =>
+                {
+                    Some(s.shape.visual_bounding_rect().center().x)
+                }
+                _ => None,
+            })
+            .expect("course collapse toggle");
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut a,
+            click_events(Pos2::new(course_toggle_x + 22.0, course_row_y)),
+        );
+        assert_eq!(a.selected_batch_count(), 4);
+
+        // Uncheck one in Folder tree, switch to File tree -> all 4 still checked in File tree.
+        a.batch_rows[1].tree_selected = false;
+        assert_eq!(a.selected_batch_count(), 3);
+        let flat_btn = find_text_center(&after_ch1_uncheck, |t| t == "File tree");
+        let _ = run_ui_pass_frame(&ctx, &mut a, click_events(flat_btn));
+        assert_eq!(a.batch_selection_mode, batch::BatchSelectionMode::FlatList);
+        assert_eq!(a.selected_batch_count(), 4);
+
+        // Uncheck in File tree via Deselect all, re-enable 2 items, then switch back to Folder tree ->
+        // Folder tree still retains its 3 selections!
+        let flat_out = run_ui_pass_sized(&ctx, &mut a, Vec2::new(1056.0, 900.0));
+        let flat_deselect = find_text_center(&flat_out, |t| t == "Deselect all");
+        let _ = run_ui_pass_frame(&ctx, &mut a, click_events(flat_deselect));
+        assert_eq!(a.selected_batch_count(), 0);
+        assert_eq!(a.files.len(), 4);
+        a.batch_rows[0].flat_selected = true;
+        a.batch_rows[3].flat_selected = true;
+        assert_eq!(a.selected_batch_count(), 2);
+        let two_selected_out = run_ui_pass_sized(&ctx, &mut a, Vec2::new(1056.0, 900.0));
+        assert!(find_text_center(&two_selected_out, |t| t == "0/2 files").x > 0.0);
+
+        let tree_btn = find_text_center(&two_selected_out, |t| t == "Folder tree");
+        let _ = run_ui_pass_frame(&ctx, &mut a, click_events(tree_btn));
+        assert_eq!(
+            a.batch_selection_mode,
+            batch::BatchSelectionMode::FolderTree
+        );
+        assert_eq!(a.selected_batch_count(), 3);
+        assert!(a.batch_rows[0].flat_selected);
+        assert!(!a.batch_rows[1].flat_selected);
+        assert!(!a.batch_rows[2].flat_selected);
+        assert!(a.batch_rows[3].flat_selected);
     }
 }
