@@ -13,7 +13,7 @@ preserves them. Removal does not qualify the pending Office/platform scenarios.
   Checks cover source synchronization, one-step undo, imported
   attributes, incomplete/unknown drafts, cancellation and save blocking.
 
-- Sketch-based layout: fixed footer/save and LaTeX visibility at 1040×560,
+- Sketch-based layout: fixed footer/save and LaTeX visibility at 1056×560,
   1100×650 and 1440×900 in light/dark themes for standalone/Office sessions.
   Checks cover initial and settled layout, canvas/source overlap and aligned
   horizontal edges. Templates reserve three rows at every size; format/font/undo/

@@ -87,4 +87,25 @@ const xml = new DOMParser().parseFromString(fs.readFileSync(path.join(__dirname,
 const toggle = Array.from(xml.getElementsByTagName('toggleButton')).find(n => n.getAttribute('id') === 'btnAutoEquationTab');
 assert.equal(toggle, undefined);
 assert.equal(setup().c.OnAutoEquationTab, undefined);
+
+// Ribbon GetImage resolves distinct PNG assets per control ID and taskpane renders Tabler SVGs.
+{
+  const { c } = setup();
+  const expected = {
+    btnInsertEquation: 'assets/icons/pencil-plus-32.png',
+    btnEditEquation: 'assets/icons/edit-32.png',
+    btnToggleLatex: 'assets/icons/tex-32.png',
+    btnUpgradeLegacy: 'assets/icons/arrow-big-up-lines-32.png',
+    btnBatchConverter: 'assets/icons/file-type-docx-32.png'
+  };
+  for (const [id, relPath] of Object.entries(expected)) {
+    assert.equal(c.GetImage({ Id: id }), relPath, `GetImage(${id})`);
+    assert.ok(fs.existsSync(path.join(__dirname, '../../wps-addin', relPath)), `Missing ${relPath}`);
+  }
+  assert.equal(c.GetImage({ Id: 'unknown' }), 'assets/icon-32.png');
+
+  const taskpaneHtml = fs.readFileSync(path.join(__dirname, '../../wps-addin/taskpane.html'), 'utf8');
+  assert.match(taskpaneHtml, /id="btn-start-upgrade"[\s\S]*?<svg[\s\S]*?<\/svg>/);
+  assert.match(taskpaneHtml, /id="btn-disk-upgrade"[\s\S]*?<svg[\s\S]*?<\/svg>/);
+}
 console.log('WPS equation tab regression tests passed');

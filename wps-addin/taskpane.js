@@ -20,6 +20,7 @@ var statFound = document.getElementById("stat-found");
 var statUpgraded = document.getElementById("stat-upgraded");
 var statErrors = document.getElementById("stat-errors");
 var btnDiskUpgrade = document.getElementById("btn-disk-upgrade");
+var btnDiskUpgradeLabel = document.getElementById("btn-disk-upgrade-label");
 
 // Bridge Health Check
 function checkBridgeHealth() {
@@ -53,7 +54,7 @@ btnDiskUpgrade.addEventListener("click", function () {
     doc.Save();
 
     btnDiskUpgrade.disabled = true;
-    btnDiskUpgrade.textContent = "Converting on disk...";
+    (btnDiskUpgradeLabel || btnDiskUpgrade).textContent = "Converting on disk...";
 
     var targetMode = upgradeTarget.value === "omml" ? "upgrade_omml" : "upgrade_mathtype";
 
@@ -65,7 +66,7 @@ btnDiskUpgrade.addEventListener("click", function () {
       }),
       function (status, responseText) {
         btnDiskUpgrade.disabled = false;
-        btnDiskUpgrade.textContent = "Upgrade Active File via Rust Core";
+        (btnDiskUpgradeLabel || btnDiskUpgrade).textContent = "Upgrade Active File via Rust Core";
 
         if (status === 200) {
           var res = JSON.parse(responseText);

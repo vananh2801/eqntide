@@ -49,7 +49,7 @@ cargo test --workspace --all-targets
 Bao gồm:
 - Core engine (`src/`): parser XML, MathML AST, OMML encoder/decoder, MTEF v3/v5, OLE CFB, EMF/PNG/SVG renderer, LaTeX extensions, HTTP service.
 - Editor (`crates/eqntide-editor/`): con trỏ, selection, template wrapping, matrix resize, undo/redo, command completion.
-- Desktop UI (`desktop/`): layout 3 hàng palette ở các kích thước 1040×560 / 1100×650 / 1440×900, DPI scaling, live LaTeX debounce, session dirty/save guard.
+- Desktop UI (`desktop/`): layout 3 hàng palette ở các kích thước 1056×560 / 1100×650 / 1440×900, DPI scaling, live LaTeX debounce, session dirty/save guard.
 
 ---
 

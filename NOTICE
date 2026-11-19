@@ -58,6 +58,17 @@ from the following open-source projects and standards:
    - W3C MathML Core Specification
      https://w3c.github.io/mathml-core/
 
+6. Tabler Icons
+   Official Project: https://github.com/tabler/tabler-icons
+   Author: Paweł Kuna
+   Copyright (c) 2020-2026 Paweł Kuna
+   License: MIT License
+   License Location: assets/icons/tabler-icons/LICENSE.txt
+   Description:
+     Curated outline SVG icons in `assets/icons/tabler-icons/` and derived
+     rasterized PNG icons used across the native desktop UI, Microsoft Word
+     Ribbon template, and WPS Office add-in.
+
 Native desktop UI
 -----------------
 The native desktop uses egui/eframe (MIT OR Apache-2.0), rfd (MIT),

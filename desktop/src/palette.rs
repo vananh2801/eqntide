@@ -3,7 +3,6 @@
 pub use eqntide::catalog::{
     attaches_to_previous, matrix, preview_template, template, GROUPS, PALETTE,
 };
-use eqntide::MathNode;
 
 pub const RECENT_GROUP: &str = "Recent";
 pub const DEFAULT_GROUP: &str = "Fractions";
@@ -14,7 +13,7 @@ pub type PaletteItem = (&'static str, &'static str, &'static str);
 pub struct UiGroup {
     pub id: &'static str,
     pub label: &'static str,
-    pub icon_source: &'static str,
+    pub icons: &'static [&'static str],
     pub catalog_groups: &'static [&'static str],
 }
 
@@ -22,73 +21,73 @@ pub const UI_GROUPS: &[UiGroup] = &[
     UiGroup {
         id: RECENT_GROUP,
         label: "Recent",
-        icon_source: "★",
+        icons: &["history"],
         catalog_groups: &[],
     },
     UiGroup {
         id: "Fractions",
         label: "Fractions & Radicals",
-        icon_source: r"\frac{#?}{#?}",
+        icons: &["math-x-divide-y", "square-root-2"],
         catalog_groups: &["Fractions"],
     },
     UiGroup {
         id: "Scripts",
         label: "Scripts",
-        icon_source: "x^{#?}",
+        icons: &["x-power-y"],
         catalog_groups: &["Scripts"],
     },
     UiGroup {
         id: "Fences",
         label: "Fences",
-        icon_source: r"\left( #? \right)",
+        icons: &["parentheses"],
         catalog_groups: &["Fences"],
     },
     UiGroup {
         id: "Integrals",
         label: "Integrals",
-        icon_source: r"\int #?",
+        icons: &["math-integral"],
         catalog_groups: &["Integrals"],
     },
     UiGroup {
         id: "SumsAndBigOps",
         label: "Sums & Big Operators",
-        icon_source: r"\sum_{#?}^{#?}",
+        icons: &["sum"],
         catalog_groups: &["Sums", "BigOperators"],
     },
     UiGroup {
         id: "MatricesAndBoxes",
         label: "Matrices & Boxes",
-        icon_source: r"\begin{pmatrix} #? & #? \\ #? & #? \end{pmatrix}",
+        icons: &["matrix"],
         catalog_groups: &["Matrices", "Boxes"],
     },
     UiGroup {
         id: "AccentsAndBars",
         label: "Accents & Bars",
-        icon_source: r"\bar{#?}",
+        icons: &["overline", "underline"],
         catalog_groups: &["Embellishments", "Bars"],
     },
     UiGroup {
         id: "OperatorsAndRelations",
         label: "Operators & Relations",
-        icon_source: r"\pm\leq",
+        icons: &["math-equal-lower"],
         catalog_groups: &["Operators", "Relations"],
     },
     UiGroup {
         id: "Arrows",
         label: "Arrows",
-        icon_source: r"\rightarrow\Rightarrow",
+        icons: &["arrows-left-right"],
         catalog_groups: &["Arrows", "LabeledArrows"],
     },
     UiGroup {
         id: "LogicSetsSymbols",
         label: "Logic, Sets & Symbols",
-        icon_source: r"\forall\in",
+        icons: &["math-avg"],
         catalog_groups: &["Logic", "Sets", "Symbols", "Spaces"],
     },
     UiGroup {
         id: "Greek",
         label: "Greek Letters",
-        icon_source: r"\alpha\Omega",
+        icons: &["alpha", "omega"],
         catalog_groups: &["GreekLower", "GreekUpper"],
     },
 ];
@@ -137,19 +136,10 @@ pub fn items_for_ui_group(ui_group_id: &str, recent: &[&'static str]) -> Vec<&'s
         .collect()
 }
 
-pub fn icon_math(group: &UiGroup) -> Result<MathNode, String> {
-    if group.id == RECENT_GROUP {
-        return Ok(MathNode::with_children(
-            "math",
-            vec![MathNode::leaf("mo", group.icon_source)],
-        ));
-    }
-    preview_template(group.icon_source)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eqntide::MathNode;
     #[test]
     fn every_existing_palette_button_has_a_native_template() {
         let errors: Vec<_> = PALETTE
@@ -216,16 +206,30 @@ mod tests {
         assert!(!items_for_ui_group(DEFAULT_GROUP, &[]).is_empty());
 
         let mut mapped = Vec::new();
+        let icon_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/icons/rendered");
         for group in UI_GROUPS {
-            let math = icon_math(group).unwrap_or_else(|e| panic!("{}: {e}", group.id));
-            assert_eq!(math.tag, "math", "{}", group.id);
-            let mask = eqntide::render_alpha_at(&math, 18.0, 54.0, 32.0)
-                .unwrap_or_else(|e| panic!("{}: {e}", group.id));
             assert!(
-                mask.width > 0 && mask.height > 0 && mask.alpha.iter().any(|&a| a > 0),
-                "empty sidebar icon for {}",
-                group.id
+                matches!(group.icons.len(), 1 | 2),
+                "{}: expected 1 or 2 sidebar icons, got {}",
+                group.id,
+                group.icons.len()
             );
+            for &icon_name in group.icons {
+                let icon_path = icon_dir.join(format!("{icon_name}.png"));
+                let pixels = image::open(&icon_path)
+                    .unwrap_or_else(|e| {
+                        panic!("{}: failed to open {}: {e}", group.id, icon_path.display())
+                    })
+                    .to_rgba8();
+                assert!(
+                    pixels.width() > 0
+                        && pixels.height() > 0
+                        && pixels.pixels().any(|p| p.0[3] > 0),
+                    "empty sidebar icon {icon_name} for {}",
+                    group.id
+                );
+            }
             mapped.extend_from_slice(group.catalog_groups);
         }
 

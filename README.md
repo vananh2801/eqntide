@@ -731,6 +731,8 @@ This project is an independent bidirectional conversion engine and library that 
    - Standard reference for MathML mathematical layout and token element formatting.
 8. **[STIX Fonts Project](https://github.com/stipub/stixfonts)** (by The STI Pub Companies):
    - Embedded fonts in `assets/fonts/` (`STIXTwoText`, `STIXTwoMath`) used for standalone vector (EMF) and raster (PNG) equation preview rendering and OpenType `MATH` table metrics, licensed under the [SIL Open Font License 1.1](assets/fonts/stixfonts-2.13b171/OFL.txt).
+9. **[Tabler Icons](https://github.com/tabler/tabler-icons)** (by Paweł Kuna):
+   - Outline SVG icons in `assets/icons/tabler-icons/` (and pre-rasterized PNGs) used across the native desktop editor, Microsoft Word template, and WPS Office add-in, licensed under the [MIT License](assets/icons/tabler-icons/LICENSE.txt).
 
 Detailed attribution and copyright information are documented in [NOTICE](NOTICE).
 
@@ -740,6 +742,7 @@ Detailed attribution and copyright information are documented in [NOTICE](NOTICE
 
 - Source code is licensed under the [MIT License](LICENSE).
 - Bundled STIX fonts (`assets/fonts/stixfonts-2.13b171/`) are licensed under the [SIL Open Font License 1.1](assets/fonts/stixfonts-2.13b171/OFL.txt).
+- Bundled Tabler UI icons (`assets/icons/tabler-icons/`) are licensed under the [MIT License](assets/icons/tabler-icons/LICENSE.txt).
 - Comprehensive copyright and third-party notices are available in [NOTICE](NOTICE).
 
 Background bridge diagnostics after native installation:

@@ -41,6 +41,13 @@ StartupNotify=true
 
 
 def populate(stage, binary_dir, windows):
+    import importlib.util
+    render_spec = importlib.util.spec_from_file_location("render_icons", ROOT / "scripts/render_icons.py")
+    render_mod = importlib.util.module_from_spec(render_spec)
+    render_spec.loader.exec_module(render_mod)
+    if render_mod.check_all() != 0:
+        raise RuntimeError("Rendered Tabler PNG icons are out of sync; run python3 scripts/render_icons.py")
+
     suffix = ".exe" if windows else ""
     for name in ("eqntide-cli", "eqntide-desktop"):
         shutil.copy2(binary_dir / (name + suffix), stage / (name + suffix))

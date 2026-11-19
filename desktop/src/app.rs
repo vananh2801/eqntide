@@ -27,16 +27,52 @@ use std::{
 const CONTENT_PADDING: i8 = theme::SPACE_MD as i8;
 const FONT_SIZE_CONTROL_WIDTH: f32 = 96.0;
 const FOOTER_CONTROL_HEIGHT: f32 = theme::BUTTON_HEIGHT;
-pub(crate) const MIN_WINDOW_SIZE: [f32; 2] = [1040.0, 560.0];
+pub(crate) const MIN_WINDOW_SIZE: [f32; 2] = [1056.0, 560.0];
 const PALETTE_BUTTON_SIZE: Vec2 = Vec2::new(46.0, 32.0);
 const PALETTE_GAP: f32 = theme::SPACE_XS;
-const SIDEBAR_ICON_TARGET_EM: f32 = 18.0;
+const SIDEBAR_CATEGORY_ICON_SIZE: f32 = 22.0;
+const UI_ICON_SIZE: f32 = 16.0;
+const EMPTY_STATE_ICON_SIZE: f32 = 32.0;
 const PALETTE_ICON_TARGET_EM: f32 = 17.0;
 const PALETTE_HEIGHT: f32 =
     3.0 * PALETTE_BUTTON_SIZE.y + 2.0 * PALETTE_GAP + CONTENT_PADDING as f32;
 const LATEX_PANEL_HEIGHT: f32 = 88.0;
 const LATEX_INPUT_HEIGHT: f32 = LATEX_PANEL_HEIGHT - CONTENT_PADDING as f32;
 const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";
+
+fn tabler_icon_bytes(name: &str) -> &'static [u8] {
+    match name {
+        "alpha" => include_bytes!("../../assets/icons/rendered/alpha.png"),
+        "arrow-back-up" => include_bytes!("../../assets/icons/rendered/arrow-back-up.png"),
+        "arrow-forward-up" => include_bytes!("../../assets/icons/rendered/arrow-forward-up.png"),
+        "arrows-left-right" => include_bytes!("../../assets/icons/rendered/arrows-left-right.png"),
+        "brand-github" => include_bytes!("../../assets/icons/rendered/brand-github.png"),
+        "chevron-left" => include_bytes!("../../assets/icons/rendered/chevron-left.png"),
+        "file" => include_bytes!("../../assets/icons/rendered/file.png"),
+        "file-type-docx" => include_bytes!("../../assets/icons/rendered/file-type-docx.png"),
+        "file-upload" => include_bytes!("../../assets/icons/rendered/file-upload.png"),
+        "folder" => include_bytes!("../../assets/icons/rendered/folder.png"),
+        "folder-open" => include_bytes!("../../assets/icons/rendered/folder-open.png"),
+        "history" => include_bytes!("../../assets/icons/rendered/history.png"),
+        "info-circle" => include_bytes!("../../assets/icons/rendered/info-circle.png"),
+        "license" => include_bytes!("../../assets/icons/rendered/license.png"),
+        "math-avg" => include_bytes!("../../assets/icons/rendered/math-avg.png"),
+        "math-equal-lower" => include_bytes!("../../assets/icons/rendered/math-equal-lower.png"),
+        "math-integral" => include_bytes!("../../assets/icons/rendered/math-integral.png"),
+        "math-x-divide-y" => include_bytes!("../../assets/icons/rendered/math-x-divide-y.png"),
+        "matrix" => include_bytes!("../../assets/icons/rendered/matrix.png"),
+        "omega" => include_bytes!("../../assets/icons/rendered/omega.png"),
+        "overline" => include_bytes!("../../assets/icons/rendered/overline.png"),
+        "parentheses" => include_bytes!("../../assets/icons/rendered/parentheses.png"),
+        "settings" => include_bytes!("../../assets/icons/rendered/settings.png"),
+        "square-root-2" => include_bytes!("../../assets/icons/rendered/square-root-2.png"),
+        "sum" => include_bytes!("../../assets/icons/rendered/sum.png"),
+        "underline" => include_bytes!("../../assets/icons/rendered/underline.png"),
+        "user" => include_bytes!("../../assets/icons/rendered/user.png"),
+        "x-power-y" => include_bytes!("../../assets/icons/rendered/x-power-y.png"),
+        other => panic!("unknown tabler icon: {other}"),
+    }
+}
 
 #[derive(Clone)]
 struct MatrixDialog {
@@ -256,7 +292,7 @@ pub struct App {
     category: String,
     matrix_dialog: Option<MatrixDialog>,
     palette_atlases: HashMap<String, PaletteAtlas>,
-    sidebar_atlas: Option<PaletteAtlas>,
+    ui_icons: HashMap<&'static str, egui::TextureHandle>,
     palette_ppp: f32,
     recent_palette: Vec<&'static str>,
     gpu_profile: GpuProfile,
@@ -512,7 +548,11 @@ impl App {
         visible
     }
 
-    fn primary_button(ui: &mut egui::Ui, enabled: bool, label: &str) -> egui::Response {
+    fn primary_button_with<R>(
+        ui: &mut egui::Ui,
+        enabled: bool,
+        add_button: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> R {
         let tokens = ThemeTokens::from_ui(ui);
         ui.scope(|ui| {
             let widgets = &mut ui.visuals_mut().widgets;
@@ -541,16 +581,55 @@ impl App {
                 widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
                 widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text_disabled);
             }
-            ui.add_enabled(
-                enabled,
-                egui::Button::new(label).min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
-            )
+            ui.add_enabled_ui(enabled, add_button).inner
         })
         .inner
     }
 
+    fn primary_button(ui: &mut egui::Ui, enabled: bool, label: &str) -> egui::Response {
+        Self::primary_button_with(ui, enabled, |ui| {
+            ui.add(egui::Button::new(label).min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)))
+        })
+    }
+
+    fn icon_primary_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        enabled: bool,
+        icon: &'static str,
+        label: &str,
+    ) -> egui::Response {
+        let tokens = ThemeTokens::from_ui(ui);
+        let tint = if enabled {
+            tokens.primary_fg
+        } else {
+            tokens.text_disabled
+        };
+        let image = self.ui_icon(ui.ctx(), icon, UI_ICON_SIZE, tint);
+        Self::primary_button_with(ui, enabled, |ui| {
+            ui.add(
+                egui::Button::image_and_text(image, label)
+                    .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+            )
+        })
+    }
+
     fn standard_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
         ui.add(egui::Button::new(label).min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)))
+    }
+
+    fn icon_standard_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        icon: &'static str,
+        label: &str,
+    ) -> egui::Response {
+        let tint = ThemeTokens::from_ui(ui).icon_tint(false, ui.is_enabled());
+        let image = self.ui_icon(ui.ctx(), icon, UI_ICON_SIZE, tint);
+        ui.add(
+            egui::Button::image_and_text(image, label)
+                .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+        )
     }
 
     fn compact_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
@@ -671,7 +750,7 @@ impl App {
             category: palette::DEFAULT_GROUP.into(),
             matrix_dialog: None,
             palette_atlases: HashMap::new(),
-            sidebar_atlas: None,
+            ui_icons: HashMap::new(),
             palette_ppp: 0.0,
             recent_palette: Vec::new(),
             gpu_profile: GpuProfile::Native,
@@ -1457,14 +1536,18 @@ impl App {
                         if drag_resp.drag_stopped() && !drag_resp.has_focus() {
                             self.pending_focus_restore = Some(self.active_editor_focus);
                         }
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("↶").size(15.0))
-                                    .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
-                            )
-                            .on_hover_text("Undo (Ctrl+Z)")
-                            .clicked()
-                        {
+                        let history_tint =
+                            ThemeTokens::from_ui(ui).icon_tint(false, ui.is_enabled());
+                        let undo_img =
+                            self.ui_icon(ui.ctx(), "arrow-back-up", UI_ICON_SIZE, history_tint);
+                        let undo_resp = ui.add(
+                            egui::Button::new(undo_img)
+                                .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
+                        );
+                        undo_resp.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Undo")
+                        });
+                        if undo_resp.on_hover_text("Undo (Ctrl+Z)").clicked() {
                             self.command_input = None;
                             self.latex_groups.clear();
                             self.expects_latex_group = false;
@@ -1472,14 +1555,16 @@ impl App {
                             self.changed();
                             self.pending_focus_restore = Some(self.active_editor_focus);
                         }
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("↷").size(15.0))
-                                    .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
-                            )
-                            .on_hover_text("Redo (Ctrl+Y)")
-                            .clicked()
-                        {
+                        let redo_img =
+                            self.ui_icon(ui.ctx(), "arrow-forward-up", UI_ICON_SIZE, history_tint);
+                        let redo_resp = ui.add(
+                            egui::Button::new(redo_img)
+                                .min_size(Vec2::new(32.0, FOOTER_CONTROL_HEIGHT)),
+                        );
+                        redo_resp.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Redo")
+                        });
+                        if redo_resp.on_hover_text("Redo (Ctrl+Y)").clicked() {
                             self.command_input = None;
                             self.latex_groups.clear();
                             self.expects_latex_group = false;
@@ -1500,6 +1585,7 @@ impl App {
         const SIDEBAR_GAP: f32 = theme::SPACE_SM;
         const SIDEBAR_BUTTON_HEIGHT: f32 = 42.0;
         let tokens = ThemeTokens::from_ui(ui);
+        let enabled = ui.is_enabled();
         egui::Panel::bottom("sidebar-batch")
             .exact_size(130.0)
             .frame(
@@ -1508,12 +1594,18 @@ impl App {
             .show_separator_line(false)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = theme::SPACE_SM;
-                for (tab, label) in [(1, "Batch DOCX"), (2, "Settings"), (3, "About")] {
+                for (tab, icon, label) in [
+                    (1, "file-type-docx", "Batch DOCX"),
+                    (2, "settings", "Settings"),
+                    (3, "info-circle", "About"),
+                ] {
                     let selected = self.tab == tab;
+                    let icon_tint = tokens.icon_tint(selected, enabled);
+                    let icon_img = self.ui_icon(ui.ctx(), icon, UI_ICON_SIZE, icon_tint);
                     if Self::with_selectable_style(ui, selected, |ui| {
                         ui.add_sized(
                             [ui.available_width(), theme::SIDEBAR_TAB_HEIGHT],
-                            egui::Button::new(label),
+                            egui::Button::image_and_text(icon_img, label),
                         )
                     })
                     .clicked()
@@ -1523,7 +1615,6 @@ impl App {
                 }
             });
         ui.add_space(theme::SPACE_MD);
-        self.ensure_sidebar_atlas(ui.ctx());
         let button_width = ((ui.available_width() - SIDEBAR_GAP) / 2.0)
             .floor()
             .max(48.0);
@@ -1534,22 +1625,37 @@ impl App {
             .spacing(Vec2::splat(SIDEBAR_GAP))
             .show(ui, |ui| {
                 ui.spacing_mut().button_padding = Vec2::splat(theme::SPACE_XS);
-                let enabled = ui.is_enabled();
-                let atlas = self.sidebar_atlas.as_ref();
                 for (index, group) in palette::UI_GROUPS.iter().enumerate() {
                     let selected = self.category == group.id;
                     let icon_color = tokens.icon_tint(selected, enabled);
-                    let response = Self::with_selectable_style(ui, selected, |ui| {
-                        let button = if let Some((atlas, entry)) =
-                            atlas.and_then(|a| a.entries.get(group.id).map(|e| (a, e)))
-                        {
-                            let image = egui::Image::new((atlas.texture.id(), entry.display_size))
-                                .uv(entry.uv)
-                                .tint(icon_color);
+                    let button = match group.icons {
+                        [first, second] => {
+                            let left = self.ui_icon(
+                                ui.ctx(),
+                                first,
+                                SIDEBAR_CATEGORY_ICON_SIZE,
+                                icon_color,
+                            );
+                            let right = self.ui_icon(
+                                ui.ctx(),
+                                second,
+                                SIDEBAR_CATEGORY_ICON_SIZE,
+                                icon_color,
+                            );
+                            egui::Button::new((left, right)).gap(0.0)
+                        }
+                        [single] => {
+                            let image = self.ui_icon(
+                                ui.ctx(),
+                                single,
+                                SIDEBAR_CATEGORY_ICON_SIZE,
+                                icon_color,
+                            );
                             egui::Button::new(image)
-                        } else {
-                            egui::Button::new(group.icon_source)
-                        };
+                        }
+                        _ => unreachable!("sidebar category must have 1 or 2 icons"),
+                    };
+                    let response = Self::with_selectable_style(ui, selected, |ui| {
                         ui.add_sized(button_size, button)
                     });
                     response.widget_info(|| {
@@ -1885,42 +1991,39 @@ impl App {
         ThemeTokens::from_ui(ui).icon_tint(false, ui.is_enabled())
     }
 
+    fn ui_icon(
+        &mut self,
+        ctx: &egui::Context,
+        name: &'static str,
+        size: f32,
+        tint: Color32,
+    ) -> egui::Image<'static> {
+        let texture_id = self
+            .ui_icons
+            .entry(name)
+            .or_insert_with(|| {
+                let pixels = image::load_from_memory(tabler_icon_bytes(name))
+                    .expect("bundled tabler icon is valid")
+                    .to_rgba8();
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [pixels.width() as usize, pixels.height() as usize],
+                    pixels.as_raw(),
+                );
+                ctx.load_texture(
+                    format!("tabler-icon-{name}"),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                )
+            })
+            .id();
+        egui::Image::new((texture_id, Vec2::splat(size))).tint(tint)
+    }
+
     fn sync_atlas_dpi(&mut self, ppp: f32) {
         if (self.palette_ppp - ppp).abs() > f32::EPSILON {
             self.palette_atlases.clear();
-            self.sidebar_atlas = None;
             self.palette_ppp = ppp;
         }
-    }
-
-    fn ensure_sidebar_atlas(&mut self, ctx: &egui::Context) -> Option<&PaletteAtlas> {
-        let ppp = ctx.pixels_per_point();
-        self.sync_atlas_dpi(ppp);
-        if self.sidebar_atlas.is_none() {
-            self.sidebar_atlas = Self::build_sidebar_atlas(ctx, ppp);
-        }
-        self.sidebar_atlas.as_ref()
-    }
-
-    fn build_sidebar_atlas(ctx: &egui::Context, ppp: f32) -> Option<PaletteAtlas> {
-        let mut rendered = Vec::new();
-        for group in palette::UI_GROUPS {
-            let Ok(math) = palette::icon_math(group) else {
-                continue;
-            };
-            let Ok(mask) = eqntide::render_alpha_at(
-                &math,
-                SIDEBAR_ICON_TARGET_EM * ppp,
-                54.0 * ppp,
-                32.0 * ppp,
-            ) else {
-                continue;
-            };
-            if mask.width > 0 && mask.height > 0 {
-                rendered.push((group.id, mask));
-            }
-        }
-        Self::build_mask_atlas(ctx, "sidebar-atlas", rendered, ppp)
     }
 
     fn build_palette_atlas(
@@ -2033,8 +2136,8 @@ impl App {
     }
 
     #[cfg(test)]
-    fn sidebar_texture_id(&self) -> Option<egui::TextureId> {
-        self.sidebar_atlas.as_ref().map(|a| a.texture.id())
+    fn ui_icon_texture_id(&self, name: &str) -> Option<egui::TextureId> {
+        self.ui_icons.get(name).map(|t| t.id())
     }
 
     fn enforce_window_minimum_if_needed(&mut self, ctx: &egui::Context) {
@@ -2113,7 +2216,7 @@ impl App {
             .show(ui, |ui| self.status_bar(ui));
         if self.tab == 0 {
             egui::Panel::left("app-sidebar")
-                .exact_size(158.0)
+                .exact_size(174.0)
                 .resizable(false)
                 .frame(egui::Frame::NONE.fill(tokens.panel_bg).inner_margin(
                     egui::Margin::symmetric(theme::SPACE_LG as i8, CONTENT_PADDING),
@@ -3264,15 +3367,21 @@ impl App {
             self.changed();
         }
     }
-    fn batch_ui(&mut self, ui: &mut egui::Ui) {
-        let tokens = ThemeTokens::from_ui(ui);
-        if Self::standard_button(ui, "← Back to equation").clicked() {
+    fn back_to_editor_button(&mut self, ui: &mut egui::Ui) {
+        if self
+            .icon_standard_button(ui, "chevron-left", "Back")
+            .clicked()
+        {
             self.tab = 0;
             self.active_editor_focus = self.startup_focus;
             self.pending_focus_restore = Some(self.startup_focus);
         }
         ui.add_space(theme::SPACE_MD);
-        ui.heading("Batch document conversion");
+    }
+
+    fn batch_ui(&mut self, ui: &mut egui::Ui) {
+        let tokens = ThemeTokens::from_ui(ui);
+        self.back_to_editor_button(ui);
         ui.label(
             egui::RichText::new(
                 "Drop .docx files or folders here. Files save beside inputs; folders mirror into <folder>_<target>_<time>/.",
@@ -3283,7 +3392,10 @@ impl App {
         Self::full_width_card(ui, tokens, |ui| {
             ui.add_enabled_ui(!self.batch_running, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    if Self::standard_button(ui, "Add DOCX files…").clicked() {
+                    if self
+                        .icon_standard_button(ui, "file", "Add DOCX files…")
+                        .clicked()
+                    {
                         let tx = self.tx.clone();
                         std::thread::spawn(move || {
                             if let Some(paths) = rfd::FileDialog::new()
@@ -3294,7 +3406,10 @@ impl App {
                             }
                         });
                     }
-                    if Self::standard_button(ui, "Add folder…").clicked() {
+                    if self
+                        .icon_standard_button(ui, "folder", "Add folder…")
+                        .clicked()
+                    {
                         let tx = self.tx.clone();
                         std::thread::spawn(move || {
                             if let Some(folder) = rfd::FileDialog::new().pick_folder() {
@@ -3334,12 +3449,14 @@ impl App {
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                if Self::primary_button(
-                    ui,
-                    !self.batch_running && !self.files.is_empty(),
-                    "Convert",
-                )
-                .clicked()
+                if self
+                    .icon_primary_button(
+                        ui,
+                        !self.batch_running && !self.files.is_empty(),
+                        "arrows-left-right",
+                        "Convert",
+                    )
+                    .clicked()
                 {
                     let target = batch::TARGETS[self.batch_target].0;
                     let timestamp = batch::timestamp_now();
@@ -3376,7 +3493,10 @@ impl App {
                 {
                     self.stop.store(true, Ordering::Relaxed);
                 }
-                if Self::standard_button(ui, "Open output folder").clicked() {
+                if self
+                    .icon_standard_button(ui, "folder-open", "Open output folder")
+                    .clicked()
+                {
                     if let Some(path) = self.resolved_batch_output_folder() {
                         if let Err(e) = runtime::open_folder(path) {
                             self.status = e;
@@ -3387,12 +3507,20 @@ impl App {
         });
         ui.add_space(theme::SPACE_MD);
         if self.files.is_empty() {
+            let empty_icon = self.ui_icon(
+                ui.ctx(),
+                "file-upload",
+                EMPTY_STATE_ICON_SIZE,
+                tokens.text_muted,
+            );
             tokens.group_frame().show(ui, |ui| {
                 let min_height = ui.available_height().max(120.0);
                 ui.set_min_size(Vec2::new(ui.available_width(), min_height));
                 ui.centered_and_justified(|ui| {
                     ui.vertical_centered(|ui| {
-                        ui.add_space((min_height * 0.25).max(theme::SPACE_LG));
+                        ui.add_space((min_height * 0.18).max(theme::SPACE_MD));
+                        ui.add(empty_icon);
+                        ui.add_space(theme::SPACE_XS);
                         ui.label(
                             egui::RichText::new("No .docx files queued")
                                 .strong()
@@ -3533,14 +3661,7 @@ impl App {
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         let tokens = ThemeTokens::from_ui(ui);
-        if Self::standard_button(ui, "← Back to equation").clicked() {
-            self.tab = 0;
-            self.active_editor_focus = self.startup_focus;
-            self.pending_focus_restore = Some(self.startup_focus);
-        }
-        ui.add_space(theme::SPACE_MD);
-        ui.heading("Settings");
-        ui.add_space(theme::SPACE_LG);
+        self.back_to_editor_button(ui);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3671,14 +3792,10 @@ impl App {
 
     fn about_ui(&mut self, ui: &mut egui::Ui) {
         let tokens = ThemeTokens::from_ui(ui);
-        if Self::standard_button(ui, "← Back to equation").clicked() {
-            self.tab = 0;
-            self.active_editor_focus = self.startup_focus;
-            self.pending_focus_restore = Some(self.startup_focus);
-        }
-        ui.add_space(theme::SPACE_MD);
-        ui.heading("About EqnTide");
-        ui.add_space(theme::SPACE_LG);
+        self.back_to_editor_button(ui);
+        let author_icon = self.ui_icon(ui.ctx(), "user", UI_ICON_SIZE, tokens.text_muted);
+        let license_icon = self.ui_icon(ui.ctx(), "license", UI_ICON_SIZE, tokens.text_muted);
+        let github_icon = self.ui_icon(ui.ctx(), "brand-github", UI_ICON_SIZE, tokens.text_muted);
         let logo_id = self
             .logo_texture
             .get_or_insert_with(|| {
@@ -3698,16 +3815,35 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 Self::full_width_card(ui, tokens, |ui| {
+                    const ABOUT_LOGO_SIZE: f32 = 72.0;
                     ui.horizontal(|ui| {
                         ui.add(
-                            egui::Image::new((logo_id, Vec2::splat(72.0)))
+                            egui::Image::new((logo_id, Vec2::splat(ABOUT_LOGO_SIZE)))
                                 .corner_radius(theme::SURFACE_CORNER_RADIUS),
                         );
                         ui.add_space(theme::SPACE_LG);
+                        let title = concat!("EqnTide ", env!("CARGO_PKG_VERSION"));
+                        let desc = env!("CARGO_PKG_DESCRIPTION");
+                        let desc = desc.strip_prefix("EqnTide: ").unwrap_or(desc);
+                        let avail_w = ui.available_width().max(1.0);
+                        let heading_font = egui::TextStyle::Heading.resolve(ui.style());
+                        let body_font = egui::TextStyle::Body.resolve(ui.style());
+                        let title_h = ui.fonts_mut(|f| {
+                            f.layout(title.to_owned(), heading_font, tokens.text_primary, avail_w)
+                                .size()
+                                .y
+                        });
+                        let desc_h = ui.fonts_mut(|f| {
+                            f.layout(desc.to_owned(), body_font, tokens.text_primary, avail_w)
+                                .size()
+                                .y
+                        });
+                        let content_h = title_h + ui.spacing().item_spacing.y + desc_h;
+                        let top_pad = ((ABOUT_LOGO_SIZE - content_h) * 0.5).max(0.0);
                         ui.vertical(|ui| {
-                            ui.heading("EqnTide");
-                            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                            ui.label(env!("CARGO_PKG_DESCRIPTION"));
+                            ui.add_space(top_pad);
+                            ui.heading(title);
+                            ui.label(desc);
                         });
                     });
                     ui.add_space(theme::SPACE_XL);
@@ -3717,19 +3853,24 @@ impl App {
                         .num_columns(2)
                         .spacing([theme::SPACE_XL, theme::SPACE_MD])
                         .show(ui, |ui| {
-                            ui.strong("Author:");
+                            ui.horizontal(|ui| {
+                                ui.add(author_icon);
+                                ui.strong("Author:");
+                            });
                             ui.label(env!("CARGO_PKG_AUTHORS"));
                             ui.end_row();
 
-                            ui.strong("Version:");
-                            ui.label(env!("CARGO_PKG_VERSION"));
-                            ui.end_row();
-
-                            ui.strong("License:");
+                            ui.horizontal(|ui| {
+                                ui.add(license_icon);
+                                ui.strong("License:");
+                            });
                             ui.label(env!("CARGO_PKG_LICENSE"));
                             ui.end_row();
 
-                            ui.strong("GitHub:");
+                            ui.horizontal(|ui| {
+                                ui.add(github_icon);
+                                ui.strong("GitHub:");
+                            });
                             ui.hyperlink(env!("CARGO_PKG_REPOSITORY"));
                             ui.end_row();
                         });
@@ -4511,15 +4652,7 @@ mod tests {
                         } else {
                             "Save MathML (Ctrl+S)"
                         };
-                        for text in [
-                            label,
-                            "source-marker",
-                            "MathType",
-                            "OMML",
-                            "Font size",
-                            "↶",
-                            "↷",
-                        ] {
+                        for text in [label, "source-marker", "MathType", "OMML", "Font size"] {
                             let shape = output.shapes.iter().find(|shape| {
                                 matches!(&shape.shape, egui::Shape::Text(t) if t.galley.text() == text)
                             }).unwrap_or_else(|| panic!("missing {text} at {size:?}"));
@@ -4590,6 +4723,32 @@ mod tests {
                                 shape.clip_rect.contains_rect(rect),
                                 "{text} clipped: {rect:?} by {:?}",
                                 shape.clip_rect
+                            );
+                        }
+                        let save_center_y = find_text_center(&output, |t| t == label).y;
+                        for icon_name in ["arrow-back-up", "arrow-forward-up"] {
+                            let tex_id = a
+                                .ui_icon_texture_id(icon_name)
+                                .unwrap_or_else(|| panic!("missing footer icon {icon_name}"));
+                            let icon_rect = output
+                                .shapes
+                                .iter()
+                                .find_map(|s| match &s.shape {
+                                    egui::Shape::Rect(r)
+                                        if r.brush
+                                            .as_ref()
+                                            .is_some_and(|b| b.fill_texture_id == tex_id) =>
+                                    {
+                                        Some(r.rect)
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or_else(|| {
+                                    panic!("missing painted footer icon {icon_name}")
+                                });
+                            assert!(
+                                (icon_rect.center().y - save_center_y).abs() <= 3.0,
+                                "footer icon {icon_name} must share the save row"
                             );
                         }
                     }
@@ -4745,7 +4904,15 @@ mod tests {
                 |ui| a.shell(ui),
             );
             output.textures_delta.clear();
-            let sidebar_tex = a.sidebar_texture_id().expect("sidebar texture must exist");
+            let sidebar_tex_ids: std::collections::HashSet<_> = palette::UI_GROUPS
+                .iter()
+                .flat_map(|g| g.icons.iter().copied())
+                .map(|icon_name| {
+                    a.ui_icon_texture_id(icon_name)
+                        .unwrap_or_else(|| panic!("missing sidebar icon {icon_name}"))
+                })
+                .collect();
+            let expected_icon_count: usize = palette::UI_GROUPS.iter().map(|g| g.icons.len()).sum();
             let icon_rects: Vec<_> = output
                 .shapes
                 .iter()
@@ -4753,7 +4920,7 @@ mod tests {
                     if let egui::Shape::Rect(r) = &shape.shape {
                         if r.brush
                             .as_ref()
-                            .is_some_and(|b| b.fill_texture_id == sidebar_tex)
+                            .is_some_and(|b| sidebar_tex_ids.contains(&b.fill_texture_id))
                         {
                             return Some((r.rect, shape.clip_rect));
                         }
@@ -4763,9 +4930,8 @@ mod tests {
                 .collect();
             assert_eq!(
                 icon_rects.len(),
-                palette::UI_GROUPS.len(),
-                "all {} category icons must render at DPI {dpi}",
-                palette::UI_GROUPS.len()
+                expected_icon_count,
+                "all {expected_icon_count} category icons must render at DPI {dpi}"
             );
             for (rect, clip) in icon_rects {
                 assert!(
@@ -5442,7 +5608,7 @@ mod tests {
         let before = a.editor.math();
         let source = a.latex.clone();
         let ctx = egui::Context::default();
-        for (label, expected_tab) in [("Batch DOCX", 1), ("← Back to equation", 0)] {
+        for (label, expected_tab) in [("Batch DOCX", 1), ("Back", 0)] {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
             output.textures_delta.clear();
             let pos = output
@@ -5750,12 +5916,7 @@ mod tests {
         ctx.set_theme(egui::Theme::Dark);
 
         // Open Settings from sidebar
-        for (label, expected_tab) in [
-            ("Settings", 2),
-            ("← Back to equation", 0),
-            ("About", 3),
-            ("← Back to equation", 0),
-        ] {
+        for (label, expected_tab) in [("Settings", 2), ("Back", 0), ("About", 3), ("Back", 0)] {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
             output.textures_delta.clear();
             let pos = output
@@ -5808,9 +5969,17 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(texts.iter().any(|t| t == "About EqnTide"));
+        assert!(texts
+            .iter()
+            .any(|t| t == concat!("EqnTide ", env!("CARGO_PKG_VERSION"))));
+        assert!(!texts.iter().any(|t| t == "About EqnTide"));
+        assert!(!texts
+            .iter()
+            .any(|t| t == "Version:" || t.starts_with("Version ")));
+        assert!(texts
+            .iter()
+            .any(|t| t.starts_with("Bidirectional math equation")));
         assert!(texts.iter().any(|t| t == env!("CARGO_PKG_AUTHORS")));
-        assert!(texts.iter().any(|t| t == env!("CARGO_PKG_VERSION")));
         assert!(texts.iter().any(|t| t == env!("CARGO_PKG_REPOSITORY")));
         assert!(a.logo_texture.is_some());
 
@@ -5870,45 +6039,40 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_icons_regenerate_on_dpi_change_and_tint_across_themes() {
+    fn sidebar_icons_load_48px_textures_and_tint_across_themes() {
         let mut a = app();
         let ctx = egui::Context::default();
-        ctx.set_pixels_per_point(1.0);
-        let mut out1 = ctx.run_ui(egui::RawInput::default(), |ui| {
-            a.ensure_sidebar_atlas(ui.ctx());
-        });
-        out1.textures_delta.clear();
-        let (first_size, first_display) = {
-            let atlas = a.sidebar_atlas.as_ref().expect("sidebar atlas at 1x");
-            assert_eq!(atlas.entries.len(), palette::UI_GROUPS.len());
-            (
-                atlas.texture.size(),
-                atlas.entries["Fractions"].display_size,
-            )
-        };
-
-        ctx.set_pixels_per_point(2.0);
-        let mut out2 = ctx.run_ui(egui::RawInput::default(), |ui| {
-            a.ensure_sidebar_atlas(ui.ctx());
-        });
-        out2.textures_delta.clear();
-        let (second_size, second_display) = {
-            let atlas = a.sidebar_atlas.as_ref().expect("sidebar atlas at 2x");
-            assert_eq!(atlas.entries.len(), palette::UI_GROUPS.len());
-            (
-                atlas.texture.size(),
-                atlas.entries["Fractions"].display_size,
-            )
-        };
-        assert!(
-            second_size[0] > first_size[0] || second_size[1] > first_size[1],
-            "expected higher-resolution sidebar atlas at 2x DPI: {first_size:?} vs {second_size:?}"
-        );
-        assert!(
-            (first_display - second_display).length() <= 1.5,
-            "expected consistent logical icon size: {first_display:?} vs {second_display:?}"
-        );
-        assert!((a.palette_ppp - 2.0).abs() < f32::EPSILON);
+        for dpi in [1.0, 2.0] {
+            ctx.set_pixels_per_point(dpi);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| a.shell(ui));
+            out.textures_delta.clear();
+            for group in palette::UI_GROUPS {
+                for &icon_name in group.icons {
+                    let handle = a
+                        .ui_icons
+                        .get(icon_name)
+                        .unwrap_or_else(|| panic!("missing texture for {icon_name}"));
+                    assert_eq!(handle.size(), [48, 48]);
+                    let tex_id = handle.id();
+                    let icon_rect = out
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::Rect(r)
+                                if r.brush
+                                    .as_ref()
+                                    .is_some_and(|b| b.fill_texture_id == tex_id) =>
+                            {
+                                Some(r.rect)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing painted sidebar icon {icon_name}"));
+                    assert!((icon_rect.width() - SIDEBAR_CATEGORY_ICON_SIZE).abs() <= 0.5);
+                    assert!((icon_rect.height() - SIDEBAR_CATEGORY_ICON_SIZE).abs() <= 0.5);
+                }
+            }
+        }
 
         for (theme, expected_tint) in [
             (egui::Theme::Dark, ThemeTokens::for_mode(true).text_primary),
@@ -6272,18 +6436,17 @@ mod tests {
         let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
 
         // 1. Click sidebar category "Scripts".
-        let sidebar_atlas = a.sidebar_atlas.as_ref().unwrap();
-        let scripts_uv = sidebar_atlas.entries["Scripts"].uv;
-        let sidebar_tex = sidebar_atlas.texture.id();
+        let scripts_tex = a
+            .ui_icon_texture_id(palette::ui_group("Scripts").unwrap().icons[0])
+            .expect("Scripts sidebar texture");
         let scripts_pos = out
             .shapes
             .iter()
             .find_map(|s| match &s.shape {
                 egui::Shape::Rect(r)
-                    if r.brush.as_ref().is_some_and(|b| {
-                        b.fill_texture_id == sidebar_tex
-                            && (b.uv.min - scripts_uv.min).length() < 1e-4
-                    }) =>
+                    if r.brush
+                        .as_ref()
+                        .is_some_and(|b| b.fill_texture_id == scripts_tex) =>
                 {
                     Some(r.rect.center())
                 }
@@ -6428,7 +6591,7 @@ mod tests {
         assert_eq!(Settings::load_from_path(&path).theme, ThemeMode::Light);
 
         // 6. Open Batch DOCX tab, toggle overwrite and change batch target.
-        let back_pos = find_text_center(&out, |t| t == "← Back to equation");
+        let back_pos = find_text_center(&out, |t| t == "Back");
         run_ui_pass_frame(&ctx, &mut a, click_events(back_pos));
         let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
         let batch_pos = find_text_center(&out, |t| t == "Batch DOCX");
@@ -6483,14 +6646,13 @@ mod tests {
             let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
 
             // Selected sidebar category ("Fractions") displays tinted-accent surface and matching icon tint.
-            let sidebar_atlas = a.sidebar_atlas.as_ref().unwrap();
-            let fractions_uv = sidebar_atlas.entries["Fractions"].uv;
-            let sidebar_tex = sidebar_atlas.texture.id();
+            let fractions_tex = a
+                .ui_icon_texture_id(palette::ui_group("Fractions").unwrap().icons[0])
+                .expect("Fractions sidebar texture");
             assert!(out.shapes.iter().any(|s| matches!(&s.shape,
                 egui::Shape::Rect(r) if r.fill == tokens.selected_bg && r.stroke.color == tokens.selected_border)));
             assert!(out.shapes.iter().any(|s| matches!(&s.shape,
-                egui::Shape::Rect(r) if r.brush.as_ref().is_some_and(|b|
-                    b.fill_texture_id == sidebar_tex && (b.uv.min - fractions_uv.min).length() < 1e-4)
+                egui::Shape::Rect(r) if r.brush.as_ref().is_some_and(|b| b.fill_texture_id == fractions_tex)
                     && r.fill == tokens.selected_fg)));
 
             // Primary Save button uses primary_bg at rest, primary_hover_bg on hover without growing, and disabled fill when disabled.
@@ -6654,15 +6816,27 @@ mod tests {
         a.category = "Scripts".into();
         let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
 
-        let sidebar_atlas = a.sidebar_atlas.as_ref().unwrap();
-        let star_h = sidebar_atlas.entries[palette::RECENT_GROUP].display_size.y;
-        let ops_h = sidebar_atlas.entries["OperatorsAndRelations"]
-            .display_size
-            .y;
-        let greek_h = sidebar_atlas.entries["Greek"].display_size.y;
-        assert!(star_h <= 24.0);
-        assert!((star_h - ops_h).abs() <= 3.0);
-        assert!((ops_h - greek_h).abs() <= 3.0);
+        for group in palette::UI_GROUPS {
+            for &icon_name in group.icons {
+                let tex = a
+                    .ui_icon_texture_id(icon_name)
+                    .unwrap_or_else(|| panic!("missing sidebar icon {icon_name}"));
+                let rect = out
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Rect(r)
+                            if r.brush.as_ref().is_some_and(|b| b.fill_texture_id == tex) =>
+                        {
+                            Some(r.rect)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing painted sidebar icon {icon_name}"));
+                assert!((rect.width() - SIDEBAR_CATEGORY_ICON_SIZE).abs() <= 0.5);
+                assert!((rect.height() - SIDEBAR_CATEGORY_ICON_SIZE).abs() <= 0.5);
+            }
+        }
 
         let scripts_items = palette::items_for_ui_group("Scripts", &[]);
         let scripts_atlas = &a.palette_atlases["Scripts"];
@@ -6730,10 +6904,39 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing button rect for {label}"))
         };
 
+        let icon_button_rect = |icon_name: &str| -> Rect {
+            let tex = a
+                .ui_icon_texture_id(icon_name)
+                .unwrap_or_else(|| panic!("missing icon texture {icon_name}"));
+            let pos = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.brush.as_ref().is_some_and(|b| b.fill_texture_id == tex) =>
+                    {
+                        Some(r.rect.center())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing painted icon {icon_name}"));
+            out.shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.brush.is_none() && r.rect.contains(pos) && r.rect.height() <= 40.0 =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing button rect for icon {icon_name}"))
+        };
+
         // Footer standard buttons and DragValue share BUTTON_HEIGHT (30px).
         let save_rect = button_rect_around("Save MathML (Ctrl+S)");
-        let undo_rect = button_rect_around("↶");
-        let redo_rect = button_rect_around("↷");
+        let undo_rect = icon_button_rect("arrow-back-up");
+        let redo_rect = icon_button_rect("arrow-forward-up");
         assert!((save_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
         assert!((undo_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
         assert!((redo_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
@@ -6804,13 +7007,13 @@ mod tests {
         assert!(latex_ctx.memory(|m| m.has_focus(latex_id)));
         assert!(!latex_ctx.memory(|m| m.has_focus(canvas_id)));
 
-        // Open Settings and click "← Back to equation" -> focuses LaTeX source again.
+        // Open Settings and click "Back" -> focuses LaTeX source again.
         let out = run_ui_pass_frame(&latex_ctx, &mut b, vec![]);
         let settings_btn = find_text_center(&out, |t| t == "Settings");
         run_ui_pass_frame(&latex_ctx, &mut b, click_events(settings_btn));
         assert_eq!(b.tab, 2);
         let out = run_ui_pass_frame(&latex_ctx, &mut b, vec![]);
-        let back_btn = find_text_center(&out, |t| t == "← Back to equation");
+        let back_btn = find_text_center(&out, |t| t == "Back");
         run_ui_pass_frame(&latex_ctx, &mut b, click_events(back_btn));
         assert_eq!(b.tab, 0);
         run_ui_pass_frame(&latex_ctx, &mut b, vec![]);
@@ -6834,7 +7037,7 @@ mod tests {
             .iter()
             .find_map(|s| {
                 let rect = s.shape.visual_bounding_rect();
-                if rect.min.x < 160.0
+                if rect.min.x < 174.0
                     && rect.min.y > 40.0
                     && rect.min.y < 360.0
                     && (rect.height() - 42.0).abs() <= 1.0
@@ -6849,7 +7052,21 @@ mod tests {
         assert!(ctx.memory(|m| m.has_focus(canvas_id)));
 
         // Click Undo and MathType radio -> Equation Canvas retains focus.
-        let undo_pos = find_text_center(&out, |t| t == "↶");
+        let undo_tex = a.ui_icon_texture_id("arrow-back-up").expect("undo icon");
+        let undo_pos = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.brush
+                        .as_ref()
+                        .is_some_and(|b| b.fill_texture_id == undo_tex) =>
+                {
+                    Some(r.rect.center())
+                }
+                _ => None,
+            })
+            .expect("undo icon rect");
         let out = run_ui_pass_frame(&ctx, &mut a, click_events(undo_pos));
         assert!(ctx.memory(|m| m.has_focus(canvas_id)));
         let mt_pos = find_text_center(&out, |t| t == "MathType");
@@ -6867,7 +7084,7 @@ mod tests {
             .iter()
             .find_map(|s| {
                 let rect = s.shape.visual_bounding_rect();
-                if rect.min.x > 160.0
+                if rect.min.x > 174.0
                     && rect.min.y < 140.0
                     && (rect.width() - PALETTE_BUTTON_SIZE.x).abs() <= 1.0
                     && (rect.height() - PALETTE_BUTTON_SIZE.y).abs() <= 1.0
@@ -6881,7 +7098,20 @@ mod tests {
         let out = run_ui_pass_frame(&ctx, &mut a, click_events(palette_pos));
         assert!(ctx.memory(|m| m.has_focus(latex_id)));
 
-        let undo_pos = find_text_center(&out, |t| t == "↶");
+        let undo_pos = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.brush
+                        .as_ref()
+                        .is_some_and(|b| b.fill_texture_id == undo_tex) =>
+                {
+                    Some(r.rect.center())
+                }
+                _ => None,
+            })
+            .expect("undo icon rect");
         let out = run_ui_pass_frame(&ctx, &mut a, click_events(undo_pos));
         assert!(ctx.memory(|m| m.has_focus(latex_id)));
 
@@ -7207,7 +7437,11 @@ mod tests {
             let _ = run_ui_pass_sized(&ctx, &mut a, size);
             let out = run_ui_pass_sized(&ctx, &mut a, size);
             let expected_width = width - 2.0 * theme::SPACE_LG;
-            let cards = card_rects_for_section_titles(&out, tokens, &["EqnTide"]);
+            let cards = card_rects_for_section_titles(
+                &out,
+                tokens,
+                &[concat!("EqnTide ", env!("CARGO_PKG_VERSION"))],
+            );
             let rect = cards[0];
             assert!(
                 rect.width() >= expected_width - 24.0 && rect.width() <= expected_width + 0.5,
@@ -7224,6 +7458,51 @@ mod tests {
             assert!(
                 rect.contains(github_pos),
                 "About metadata grid should sit inside full-width card {rect:?}"
+            );
+            let logo_tex = a.logo_texture.as_ref().expect("about logo texture").id();
+            let logo_rect = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.brush
+                            .as_ref()
+                            .is_some_and(|b| b.fill_texture_id == logo_tex) =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .expect("about logo rect");
+            let title_rect = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t)
+                        if t.galley.text() == concat!("EqnTide ", env!("CARGO_PKG_VERSION")) =>
+                    {
+                        Some(s.shape.visual_bounding_rect())
+                    }
+                    _ => None,
+                })
+                .expect("about title rect");
+            let desc_rect = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t)
+                        if t.galley.text().starts_with("Bidirectional math equation") =>
+                    {
+                        Some(s.shape.visual_bounding_rect())
+                    }
+                    _ => None,
+                })
+                .expect("about desc rect");
+            let text_mid_y = (title_rect.top() + desc_rect.bottom()) * 0.5;
+            assert!(
+                (text_mid_y - logo_rect.center().y).abs() <= 2.5,
+                "about header text ({text_mid_y}) should align vertically with logo ({})",
+                logo_rect.center().y
             );
         }
     }
@@ -7379,5 +7658,72 @@ mod tests {
             a.resolved_batch_output_folder(),
             Some(expected_out_dir.as_path())
         );
+    }
+
+    #[test]
+    fn desktop_ui_views_render_assigned_tabler_icons() {
+        let assert_painted = |a: &App, out: &egui::FullOutput, icon: &str, tint: Color32| {
+            let tex = a
+                .ui_icon_texture_id(icon)
+                .unwrap_or_else(|| panic!("missing icon texture {icon}"));
+            assert!(
+                out.shapes.iter().any(|s| match &s.shape {
+                    egui::Shape::Rect(r) => {
+                        r.brush.as_ref().is_some_and(|b| b.fill_texture_id == tex) && r.fill == tint
+                    }
+                    _ => false,
+                }),
+                "expected painted icon {icon} with tint {tint:?}"
+            );
+        };
+
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let tokens = ThemeTokens::for_mode(theme == egui::Theme::Dark);
+            let ctx = egui::Context::default();
+            ThemeTokens::apply_style(&ctx);
+            ctx.set_theme(theme);
+            let mut a = app();
+
+            // Editor view: sidebar tabs + Undo/Redo.
+            let editor_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+            for icon in [
+                "file-type-docx",
+                "settings",
+                "info-circle",
+                "arrow-back-up",
+                "arrow-forward-up",
+            ] {
+                assert_painted(&a, &editor_out, icon, tokens.text_primary);
+            }
+
+            // Batch DOCX view (empty drop-zone + buttons).
+            a.tab = 1;
+            let batch_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+            for icon in ["chevron-left", "file", "folder", "folder-open"] {
+                assert_painted(&a, &batch_out, icon, tokens.text_primary);
+            }
+            assert_painted(
+                &a,
+                &batch_out,
+                "arrows-left-right",
+                tokens
+                    .text_disabled
+                    .gamma_multiply(ctx.style_of(theme).visuals.disabled_alpha()),
+            );
+            assert_painted(&a, &batch_out, "file-upload", tokens.text_muted);
+
+            // Settings view.
+            a.tab = 2;
+            let settings_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+            assert_painted(&a, &settings_out, "chevron-left", tokens.text_primary);
+
+            // About view.
+            a.tab = 3;
+            let about_out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+            assert_painted(&a, &about_out, "chevron-left", tokens.text_primary);
+            for icon in ["user", "license", "brand-github"] {
+                assert_painted(&a, &about_out, icon, tokens.text_muted);
+            }
+        }
     }
 }

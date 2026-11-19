@@ -335,7 +335,21 @@ try {
  * Provide icon images for Ribbon buttons
  */
 function GetImage(control) {
-  return "assets/icon-32.png";
+  var id = control && control.Id;
+  switch (id) {
+    case "btnInsertEquation":
+      return "assets/icons/pencil-plus-32.png";
+    case "btnEditEquation":
+      return "assets/icons/edit-32.png";
+    case "btnToggleLatex":
+      return "assets/icons/tex-32.png";
+    case "btnUpgradeLegacy":
+      return "assets/icons/arrow-big-up-lines-32.png";
+    case "btnBatchConverter":
+      return "assets/icons/file-type-docx-32.png";
+    default:
+      return "assets/icon-32.png";
+  }
 }
 
 /**
