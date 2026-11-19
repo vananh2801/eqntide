@@ -282,7 +282,10 @@ mod tests {
             BatchItem::from_folder(root_doc.clone(), input_root.clone()),
             BatchItem::from_folder(nested_doc.clone(), input_root.clone()),
         ];
-        assert_eq!(items[0].display_label(), "docs/intro.docx");
+        assert_eq!(
+            items[0].display_label(),
+            Path::new("docs").join("intro.docx").display().to_string()
+        );
         assert_eq!(
             items[1].display_label(),
             Path::new("docs")
