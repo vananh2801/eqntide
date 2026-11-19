@@ -3668,50 +3668,61 @@ impl App {
                 Self::full_width_card(ui, tokens, |ui| {
                     ui.label(egui::RichText::new("Canvas zoom").strong());
                     ui.add_space(theme::SPACE_XS);
-                    ui.horizontal(|ui| {
-                        let slider_changed = ui
-                            .scope(|ui| {
-                                ui.spacing_mut().slider_width = 220.0;
-                                ui.visuals_mut().widgets.inactive.bg_fill = tokens.border;
-                                ui.visuals_mut().selection.bg_fill = tokens.accent;
-                                ui.add(
-                                    egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
-                                        .show_value(false)
-                                        .trailing_fill(true)
-                                        .handle_shape(egui::style::HandleShape::Rect {
-                                            aspect_ratio: 1.0,
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_size_before_wrap().x, theme::BUTTON_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            let slider_changed = ui
+                                .scope(|ui| {
+                                    ui.spacing_mut().slider_width = 220.0;
+                                    let visuals = ui.visuals_mut();
+                                    let handle_stroke = Stroke::new(1.0, tokens.accent);
+                                    visuals.widgets.inactive.bg_fill = tokens.border;
+                                    visuals.widgets.inactive.fg_stroke = handle_stroke;
+                                    visuals.widgets.hovered.fg_stroke = handle_stroke;
+                                    visuals.widgets.active.fg_stroke = handle_stroke;
+                                    visuals.selection.bg_fill = tokens.accent;
+                                    ui.add(
+                                        egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
+                                            .show_value(false)
+                                            .trailing_fill(true)
+                                            .handle_shape(egui::style::HandleShape::Rect {
+                                                aspect_ratio: 1.0,
+                                            }),
+                                    )
+                                    .changed()
+                                })
+                                .inner;
+                            let value_changed = ui
+                                .add(
+                                    egui::DragValue::new(&mut self.zoom)
+                                        .range(ZOOM_RANGE)
+                                        .speed(0.01)
+                                        .min_size(Vec2::new(60.0, theme::BUTTON_HEIGHT))
+                                        .custom_formatter(|value, _| {
+                                            format!("{:.0}%", value * 100.0)
+                                        })
+                                        .custom_parser(|text| {
+                                            text.trim()
+                                                .trim_end_matches('%')
+                                                .trim()
+                                                .parse::<f64>()
+                                                .ok()
+                                                .map(|pct| pct / 100.0)
                                         }),
                                 )
-                                .changed()
-                            })
-                            .inner;
-                        let value_changed = ui
-                            .add(
-                                egui::DragValue::new(&mut self.zoom)
-                                    .range(ZOOM_RANGE)
-                                    .speed(0.01)
-                                    .min_size(Vec2::new(60.0, theme::BUTTON_HEIGHT))
-                                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.0))
-                                    .custom_parser(|text| {
-                                        text.trim()
-                                            .trim_end_matches('%')
-                                            .trim()
-                                            .parse::<f64>()
-                                            .ok()
-                                            .map(|pct| pct / 100.0)
-                                    }),
-                            )
-                            .changed();
-                        if slider_changed || value_changed {
-                            self.persisted.zoom = self.zoom;
-                            self.settings_dirty = true;
-                        }
-                        if Self::standard_button(ui, "Reset (200%)").clicked() {
-                            self.zoom = settings::DEFAULT_ZOOM;
-                            self.persisted.zoom = self.zoom;
-                            self.settings_dirty = true;
-                        }
-                    });
+                                .changed();
+                            if slider_changed || value_changed {
+                                self.persisted.zoom = self.zoom;
+                                self.settings_dirty = true;
+                            }
+                            if Self::standard_button(ui, "Reset (200%)").clicked() {
+                                self.zoom = settings::DEFAULT_ZOOM;
+                                self.persisted.zoom = self.zoom;
+                                self.settings_dirty = true;
+                            }
+                        },
+                    );
                 });
                 ui.add_space(theme::SPACE_MD);
                 Self::full_width_card(ui, tokens, |ui| {
@@ -7432,6 +7443,119 @@ mod tests {
                     rect.left()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn settings_zoom_row_aligns_vertically_and_matches_handle_border_to_accent() {
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let dark_mode = theme == egui::Theme::Dark;
+            let tokens = ThemeTokens::for_mode(dark_mode);
+            let ctx = egui::Context::default();
+            ThemeTokens::apply_style(&ctx);
+            ctx.set_theme(theme);
+            let mut a = app();
+            a.tab = 2;
+
+            let _ = run_ui_pass_frame(&ctx, &mut a, vec![]);
+            let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+
+            let pct_pos = find_text_center(&out, |t| t == "200%");
+            let reset_pos = find_text_center(&out, |t| t == "Reset (200%)");
+            let control_rect = |pos: Pos2, label: &str| {
+                out.shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Rect(r)
+                            if r.brush.is_none()
+                                && r.rect.contains(pos)
+                                && r.rect.height() <= 40.0 =>
+                        {
+                            Some(r.rect)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing rect for {label} in {theme:?}"))
+            };
+            let pct_rect = control_rect(pct_pos, "200%");
+            let reset_rect = control_rect(reset_pos, "Reset (200%)");
+            assert!((pct_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
+            assert!((reset_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
+            assert!(
+                (pct_rect.center().y - reset_rect.center().y).abs() <= 0.5,
+                "DragValue center {} != Reset center {} in {theme:?}",
+                pct_rect.center().y,
+                reset_rect.center().y
+            );
+
+            let rail_rect = out
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.fill == tokens.border
+                            && r.rect.width() >= 150.0
+                            && r.rect.height() <= 12.0
+                            && (r.rect.center().y - pct_rect.center().y).abs() < 12.0 =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing zoom slider rail in {theme:?}"));
+            assert!(
+                (rail_rect.center().y - pct_rect.center().y).abs() <= 0.5,
+                "Slider rail center {} != DragValue center {} in {theme:?}",
+                rail_rect.center().y,
+                pct_rect.center().y
+            );
+
+            let find_handle = |frame: &egui::FullOutput, label: &str| {
+                frame
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Rect(r)
+                            if (r.rect.center().y - rail_rect.center().y).abs() <= 1.0
+                                && (r.rect.width() - r.rect.height()).abs() <= 0.5
+                                && r.rect.height() >= 10.0
+                                && r.rect.height() <= 18.0
+                                && r.rect.left() >= rail_rect.left() - 2.0
+                                && r.rect.right() <= rail_rect.right() + 2.0 =>
+                        {
+                            Some((r.rect, r.stroke))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing zoom slider handle ({label}) in {theme:?}"))
+            };
+
+            let (idle_handle, idle_stroke) = find_handle(&out, "idle");
+            assert_eq!(idle_stroke.color, tokens.accent);
+            assert!((idle_handle.center().y - pct_rect.center().y).abs() <= 0.5);
+
+            // Hovered handle preserves accent border color.
+            let hovered_out = run_ui_pass_frame(
+                &ctx,
+                &mut a,
+                vec![egui::Event::PointerMoved(idle_handle.center())],
+            );
+            let (_, hovered_stroke) = find_handle(&hovered_out, "hovered");
+            assert_eq!(hovered_stroke.color, tokens.accent);
+
+            // Active/dragged handle preserves accent border color.
+            let active_out = run_ui_pass_frame(
+                &ctx,
+                &mut a,
+                vec![egui::Event::PointerButton {
+                    pos: idle_handle.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            let (_, active_stroke) = find_handle(&active_out, "active");
+            assert_eq!(active_stroke.color, tokens.accent);
         }
     }
 
