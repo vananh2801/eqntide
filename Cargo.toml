@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "eqntide"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "EqnTide: Bidirectional math equation converter & editor between Word OMML, LaTeX, and MathType"
 readme = "README.md"
