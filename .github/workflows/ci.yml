@@ -55,6 +55,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
       - name: Python packaging checks
         run: |
+          python -m pip install -r word-template/test-requirements.txt
           python -m py_compile scripts/package_native.py
           python -m unittest discover -s tests/python -p "test_*.py"
       - name: Add-in JavaScript syntax & WPS tests

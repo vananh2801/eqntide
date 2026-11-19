@@ -127,7 +127,7 @@ class WpsConfig(unittest.TestCase):
             configure_wps.configure(root)
             nodes = list(ET.parse(root / 'publish.xml').getroot())
             self.assertEqual(len([n for n in nodes if n.get('name') == 'Other']), 1)
-            self.assertEqual(len([n for n in nodes if n.get('name') == 'EqnTide']), 2)
+            self.assertEqual(len([n for n in nodes if n.get('name') == 'EqnTide']), 1)
             configure_wps.configure(root, uninstall=True)
             config = json.loads((root / 'authaddin.json').read_text())
             self.assertEqual(config['wps']['Other'], {'mode': 2})

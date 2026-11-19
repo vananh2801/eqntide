@@ -25,35 +25,40 @@ class WordRibbon(unittest.TestCase):
             cls.directory = decompress_stream(ole.openstream('VBA/dir').read())
             cls.modules = {
                 name: decompress_stream(ole.openstream('VBA/' + name).read()).decode('cp1252')
-                for name in ('EqnTide', 'EqnTideEvents')
+                for name in ('EqnTideMacros', 'ThisDocument')
             }
 
-    def test_event_class_is_nonprocedural_and_instantiable_as_a_class(self):
-        self.assertIn(b'Class=EqnTideEvents\r\n', self.project)
-        self.assertNotIn(b'Document=EqnTideEvents', self.project)
-        # MODULETYPE 0x0022 is required for WithEvents class modules.
-        event_record = self.directory[self.directory.index(b'EqnTideEvents'):]
-        self.assertIn(b'\x22\x00\x00\x00\x00\x00', event_record)
-        self.assertNotIn(b'\x21\x00\x00\x00\x00\x00', event_record)
+    def test_vba_project_modules_and_names_avoid_vbe_collision(self):
+        self.assertIn(b'Name="EqnTide"\r\n', self.project)
+        self.assertIn(b'Document=ThisDocument/&H00000000\r\n', self.project)
+        self.assertIn(b'Module=EqnTideMacros\r\n', self.project)
+        # MODULETYPE 0x0022 is required for ThisDocument, 0x0021 for standard EqnTideMacros.
+        macros_idx = self.directory.index(b'EqnTideMacros')
+        doc_record = self.directory[self.directory.index(b'ThisDocument'):macros_idx]
+        macros_record = self.directory[macros_idx:]
+        self.assertIn(b'\x22\x00\x00\x00\x00\x00', doc_record)
+        self.assertIn(b'\x21\x00\x00\x00\x00\x00', macros_record)
 
     def test_packaged_sources_match_repository_sources_without_duplication(self):
-        for name, suffix in [('EqnTide', 'bas'), ('EqnTideEvents', 'cls')]:
-            source = (ROOT / f'word-template/{name}.{suffix}').read_text()
-            self.assertEqual(self.modules[name].replace('\r\n', '\n'), source)
-            self.assertEqual(self.modules[name].count('Attribute VB_Name ='), 1)
+        source = (ROOT / 'word-template/EqnTide.bas').read_text()
+        self.assertEqual(self.modules['EqnTideMacros'].replace('\r\n', '\n'), source)
+        self.assertEqual(self.modules['EqnTideMacros'].count('Attribute VB_Name ='), 1)
+        self.assertIn('Attribute VB_Name = "ThisDocument"', self.modules['ThisDocument'])
 
-    def test_ribbon_initializes_event_sink_and_activates_the_existing_tab(self):
-        self.assertEqual(self.ribbon.attrib['onLoad'], 'RibbonOnLoad')
+    def test_ribbon_buttons_map_to_packaged_vba_callbacks(self):
         ns = {'r': 'http://schemas.microsoft.com/office/2009/07/customui'}
         tab = self.ribbon.find('.//r:tab', ns)
-        self.assertIn(f'mRibbon.ActivateTab "{tab.attrib["id"]}"', self.modules['EqnTide'])
-        self.assertIn('Public WithEvents App As Word.Application', self.modules['EqnTideEvents'])
-        self.assertIn('EqnTide.HandleEquationSelection Sel', self.modules['EqnTideEvents'])
-        self.assertIn('Set mWordEvents = New EqnTideEvents', self.modules['EqnTide'])
+        self.assertIsNotNone(tab)
+        self.assertEqual(tab.attrib['id'], 'EqnTideTab')
+        buttons = self.ribbon.findall('.//r:button', ns)
+        self.assertGreaterEqual(len(buttons), 5)
+        for button in buttons:
+            callback = button.attrib['onAction']
+            self.assertIn(f'Public Sub {callback}(control As IRibbonControl)', self.modules['EqnTideMacros'])
         self.assertEqual(self.ribbon.findall('.//r:toggleButton', ns), [])
 
     def test_packaged_word_output_policy_uses_dual_mathtype_package(self):
-        source = self.modules['EqnTide']
+        source = self.modules['EqnTideMacros']
         self.assertIn('CallBridge(rawLatex, "latex", "flat_opc_mathtype")', source)
         self.assertIn('CallBridge(cleanLatex, "latex", "flat_opc_mathtype")', source)
         self.assertNotIn('"flat_opc_omml"', source)
@@ -61,7 +66,7 @@ class WordRibbon(unittest.TestCase):
         self.assertIn('CallBridge(shapeRange.WordOpenXML, "flat_opc", "latex")', source)
 
     def test_all_flat_opc_insertions_use_inline_break_cleanup(self):
-        source = self.modules['EqnTide']
+        source = self.modules['EqnTideMacros']
         self.assertIn('Private Sub InsertFlatOpcInline(', source)
         self.assertEqual(source.count('.InsertXML'), 1)
         self.assertIn('target.InsertXML flatOpc', source)
