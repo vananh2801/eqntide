@@ -51,6 +51,13 @@ fn latex_aliases(input: &str) -> String {
                 "le" => "leq",
                 "ge" => "geq",
                 "ne" => "neq",
+                "to" => "rightarrow",
+                "gets" => "leftarrow",
+                "implies" => "Rightarrow",
+                "iff" => "Leftrightarrow",
+                "land" => "wedge",
+                "lor" => "vee",
+                "lnot" => "neg",
                 _ => &command,
             });
         } else if let Some(escaped) = chars.next() {
@@ -576,5 +583,105 @@ mod tests {
         })
         .unwrap();
         assert!(rev.result.contains("longdiv"));
+    }
+
+    #[test]
+    fn degree_inputs_unify_across_mathml_omml_and_mtef() {
+        let expected = parse_latex_to_mathml(r"90\degree").unwrap();
+        for src in [r"90^\circ", r"90^{\circ}", r"90 ^ { \circ }", r"90\degree", "90°"] {
+            let math = parse_latex_to_mathml(src).unwrap();
+            assert_eq!(math, expected, "MathML mismatch for {src}");
+            assert_eq!(
+                mathml_to_omml_xml(&math).unwrap(),
+                mathml_to_omml_xml(&expected).unwrap(),
+                "OMML mismatch for {src}"
+            );
+            assert_eq!(
+                mathml_to_mtef_bytes(&math).unwrap(),
+                mathml_to_mtef_bytes(&expected).unwrap(),
+                "MTEF mismatch for {src}"
+            );
+        }
+        let comp = parse_latex_to_mathml(r"f \circ g").unwrap();
+        assert!(comp.iter().into_iter().any(|n| n.tag == "mo" && n.text == "∘"));
+        assert!(!comp.iter().into_iter().any(|n| n.text == "°"));
+    }
+
+    #[test]
+    fn standard_short_and_explicit_aliases_parse_to_identical_mathml() {
+        for (a, b) in [
+            (r"x \le y", r"x \leq y"),
+            (r"x \ge y", r"x \geq y"),
+            (r"x \ne y", r"x \neq y"),
+            (r"x \to y", r"x \rightarrow y"),
+            (r"x \gets y", r"x \leftarrow y"),
+            (r"P \implies Q", r"P \Rightarrow Q"),
+            (r"P \iff Q", r"P \Leftrightarrow Q"),
+            (r"P \land Q", r"P \wedge Q"),
+            (r"P \lor Q", r"P \vee Q"),
+            (r"\lnot P", r"\neg P"),
+            (r"a, \dots, b", r"a, \ldots, b"),
+            (r"A \smallsetminus B", r"A \setminus B"),
+            (r"A \backslash B", r"A \setminus B"),
+            (r"\varnothing", r"\emptyset"),
+            (r"\lvert x \rvert", r"\left| x \right|"),
+            (r"\lVert x \rVert", r"\Vert x \Vert"),
+        ] {
+            let ma = parse_latex_to_mathml(a).unwrap_or_else(|e| panic!("{a}: {e}"));
+            let mb = parse_latex_to_mathml(b).unwrap_or_else(|e| panic!("{b}: {e}"));
+            if !a.contains(r"\lvert") {
+                assert_eq!(ma, mb, "{a} vs {b}");
+            } else {
+                assert!(ma.iter().into_iter().any(|n| n.tag == "mo" && n.text == "|"));
+                assert!(mb.iter().into_iter().any(|n| n.tag == "mo" && n.text == "|"));
+            }
+        }
+    }
+
+    #[test]
+    fn standard_structural_syntax_matches_legacy_forms() {
+        assert_eq!(
+            parse_latex_to_mathml(r"{\displaystyle \frac{1}{2}}").unwrap(),
+            parse_latex_to_mathml(r"\displaystyle{\frac{1}{2}}").unwrap()
+        );
+        assert_eq!(
+            parse_latex_to_mathml(r"{\textstyle x + y}").unwrap(),
+            parse_latex_to_mathml(r"\textstyle{x + y}").unwrap()
+        );
+        assert_eq!(
+            parse_latex_to_mathml(r"{n \atop k}").unwrap(),
+            parse_latex_to_mathml(r"\atopfrac{n}{k}").unwrap()
+        );
+        assert_eq!(
+            parse_latex_to_mathml(r"\genfrac{}{}{0pt}{}{n}{k}").unwrap(),
+            parse_latex_to_mathml(r"\atopfrac{n}{k}").unwrap()
+        );
+        assert_eq!(
+            parse_latex_to_mathml(r"\binom{n}{k}").unwrap(),
+            parse_latex_to_mathml(r"\genfrac{(}{)}{0pt}{}{n}{k}").unwrap()
+        );
+        let dbinom = parse_latex_to_mathml(r"\dbinom{n}{k}").unwrap();
+        assert!(dbinom
+            .iter()
+            .into_iter()
+            .any(|n| n.tag == "mfrac" && n.attr("displaystyle") == Some("true")));
+        let tbinom = parse_latex_to_mathml(r"\tbinom{n}{k}").unwrap();
+        assert!(tbinom
+            .iter()
+            .into_iter()
+            .any(|n| n.tag == "mfrac" && n.attr("displaystyle") == Some("false")));
+    }
+
+    #[test]
+    fn double_and_triple_primes_flatten_to_single_superscript_without_nesting() {
+        for (src, glyph) in [(r"f''", "″"), (r"f'''", "‴")] {
+            let math = parse_latex_to_mathml(src).unwrap();
+            let msups: Vec<_> = math.iter().into_iter().filter(|n| n.tag == "msup").collect();
+            assert_eq!(msups.len(), 1, "{src}: {}", math.to_xml());
+            assert_eq!(msups[0].children[1].text, glyph, "{src}: {}", math.to_xml());
+            assert_eq!(math.to_latex(), src);
+        }
+        let sub_sup = parse_latex_to_mathml(r"f''_0^1").unwrap();
+        assert_eq!(sub_sup.to_latex(), r"{f''}_{0}^{1}");
     }
 }

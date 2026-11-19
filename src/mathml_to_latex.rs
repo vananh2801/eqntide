@@ -41,9 +41,9 @@ fn format_node(node: &MathNode, out: &mut String) {
         "mstyle" => {
             if let Some(value) = node.attr("displaystyle") {
                 out.push_str(if value == "false" {
-                    "\\textstyle{"
+                    "{\\textstyle "
                 } else {
-                    "\\displaystyle{"
+                    "{\\displaystyle "
                 });
                 format_children(node, out);
                 out.push('}');
@@ -69,11 +69,20 @@ fn format_node(node: &MathNode, out: &mut String) {
         "mtable" => format_matrix(node, out),
         "mtr" | "mtd" => format_children(node, out),
         "menclose" => format_enclosure(node, out),
-        "mspace" => {
-            out.push_str("\\hspace{");
-            out.push_str(node.attr("width").unwrap_or("0em"));
-            out.push('}');
-        }
+        "mspace" => match node.attr("width").unwrap_or("0em").trim() {
+            "-0.166667em" => out.push_str("\\!"),
+            "0.166667em" => out.push_str("\\,"),
+            "0.222222em" => out.push_str("\\:"),
+            "0.277778em" => out.push_str("\\;"),
+            "0.5em" | "0.500000em" => out.push_str("\\enspace "),
+            "1em" | "1.000000em" => out.push_str("\\quad "),
+            "2em" | "2.000000em" => out.push_str("\\qquad "),
+            width => {
+                out.push_str("\\hspace{");
+                out.push_str(width);
+                out.push('}');
+            }
+        },
         "mprescripts" | "none" => {}
         _ => {
             if !node.text.is_empty() {
@@ -104,10 +113,20 @@ fn ends_with_control_word(s: &str) -> bool {
 }
 
 fn format_children(node: &MathNode, out: &mut String) {
-    for child in &node.children {
+    let children = &node.children;
+    let mut i = 0;
+    while i < children.len() {
         let needs_space = ends_with_control_word(out);
         let mut piece = String::new();
-        format_node(child, &mut piece);
+        if i + 2 < children.len()
+            && is_binom_triple(&children[i], &children[i + 1], &children[i + 2])
+        {
+            format_binom(&children[i + 1], &mut piece);
+            i += 3;
+        } else {
+            format_node(&children[i], &mut piece);
+            i += 1;
+        }
         if needs_space
             && piece
                 .chars()
@@ -120,20 +139,43 @@ fn format_children(node: &MathNode, out: &mut String) {
     }
 }
 
+fn is_binom_triple(open: &MathNode, middle: &MathNode, close: &MathNode) -> bool {
+    open.tag == "mo"
+        && open.text.trim() == "("
+        && middle.tag == "mfrac"
+        && is_binomial(middle)
+        && middle.attr("bevelled") != Some("true")
+        && close.tag == "mo"
+        && close.text.trim() == ")"
+}
+
+fn format_binom(node: &MathNode, out: &mut String) {
+    let command = match node.attr("displaystyle") {
+        Some("true") => "\\dbinom",
+        Some("false") => "\\tbinom",
+        _ => "\\binom",
+    };
+    out.push_str(command);
+    format_braced_child(node.children.first(), out);
+    format_braced_child(node.children.get(1), out);
+}
+
 fn format_identifier(node: &MathNode, out: &mut String) {
     let text = node.text.trim();
-    if let Some(symbol) = crate::catalog::SYMBOLS
+    if let Some(greek) = map_greek_or_symbol(text) {
+        out.push_str(greek);
+    } else if let Some(symbol) = crate::catalog::SYMBOLS
         .iter()
         .find(|s| s.tag == "mi" && s.glyph == text)
     {
         out.push('\\');
         out.push_str(symbol.name);
-    } else if let Some(greek) = map_greek_or_symbol(text) {
-        out.push_str(greek);
-    } else if is_named_function(text) {
-        out.push('\\');
+    } else if let Some(fn_latex) = format_named_function(text) {
+        out.push_str(fn_latex);
+    } else if is_operatorname_function(text) {
+        out.push_str("\\operatorname{");
         out.push_str(text);
-        out.push(' ');
+        out.push_str("} ");
     } else if text.len() > 1 && text.chars().all(char::is_alphabetic) {
         out.push_str("\\mathrm{");
         out.push_str(text);
@@ -164,6 +206,28 @@ fn format_operator(node: &MathNode, out: &mut String) {
         .iter()
         .find(|s| s.tag == "mo" && s.glyph == text)
     {
+        let padded = matches!(
+            symbol.group,
+            "Relations" | "Operators" | "Arrows" | "Logic" | "Sets"
+        ) && !matches!(
+            symbol.name,
+            "emptyset"
+                | "neg"
+                | "forall"
+                | "exists"
+                | "nexists"
+                | "dagger"
+                | "ddagger"
+                | "langle"
+                | "rangle"
+                | "llbracket"
+                | "rrbracket"
+                | "Vert"
+                | "smallcirc"
+        );
+        if padded {
+            out.push(' ');
+        }
         out.push('\\');
         out.push_str(symbol.name);
         out.push(' ');
@@ -194,7 +258,12 @@ fn format_fraction(node: &MathNode, out: &mut String) {
     } else if node.attr("displaystyle") == Some("true") {
         "\\dfrac"
     } else if is_binomial(node) {
-        "\\atopfrac"
+        out.push('{');
+        format_optional_node(node.children.first(), out);
+        out.push_str(" \\atop ");
+        format_optional_node(node.children.get(1), out);
+        out.push('}');
+        return;
     } else {
         "\\frac"
     };
@@ -252,7 +321,15 @@ fn format_superscript(node: &MathNode, out: &mut String) {
 fn prime_shortcut(node: Option<&MathNode>) -> Option<&str> {
     let node = node?;
     let text = node.text.trim();
-    (node.tag == "mo" && matches!(text, "'" | "\u{2032}" | "\u{2033}")).then_some(text)
+    if node.tag != "mo" {
+        return None;
+    }
+    match text {
+        "'" | "\u{2032}" => Some("'"),
+        "''" | "\u{2033}" => Some("''"),
+        "'''" | "\u{2034}" => Some("'''"),
+        _ => None,
+    }
 }
 
 fn format_subscript(node: &MathNode, out: &mut String) {
@@ -388,8 +465,20 @@ fn format_over_or_under_set(
 }
 
 fn format_fenced(node: &MathNode, out: &mut String) {
-    let open = map_fence_delimiter(node.attr("open").unwrap_or("("), true);
-    let close = map_fence_delimiter(node.attr("close").unwrap_or(")"), false);
+    let open_raw = node.attr("open").unwrap_or("(").trim();
+    let close_raw = node.attr("close").unwrap_or(")").trim();
+    if open_raw == "("
+        && close_raw == ")"
+        && node.children.len() == 1
+        && node.children[0].tag == "mfrac"
+        && is_binomial(&node.children[0])
+        && node.children[0].attr("bevelled") != Some("true")
+    {
+        format_binom(&node.children[0], out);
+        return;
+    }
+    let open = map_fence_delimiter(open_raw, true);
+    let close = map_fence_delimiter(close_raw, false);
     out.push_str(&open);
     for (index, child) in node.children.iter().enumerate() {
         if index > 0 {
@@ -615,9 +704,9 @@ fn map_operator(op: &str) -> Option<&'static str> {
         "×" => Some(" \\times "),
         "÷" => Some(" \\div "),
         "⋅" => Some(" \\cdot "),
-        "≤" => Some(" \\le "),
-        "≥" => Some(" \\ge "),
-        "≠" => Some(" \\ne "),
+        "≤" => Some(" \\leq "),
+        "≥" => Some(" \\geq "),
+        "≠" => Some(" \\neq "),
         "≈" => Some(" \\approx "),
         "≡" => Some(" \\equiv "),
         "∈" => Some(" \\in "),
@@ -628,14 +717,16 @@ fn map_operator(op: &str) -> Option<&'static str> {
         "⊇" => Some(" \\supseteq "),
         "∪" => Some(" \\cup "),
         "∩" => Some(" \\cap "),
+        "∖" | "\\" => Some(" \\setminus "),
         "∞" => Some("\\infty "),
         "∂" => Some("\\partial "),
         "∇" => Some("\\nabla "),
-        "→" => Some(" \\to "),
+        "→" => Some(" \\rightarrow "),
         "←" => Some(" \\leftarrow "),
         "↔" => Some(" \\leftrightarrow "),
-        "⇒" => Some(" \\implies "),
-        "⇔" => Some(" \\iff "),
+        "⇒" => Some(" \\Rightarrow "),
+        "⇐" => Some(" \\Leftarrow "),
+        "⇔" => Some(" \\Leftrightarrow "),
         "∑" => Some("\\sum "),
         "∏" => Some("\\prod "),
         "∫" => Some("\\int "),
@@ -651,14 +742,15 @@ fn map_operator(op: &str) -> Option<&'static str> {
         "∃" => Some("\\exists "),
         "∄" => Some("\\nexists "),
         "¬" => Some("\\neg "),
-        "…" => Some("\\dots "),
+        "…" => Some("\\ldots "),
         "⋯" => Some("\\cdots "),
         "⋮" => Some("\\vdots "),
         "⋱" => Some("\\ddots "),
         "′" => Some("'"),
         "″" => Some("''"),
         "‴" => Some("'''"),
-        "°" => Some("\\degree "),
+        "⁗" => Some("^{(4)}"),
+        "°" => Some("^\\circ"),
         "∠" => Some(" \\angle "),
         "⊥" => Some(" \\perp "),
         "∥" => Some(" \\parallel "),
@@ -677,35 +769,56 @@ fn map_greek_or_symbol(s: &str) -> Option<&'static str> {
         "β" | "beta" => Some("\\beta"),
         "γ" | "gamma" => Some("\\gamma"),
         "δ" | "delta" => Some("\\delta"),
-        "ε" | "ϵ" | "epsilon" => Some("\\epsilon"),
+        "ε" | "varepsilon" => Some("\\varepsilon"),
+        "ϵ" | "epsilon" => Some("\\epsilon"),
         "ζ" | "zeta" => Some("\\zeta"),
         "η" | "eta" => Some("\\eta"),
-        "θ" | "ϑ" | "theta" => Some("\\theta"),
+        "θ" | "theta" => Some("\\theta"),
+        "ϑ" | "vartheta" => Some("\\vartheta"),
         "ι" | "iota" => Some("\\iota"),
         "κ" | "kappa" => Some("\\kappa"),
+        "ϰ" | "varkappa" => Some("\\varkappa"),
         "λ" | "lambda" => Some("\\lambda"),
         "μ" | "mu" => Some("\\mu"),
         "ν" | "nu" => Some("\\nu"),
         "ξ" | "xi" => Some("\\xi"),
-        "π" | "ϖ" | "pi" => Some("\\pi"),
-        "ρ" | "ϱ" | "rho" => Some("\\rho"),
-        "σ" | "ς" | "sigma" => Some("\\sigma"),
+        "ο" | "omicron" => Some("o"),
+        "π" | "pi" => Some("\\pi"),
+        "ϖ" | "varpi" => Some("\\varpi"),
+        "ρ" | "rho" => Some("\\rho"),
+        "ϱ" | "varrho" => Some("\\varrho"),
+        "σ" | "sigma" => Some("\\sigma"),
+        "ς" | "varsigma" => Some("\\varsigma"),
         "τ" | "tau" => Some("\\tau"),
         "υ" | "upsilon" => Some("\\upsilon"),
-        "φ" | "ϕ" | "phi" => Some("\\phi"),
+        "φ" | "varphi" => Some("\\varphi"),
+        "ϕ" | "phi" => Some("\\phi"),
         "χ" | "chi" => Some("\\chi"),
         "ψ" | "psi" => Some("\\psi"),
         "ω" | "omega" => Some("\\omega"),
 
+        "Α" | "Alpha" => Some("A"),
+        "Β" | "Beta" => Some("B"),
         "Γ" | "Gamma" => Some("\\Gamma"),
         "Δ" | "Delta" => Some("\\Delta"),
+        "Ε" | "Epsilon" => Some("E"),
+        "Ζ" | "Zeta" => Some("Z"),
+        "Η" | "Eta" => Some("H"),
         "Θ" | "Theta" => Some("\\Theta"),
+        "Ι" | "Iota" => Some("I"),
+        "Κ" | "Kappa" => Some("K"),
         "Λ" | "Lambda" => Some("\\Lambda"),
+        "Μ" | "Mu" => Some("M"),
+        "Ν" | "Nu" => Some("N"),
         "Ξ" | "Xi" => Some("\\Xi"),
+        "Ο" | "Omicron" => Some("O"),
         "Π" | "Pi" => Some("\\Pi"),
+        "Ρ" | "Rho" => Some("P"),
         "Σ" | "Sigma" => Some("\\Sigma"),
+        "Τ" | "Tau" => Some("T"),
         "Υ" | "Upsilon" => Some("\\Upsilon"),
         "Φ" | "Phi" => Some("\\Phi"),
+        "Χ" | "Chi" => Some("X"),
         "Ψ" | "Psi" => Some("\\Psi"),
         "Ω" | "Omega" => Some("\\Omega"),
 
@@ -714,39 +827,50 @@ fn map_greek_or_symbol(s: &str) -> Option<&'static str> {
     }
 }
 
+fn format_named_function(s: &str) -> Option<&'static str> {
+    Some(match s {
+        "sin" => "\\sin ",
+        "cos" => "\\cos ",
+        "tan" => "\\tan ",
+        "cot" => "\\cot ",
+        "sec" => "\\sec ",
+        "csc" => "\\csc ",
+        "arcsin" => "\\arcsin ",
+        "arccos" => "\\arccos ",
+        "arctan" => "\\arctan ",
+        "sinh" => "\\sinh ",
+        "cosh" => "\\cosh ",
+        "tanh" => "\\tanh ",
+        "coth" => "\\coth ",
+        "ln" => "\\ln ",
+        "log" => "\\log ",
+        "lg" => "\\lg ",
+        "exp" => "\\exp ",
+        "lim" => "\\lim ",
+        "liminf" | "lim inf" => "\\liminf ",
+        "limsup" | "lim sup" => "\\limsup ",
+        "min" => "\\min ",
+        "max" => "\\max ",
+        "inf" => "\\inf ",
+        "sup" => "\\sup ",
+        "det" => "\\det ",
+        "dim" => "\\dim ",
+        "gcd" => "\\gcd ",
+        "hom" => "\\hom ",
+        "ker" => "\\ker ",
+        "deg" => "\\deg ",
+        "arg" => "\\arg ",
+        "Pr" => "\\Pr ",
+        _ => return None,
+    })
+}
+
+fn is_operatorname_function(s: &str) -> bool {
+    matches!(s, "arccot" | "lcm" | "mod" | "sgn" | "tg" | "cotg")
+}
+
 fn is_named_function(s: &str) -> bool {
-    matches!(
-        s,
-        "sin"
-            | "cos"
-            | "tan"
-            | "cot"
-            | "sec"
-            | "csc"
-            | "arcsin"
-            | "arccos"
-            | "arctan"
-            | "sinh"
-            | "cosh"
-            | "tanh"
-            | "coth"
-            | "ln"
-            | "log"
-            | "exp"
-            | "lim"
-            | "min"
-            | "max"
-            | "inf"
-            | "sup"
-            | "det"
-            | "dim"
-            | "gcd"
-            | "hom"
-            | "ker"
-            | "deg"
-            | "arg"
-            | "Pr"
-    )
+    format_named_function(s).is_some() || is_operatorname_function(s)
 }
 
 fn escape_latex_text(s: &str) -> String {
@@ -870,10 +994,18 @@ mod tests {
 
     #[test]
     fn serializes_binomials_and_indexed_roots() {
-        let binomial = serialize("<mfrac linethickness=\"0\"><mi>n</mi><mi>k</mi></mfrac>");
+        let bare_atop = serialize("<mfrac linethickness=\"0\"><mi>n</mi><mi>k</mi></mfrac>");
+        let binom_mrow = serialize(
+            "<math><mrow><mo stretchy=\"true\">(</mo><mfrac linethickness=\"0\"><mi>n</mi><mi>k</mi></mfrac><mo stretchy=\"true\">)</mo></mrow></math>",
+        );
+        let binom_fenced = serialize(
+            "<mfenced open=\"(\" close=\")\"><mfrac linethickness=\"0\"><mi>n</mi><mi>k</mi></mfrac></mfenced>",
+        );
         let indexed_root = serialize("<mroot><mi>x</mi><mn>3</mn></mroot>");
 
-        assert_eq!(binomial, "\\atopfrac{n}{k}");
+        assert_eq!(bare_atop, "{n \\atop k}");
+        assert_eq!(binom_mrow, "\\binom{n}{k}");
+        assert_eq!(binom_fenced, "\\binom{n}{k}");
         assert_eq!(indexed_root, "\\sqrt[3]{x}");
     }
 
@@ -898,5 +1030,65 @@ mod tests {
         assert_eq!(accent, "\\hat{x}");
         assert_eq!(limits, "\\sum_{i}^{n}");
         assert_eq!(enclosure, "\\boxed{x+y}");
+    }
+
+    #[test]
+    fn serializes_explicit_operators_setminus_degree_and_primes() {
+        assert_eq!(
+            serialize("<math><mi>A</mi><mo>∖</mo><mi>B</mi></math>"),
+            "A \\setminus B"
+        );
+        assert_eq!(
+            serialize("<math><mi mathvariant=\"double-struck\">R</mi><mo>\\</mo><mrow><mo>{</mo><mo>-</mo><mn>1</mn><mo>}</mo></mrow></math>"),
+            "\\mathbb{R} \\setminus \\{-1\\}"
+        );
+        assert_eq!(
+            serialize("<math><mi>x</mi><mo>≤</mo><mi>y</mi><mo>≥</mo><mi>z</mi><mo>≠</mo><mn>0</mn></math>"),
+            "x \\leq y \\geq z \\neq 0"
+        );
+        assert_eq!(
+            serialize("<math><mi>A</mi><mo>→</mo><mi>B</mi><mo>←</mo><mi>C</mi><mo>⇒</mo><mi>D</mi><mo>⇔</mo><mi>E</mi></math>"),
+            "A \\rightarrow B \\leftarrow C \\Rightarrow D \\Leftrightarrow E"
+        );
+        assert_eq!(
+            serialize("<math><mi>a</mi><mo>,</mo><mo>…</mo><mo>,</mo><mi>b</mi></math>"),
+            "a,\\ldots ,b"
+        );
+        assert_eq!(
+            serialize("<math><mn>90</mn><mo>°</mo></math>"),
+            "90^\\circ"
+        );
+        assert_eq!(
+            serialize("<math><mi>f</mi><mo>⁗</mo></math>"),
+            "f^{(4)}"
+        );
+        assert_eq!(
+            serialize("<math><mi>A</mi><mo>⊕</mo><mi>B</mi><mo>∉</mo><mi>S</mi></math>"),
+            "A \\oplus B \\notin S"
+        );
+    }
+
+    #[test]
+    fn serializes_spaces_styles_greek_variants_and_functions() {
+        assert_eq!(
+            serialize("<math><mi>x</mi><mspace width=\"0.166667em\"/><mi>y</mi><mspace width=\"0.222222em\"/><mi>z</mi><mspace width=\"0.277778em\"/><mi>w</mi><mspace width=\"-0.166667em\"/><mi>u</mi><mspace width=\"0.5em\"/><mi>v</mi><mspace width=\"1em\"/><mi>t</mi><mspace width=\"2em\"/><mi>s</mi><mspace width=\"0.083333em\"/><mi>q</mi></math>"),
+            "x\\,y\\:z\\;w\\!u\\enspace v\\quad t\\qquad s\\hspace{0.083333em}q"
+        );
+        assert_eq!(
+            serialize("<math><mstyle displaystyle=\"true\"><mfrac><mi>a</mi><mi>b</mi></mfrac></mstyle><mstyle displaystyle=\"false\"><mi>x</mi></mstyle></math>"),
+            "{\\displaystyle \\frac{a}{b}}{\\textstyle x}"
+        );
+        assert_eq!(
+            serialize("<math><mi>ϵ</mi><mi>ε</mi><mi>ϕ</mi><mi>φ</mi><mi>θ</mi><mi>ϑ</mi><mi>π</mi><mi>ϖ</mi><mi>ρ</mi><mi>ϱ</mi><mi>σ</mi><mi>ς</mi><mi>ϰ</mi><mi>x</mi></math>"),
+            "\\epsilon\\varepsilon\\phi\\varphi\\theta\\vartheta\\pi\\varpi\\rho\\varrho\\sigma\\varsigma\\varkappa x"
+        );
+        assert_eq!(
+            serialize("<math><mi>Α</mi><mi>Β</mi><mi>ο</mi></math>"),
+            "ABo"
+        );
+        assert_eq!(
+            serialize("<math><mi>limsup</mi><mi>x</mi><mi>lim inf</mi><mi>y</mi><mi>sgn</mi><mi>z</mi><mi mathvariant=\"normal\">lcm</mi><mo>(</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo>)</mo></math>"),
+            "\\limsup x\\liminf y\\operatorname{sgn} z\\operatorname{lcm} (a,b)"
+        );
     }
 }

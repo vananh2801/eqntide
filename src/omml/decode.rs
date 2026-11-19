@@ -84,8 +84,18 @@ pub fn is_number(s: &str) -> bool {
 /// `true` when every character is a known operator symbol.
 pub fn is_operator(s: &str) -> bool {
     !s.is_empty()
-        && s.chars()
-            .all(|c| OPS.contains(c) || OP_ALIASES.contains(&c))
+        && s.chars().all(|c| {
+            OPS.contains(c)
+                || OP_ALIASES.contains(&c)
+                || crate::symbols::sets::is_relation(c)
+                || crate::symbols::sets::is_operator(c)
+                || crate::symbols::logic::contains(c)
+                || crate::symbols::relations::contains(c)
+                || crate::symbols::arrows::contains(c)
+                || crate::catalog::SYMBOLS.iter().any(|sym| {
+                    sym.tag == "mo" && sym.glyph.chars().count() == 1 && sym.glyph.starts_with(c)
+                })
+        })
 }
 
 /// Classify a run of text as `<mn>`, `<mo>` or `<mi>`; `None` when blank.
@@ -872,5 +882,17 @@ mod tests {
             "<m:d><m:dPr><m:begChr m:val=\"|\"/><m:endChr m:val=\"|\"/></m:dPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:d>",
         );
         assert!(abs_bytes.windows(3).any(|w| w[0] == 0x03 && w[2] == TM_BAR));
+    }
+
+    #[test]
+    fn test_omml_set_minus_and_catalog_operators_decode_as_mo() {
+        let xml_str = "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:r><m:t>ℝ</m:t></m:r><m:r><m:t>∖</m:t></m:r><m:r><m:t>∅</m:t></m:r><m:r><m:t>⇒</m:t></m:r><m:r><m:t>°</m:t></m:r></m:oMath>";
+        let el = xml::parse(xml_str.as_bytes()).expect("valid OMML XML");
+        let mathml = omml_to_mathml(&el).expect("OMML -> MathML succeeds");
+        let row = &mathml.children[0];
+        assert_eq!(row.children[1], MathNode::leaf("mo", "∖"));
+        assert_eq!(row.children[2], MathNode::leaf("mo", "∅"));
+        assert_eq!(row.children[3], MathNode::leaf("mo", "⇒"));
+        assert_eq!(row.children[4], MathNode::leaf("mo", "°"));
     }
 }

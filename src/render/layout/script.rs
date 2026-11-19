@@ -579,4 +579,29 @@ mod tests {
             .unwrap();
         assert!(lim_x > x_pos + 10.0);
     }
+
+    #[test]
+    fn test_double_and_triple_prime_templates_render_level_without_staircase() {
+        for source in [r"{#?}''", r"{#?}'''"] {
+            let math = crate::catalog::preview_template(source).unwrap();
+            let (lbox, _) = layout_math(&math, 14.0).unwrap();
+            let primes: Vec<_> = lbox
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::Glyph { ch, y, em, .. }
+                        if matches!(*ch, '\'' | '\u{2032}' | '\u{2033}' | '\u{2034}') =>
+                    {
+                        Some((*ch, *y, *em))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                primes.len(),
+                1,
+                "{source} should lay out as a single combined prime glyph without nested msup stairs: {primes:?}"
+            );
+        }
+    }
 }

@@ -4548,6 +4548,18 @@ mod tests {
     }
 
     #[test]
+    fn standardized_latex_roundtrip_on_desktop_editor() {
+        let mut a = app();
+        assert!(a.load_math("<math><mi>A</mi><mo>\\</mo><mi>B</mi></math>", None, None));
+        assert_eq!(a.latex, r"A \setminus B");
+
+        let mut b = app();
+        type_canvas(&mut b, r"90\degree");
+        assert!(b.command_key(egui::Key::Enter, egui::Modifiers::NONE));
+        assert_eq!(b.latex, r"90^\circ");
+    }
+
+    #[test]
     fn command_template_wraps_selection_without_reparsing_existing_math() {
         let mut a = app();
         a.load_math("<math><mi mathvariant=\"bold\">x</mi></math>", None, None);
