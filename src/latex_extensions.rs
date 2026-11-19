@@ -896,7 +896,11 @@ impl<'a> Scanner<'a> {
                 if left.is_empty() && right.is_empty() {
                     frac
                 } else {
-                    wrap_fenced_frac(normalize_genfrac_delim(left), normalize_genfrac_delim(right), frac)
+                    wrap_fenced_frac(
+                        normalize_genfrac_delim(left),
+                        normalize_genfrac_delim(right),
+                        frac,
+                    )
                 }
             }
             "textstyle" | "displaystyle" => {

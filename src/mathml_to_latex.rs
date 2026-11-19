@@ -1054,14 +1054,8 @@ mod tests {
             serialize("<math><mi>a</mi><mo>,</mo><mo>…</mo><mo>,</mo><mi>b</mi></math>"),
             "a,\\ldots ,b"
         );
-        assert_eq!(
-            serialize("<math><mn>90</mn><mo>°</mo></math>"),
-            "90^\\circ"
-        );
-        assert_eq!(
-            serialize("<math><mi>f</mi><mo>⁗</mo></math>"),
-            "f^{(4)}"
-        );
+        assert_eq!(serialize("<math><mn>90</mn><mo>°</mo></math>"), "90^\\circ");
+        assert_eq!(serialize("<math><mi>f</mi><mo>⁗</mo></math>"), "f^{(4)}");
         assert_eq!(
             serialize("<math><mi>A</mi><mo>⊕</mo><mi>B</mi><mo>∉</mo><mi>S</mi></math>"),
             "A \\oplus B \\notin S"

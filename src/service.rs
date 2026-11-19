@@ -588,7 +588,13 @@ mod tests {
     #[test]
     fn degree_inputs_unify_across_mathml_omml_and_mtef() {
         let expected = parse_latex_to_mathml(r"90\degree").unwrap();
-        for src in [r"90^\circ", r"90^{\circ}", r"90 ^ { \circ }", r"90\degree", "90°"] {
+        for src in [
+            r"90^\circ",
+            r"90^{\circ}",
+            r"90 ^ { \circ }",
+            r"90\degree",
+            "90°",
+        ] {
             let math = parse_latex_to_mathml(src).unwrap();
             assert_eq!(math, expected, "MathML mismatch for {src}");
             assert_eq!(
@@ -603,7 +609,10 @@ mod tests {
             );
         }
         let comp = parse_latex_to_mathml(r"f \circ g").unwrap();
-        assert!(comp.iter().into_iter().any(|n| n.tag == "mo" && n.text == "∘"));
+        assert!(comp
+            .iter()
+            .into_iter()
+            .any(|n| n.tag == "mo" && n.text == "∘"));
         assert!(!comp.iter().into_iter().any(|n| n.text == "°"));
     }
 
@@ -632,8 +641,14 @@ mod tests {
             if !a.contains(r"\lvert") {
                 assert_eq!(ma, mb, "{a} vs {b}");
             } else {
-                assert!(ma.iter().into_iter().any(|n| n.tag == "mo" && n.text == "|"));
-                assert!(mb.iter().into_iter().any(|n| n.tag == "mo" && n.text == "|"));
+                assert!(ma
+                    .iter()
+                    .into_iter()
+                    .any(|n| n.tag == "mo" && n.text == "|"));
+                assert!(mb
+                    .iter()
+                    .into_iter()
+                    .any(|n| n.tag == "mo" && n.text == "|"));
             }
         }
     }
@@ -676,7 +691,11 @@ mod tests {
     fn double_and_triple_primes_flatten_to_single_superscript_without_nesting() {
         for (src, glyph) in [(r"f''", "″"), (r"f'''", "‴")] {
             let math = parse_latex_to_mathml(src).unwrap();
-            let msups: Vec<_> = math.iter().into_iter().filter(|n| n.tag == "msup").collect();
+            let msups: Vec<_> = math
+                .iter()
+                .into_iter()
+                .filter(|n| n.tag == "msup")
+                .collect();
             assert_eq!(msups.len(), 1, "{src}: {}", math.to_xml());
             assert_eq!(msups[0].children[1].text, glyph, "{src}: {}", math.to_xml());
             assert_eq!(math.to_latex(), src);

@@ -218,18 +218,17 @@ pub fn build_tree_rows(items: &[BatchItem], collapsed: &HashSet<String>) -> Vec<
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| root.display().to_string());
         let root_key = format!("root:{}", root.display());
-        let mut root_node = DirNode::new(
-            root_key,
-            root_label,
-            Some(root.display().to_string()),
-        );
+        let mut root_node = DirNode::new(root_key, root_label, Some(root.display().to_string()));
 
         for (idx, item) in items.iter().enumerate() {
             if item.source_root.as_ref() != Some(&root) {
                 continue;
             }
             root_node.descendants.push(idx);
-            let rel = item.input.strip_prefix(&root).unwrap_or(item.input.as_path());
+            let rel = item
+                .input
+                .strip_prefix(&root)
+                .unwrap_or(item.input.as_path());
             let mut cur = &mut root_node;
             if let Some(parent) = rel.parent() {
                 for comp in parent.components() {
@@ -592,7 +591,10 @@ mod tests {
 
     #[test]
     fn row_state_tracks_independent_selection_modes_defaulting_to_flat_all_selected() {
-        assert_eq!(BatchSelectionMode::default(), BatchSelectionMode::FolderTree);
+        assert_eq!(
+            BatchSelectionMode::default(),
+            BatchSelectionMode::FolderTree
+        );
         let mut row = BatchRowState::default();
         assert!(row.is_selected(BatchSelectionMode::FlatList));
         assert!(row.is_selected(BatchSelectionMode::FolderTree));
@@ -625,7 +627,8 @@ mod tests {
             Some(PathBuf::from("/tmp/docs_a_omml_20261119_194500"))
         );
 
-        let overwrite_meta = BatchRowOutput::from_conversion(&folder_item, &nested, "omml", true, ts);
+        let overwrite_meta =
+            BatchRowOutput::from_conversion(&folder_item, &nested, "omml", true, ts);
         assert_eq!(overwrite_meta.file_dir, root.join("ch1"));
         assert_eq!(overwrite_meta.root_output_dir, Some(root));
 
@@ -711,9 +714,13 @@ mod tests {
         collapsed.insert("root:/drive_a/docs_a/ch1".to_owned());
         collapsed.insert("group:individual".to_owned());
         let rows = build_tree_rows(&items, &collapsed);
-        assert!(!rows
-            .iter()
-            .any(|r| matches!(r, TreeRow::File { item_index: 0 | 3, .. })));
+        assert!(!rows.iter().any(|r| matches!(
+            r,
+            TreeRow::File {
+                item_index: 0 | 3,
+                ..
+            }
+        )));
 
         let guides = compute_tree_guides(&expanded);
         assert_eq!(guides.len(), 8);

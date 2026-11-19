@@ -1167,13 +1167,14 @@ impl App {
                             if let (Some(item), Some(row_state)) =
                                 (self.files.get(i), self.batch_rows.get_mut(i))
                             {
-                                row_state.last_output = Some(batch::BatchRowOutput::from_conversion(
-                                    item,
-                                    Path::new(&r.output_path),
-                                    &self.batch_run_target,
-                                    self.batch_run_overwrite,
-                                    &self.batch_run_timestamp,
-                                ));
+                                row_state.last_output =
+                                    Some(batch::BatchRowOutput::from_conversion(
+                                        item,
+                                        Path::new(&r.output_path),
+                                        &self.batch_run_target,
+                                        self.batch_run_overwrite,
+                                        &self.batch_run_timestamp,
+                                    ));
                             }
                             format!(
                                 "{} converted, {} skipped, {} errors → {}",
@@ -1303,7 +1304,8 @@ impl App {
     fn sync_batch_row_state(&mut self) {
         let len = self.files.len();
         if self.batch_rows.len() < len {
-            self.batch_rows.resize_with(len, batch::BatchRowState::default);
+            self.batch_rows
+                .resize_with(len, batch::BatchRowState::default);
         } else if self.batch_rows.len() > len {
             self.batch_rows.truncate(len);
         }
@@ -3430,7 +3432,11 @@ impl App {
         let tokens = ThemeTokens::from_ui(ui);
         self.back_to_editor_button(ui);
         Self::full_width_card(ui, tokens, |ui| {
-            ui.label(egui::RichText::new("Input").small().color(tokens.text_muted));
+            ui.label(
+                egui::RichText::new("Input")
+                    .small()
+                    .color(tokens.text_muted),
+            );
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(!self.batch_running, |ui| {
                     if self
@@ -3529,9 +3535,8 @@ impl App {
                         .iter()
                         .zip(self.batch_rows.iter())
                         .enumerate()
-                        .filter_map(|(idx, (item, row))| {
-                            row.is_selected(mode).then(|| (idx, item.clone()))
-                        })
+                        .filter(|(_, (_, row))| row.is_selected(mode))
+                        .map(|(idx, (item, _))| (idx, item.clone()))
                         .collect();
                     self.batch_running = true;
                     self.batch_totals = [0; 4];
@@ -3875,9 +3880,8 @@ impl App {
                             .color(tokens.text_muted),
                     );
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        let lbl = ui.add(
-                            egui::Label::new(egui::RichText::new(label).strong()).truncate(),
-                        );
+                        let lbl = ui
+                            .add(egui::Label::new(egui::RichText::new(label).strong()).truncate());
                         if let Some(hover) = hover_path {
                             lbl.on_hover_text(hover);
                         }
@@ -3936,8 +3940,7 @@ impl App {
                     }
                 });
                 if depth > 0 {
-                    let file_icon =
-                        self.ui_icon(ui.ctx(), "file", UI_ICON_SIZE, tokens.text_muted);
+                    let file_icon = self.ui_icon(ui.ctx(), "file", UI_ICON_SIZE, tokens.text_muted);
                     ui.add(file_icon);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -8215,7 +8218,11 @@ mod tests {
             .is_file());
         assert!(dir.path().join("standalone_mathtype.docx").is_file());
         assert_eq!(
-            a.batch_rows[2].last_output.as_ref().unwrap().root_output_dir,
+            a.batch_rows[2]
+                .last_output
+                .as_ref()
+                .unwrap()
+                .root_output_dir,
             None
         );
         assert_eq!(
@@ -8366,7 +8373,7 @@ mod tests {
         let mut a = app();
         a.tab = 1;
         a.batch_target = 1; // "mathtype"
-        // Add doc_a1 individually first, then add folder_a (should upgrade source_root), then folder_b.
+                            // Add doc_a1 individually first, then add folder_a (should upgrade source_root), then folder_b.
         a.add_files(vec![doc_a1.clone()]);
         assert_eq!(a.files[0].source_root, None);
         a.add_files(vec![folder_a.clone()]);
@@ -8506,7 +8513,10 @@ mod tests {
         a.tab = 1;
         a.add_files(vec![folder.clone(), f_solo.clone()]);
         assert_eq!(a.files.len(), 4);
-        assert_eq!(a.batch_selection_mode, batch::BatchSelectionMode::FolderTree);
+        assert_eq!(
+            a.batch_selection_mode,
+            batch::BatchSelectionMode::FolderTree
+        );
         assert_eq!(a.selected_batch_count(), 4);
 
         // Default Folder tree layout & header assertions.
@@ -8514,10 +8524,7 @@ mod tests {
         assert!(!tree_out.shapes.iter().any(|s| match &s.shape {
             egui::Shape::Text(t) => {
                 let txt = t.galley.text();
-                txt == "Ready"
-                    || txt == "Waiting"
-                    || txt == "View:"
-                    || txt.starts_with("Selected:")
+                txt == "Ready" || txt == "Waiting" || txt == "View:" || txt.starts_with("Selected:")
             }
             _ => false,
         }));
