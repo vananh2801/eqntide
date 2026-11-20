@@ -31,23 +31,70 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
     }
 }
 
-/// Apply PNG filter `t` (1 byte per pixel unit) to `row` given the previous row.
-fn filter_row(t: u8, row: &[u8], prev: &[u8]) -> Vec<u8> {
-    (0..row.len())
-        .map(|i| {
-            let a = if i > 0 { row[i - 1] } else { 0 };
-            let b = prev[i];
-            let c = if i > 0 { prev[i - 1] } else { 0 };
-            let x = row[i];
-            match t {
-                1 => x.wrapping_sub(a),
-                2 => x.wrapping_sub(b),
-                3 => x.wrapping_sub(((a as u16 + b as u16) / 2) as u8),
-                4 => x.wrapping_sub(paeth(a, b, c)),
-                _ => x,
+/// Apply PNG filter `t` (1 byte per pixel unit) into `dst` and return its heuristic cost.
+/// Stops early once `cost >= cost_limit`.
+fn filter_row_into(t: u8, row: &[u8], prev: &[u8], dst: &mut [u8], cost_limit: u64) -> Option<u64> {
+    let mut cost: u64 = 0;
+    match t {
+        0 => {
+            for (i, &x) in row.iter().enumerate() {
+                dst[i] = x;
+                cost += (x as i8).unsigned_abs() as u64;
+                if cost >= cost_limit {
+                    return None;
+                }
             }
-        })
-        .collect()
+        }
+        1 => {
+            let mut a = 0u8;
+            for (i, &x) in row.iter().enumerate() {
+                let v = x.wrapping_sub(a);
+                a = x;
+                dst[i] = v;
+                cost += (v as i8).unsigned_abs() as u64;
+                if cost >= cost_limit {
+                    return None;
+                }
+            }
+        }
+        2 => {
+            for (i, (&x, &b)) in row.iter().zip(prev.iter()).enumerate() {
+                let v = x.wrapping_sub(b);
+                dst[i] = v;
+                cost += (v as i8).unsigned_abs() as u64;
+                if cost >= cost_limit {
+                    return None;
+                }
+            }
+        }
+        3 => {
+            let mut a = 0u8;
+            for (i, (&x, &b)) in row.iter().zip(prev.iter()).enumerate() {
+                let v = x.wrapping_sub(((a as u16 + b as u16) / 2) as u8);
+                a = x;
+                dst[i] = v;
+                cost += (v as i8).unsigned_abs() as u64;
+                if cost >= cost_limit {
+                    return None;
+                }
+            }
+        }
+        _ => {
+            let mut a = 0u8;
+            let mut c = 0u8;
+            for (i, (&x, &b)) in row.iter().zip(prev.iter()).enumerate() {
+                let v = x.wrapping_sub(paeth(a, b, c));
+                a = x;
+                c = b;
+                dst[i] = v;
+                cost += (v as i8).unsigned_abs() as u64;
+                if cost >= cost_limit {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(cost)
 }
 
 /// Number of opacity levels stored (8-bit indexed PNG).
@@ -59,29 +106,29 @@ pub fn encode_alpha(width: u32, height: u32, alpha: &[u8], pixels_per_metre: u32
     let w = width as usize;
     let h = height as usize;
 
-    let mut packed: Vec<Vec<u8>> = Vec::with_capacity(h);
-    for row in alpha.chunks(w) {
-        packed.push(row.to_vec());
-    }
-
-    // Adaptive filtering: per row, keep the filter with the smallest sum of |value|.
+    // Adaptive filtering: per row, keep the filter with the smallest sum of |value|,
+    // reusing two scratch buffers across the whole image.
     let zero = vec![0u8; w];
+    let mut best_row = vec![0u8; w];
+    let mut cand_row = vec![0u8; w];
     let mut raw = Vec::with_capacity((w + 1) * h);
-    for (y, row) in packed.iter().enumerate() {
-        let prev = if y > 0 { &packed[y - 1] } else { &zero };
-        let best = (0u8..=4)
-            .map(|t| {
-                let f = filter_row(t, row, prev);
-                let cost: u64 = f.iter().map(|&v| (v as i8).unsigned_abs() as u64).sum();
-                (cost, t, f)
-            })
-            .min_by_key(|(c, _, _)| *c)
-            .expect("five candidates");
-        raw.push(best.1);
-        raw.extend_from_slice(&best.2);
+    let mut prev_row: &[u8] = &zero;
+    for row in alpha.chunks_exact(w) {
+        let mut best_t = 0u8;
+        let mut best_cost = u64::MAX;
+        for t in 0u8..=4 {
+            if let Some(cost) = filter_row_into(t, row, prev_row, &mut cand_row, best_cost) {
+                best_cost = cost;
+                best_t = t;
+                std::mem::swap(&mut best_row, &mut cand_row);
+            }
+        }
+        raw.push(best_t);
+        raw.extend_from_slice(&best_row);
+        prev_row = row;
     }
 
-    let mut z = ZlibEncoder::new(Vec::new(), Compression::best());
+    let mut z = ZlibEncoder::new(Vec::new(), Compression::new(4));
     z.write_all(&raw).expect("writing to a Vec cannot fail");
     let idat = z.finish().expect("writing to a Vec cannot fail");
 

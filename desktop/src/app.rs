@@ -1205,7 +1205,7 @@ impl App {
                         }
                     }
                     self.status = if self.stop.load(Ordering::Relaxed) {
-                        "Batch stopped between files."
+                        "Batch stopped."
                     } else {
                         "Batch finished."
                     }
@@ -3573,8 +3573,7 @@ impl App {
                 if ui
                     .add_enabled(
                         self.batch_running,
-                        egui::Button::new("Stop after current file")
-                            .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+                        egui::Button::new("Stop").min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
                     )
                     .clicked()
                 {
@@ -8450,7 +8449,7 @@ mod tests {
             _ => false,
         }));
 
-        // Disabled Convert, Stop after current file, and Clear list share identical text color.
+        // Disabled Convert, Stop, and Clear list share identical text color.
         let text_color_for = |out: &egui::FullOutput, label: &str| {
             out.shapes
                 .iter()
@@ -8466,10 +8465,7 @@ mod tests {
             text_color_for(&empty_out, "Convert"),
             expected_disabled_text
         );
-        assert_eq!(
-            text_color_for(&empty_out, "Stop after current file"),
-            expected_disabled_text
-        );
+        assert_eq!(text_color_for(&empty_out, "Stop"), expected_disabled_text);
         assert_eq!(
             text_color_for(&empty_out, "Clear list"),
             expected_disabled_text

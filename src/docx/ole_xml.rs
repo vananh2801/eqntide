@@ -1,5 +1,7 @@
 //! Builders for the XML that embeds a MathType OLE object in `document.xml`.
 
+use std::sync::OnceLock;
+
 use crate::ole::PROG_ID;
 use crate::xml::{self, Element, Node};
 
@@ -92,9 +94,15 @@ pub fn make_ole_xml(
 pub(super) const SHAPETYPE_XML: &str = r#"<v:shapetype xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"><v:stroke joinstyle="miter"/><v:formulas><v:f eqn="if lineDrawn pixelLineWidth 0"/><v:f eqn="sum @0 1 0"/><v:f eqn="sum 0 0 @1"/><v:f eqn="prod @2 1 2"/><v:f eqn="prod @3 21600 pixelWidth"/><v:f eqn="prod @3 21600 pixelHeight"/><v:f eqn="sum @0 0 1"/><v:f eqn="prod @6 1 2"/><v:f eqn="prod @7 21600 pixelWidth"/><v:f eqn="sum @8 21600 0"/><v:f eqn="prod @7 21600 pixelHeight"/><v:f eqn="sum @10 21600 0"/></v:formulas><v:path o:extrusionok="f" gradientshapeok="t" o:connecttype="rect"/><o:lock v:ext="edit" aspectratio="t"/></v:shapetype>"#;
 
 pub(super) fn shapetype() -> Element {
-    let mut e = xml::parse(SHAPETYPE_XML.as_bytes()).expect("static shapetype is well-formed");
-    e.nsdecls.clear(); // the serialiser declares v:/o: only where they are missing
-    e
+    static SHAPETYPE: OnceLock<Element> = OnceLock::new();
+    SHAPETYPE
+        .get_or_init(|| {
+            let mut e =
+                xml::parse(SHAPETYPE_XML.as_bytes()).expect("static shapetype is well-formed");
+            e.nsdecls.clear(); // the serialiser declares v:/o: only where they are missing
+            e
+        })
+        .clone()
 }
 
 /// Build the `w:r` Word writes for an inline MathType equation:

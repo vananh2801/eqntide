@@ -1,6 +1,8 @@
 use crate::{Event, EventSender as Sender};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
+    io::{BufRead, BufReader, Write},
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -282,7 +284,7 @@ pub fn build_tree_rows(items: &[BatchItem], collapsed: &HashSet<String>) -> Vec<
     out
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchItem {
     pub input: PathBuf,
     pub source_root: Option<PathBuf>,
@@ -394,36 +396,76 @@ pub fn convert_item(
     overwrite: bool,
     timestamp: &str,
 ) -> Result<eqntide::bridge::ConvertDocumentResponse, String> {
+    match convert_item_with_cancel(item, target, font_pt, overwrite, timestamp, None) {
+        BatchItemOutcome::Finished(res) => res,
+        BatchItemOutcome::Cancelled => Err("document conversion cancelled".into()),
+    }
+}
+
+enum BatchItemOutcome {
+    Finished(Result<eqntide::bridge::ConvertDocumentResponse, String>),
+    Cancelled,
+}
+
+fn convert_item_with_cancel(
+    item: &BatchItem,
+    target: &str,
+    font_pt: f32,
+    overwrite: bool,
+    timestamp: &str,
+    stop: Option<&AtomicBool>,
+) -> BatchItemOutcome {
+    if stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
+        return BatchItemOutcome::Cancelled;
+    }
     let output = item_output_path(item, target, overwrite, timestamp);
     if !overwrite && output.exists() {
-        return Err(format!("Output already exists: {}", output.display()));
+        return BatchItemOutcome::Finished(Err(format!(
+            "Output already exists: {}",
+            output.display()
+        )));
     }
     let parent = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let temp = tempfile::Builder::new()
+    if let Err(e) = std::fs::create_dir_all(parent) {
+        return BatchItemOutcome::Finished(Err(e.to_string()));
+    }
+    let temp = match tempfile::Builder::new()
         .prefix(".eqntide-")
         .suffix(".docx")
         .tempfile_in(parent)
-        .map_err(|e| e.to_string())?;
-    let mut response =
-        eqntide::service::convert_document(&eqntide::bridge::ConvertDocumentRequest {
+    {
+        Ok(t) => t,
+        Err(e) => return BatchItemOutcome::Finished(Err(e.to_string())),
+    };
+    let mut response = match eqntide::service::convert_document_with_cancel(
+        &eqntide::bridge::ConvertDocumentRequest {
             input_path: item.input.to_string_lossy().into_owned(),
             output_path: Some(temp.path().to_string_lossy().into_owned()),
             target: target.into(),
             preview: "emf".into(),
             font_pt,
-        })
-        .map_err(|e| e.to_string())?;
+        },
+        stop,
+    ) {
+        Ok(r) => r,
+        Err(e) if e.status == 499 => return BatchItemOutcome::Cancelled,
+        Err(e) => return BatchItemOutcome::Finished(Err(e.to_string())),
+    };
+    if stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
+        return BatchItemOutcome::Cancelled;
+    }
     if overwrite {
-        temp.persist(&output).map_err(|e| e.to_string())?;
-    } else {
-        temp.persist_noclobber(&output).map_err(|e| e.to_string())?;
+        if let Err(e) = temp.persist(&output) {
+            return BatchItemOutcome::Finished(Err(e.to_string()));
+        }
+    } else if let Err(e) = temp.persist_noclobber(&output) {
+        return BatchItemOutcome::Finished(Err(e.to_string()));
     }
     response.output_path = output.to_string_lossy().into_owned();
-    Ok(response)
+    BatchItemOutcome::Finished(Ok(response))
 }
 
 #[allow(dead_code)]
@@ -442,6 +484,211 @@ pub fn convert_one(
     )
 }
 
+#[derive(Serialize, Deserialize)]
+struct WorkerRequest {
+    items: Vec<(usize, BatchItem)>,
+    target: String,
+    font_pt: f32,
+    overwrite: bool,
+    timestamp: String,
+}
+
+#[derive(Serialize, Deserialize)]
+enum WorkerEvent {
+    Item {
+        orig_idx: usize,
+        result: Result<eqntide::bridge::ConvertDocumentResponse, String>,
+    },
+}
+
+fn process_items_sequential(
+    items: &[(usize, BatchItem)],
+    target: &str,
+    font_pt: f32,
+    overwrite: bool,
+    timestamp: &str,
+    stop: &AtomicBool,
+    mut on_item: impl FnMut(usize, Result<eqntide::bridge::ConvertDocumentResponse, String>),
+) {
+    for (orig_idx, item) in items {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if let BatchItemOutcome::Finished(res) =
+            convert_item_with_cancel(item, target, font_pt, overwrite, timestamp, Some(stop))
+        {
+            on_item(*orig_idx, res);
+        }
+    }
+}
+
+fn execute_worker_request<W: Write>(req: &WorkerRequest, mut writer: W, stop: &AtomicBool) {
+    process_items_sequential(
+        &req.items,
+        &req.target,
+        req.font_pt,
+        req.overwrite,
+        &req.timestamp,
+        stop,
+        |orig_idx, result| {
+            if let Ok(line) = serde_json::to_string(&WorkerEvent::Item { orig_idx, result }) {
+                let _ = writeln!(writer, "{line}");
+                let _ = writer.flush();
+            }
+        },
+    );
+}
+
+#[cfg(test)]
+fn run_worker_lines<R: BufRead, W: Write>(
+    mut reader: R,
+    writer: W,
+    stop: &AtomicBool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut first_line = String::new();
+    let n = reader.read_line(&mut first_line)?;
+    if n == 0 || first_line.trim().is_empty() {
+        return Ok(());
+    }
+    let req: WorkerRequest = serde_json::from_str(&first_line)?;
+    execute_worker_request(&req, writer, stop);
+    Ok(())
+}
+
+/// Entry point for `eqntide-desktop --batch-worker`: processes one file at a time
+/// (multi-threaded inside each file) and exits so the OS reclaims 100% of memory.
+pub fn run_worker_stdio() -> Result<(), Box<dyn std::error::Error>> {
+    let stdin = std::io::stdin();
+    let mut reader = BufReader::new(stdin.lock());
+    let mut first_line = String::new();
+    let n = reader.read_line(&mut first_line)?;
+    if n == 0 || first_line.trim().is_empty() {
+        return Ok(());
+    }
+    let req: WorkerRequest = serde_json::from_str(&first_line)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_reader = Arc::clone(&stop);
+
+    // Watch stdin for explicit "stop" or EOF (parent closed pipe / clicked Stop)
+    drop(reader);
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut reader = BufReader::new(stdin.lock());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => {
+                    stop_reader.store(true, Ordering::Relaxed);
+                    break;
+                }
+                Ok(_) if line.trim().eq_ignore_ascii_case("stop") => {
+                    stop_reader.store(true, Ordering::Relaxed);
+                    break;
+                }
+                Ok(_) => {}
+            }
+        }
+    });
+
+    let stdout = std::io::stdout();
+    let writer = std::io::BufWriter::new(stdout.lock());
+    execute_worker_request(&req, writer, &stop);
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn run_via_worker_subprocess(
+    items: &[(usize, BatchItem)],
+    target: &str,
+    font_pt: f32,
+    overwrite: bool,
+    timestamp: &str,
+    stop: &Arc<AtomicBool>,
+    tx: &Sender<Event>,
+) -> bool {
+    use std::process::{Command, Stdio};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Ok(mut child) = Command::new(exe)
+        .arg("--batch-worker")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+
+    let Some(mut child_stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    };
+    let Some(child_stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    };
+
+    let req = WorkerRequest {
+        items: items.to_vec(),
+        target: target.to_owned(),
+        font_pt,
+        overwrite,
+        timestamp: timestamp.to_owned(),
+    };
+    let Ok(payload) = serde_json::to_string(&req) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    };
+    if writeln!(child_stdin, "{payload}").is_err() || child_stdin.flush().is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    }
+
+    let stdin_guard = Arc::new(Mutex::new(Some(child_stdin)));
+    let worker_done = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(stop);
+    let done_flag = Arc::clone(&worker_done);
+    let stdin_watcher = Arc::clone(&stdin_guard);
+    let watcher = std::thread::spawn(move || {
+        while !done_flag.load(Ordering::Relaxed) {
+            if stop_flag.load(Ordering::Relaxed) {
+                if let Ok(mut guard) = stdin_watcher.lock() {
+                    if let Some(mut pipe) = guard.take() {
+                        let _ = writeln!(pipe, "stop");
+                        let _ = pipe.flush();
+                    }
+                }
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+    });
+
+    let reader = BufReader::new(child_stdout);
+    for line in reader.lines().map_while(Result::ok) {
+        if let Ok(WorkerEvent::Item { orig_idx, result }) = serde_json::from_str(&line) {
+            let _ = tx.send(Event::Batch(orig_idx, result));
+        }
+    }
+
+    worker_done.store(true, Ordering::Relaxed);
+    if let Ok(mut guard) = stdin_guard.lock() {
+        guard.take();
+    }
+    let _ = watcher.join();
+    let _ = child.wait();
+    true
+}
+
 pub fn run_items(
     items: Vec<(usize, BatchItem)>,
     target: String,
@@ -452,14 +699,24 @@ pub fn run_items(
     tx: Sender<Event>,
 ) {
     std::thread::spawn(move || {
-        for (orig_idx, item) in &items {
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            let _ = tx.send(Event::Batch(
-                *orig_idx,
-                convert_item(item, &target, font_pt, overwrite, &timestamp),
-            ));
+        #[cfg(not(test))]
+        let ran_worker =
+            run_via_worker_subprocess(&items, &target, font_pt, overwrite, &timestamp, &stop, &tx);
+        #[cfg(test)]
+        let ran_worker = false;
+
+        if !ran_worker {
+            process_items_sequential(
+                &items,
+                &target,
+                font_pt,
+                overwrite,
+                &timestamp,
+                &stop,
+                |orig_idx, res| {
+                    let _ = tx.send(Event::Batch(orig_idx, res));
+                },
+            );
         }
         let _ = tx.send(Event::BatchDone);
     });
@@ -733,5 +990,127 @@ mod tests {
         assert!(guides[3].is_last_sibling);
         // docs_b/b1.docx (idx 5, depth 1) is last child of docs_b
         assert!(guides[5].is_last_sibling);
+    }
+
+    #[test]
+    fn run_items_converts_multiple_files_concurrently_and_honors_stop() {
+        use std::io::{Cursor, Write};
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        zip.start_file("[Content_Types].xml", opts).unwrap();
+        zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#).unwrap();
+        zip.start_file("word/document.xml", opts).unwrap();
+        zip.write_all(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMath><m:r><m:t>x</m:t></m:r></m:oMath></w:p></w:body></w:document>"#).unwrap();
+        let original = zip.finish().unwrap().into_inner();
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut items = Vec::new();
+        for i in 0..6 {
+            let p = dir.path().join(format!("doc_{i}.docx"));
+            std::fs::write(&p, &original).unwrap();
+            items.push((i, BatchItem::file(p)));
+        }
+
+        // 1. Concurrent full run
+        let (raw_tx, rx) = std::sync::mpsc::channel();
+        let tx = crate::EventSender::new(raw_tx);
+        let stop = Arc::new(AtomicBool::new(false));
+        run_items(
+            items.clone(),
+            "mathtype".into(),
+            12.0,
+            false,
+            String::new(),
+            stop,
+            tx,
+        );
+
+        let mut completed = Vec::new();
+        let mut done_seen = false;
+        for ev in rx {
+            match ev {
+                Event::Batch(idx, res) => {
+                    assert!(res.is_ok(), "item {idx} failed: {res:?}");
+                    completed.push(idx);
+                }
+                Event::BatchDone => {
+                    done_seen = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(done_seen);
+        completed.sort_unstable();
+        assert_eq!(completed, vec![0, 1, 2, 3, 4, 5]);
+        for (_, item) in &items {
+            assert!(output_path(&item.input, "mathtype").is_file());
+        }
+
+        // 2. Cooperative stop skips unstarted files and leaves no temp files
+        let dir_stop = tempfile::tempdir().unwrap();
+        let mut stop_items = Vec::new();
+        for i in 0..4 {
+            let p = dir_stop.path().join(format!("stop_{i}.docx"));
+            std::fs::write(&p, &original).unwrap();
+            stop_items.push((i, BatchItem::file(p)));
+        }
+        let (raw_tx2, rx2) = std::sync::mpsc::channel();
+        let tx2 = crate::EventSender::new(raw_tx2);
+        let stop_flag = Arc::new(AtomicBool::new(true));
+        run_items(
+            stop_items.clone(),
+            "mathtype".into(),
+            12.0,
+            false,
+            String::new(),
+            stop_flag,
+            tx2,
+        );
+        let mut stopped_events = Vec::new();
+        let mut done2 = false;
+        for ev in rx2 {
+            match ev {
+                Event::Batch(idx, _) => stopped_events.push(idx),
+                Event::BatchDone => {
+                    done2 = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(done2);
+        assert!(stopped_events.is_empty());
+        assert_eq!(std::fs::read_dir(dir_stop.path()).unwrap().count(), 4);
+
+        // 3. Headless --batch-worker JSON stdio protocol
+        let dir_worker = tempfile::tempdir().unwrap();
+        let worker_doc = dir_worker.path().join("w0.docx");
+        std::fs::write(&worker_doc, &original).unwrap();
+        let req = WorkerRequest {
+            items: vec![(7, BatchItem::file(worker_doc.clone()))],
+            target: "mathtype".into(),
+            font_pt: 12.0,
+            overwrite: false,
+            timestamp: String::new(),
+        };
+        let mut in_bytes = serde_json::to_vec(&req).unwrap();
+        in_bytes.push(b'\n');
+        let mut out_bytes = Vec::new();
+        run_worker_lines(
+            std::io::Cursor::new(in_bytes),
+            &mut out_bytes,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let out_line = String::from_utf8(out_bytes).unwrap();
+        let ev: WorkerEvent = serde_json::from_str(out_line.trim()).unwrap();
+        match ev {
+            WorkerEvent::Item { orig_idx, result } => {
+                assert_eq!(orig_idx, 7);
+                assert_eq!(result.unwrap().converted, 1);
+            }
+        }
+        assert!(output_path(&worker_doc, "mathtype").is_file());
     }
 }

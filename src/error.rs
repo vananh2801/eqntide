@@ -31,6 +31,8 @@ pub enum Error {
         /// Image height in pixels.
         height: usize,
     },
+    /// The conversion was cancelled via cooperative cancellation signal.
+    Cancelled,
 }
 
 /// Convenience alias used across the crate.
@@ -54,6 +56,7 @@ impl fmt::Display for Error {
                 f,
                 "equation preview would be too large ({width}x{height} px)"
             ),
+            Error::Cancelled => write!(f, "conversion cancelled"),
         }
     }
 }

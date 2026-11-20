@@ -14,6 +14,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rayon::prelude::*;
 
 use crate::omml::decode::NS_M;
 
@@ -29,11 +32,14 @@ use crate::xml::{self, Element, Node};
 use super::consts::*;
 use super::ole_xml::{make_object_run, sanitize_document_baselines};
 use super::options::{ConversionSummary, ToOmmlOptions, UpgradeOptions, UpgradeTarget};
-use super::package::{add_relationship, ensure_content_type, ensure_default_extension, Package};
+use super::package::{
+    add_relationship, collect_override_part_names, ensure_content_type_indexed,
+    ensure_default_extension, Package,
+};
 use super::to_omml::{
     build_rel_map, cleanup_unreferenced_files, collect_imagedata_rids, collect_referenced_rids,
-    convert_bytes_to_omml_with, discover_content_parts, find_mathtype_ole_in_subtree, get_r_attr,
-    rels_path_for_part,
+    convert_bytes_to_omml_with_cancel, discover_content_parts, find_mathtype_ole_in_subtree,
+    get_r_attr, rels_path_for_part,
 };
 
 // ── Public Entry Points ──────────────────────────────────────────────────────
@@ -52,8 +58,24 @@ pub fn upgrade_legacy_mathtype_docx_with(
     output_path: impl AsRef<Path>,
     opts: &UpgradeOptions,
 ) -> Result<ConversionSummary> {
+    upgrade_legacy_mathtype_docx_with_cancel(input_path, output_path, opts, None)
+}
+
+/// Like [`upgrade_legacy_mathtype_docx_with`], supporting cooperative cancellation before writing output.
+pub fn upgrade_legacy_mathtype_docx_with_cancel(
+    input_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    opts: &UpgradeOptions,
+    cancel: Option<&AtomicBool>,
+) -> Result<ConversionSummary> {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
     let input = std::fs::read(input_path.as_ref())?;
-    let (output, summary) = upgrade_legacy_mathtype_bytes_with(&input, opts)?;
+    let (output, summary) = upgrade_legacy_mathtype_bytes_with_cancel(&input, opts, cancel)?;
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
     std::fs::write(output_path.as_ref(), output)?;
     log::info!("Saved upgraded docx → {}", output_path.as_ref().display());
     Ok(summary)
@@ -69,12 +91,25 @@ pub fn upgrade_legacy_mathtype_bytes_with(
     input: &[u8],
     opts: &UpgradeOptions,
 ) -> Result<(Vec<u8>, ConversionSummary)> {
+    upgrade_legacy_mathtype_bytes_with_cancel(input, opts, None)
+}
+
+/// Like [`upgrade_legacy_mathtype_bytes_with`], supporting cooperative cancellation.
+pub fn upgrade_legacy_mathtype_bytes_with_cancel(
+    input: &[u8],
+    opts: &UpgradeOptions,
+    cancel: Option<&AtomicBool>,
+) -> Result<(Vec<u8>, ConversionSummary)> {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
     if opts.target == UpgradeTarget::ModernOmml {
-        return convert_bytes_to_omml_with(
+        return convert_bytes_to_omml_with_cancel(
             input,
             &ToOmmlOptions {
                 math_font: opts.math_font.clone(),
             },
+            cancel,
         );
     }
 
@@ -87,6 +122,7 @@ pub fn upgrade_legacy_mathtype_bytes_with(
         pkg.get(CT_PATH)
             .ok_or_else(|| Error::MissingPart(CT_PATH.into()))?,
     )?;
+    let mut ct_overrides = collect_override_part_names(&ct_root);
 
     let (mut ole_index, mut img_index) = next_package_part_indices(&pkg);
 
@@ -95,15 +131,20 @@ pub fn upgrade_legacy_mathtype_bytes_with(
     let mut candidate_files_to_remove: HashSet<String> = HashSet::new();
 
     for xml_path in content_parts {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
         upgrade_content_part(
             &mut pkg,
             &xml_path,
             &mut ct_root,
+            &mut ct_overrides,
             &mut ole_index,
             &mut img_index,
             opts,
             &mut summary,
             &mut candidate_files_to_remove,
+            cancel,
         )?;
     }
 
@@ -111,6 +152,9 @@ pub fn upgrade_legacy_mathtype_bytes_with(
         cleanup_unreferenced_files(&mut pkg, &candidate_files_to_remove)?;
     }
 
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
     pkg.set(CT_PATH, xml::to_bytes(&ct_root));
     Ok((pkg.write()?, summary))
 }
@@ -120,11 +164,13 @@ fn upgrade_content_part(
     pkg: &mut Package,
     xml_path: &str,
     ct_root: &mut Element,
+    ct_overrides: &mut HashSet<String>,
     ole_index: &mut usize,
     img_index: &mut usize,
     opts: &UpgradeOptions,
     summary: &mut ConversionSummary,
     candidate_files_to_remove: &mut HashSet<String>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<()> {
     let Some(xml_bytes) = pkg.get(xml_path) else {
         return Ok(());
@@ -141,22 +187,87 @@ fn upgrade_content_part(
         .elements()
         .filter_map(|child| child.attr(None, "Id").map(str::to_owned))
         .collect();
-    let mut converted_rids = HashSet::new();
     let before_converted = summary.converted;
+    let mut converted_rids = HashSet::new();
+    let mut next_ole_rid = 1usize;
+    let mut next_img_rid = 1usize;
 
-    upgrade_element(
-        &mut doc_root,
-        pkg,
-        &mut rels_root,
-        ct_root,
-        &rel_map,
-        &mut existing_ids,
-        ole_index,
-        img_index,
-        opts,
-        summary,
-        &mut converted_rids,
-    )?;
+    let mut items = Vec::new();
+    collect_upgrade_items(&doc_root, &mut Vec::new(), &mut items);
+
+    let prepared: Vec<Result<UpgradePrepared>> = if items.len() <= 1 {
+        items
+            .iter()
+            .map(|item| prepare_upgrade_item(item, pkg, &rel_map, opts.font_pt, cancel))
+            .collect()
+    } else {
+        items
+            .par_iter()
+            .map(|item| prepare_upgrade_item(item, pkg, &rel_map, opts.font_pt, cancel))
+            .collect()
+    };
+
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
+
+    for (item, res) in items.into_iter().zip(prepared) {
+        let prep = res?;
+        match prep {
+            UpgradePrepared::NotAnEquation => {}
+            UpgradePrepared::Skipped {
+                reason,
+                extra_context,
+            } => {
+                summary.found += 1;
+                let eq_num = summary.found;
+                summary.skipped += 1;
+                if let Some(ctx) = extra_context {
+                    log::warn!(
+                        "Equation {eq_num}: {reason} is not supported in MathType ({ctx}), skipping"
+                    );
+                } else {
+                    log::warn!(
+                        "Equation {eq_num}: {reason} is not supported in MathType, skipping"
+                    );
+                }
+            }
+            UpgradePrepared::Failed { err } => {
+                summary.found += 1;
+                let eq_num = summary.found;
+                summary.errors += 1;
+                log::error!("Equation {eq_num}: {err}");
+            }
+            UpgradePrepared::Ready {
+                ole_bin,
+                preview,
+                rids_to_retire,
+                log_label,
+            } => {
+                summary.found += 1;
+                let eq_num = summary.found;
+                let mut ctx = UpgradeAssembleCtx {
+                    pkg,
+                    rels_root: &mut rels_root,
+                    ct_root,
+                    ct_overrides,
+                    existing_ids: &mut existing_ids,
+                    next_ole_rid: &mut next_ole_rid,
+                    next_img_rid: &mut next_img_rid,
+                    ole_index,
+                    img_index,
+                };
+                let modern_run = assemble_modern_ole_run(ole_bin, preview, eq_num, &mut ctx);
+                if let Some(slot_el) = element_at_mut(&mut doc_root, &item.path) {
+                    *slot_el = modern_run;
+                }
+                converted_rids.extend(rids_to_retire);
+                summary.converted += 1;
+                log::info!("Equation {eq_num}: {log_label}");
+            }
+        }
+    }
+
     sanitize_document_baselines(&mut doc_root);
     if summary.converted == before_converted {
         return Ok(());
@@ -210,16 +321,20 @@ fn obsolete_relationship_ids(root: &Element, converted: HashSet<String>) -> Hash
         .collect()
 }
 
-fn next_unique_id(existing: &mut HashSet<String>, prefix: &str) -> String {
-    let mut i = 1;
+fn next_unique_id_from(existing: &mut HashSet<String>, prefix: &str, cursor: &mut usize) -> String {
     loop {
-        let id = format!("{prefix}{i}");
-        if !existing.contains(&id) {
-            existing.insert(id.clone());
+        let id = format!("{prefix}{}", *cursor);
+        *cursor += 1;
+        if existing.insert(id.clone()) {
             return id;
         }
-        i += 1;
     }
+}
+
+#[cfg(test)]
+fn next_unique_id(existing: &mut HashSet<String>, prefix: &str) -> String {
+    let mut cursor = 1;
+    next_unique_id_from(existing, prefix, &mut cursor)
 }
 
 fn convert_ole_rid_to_mathml(
@@ -251,69 +366,308 @@ fn mtef_from_metafile(path: &str, bytes: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_modern_ole_run(
+struct UpgradeAssembleCtx<'a> {
+    pkg: &'a mut Package,
+    rels_root: &'a mut Element,
+    ct_root: &'a mut Element,
+    ct_overrides: &'a mut HashSet<String>,
+    existing_ids: &'a mut HashSet<String>,
+    next_ole_rid: &'a mut usize,
+    next_img_rid: &'a mut usize,
+    ole_index: &'a mut usize,
+    img_index: &'a mut usize,
+}
+
+enum UpgradeWorkKind {
+    AlternateContent,
+    OleRun,
+    MetafileRun,
+}
+
+struct UpgradeWorkItem {
+    path: Vec<usize>,
+    kind: UpgradeWorkKind,
+    el: Element,
+}
+
+enum UpgradePrepared {
+    NotAnEquation,
+    Skipped {
+        reason: &'static str,
+        extra_context: Option<String>,
+    },
+    Failed {
+        err: Error,
+    },
+    Ready {
+        ole_bin: Vec<u8>,
+        preview: crate::render::emf::EmfPreview,
+        rids_to_retire: Vec<String>,
+        log_label: String,
+    },
+}
+
+fn element_at_mut<'a>(root: &'a mut Element, path: &[usize]) -> Option<&'a mut Element> {
+    let mut cur = root;
+    for &idx in path {
+        match cur.children.get_mut(idx)? {
+            Node::Element(c) => cur = c,
+            _ => return None,
+        }
+    }
+    Some(cur)
+}
+
+fn collect_upgrade_items(el: &Element, path: &mut Vec<usize>, out: &mut Vec<UpgradeWorkItem>) {
+    for (i, child) in el.children.iter().enumerate() {
+        let Node::Element(c) = child else {
+            continue;
+        };
+        path.push(i);
+        if (c.is(NS_MC, "AlternateContent") || c.local == "AlternateContent")
+            && !find_mathtype_ole_in_subtree(c).is_empty()
+        {
+            out.push(UpgradeWorkItem {
+                path: path.clone(),
+                kind: UpgradeWorkKind::AlternateContent,
+                el: c.clone(),
+            });
+            path.pop();
+            continue;
+        }
+        if c.is(NS_W, "r") {
+            if !find_mathtype_ole_in_subtree(c).is_empty() {
+                out.push(UpgradeWorkItem {
+                    path: path.clone(),
+                    kind: UpgradeWorkKind::OleRun,
+                    el: c.clone(),
+                });
+                path.pop();
+                continue;
+            }
+            if !collect_imagedata_rids(c).is_empty() {
+                out.push(UpgradeWorkItem {
+                    path: path.clone(),
+                    kind: UpgradeWorkKind::MetafileRun,
+                    el: c.clone(),
+                });
+                path.pop();
+                continue;
+            }
+        }
+        collect_upgrade_items(c, path, out);
+        path.pop();
+    }
+}
+
+fn compute_modern_ole_payload(
     mathml: &MathNode,
     font_pt: f32,
-    eq_num: usize,
-    pkg: &mut Package,
-    rels_root: &mut Element,
-    ct_root: &mut Element,
-    existing_ids: &mut HashSet<String>,
-    ole_index: &mut usize,
-    img_index: &mut usize,
-) -> Result<Element> {
-    // 1. MathML → MTEF 5.0 inner equation bytes
+) -> Result<(Vec<u8>, crate::render::emf::EmfPreview)> {
     let eq_bytes = mathml_to_mtef_bytes(mathml)?;
     if eq_bytes.is_empty() {
         return Err(Error::InvalidMtef("empty equation content".into()));
     }
-
-    // 2. Wrap in Equation Native stream & OLE CFB
     let native_stream = make_equation_native(&eq_bytes);
     let ole_bin = make_ole(&native_stream)?;
-
-    // 3. Render vector EMF preview with embedded MTEF in EMR_COMMENT
     let complete_mtef = crate::mtef::build_mtef(&eq_bytes);
     let pv = render_emf_with_mtef(mathml, font_pt, Some(&complete_mtef))?;
+    Ok((ole_bin, pv))
+}
 
-    // 4. Save into docx package
-    let mut bin_name = format!("word/embeddings/oleObject{ole_index}.bin");
-    while pkg.contains(&bin_name) {
-        *ole_index += 1;
-        bin_name = format!("word/embeddings/oleObject{ole_index}.bin");
+fn prepare_upgrade_item(
+    item: &UpgradeWorkItem,
+    pkg: &Package,
+    rel_map: &HashMap<String, String>,
+    font_pt: f32,
+    cancel: Option<&AtomicBool>,
+) -> Result<UpgradePrepared> {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
     }
-    *ole_index += 1;
-    pkg.set(&bin_name, ole_bin);
-    let bin_target = format!("embeddings/oleObject{}.bin", *ole_index - 1);
 
-    let mut img_name = format!("word/media/equation{img_index}.emf");
-    while pkg.contains(&img_name) {
-        *img_index += 1;
-        img_name = format!("word/media/equation{img_index}.emf");
+    match item.kind {
+        UpgradeWorkKind::AlternateContent => {
+            let ole_nodes = find_mathtype_ole_in_subtree(&item.el);
+            let ole_rid = ole_nodes[0]
+                .attr(Some(NS_R), "id")
+                .or_else(|| ole_nodes[0].attr(None, "id"));
+            let img_rids = collect_imagedata_rids(&item.el);
+
+            let mathml_opt = match ole_rid {
+                Some(rid) => convert_ole_rid_to_mathml(rid, &img_rids, pkg, rel_map).ok(),
+                None => None,
+            }
+            .or_else(|| {
+                item.el
+                    .find(NS_MC, "Fallback")
+                    .and_then(|fb| fb.find(NS_M, "oMath"))
+                    .and_then(|omath| crate::omml::decode::omml_to_mathml(omath).ok())
+            });
+
+            if let Some(ref mml) = mathml_opt {
+                if let Some(reason) = crate::mtef::check_mathtype_unsupported(mml) {
+                    return Ok(UpgradePrepared::Skipped {
+                        reason,
+                        extra_context: None,
+                    });
+                }
+            }
+
+            let payload_res = match mathml_opt {
+                Some(mml) => compute_modern_ole_payload(&mml, font_pt),
+                None => Err(Error::InvalidMtef(
+                    "failed to decode AlternateContent formula".into(),
+                )),
+            };
+
+            match payload_res {
+                Ok((ole_bin, preview)) => {
+                    let mut rids_to_retire = img_rids;
+                    if let Some(rid) = ole_rid {
+                        rids_to_retire.push(rid.to_owned());
+                    }
+                    Ok(UpgradePrepared::Ready {
+                        ole_bin,
+                        preview,
+                        rids_to_retire,
+                        log_label: "upgraded AlternateContent → Equation.DSMT4 OLE".into(),
+                    })
+                }
+                Err(err) => Ok(UpgradePrepared::Failed { err }),
+            }
+        }
+        UpgradeWorkKind::OleRun => {
+            let oles = find_mathtype_ole_in_subtree(&item.el);
+            let ole_rid = oles.first().and_then(|o| get_r_attr(o, "id"));
+            let img_rids = collect_imagedata_rids(&item.el);
+
+            let mathml_res = match ole_rid {
+                Some(rid) => convert_ole_rid_to_mathml(rid, &img_rids, pkg, rel_map),
+                None => Err(Error::InvalidOle("OLEObject missing r:id".into())),
+            };
+            let mml = match mathml_res {
+                Ok(mml) => mml,
+                Err(err) => return Ok(UpgradePrepared::Failed { err }),
+            };
+            if let Some(reason) = crate::mtef::check_mathtype_unsupported(&mml) {
+                return Ok(UpgradePrepared::Skipped {
+                    reason,
+                    extra_context: None,
+                });
+            }
+            match compute_modern_ole_payload(&mml, font_pt) {
+                Ok((ole_bin, preview)) => {
+                    let mut rids_to_retire = img_rids;
+                    if let Some(rid) = ole_rid {
+                        rids_to_retire.push(rid.to_owned());
+                    }
+                    Ok(UpgradePrepared::Ready {
+                        ole_bin,
+                        preview,
+                        rids_to_retire,
+                        log_label: "upgraded OLE → Equation.DSMT4".into(),
+                    })
+                }
+                Err(err) => Ok(UpgradePrepared::Failed { err }),
+            }
+        }
+        UpgradeWorkKind::MetafileRun => {
+            let img_rids = collect_imagedata_rids(&item.el);
+            for rid in img_rids {
+                let Some(target_path) = rel_map.get(&rid) else {
+                    continue;
+                };
+                let lower = target_path.to_ascii_lowercase();
+                let is_wmf = lower.ends_with(".wmf");
+                let is_emf = lower.ends_with(".emf");
+                if !is_wmf && !is_emf {
+                    continue;
+                }
+                let Some(img_bytes) = pkg.get(target_path) else {
+                    continue;
+                };
+                let Some(mtef_bytes) = mtef_from_metafile(target_path, img_bytes) else {
+                    continue;
+                };
+
+                let kind_str = if is_wmf { "WMF" } else { "EMF" };
+                let mathml_opt = mtef_to_mathml(&mtef_bytes);
+                if let Some(ref mml) = mathml_opt {
+                    if let Some(reason) = crate::mtef::check_mathtype_unsupported(mml) {
+                        return Ok(UpgradePrepared::Skipped {
+                            reason,
+                            extra_context: Some(format!("{kind_str} {rid}")),
+                        });
+                    }
+                }
+                let payload_res = match mathml_opt {
+                    Some(mml) => compute_modern_ole_payload(&mml, font_pt),
+                    None => Err(Error::InvalidMtef(format!(
+                        "failed to decode {kind_str} MTEF in {target_path}"
+                    ))),
+                };
+                return match payload_res {
+                    Ok((ole_bin, preview)) => Ok(UpgradePrepared::Ready {
+                        ole_bin,
+                        preview,
+                        rids_to_retire: vec![rid.clone()],
+                        log_label: format!(
+                            "upgraded standalone {kind_str} ({rid}) → Equation.DSMT4 OLE"
+                        ),
+                    }),
+                    Err(err) => Ok(UpgradePrepared::Failed { err }),
+                };
+            }
+            Ok(UpgradePrepared::NotAnEquation)
+        }
     }
-    *img_index += 1;
-    pkg.set(&img_name, pv.emf);
-    let img_target = format!("media/equation{}.emf", *img_index - 1);
+}
 
-    // 5. Add relationships
-    let ole_rid = next_unique_id(existing_ids, "rIdOle");
-    add_relationship(rels_root, &ole_rid, REL_OLEOBJECT, &bin_target);
+fn assemble_modern_ole_run(
+    ole_bin: Vec<u8>,
+    pv: crate::render::emf::EmfPreview,
+    eq_num: usize,
+    ctx: &mut UpgradeAssembleCtx<'_>,
+) -> Element {
+    let mut bin_name = format!("word/embeddings/oleObject{}.bin", *ctx.ole_index);
+    while ctx.pkg.contains(&bin_name) {
+        *ctx.ole_index += 1;
+        bin_name = format!("word/embeddings/oleObject{}.bin", *ctx.ole_index);
+    }
+    *ctx.ole_index += 1;
+    ctx.pkg.set(&bin_name, ole_bin);
+    let bin_target = format!("embeddings/oleObject{}.bin", *ctx.ole_index - 1);
 
-    let img_rid = next_unique_id(existing_ids, "rIdImg");
-    add_relationship(rels_root, &img_rid, REL_IMAGE, &img_target);
+    let mut img_name = format!("word/media/equation{}.emf", *ctx.img_index);
+    while ctx.pkg.contains(&img_name) {
+        *ctx.img_index += 1;
+        img_name = format!("word/media/equation{}.emf", *ctx.img_index);
+    }
+    *ctx.img_index += 1;
+    ctx.pkg.set(&img_name, pv.emf);
+    let img_target = format!("media/equation{}.emf", *ctx.img_index - 1);
 
-    // 6. Ensure Content Types
-    ensure_content_type(ct_root, &format!("/{bin_name}"), CT_OLEOBJECT);
-    ensure_default_extension(ct_root, "emf", "image/x-emf");
+    let ole_rid = next_unique_id_from(ctx.existing_ids, "rIdOle", ctx.next_ole_rid);
+    add_relationship(ctx.rels_root, &ole_rid, REL_OLEOBJECT, &bin_target);
 
-    // 7. Make object run
+    let img_rid = next_unique_id_from(ctx.existing_ids, "rIdImg", ctx.next_img_rid);
+    add_relationship(ctx.rels_root, &img_rid, REL_IMAGE, &img_target);
+
+    ensure_content_type_indexed(
+        ctx.ct_root,
+        ctx.ct_overrides,
+        &format!("/{bin_name}"),
+        CT_OLEOBJECT,
+    );
+    ensure_default_extension(ctx.ct_root, "emf", "image/x-emf");
+
     let shape_id = format!("_x0000_i{}", 1024 + eq_num);
     let obj_id = format!(
         "_{}",
         1_000_000_000u128 + uuid::Uuid::new_v4().as_u128() % 9_000_000_000u128
     );
-    Ok(make_object_run(
+    make_object_run(
         &ole_rid,
         &img_rid,
         &shape_id,
@@ -321,312 +675,7 @@ fn build_modern_ole_run(
         pv.width_pt,
         pv.height_pt,
         pv.depth_pt,
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn upgrade_element(
-    parent: &mut Element,
-    pkg: &mut Package,
-    rels_root: &mut Element,
-    ct_root: &mut Element,
-    rel_map: &HashMap<String, String>,
-    existing_ids: &mut HashSet<String>,
-    ole_index: &mut usize,
-    img_index: &mut usize,
-    opts: &UpgradeOptions,
-    summary: &mut ConversionSummary,
-    converted_rids: &mut HashSet<String>,
-) -> Result<()> {
-    let mut new_children: Vec<Node> = Vec::with_capacity(parent.children.len());
-
-    for child in std::mem::take(&mut parent.children) {
-        let Node::Element(mut el) = child else {
-            new_children.push(child);
-            continue;
-        };
-
-        // Case 1: `<mc:AlternateContent>` wrapping a MathType OLE object in `<mc:Choice>`
-        if el.is(NS_MC, "AlternateContent") || el.local == "AlternateContent" {
-            let ole_nodes = find_mathtype_ole_in_subtree(&el);
-            if !ole_nodes.is_empty() {
-                summary.found += 1;
-                let eq_num = summary.found;
-                let ole_rid = ole_nodes[0]
-                    .attr(Some(NS_R), "id")
-                    .or_else(|| ole_nodes[0].attr(None, "id"));
-                let img_rids = collect_imagedata_rids(&el);
-
-                let mathml_opt = match ole_rid {
-                    Some(rid) => convert_ole_rid_to_mathml(rid, &img_rids, pkg, rel_map).ok(),
-                    None => None,
-                }
-                .or_else(|| {
-                    el.find(NS_MC, "Fallback")
-                        .and_then(|fb| fb.find(NS_M, "oMath"))
-                        .and_then(|omath| crate::omml::decode::omml_to_mathml(omath).ok())
-                });
-
-                if let Some(ref mml) = mathml_opt {
-                    if let Some(reason) = crate::mtef::check_mathtype_unsupported(mml) {
-                        summary.skipped += 1;
-                        log::warn!(
-                            "Equation {eq_num}: {reason} is not supported in MathType, skipping"
-                        );
-                        new_children.push(Node::Element(el));
-                        continue;
-                    }
-                }
-                let modern_run_res = match mathml_opt {
-                    Some(mml) => build_modern_ole_run(
-                        &mml,
-                        opts.font_pt,
-                        eq_num,
-                        pkg,
-                        rels_root,
-                        ct_root,
-                        existing_ids,
-                        ole_index,
-                        img_index,
-                    ),
-                    None => Err(Error::InvalidMtef(
-                        "failed to decode AlternateContent formula".into(),
-                    )),
-                };
-
-                match modern_run_res {
-                    Ok(modern_run) => {
-                        if let Some(rid) = ole_rid {
-                            converted_rids.insert(rid.to_owned());
-                        }
-                        converted_rids.extend(img_rids);
-                        summary.converted += 1;
-                        log::info!(
-                            "Equation {eq_num}: upgraded AlternateContent → Equation.DSMT4 OLE"
-                        );
-                        new_children.push(Node::Element(modern_run));
-                        continue;
-                    }
-                    Err(e) => {
-                        summary.errors += 1;
-                        log::error!("Equation {eq_num}: {e}");
-                        new_children.push(Node::Element(el));
-                        continue;
-                    }
-                }
-            }
-        }
-
-        // Case 2: `<w:r>` containing one or more MathType `<o:OLEObject>` elements
-        if el.is(NS_W, "r") {
-            let ole_count = find_mathtype_ole_in_subtree(&el).len();
-            if ole_count > 0 {
-                let replacements = upgrade_ole_run(
-                    &el,
-                    pkg,
-                    rels_root,
-                    ct_root,
-                    rel_map,
-                    existing_ids,
-                    ole_index,
-                    img_index,
-                    opts,
-                    summary,
-                    converted_rids,
-                );
-                for rep in replacements {
-                    new_children.push(Node::Element(rep));
-                }
-                continue;
-            }
-
-            // Case 3: `<w:r>` with a standalone `.wmf` or `.emf` image containing MathType MTEF
-            if let Some(modern_run) = try_upgrade_metafile_run(
-                &el,
-                pkg,
-                rels_root,
-                ct_root,
-                rel_map,
-                existing_ids,
-                ole_index,
-                img_index,
-                opts,
-                summary,
-                converted_rids,
-            ) {
-                new_children.push(Node::Element(modern_run));
-                continue;
-            }
-        }
-
-        // Recurse into child elements
-        upgrade_element(
-            &mut el,
-            pkg,
-            rels_root,
-            ct_root,
-            rel_map,
-            existing_ids,
-            ole_index,
-            img_index,
-            opts,
-            summary,
-            converted_rids,
-        )?;
-        new_children.push(Node::Element(el));
-    }
-
-    parent.children = new_children;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn upgrade_ole_run(
-    run_el: &Element,
-    pkg: &mut Package,
-    rels_root: &mut Element,
-    ct_root: &mut Element,
-    rel_map: &HashMap<String, String>,
-    existing_ids: &mut HashSet<String>,
-    ole_index: &mut usize,
-    img_index: &mut usize,
-    opts: &UpgradeOptions,
-    summary: &mut ConversionSummary,
-    converted_rids: &mut HashSet<String>,
-) -> Vec<Element> {
-    summary.found += 1;
-    let eq_num = summary.found;
-    let oles = find_mathtype_ole_in_subtree(run_el);
-    let ole_rid = oles.first().and_then(|o| get_r_attr(o, "id"));
-    let img_rids = collect_imagedata_rids(run_el);
-
-    let mathml_res = match ole_rid {
-        Some(rid) => convert_ole_rid_to_mathml(rid, &img_rids, pkg, rel_map),
-        None => Err(Error::InvalidOle("OLEObject missing r:id".into())),
-    };
-
-    let mml = match mathml_res {
-        Ok(mml) => mml,
-        Err(e) => {
-            summary.errors += 1;
-            log::error!("Equation {eq_num}: {e}");
-            return vec![run_el.clone()];
-        }
-    };
-    if let Some(reason) = crate::mtef::check_mathtype_unsupported(&mml) {
-        summary.skipped += 1;
-        log::warn!("Equation {eq_num}: {reason} is not supported in MathType, skipping");
-        return vec![run_el.clone()];
-    }
-
-    match build_modern_ole_run(
-        &mml,
-        opts.font_pt,
-        eq_num,
-        pkg,
-        rels_root,
-        ct_root,
-        existing_ids,
-        ole_index,
-        img_index,
-    ) {
-        Ok(modern_run) => {
-            if let Some(rid) = ole_rid {
-                converted_rids.insert(rid.to_owned());
-            }
-            converted_rids.extend(img_rids);
-            summary.converted += 1;
-            log::info!("Equation {eq_num}: upgraded OLE → Equation.DSMT4");
-            vec![modern_run]
-        }
-        Err(e) => {
-            summary.errors += 1;
-            log::error!("Equation {eq_num}: {e}");
-            vec![run_el.clone()]
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn try_upgrade_metafile_run(
-    run_el: &Element,
-    pkg: &mut Package,
-    rels_root: &mut Element,
-    ct_root: &mut Element,
-    rel_map: &HashMap<String, String>,
-    existing_ids: &mut HashSet<String>,
-    ole_index: &mut usize,
-    img_index: &mut usize,
-    opts: &UpgradeOptions,
-    summary: &mut ConversionSummary,
-    converted_rids: &mut HashSet<String>,
-) -> Option<Element> {
-    let img_rids = collect_imagedata_rids(run_el);
-    for rid in &img_rids {
-        let Some(target_path) = rel_map.get(rid) else {
-            continue;
-        };
-        let lower = target_path.to_ascii_lowercase();
-        let is_wmf = lower.ends_with(".wmf");
-        let is_emf = lower.ends_with(".emf");
-        if !is_wmf && !is_emf {
-            continue;
-        }
-        let Some(img_bytes) = pkg.get(target_path) else {
-            continue;
-        };
-        let mtef_bytes = mtef_from_metafile(target_path, img_bytes);
-        let Some(mtef_bytes) = mtef_bytes else {
-            continue;
-        };
-
-        summary.found += 1;
-        let eq_num = summary.found;
-        let kind_str = if is_wmf { "WMF" } else { "EMF" };
-        let mathml_opt = mtef_to_mathml(&mtef_bytes);
-        if let Some(ref mml) = mathml_opt {
-            if let Some(reason) = crate::mtef::check_mathtype_unsupported(mml) {
-                summary.skipped += 1;
-                log::warn!(
-                    "Equation {eq_num}: {reason} is not supported in MathType ({kind_str} {rid}), skipping"
-                );
-                return None;
-            }
-        }
-        let modern_run_res = match mathml_opt {
-            Some(mml) => build_modern_ole_run(
-                &mml,
-                opts.font_pt,
-                eq_num,
-                pkg,
-                rels_root,
-                ct_root,
-                existing_ids,
-                ole_index,
-                img_index,
-            ),
-            None => Err(Error::InvalidMtef(format!(
-                "failed to decode {kind_str} MTEF in {target_path}"
-            ))),
-        };
-
-        match modern_run_res {
-            Ok(modern_run) => {
-                converted_rids.insert(rid.clone());
-                summary.converted += 1;
-                log::info!(
-                    "Equation {eq_num}: upgraded standalone {kind_str} ({rid}) → Equation.DSMT4 OLE"
-                );
-                return Some(modern_run);
-            }
-            Err(e) => {
-                summary.errors += 1;
-                log::error!("Equation {eq_num}: {e}");
-                return None;
-            }
-        }
-    }
-    None
+    )
 }
 
 #[cfg(test)]

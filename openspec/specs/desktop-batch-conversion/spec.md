@@ -29,11 +29,11 @@ When overwrite is disabled, files queued from a folder SHALL be written into a s
 - **THEN** each converted `.docx` file replaces its original source file in place rather than creating `<folder>_<target>_<time>/`
 
 ### Requirement: Structured batch toolbar and consistent control states
-The desktop **Batch DOCX** tab SHALL organize its top controls into an **Input** group (`Add DOCX files…`, `Add folder…`, `Clear list`) and an **Options & Actions** group (target selector, overwrite toggle, `Convert`, `Stop after current file`), without a global `Open output folder` toolbar button, and SHALL disable unavailable actions with consistent visual opacity.
+The desktop **Batch DOCX** tab SHALL organize its top controls into an **Input** group (`Add DOCX files…`, `Add folder…`, `Clear list`) and an **Options & Actions** group (target selector, overwrite toggle, `Convert`, `Stop`), without a global `Open output folder` toolbar button, and SHALL disable unavailable actions with consistent visual opacity.
 
 #### Scenario: Empty queue shows consistent disabled states
 - **WHEN** the **Batch DOCX** tab has no queued `.docx` files
-- **THEN** `Clear list`, `Convert`, and `Stop after current file` are disabled with consistent disabled styling, while `Add DOCX files…` and `Add folder…` remain enabled
+- **THEN** `Clear list`, `Convert`, and `Stop` are disabled with consistent disabled styling, while `Add DOCX files…` and `Add folder…` remain enabled
 
 #### Scenario: Multiple additive additions across different locations
 - **WHEN** the user invokes `Add DOCX files…` or `Add folder…` multiple times across different directories or drives
@@ -41,7 +41,7 @@ The desktop **Batch DOCX** tab SHALL organize its top controls into an **Input**
 
 #### Scenario: Active run enables stop and disables editing controls
 - **WHEN** a batch conversion is running
-- **THEN** `Stop after current file` is enabled and `Add DOCX files…`, `Add folder…`, `Clear list`, target selection, overwrite toggle, and `Convert` are disabled until the run finishes
+- **THEN** `Stop` is enabled and `Add DOCX files…`, `Add folder…`, `Clear list`, target selection, overwrite toggle, and `Convert` are disabled until the run finishes
 
 ### Requirement: Dual-mode non-destructive file selection
 The desktop **Batch DOCX** tab SHALL let users switch between **Folder tree** (default) and **File tree** selection modes, maintaining independent checkbox selection states for each mode where newly added files default to checked in both modes and individual rows are excluded by unchecking rather than deleted.
@@ -79,3 +79,14 @@ After conversion succeeds, **Batch DOCX** SHALL display context-appropriate **`O
 #### Scenario: Folder tree places Open folder on folder rows and standalone files
 - **WHEN** `docs/intro.docx`, `docs/chapter1/lesson1.docx`, and standalone `other/note.docx` finish converting and the user views **Folder tree** mode
 - **THEN** the `docs` root row shows **`Open folder`** targeting `docs_omml_<time>/`, the `chapter1` subfolder row shows **`Open folder`** targeting `docs_omml_<time>/chapter1/`, `intro.docx` and `lesson1.docx` show no button, and standalone `note.docx` shows **`Open folder`** targeting `other/`
+
+### Requirement: Isolated sequential-file batch worker with multi-core per-document conversion and cooperative stop
+The desktop **Batch DOCX** runner SHALL process selected `.docx` files one file at a time inside an isolated headless worker subprocess (`--batch-worker`) that uses multi-core parallelism within each document and exits upon completion or cancellation so the operating system reclaims worker memory immediately, while honoring **`Stop`** cooperatively without corrupting source files or leaving temporary artifacts behind.
+
+#### Scenario: Multiple queued files convert one-by-one with multi-core per-file throughput and reclaimable memory
+- **WHEN** multiple `.docx` files are selected and the user clicks **Convert**
+- **THEN** the worker subprocess processes each selected file sequentially (parallelizing equations and ZIP packaging inside each file), reports per-row progress and output metadata as each file finishes, and exits after completion so memory is returned to the operating system
+
+#### Scenario: Clicking Stop halts remaining queued files safely
+- **WHEN** a batch conversion is active and the user clicks **`Stop`**
+- **THEN** the worker subprocess receives the cancellation signal, stops claiming unstarted files from the queue, discards any incomplete temporary output without modifying untouched source files, and exits cleanly so the UI marks unstarted rows stopped and re-enables editing controls

@@ -78,14 +78,52 @@ impl Writer {
         self.buf.resize(self.buf.len() + (padded - body.len()), 0);
         self.records += 1;
     }
-}
 
-fn u32s(v: &[u32]) -> Vec<u8> {
-    v.iter().flat_map(|x| x.to_le_bytes()).collect()
-}
+    #[inline]
+    fn record_empty(&mut self, kind: u32) {
+        self.buf.extend_from_slice(&kind.to_le_bytes());
+        self.buf.extend_from_slice(&8u32.to_le_bytes());
+        self.records += 1;
+    }
 
-fn i32s(v: &[i32]) -> Vec<u8> {
-    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    #[inline]
+    fn record_u32s(&mut self, kind: u32, vals: &[u32]) {
+        let size = 8 + (vals.len() * 4) as u32;
+        self.buf.extend_from_slice(&kind.to_le_bytes());
+        self.buf.extend_from_slice(&size.to_le_bytes());
+        for &v in vals {
+            self.buf.extend_from_slice(&v.to_le_bytes());
+        }
+        self.records += 1;
+    }
+
+    #[inline]
+    fn record_i32s(&mut self, kind: u32, vals: &[i32]) {
+        let size = 8 + (vals.len() * 4) as u32;
+        self.buf.extend_from_slice(&kind.to_le_bytes());
+        self.buf.extend_from_slice(&size.to_le_bytes());
+        for &v in vals {
+            self.buf.extend_from_slice(&v.to_le_bytes());
+        }
+        self.records += 1;
+    }
+
+    #[inline]
+    fn record_polybezierto(&mut self, bounds: [i32; 4], pts: &[(i32, i32)]) {
+        let size = (8 + 16 + 4 + pts.len() * 8) as u32;
+        self.buf.extend_from_slice(&EMR_POLYBEZIERTO.to_le_bytes());
+        self.buf.extend_from_slice(&size.to_le_bytes());
+        for b in bounds {
+            self.buf.extend_from_slice(&b.to_le_bytes());
+        }
+        self.buf
+            .extend_from_slice(&(pts.len() as u32).to_le_bytes());
+        for &(x, y) in pts {
+            self.buf.extend_from_slice(&x.to_le_bytes());
+            self.buf.extend_from_slice(&y.to_le_bytes());
+        }
+        self.records += 1;
+    }
 }
 
 /// Draw `math` (a `<math>` tree) at `font_pt` points per em, as EMF.
@@ -163,22 +201,23 @@ pub fn render_emf_with_mtef(
 
     // The header is written last (it needs the totals); reserve nothing here and
     // prepend it at the end.
-    out.record(EMR_SETMAPMODE, &u32s(&[MM_ANISOTROPIC]));
-    out.record(EMR_SETWINDOWEXTEX, &i32s(&[wl, hl]));
-    out.record(EMR_SETVIEWPORTEXTEX, &i32s(&[wd, hd]));
-    out.record(EMR_SETPOLYFILLMODE, &u32s(&[WINDING]));
+    out.record_u32s(EMR_SETMAPMODE, &[MM_ANISOTROPIC]);
+    out.record_i32s(EMR_SETWINDOWEXTEX, &[wl, hl]);
+    out.record_i32s(EMR_SETVIEWPORTEXTEX, &[wd, hd]);
+    out.record_u32s(EMR_SETPOLYFILLMODE, &[WINDING]);
     // handle 1 = solid black brush
-    out.record(EMR_CREATEBRUSHINDIRECT, &u32s(&[1, 0, 0x0000_0000, 0]));
-    out.record(EMR_SELECTOBJECT, &u32s(&[1]));
+    out.record_u32s(EMR_CREATEBRUSHINDIRECT, &[1, 0, 0x0000_0000, 0]);
+    out.record_u32s(EMR_SELECTOBJECT, &[1]);
 
-    let bounds = i32s(&[0, 0, wl, hl]);
+    let bounds = [0, 0, wl, hl];
     let fill = |out: &mut Writer, build: &dyn Fn(&mut Writer)| {
-        out.record(EMR_BEGINPATH, &[]);
+        out.record_empty(EMR_BEGINPATH);
         build(out);
-        out.record(EMR_ENDPATH, &[]);
-        out.record(EMR_FILLPATH, &bounds);
+        out.record_empty(EMR_ENDPATH);
+        out.record_i32s(EMR_FILLPATH, &bounds);
     };
 
+    let mut poly_segs: Vec<Seg> = Vec::new();
     for it in &b.items {
         match it {
             Item::Glyph {
@@ -193,67 +232,71 @@ pub fn render_emf_with_mtef(
                 else {
                     continue;
                 };
-                fill(&mut out, &|o| write_segs(o, &segs, &l, [0, 0, wl, hl]));
+                fill(&mut out, &|o| write_segs(o, &segs, &l, bounds));
             }
             Item::Poly(pts) => {
                 if pts.len() < 3 {
                     continue;
                 }
-                let mut segs = Vec::with_capacity(pts.len() + 1);
+                poly_segs.clear();
+                poly_segs.reserve(pts.len() + 1);
                 for (i, (x, y)) in pts.iter().enumerate() {
                     let (x, y) = (ox + x, oy + y);
-                    segs.push(if i == 0 {
+                    poly_segs.push(if i == 0 {
                         Seg::Move(x, y)
                     } else {
                         Seg::Line(x, y)
                     });
                 }
-                segs.push(Seg::Close);
-                fill(&mut out, &|o| write_segs(o, &segs, &l, [0, 0, wl, hl]));
+                poly_segs.push(Seg::Close);
+                fill(&mut out, &|o| write_segs(o, &poly_segs, &l, bounds));
             }
             Item::Contours(contours) => {
-                let mut segs = Vec::new();
+                poly_segs.clear();
                 for pts in contours {
                     if pts.len() < 3 {
                         continue;
                     }
                     for (i, (x, y)) in pts.iter().enumerate() {
                         let (x, y) = (ox + x, oy + y);
-                        segs.push(if i == 0 {
+                        poly_segs.push(if i == 0 {
                             Seg::Move(x, y)
                         } else {
                             Seg::Line(x, y)
                         });
                     }
-                    segs.push(Seg::Close);
+                    poly_segs.push(Seg::Close);
                 }
-                if !segs.is_empty() {
-                    fill(&mut out, &|o| write_segs(o, &segs, &l, [0, 0, wl, hl]));
+                if !poly_segs.is_empty() {
+                    fill(&mut out, &|o| write_segs(o, &poly_segs, &l, bounds));
                 }
             }
         }
     }
-    out.record(EMR_EOF, &u32s(&[0, 16, 20])); // no palette; nSizeLast = this record's size
+    out.record_u32s(EMR_EOF, &[0, 16, 20]); // no palette; nSizeLast = this record's size
 
     // ---- header ----
     let frame_hm = |pt: f32| (pt * 25.4 / 72.0 * 100.0).round() as i32; // 0.01 mm
     let (fw, fh) = (frame_hm(wpt), frame_hm(hpt));
-    let mut hdr = Vec::with_capacity(80);
-    hdr.extend(i32s(&[0, 0, wd - 1, hd - 1])); // rclBounds (device units)
-    hdr.extend(i32s(&[0, 0, fw, fh])); // rclFrame (0.01 mm)
-    hdr.extend(u32s(&[0x464D_4520, 0x0001_0000])); // " EMF", version 1.0
     let total = 88 + out.buf.len() as u32;
-    hdr.extend(u32s(&[total, out.records + 1]));
-    hdr.extend_from_slice(&2u16.to_le_bytes()); // nHandles (0 is reserved, 1 = brush)
-    hdr.extend_from_slice(&0u16.to_le_bytes());
-    hdr.extend(u32s(&[0, 0, 0])); // nDescription, offDescription, nPalEntries
-    hdr.extend(i32s(&[14400, 8100])); // szlDevice: 10 in x 5.625 in at 1440 per inch
-    hdr.extend(i32s(&[254, 143])); // szlMillimeters
-
-    let mut file = Writer::new();
-    file.record(EMR_HEADER, &hdr);
-    debug_assert_eq!(file.buf.len(), 88);
-    let mut emf = file.buf;
+    let mut emf = Vec::with_capacity(total as usize);
+    emf.extend_from_slice(&EMR_HEADER.to_le_bytes());
+    emf.extend_from_slice(&88u32.to_le_bytes());
+    for v in [0, 0, wd - 1, hd - 1, 0, 0, fw, fh] {
+        emf.extend_from_slice(&v.to_le_bytes()); // rclBounds, rclFrame
+    }
+    for v in [0x464D_4520u32, 0x0001_0000, total, out.records + 1] {
+        emf.extend_from_slice(&v.to_le_bytes());
+    }
+    emf.extend_from_slice(&2u16.to_le_bytes()); // nHandles (0 is reserved, 1 = brush)
+    emf.extend_from_slice(&0u16.to_le_bytes());
+    for v in [0u32, 0, 0] {
+        emf.extend_from_slice(&v.to_le_bytes()); // nDescription, offDescription, nPalEntries
+    }
+    for v in [14400i32, 8100, 254, 143] {
+        emf.extend_from_slice(&v.to_le_bytes()); // szlDevice, szlMillimeters
+    }
+    debug_assert_eq!(emf.len(), 88);
     emf.extend_from_slice(&out.buf);
     debug_assert_eq!(emf.len() as u32, total);
 
@@ -268,22 +311,14 @@ pub fn render_emf_with_mtef(
 /// Write contour commands as `MOVETOEX` / `LINETO` / `POLYBEZIERTO` / `CLOSEFIGURE`.
 fn write_segs(o: &mut Writer, segs: &[Seg], l: &dyn Fn(f32) -> i32, bounds: [i32; 4]) {
     let mut cur = (0.0f32, 0.0f32);
-    let bezier = |o: &mut Writer, pts: &[(f32, f32)]| {
-        let mut body = i32s(&bounds); // rclBounds: the whole picture (a safe superset)
-        body.extend(u32s(&[pts.len() as u32]));
-        for (x, y) in pts {
-            body.extend(i32s(&[l(*x), l(*y)]));
-        }
-        o.record(EMR_POLYBEZIERTO, &body);
-    };
     for sg in segs {
         match *sg {
             Seg::Move(x, y) => {
-                o.record(EMR_MOVETOEX, &i32s(&[l(x), l(y)]));
+                o.record_i32s(EMR_MOVETOEX, &[l(x), l(y)]);
                 cur = (x, y);
             }
             Seg::Line(x, y) => {
-                o.record(EMR_LINETO, &i32s(&[l(x), l(y)]));
+                o.record_i32s(EMR_LINETO, &[l(x), l(y)]);
                 cur = (x, y);
             }
             Seg::Quad(cx, cy, x, y) => {
@@ -293,14 +328,17 @@ fn write_segs(o: &mut Writer, segs: &[Seg], l: &dyn Fn(f32) -> i32, bounds: [i32
                     cur.1 + 2.0 / 3.0 * (cy - cur.1),
                 );
                 let c2 = (x + 2.0 / 3.0 * (cx - x), y + 2.0 / 3.0 * (cy - y));
-                bezier(o, &[c1, c2, (x, y)]);
+                o.record_polybezierto(
+                    bounds,
+                    &[(l(c1.0), l(c1.1)), (l(c2.0), l(c2.1)), (l(x), l(y))],
+                );
                 cur = (x, y);
             }
             Seg::Cubic(c1x, c1y, c2x, c2y, x, y) => {
-                bezier(o, &[(c1x, c1y), (c2x, c2y), (x, y)]);
+                o.record_polybezierto(bounds, &[(l(c1x), l(c1y)), (l(c2x), l(c2y)), (l(x), l(y))]);
                 cur = (x, y);
             }
-            Seg::Close => o.record(EMR_CLOSEFIGURE, &[]),
+            Seg::Close => o.record_empty(EMR_CLOSEFIGURE),
         }
     }
 }

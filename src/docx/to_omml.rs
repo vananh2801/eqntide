@@ -9,6 +9,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rayon::prelude::*;
 
 use crate::error::{Error, Result};
 use crate::mtef::decode::{mtef_to_mathml, ole_to_mathml};
@@ -48,6 +51,18 @@ pub fn convert_bytes_to_omml_with(
     input: &[u8],
     opts: &ToOmmlOptions,
 ) -> Result<(Vec<u8>, ConversionSummary)> {
+    convert_bytes_to_omml_with_cancel(input, opts, None)
+}
+
+/// Like [`convert_bytes_to_omml_with`], supporting cooperative cancellation.
+pub fn convert_bytes_to_omml_with_cancel(
+    input: &[u8],
+    opts: &ToOmmlOptions,
+    cancel: Option<&AtomicBool>,
+) -> Result<(Vec<u8>, ConversionSummary)> {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
     let mut pkg = Package::read(input)?;
     if !pkg.contains(DOC_XML_PATH) {
         return Err(Error::MissingPart(DOC_XML_PATH.into()));
@@ -66,12 +81,16 @@ pub fn convert_bytes_to_omml_with(
     let mut candidate_files_to_remove: HashSet<String> = HashSet::new();
 
     for xml_path in content_parts {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
         convert_content_part(
             &mut pkg,
             &xml_path,
             &effective_opts,
             &mut summary,
             &mut candidate_files_to_remove,
+            cancel,
         )?;
     }
 
@@ -79,6 +98,9 @@ pub fn convert_bytes_to_omml_with(
         cleanup_unreferenced_files(&mut pkg, &candidate_files_to_remove)?;
     }
 
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
     Ok((pkg.write()?, summary))
 }
 
@@ -88,6 +110,7 @@ fn convert_content_part(
     opts: &ToOmmlOptions,
     summary: &mut ConversionSummary,
     candidate_files_to_remove: &mut HashSet<String>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<()> {
     let Some(xml_bytes) = pkg.get(xml_path) else {
         return Ok(());
@@ -98,14 +121,15 @@ fn convert_content_part(
     let mut converted_rids = HashSet::new();
     let before_converted = summary.converted;
 
-    rewrite_element(
+    rewrite_part_parallel(
         &mut doc_root,
         pkg,
         &rel_map,
         opts,
         summary,
         &mut converted_rids,
-    );
+        cancel,
+    )?;
     if summary.converted == before_converted {
         return Ok(());
     }
@@ -165,8 +189,24 @@ pub fn convert_to_omml_with(
     output_path: impl AsRef<Path>,
     opts: &ToOmmlOptions,
 ) -> Result<ConversionSummary> {
+    convert_to_omml_with_cancel(input_path, output_path, opts, None)
+}
+
+/// Like [`convert_to_omml_with`], supporting cooperative cancellation before writing output.
+pub fn convert_to_omml_with_cancel(
+    input_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    opts: &ToOmmlOptions,
+    cancel: Option<&AtomicBool>,
+) -> Result<ConversionSummary> {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
     let input = std::fs::read(input_path.as_ref())?;
-    let (output, summary) = convert_bytes_to_omml_with(&input, opts)?;
+    let (output, summary) = convert_bytes_to_omml_with_cancel(&input, opts, cancel)?;
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
     std::fs::write(output_path.as_ref(), output)?;
     log::info!("Saved → {}", output_path.as_ref().display());
     Ok(summary)
@@ -379,287 +419,434 @@ fn mtef_from_metafile(path: &str, bytes: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-fn rewrite_element(
-    parent: &mut Element,
+enum ToOmmlWorkKind {
+    AlternateContent,
+    OleRun,
+    MetafileRun,
+}
+
+struct ToOmmlWorkItem {
+    path: Vec<usize>,
+    kind: ToOmmlWorkKind,
+    el: Element,
+}
+
+enum ToOmmlPrepared {
+    NoOp,
+    AlternateContent {
+        ole_rid: Option<String>,
+        img_rids: Vec<String>,
+        outcome: Result<OmmlConvertOutcome>,
+        fallback_omml: Option<Element>,
+    },
+    OleRun(Vec<OleRunEntryOutcome>),
+    MetafileRun {
+        rid: String,
+        kind_str: &'static str,
+        outcome: Result<OmmlConvertOutcome>,
+    },
+}
+
+enum OleRunEntryOutcome {
+    Keep(Element),
+    Converted {
+        rid: String,
+        img_rids: Vec<String>,
+        omml: Element,
+    },
+    Skipped {
+        rid: String,
+        reason: &'static str,
+        kept: Element,
+    },
+    Failed {
+        err: Error,
+        kept: Element,
+    },
+}
+
+fn collect_to_omml_items(el: &Element, path: &mut Vec<usize>, out: &mut Vec<ToOmmlWorkItem>) {
+    for (i, child) in el.children.iter().enumerate() {
+        let Node::Element(c) = child else {
+            continue;
+        };
+        path.push(i);
+        if (c.is(NS_MC, "AlternateContent") || c.local == "AlternateContent")
+            && !find_mathtype_ole_in_subtree(c).is_empty()
+        {
+            out.push(ToOmmlWorkItem {
+                path: path.clone(),
+                kind: ToOmmlWorkKind::AlternateContent,
+                el: c.clone(),
+            });
+            path.pop();
+            continue;
+        }
+        if c.is(NS_W, "r") {
+            if !find_mathtype_ole_in_subtree(c).is_empty() {
+                out.push(ToOmmlWorkItem {
+                    path: path.clone(),
+                    kind: ToOmmlWorkKind::OleRun,
+                    el: c.clone(),
+                });
+                path.pop();
+                continue;
+            }
+            if !collect_imagedata_rids(c).is_empty() {
+                out.push(ToOmmlWorkItem {
+                    path: path.clone(),
+                    kind: ToOmmlWorkKind::MetafileRun,
+                    el: c.clone(),
+                });
+                path.pop();
+                continue;
+            }
+        }
+        collect_to_omml_items(c, path, out);
+        path.pop();
+    }
+}
+
+fn prepare_to_omml_item(
+    item: &ToOmmlWorkItem,
+    pkg: &Package,
+    rel_map: &HashMap<String, String>,
+    opts: &ToOmmlOptions,
+    cancel: Option<&AtomicBool>,
+) -> Result<ToOmmlPrepared> {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
+
+    match item.kind {
+        ToOmmlWorkKind::AlternateContent => {
+            let ole_nodes = find_mathtype_ole_in_subtree(&item.el);
+            let ole_rid = ole_nodes[0]
+                .attr(Some(NS_R), "id")
+                .or_else(|| ole_nodes[0].attr(None, "id"))
+                .map(str::to_owned);
+            let img_rids = collect_imagedata_rids(&item.el);
+            let outcome = match ole_rid.as_deref() {
+                Some(rid) => convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts),
+                None => Err(Error::InvalidOle("OLEObject missing r:id".into())),
+            };
+            let fallback_omml = if outcome.is_err() {
+                item.el
+                    .find(NS_MC, "Fallback")
+                    .and_then(|fb| fb.find(NS_M, "oMath"))
+                    .cloned()
+                    .map(|mut omml| {
+                        if let Some(ref font) = opts.math_font {
+                            apply_math_font(&mut omml, font);
+                        }
+                        omml
+                    })
+            } else {
+                None
+            };
+            Ok(ToOmmlPrepared::AlternateContent {
+                ole_rid,
+                img_rids,
+                outcome,
+                fallback_omml,
+            })
+        }
+        ToOmmlWorkKind::OleRun => {
+            let run_el = &item.el;
+            let obj_children: Vec<&Element> = run_el
+                .elements()
+                .filter(|c| c.is(NS_W, "object") || c.local == "object")
+                .collect();
+
+            if obj_children.len() > 1 {
+                let rpr = run_el.find(NS_W, "rPr").cloned();
+                let mut entries = Vec::with_capacity(obj_children.len());
+                for obj in obj_children {
+                    let oles = find_mathtype_ole_in_subtree(obj);
+                    let make_kept = || {
+                        let mut kept_run = Element::new(Some(NS_W), Some("w"), "r");
+                        if let Some(ref p) = rpr {
+                            kept_run.push(p.clone());
+                        }
+                        kept_run.push(obj.clone());
+                        kept_run
+                    };
+                    if oles.is_empty() {
+                        entries.push(OleRunEntryOutcome::Keep(make_kept()));
+                        continue;
+                    }
+                    let ole_rid = get_r_attr(oles[0], "id");
+                    let img_rids = collect_imagedata_rids(obj);
+                    match ole_rid
+                        .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
+                        .and_then(|rid| {
+                            let res = convert_ole_rid_to_omml_checked(
+                                rid, &img_rids, pkg, rel_map, opts,
+                            )?;
+                            Ok((rid, res))
+                        }) {
+                        Ok((rid, OmmlConvertOutcome::Converted(omml))) => {
+                            entries.push(OleRunEntryOutcome::Converted {
+                                rid: rid.to_owned(),
+                                img_rids,
+                                omml,
+                            });
+                        }
+                        Ok((rid, OmmlConvertOutcome::Skipped(reason))) => {
+                            entries.push(OleRunEntryOutcome::Skipped {
+                                rid: rid.to_owned(),
+                                reason,
+                                kept: make_kept(),
+                            });
+                        }
+                        Err(err) => {
+                            entries.push(OleRunEntryOutcome::Failed {
+                                err,
+                                kept: make_kept(),
+                            });
+                        }
+                    }
+                }
+                Ok(ToOmmlPrepared::OleRun(entries))
+            } else {
+                let oles = find_mathtype_ole_in_subtree(run_el);
+                let ole_rid = oles.first().and_then(|o| get_r_attr(o, "id"));
+                let img_rids = collect_imagedata_rids(run_el);
+                let entry = match ole_rid
+                    .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
+                    .and_then(|rid| {
+                        let res =
+                            convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts)?;
+                        Ok((rid, res))
+                    }) {
+                    Ok((rid, OmmlConvertOutcome::Converted(omml))) => {
+                        OleRunEntryOutcome::Converted {
+                            rid: rid.to_owned(),
+                            img_rids,
+                            omml,
+                        }
+                    }
+                    Ok((rid, OmmlConvertOutcome::Skipped(reason))) => OleRunEntryOutcome::Skipped {
+                        rid: rid.to_owned(),
+                        reason,
+                        kept: run_el.clone(),
+                    },
+                    Err(err) => OleRunEntryOutcome::Failed {
+                        err,
+                        kept: run_el.clone(),
+                    },
+                };
+                Ok(ToOmmlPrepared::OleRun(vec![entry]))
+            }
+        }
+        ToOmmlWorkKind::MetafileRun => {
+            let img_rids = collect_imagedata_rids(&item.el);
+            for rid in img_rids {
+                let Some(target_path) = rel_map.get(&rid) else {
+                    continue;
+                };
+                let lower = target_path.to_ascii_lowercase();
+                let is_wmf = lower.ends_with(".wmf");
+                let is_emf = lower.ends_with(".emf");
+                if !is_wmf && !is_emf {
+                    continue;
+                }
+                let Some(img_bytes) = pkg.get(target_path) else {
+                    continue;
+                };
+                let Some(mtef_bytes) = mtef_from_metafile(target_path, img_bytes) else {
+                    continue;
+                };
+                let kind_str = if is_wmf { "WMF" } else { "EMF" };
+                let outcome = mtef_to_mathml(&mtef_bytes)
+                    .ok_or_else(|| {
+                        Error::InvalidMtef(format!(
+                            "failed to decode {kind_str} MTEF in {target_path}"
+                        ))
+                    })
+                    .and_then(|mml| convert_mathml_to_omml_checked(&mml, opts));
+                return Ok(ToOmmlPrepared::MetafileRun {
+                    rid,
+                    kind_str,
+                    outcome,
+                });
+            }
+            Ok(ToOmmlPrepared::NoOp)
+        }
+    }
+}
+
+fn splice_at_path(root: &mut Element, path: &[usize], replacements: Vec<Element>) {
+    let Some((&slot, parent_path)) = path.split_last() else {
+        return;
+    };
+    let mut cur = root;
+    for &idx in parent_path {
+        match cur.children.get_mut(idx) {
+            Some(Node::Element(c)) => cur = c,
+            _ => return,
+        }
+    }
+    cur.children
+        .splice(slot..=slot, replacements.into_iter().map(Node::Element));
+}
+
+fn rewrite_part_parallel(
+    doc_root: &mut Element,
     pkg: &Package,
     rel_map: &HashMap<String, String>,
     opts: &ToOmmlOptions,
     summary: &mut ConversionSummary,
     converted_rids: &mut HashSet<String>,
-) {
-    let mut new_children: Vec<Node> = Vec::with_capacity(parent.children.len());
+    cancel: Option<&AtomicBool>,
+) -> Result<()> {
+    let mut items = Vec::new();
+    collect_to_omml_items(doc_root, &mut Vec::new(), &mut items);
+    if items.is_empty() {
+        return Ok(());
+    }
 
-    for child in std::mem::take(&mut parent.children) {
-        let Node::Element(mut el) = child else {
-            new_children.push(child);
-            continue;
-        };
+    let prepared: Vec<Result<ToOmmlPrepared>> = if items.len() <= 1 {
+        items
+            .iter()
+            .map(|item| prepare_to_omml_item(item, pkg, rel_map, opts, cancel))
+            .collect()
+    } else {
+        items
+            .par_iter()
+            .map(|item| prepare_to_omml_item(item, pkg, rel_map, opts, cancel))
+            .collect()
+    };
 
-        // Case 1: `<mc:AlternateContent>` wrapping a MathType OLE object in `<mc:Choice>`
-        if el.is(NS_MC, "AlternateContent") || el.local == "AlternateContent" {
-            let ole_nodes = find_mathtype_ole_in_subtree(&el);
-            if !ole_nodes.is_empty() {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
+
+    let mut splices: Vec<(Vec<usize>, Vec<Element>)> = Vec::new();
+
+    for (item, res) in items.into_iter().zip(prepared) {
+        let prep = res?;
+        match prep {
+            ToOmmlPrepared::NoOp => {}
+            ToOmmlPrepared::AlternateContent {
+                ole_rid,
+                img_rids,
+                outcome,
+                fallback_omml,
+            } => {
                 summary.found += 1;
                 let eq_num = summary.found;
-                let ole_rid = ole_nodes[0]
-                    .attr(Some(NS_R), "id")
-                    .or_else(|| ole_nodes[0].attr(None, "id"));
-                let img_rids = collect_imagedata_rids(&el);
-
-                let outcome = match ole_rid {
-                    Some(rid) => {
-                        convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts)
-                    }
-                    None => Err(Error::InvalidOle("OLEObject missing r:id".into())),
-                };
-
                 match outcome {
                     Ok(OmmlConvertOutcome::Converted(omml)) => {
                         if let Some(rid) = ole_rid {
-                            converted_rids.insert(rid.to_owned());
+                            converted_rids.insert(rid);
                         }
                         converted_rids.extend(img_rids);
                         summary.converted += 1;
                         log::info!("Equation {eq_num}: converted AlternateContent → m:oMath");
-                        new_children.push(Node::Element(omml));
-                        continue;
+                        splices.push((item.path, vec![omml]));
                     }
                     Ok(OmmlConvertOutcome::Skipped(reason)) => {
                         summary.skipped += 1;
                         log::warn!(
                             "Equation {eq_num}: {reason} is not supported in OMML, skipping"
                         );
-                        new_children.push(Node::Element(el));
-                        continue;
                     }
                     Err(_) => {
-                        // Fallback: if `<mc:Fallback>` already holds an `<m:oMath>`, use it
-                        if let Some(mut omml) = el
-                            .find(NS_MC, "Fallback")
-                            .and_then(|fb| fb.find(NS_M, "oMath"))
-                            .cloned()
-                        {
-                            if let Some(ref font) = opts.math_font {
-                                apply_math_font(&mut omml, font);
-                            }
+                        if let Some(omml) = fallback_omml {
                             if let Some(rid) = ole_rid {
-                                converted_rids.insert(rid.to_owned());
+                                converted_rids.insert(rid);
                             }
                             converted_rids.extend(img_rids);
                             summary.converted += 1;
                             log::info!("Equation {eq_num}: converted AlternateContent → m:oMath");
-                            new_children.push(Node::Element(omml));
-                            continue;
+                            splices.push((item.path, vec![omml]));
+                        } else {
+                            summary.errors += 1;
+                            log::error!(
+                                "Equation {eq_num}: failed to convert AlternateContent MathType object"
+                            );
                         }
-                        summary.errors += 1;
-                        log::error!(
-                            "Equation {eq_num}: failed to convert AlternateContent MathType object"
+                    }
+                }
+            }
+            ToOmmlPrepared::OleRun(entries) => {
+                let mut replacements = Vec::with_capacity(entries.len());
+                let mut any_changed = false;
+                for entry in entries {
+                    match entry {
+                        OleRunEntryOutcome::Keep(kept) => replacements.push(kept),
+                        OleRunEntryOutcome::Converted {
+                            rid,
+                            img_rids,
+                            omml,
+                        } => {
+                            summary.found += 1;
+                            let eq_num = summary.found;
+                            converted_rids.insert(rid.clone());
+                            converted_rids.extend(img_rids);
+                            summary.converted += 1;
+                            any_changed = true;
+                            log::info!("Equation {eq_num}: converted OLE ({rid}) → m:oMath");
+                            replacements.push(omml);
+                        }
+                        OleRunEntryOutcome::Skipped { rid, reason, kept } => {
+                            summary.found += 1;
+                            let eq_num = summary.found;
+                            summary.skipped += 1;
+                            log::warn!(
+                                "Equation {eq_num}: {reason} is not supported in OMML (OLE {rid}), skipping"
+                            );
+                            replacements.push(kept);
+                        }
+                        OleRunEntryOutcome::Failed { err, kept } => {
+                            summary.found += 1;
+                            let eq_num = summary.found;
+                            summary.errors += 1;
+                            log::error!("Equation {eq_num}: {err}");
+                            replacements.push(kept);
+                        }
+                    }
+                }
+                if any_changed {
+                    splices.push((item.path, replacements));
+                }
+            }
+            ToOmmlPrepared::MetafileRun {
+                rid,
+                kind_str,
+                outcome,
+            } => {
+                summary.found += 1;
+                let eq_num = summary.found;
+                match outcome {
+                    Ok(OmmlConvertOutcome::Converted(omml)) => {
+                        converted_rids.insert(rid.clone());
+                        summary.converted += 1;
+                        log::info!("Equation {eq_num}: converted {kind_str} ({rid}) → m:oMath");
+                        splices.push((item.path, vec![omml]));
+                    }
+                    Ok(OmmlConvertOutcome::Skipped(reason)) => {
+                        summary.skipped += 1;
+                        log::warn!(
+                            "Equation {eq_num}: {reason} is not supported in OMML ({kind_str} {rid}), skipping"
                         );
-                        new_children.push(Node::Element(el));
-                        continue;
+                    }
+                    Err(e) => {
+                        summary.errors += 1;
+                        log::error!("Equation {eq_num}: {e}");
                     }
                 }
             }
         }
-
-        // Case 2: `<w:r>` containing one or more MathType `<o:OLEObject>` elements
-        if el.is(NS_W, "r") {
-            let ole_count = find_mathtype_ole_in_subtree(&el).len();
-            if ole_count > 0 {
-                let replacements =
-                    convert_ole_run(&el, pkg, rel_map, opts, summary, converted_rids);
-                for rep in replacements {
-                    new_children.push(Node::Element(rep));
-                }
-                continue;
-            }
-
-            // Case 3: `<w:r>` without `<o:OLEObject>`, but with a standalone `.wmf` or `.emf` image
-            // containing embedded MathType MTEF data.
-            if let Some(omml) =
-                try_convert_metafile_run(&el, pkg, rel_map, opts, summary, converted_rids)
-            {
-                new_children.push(Node::Element(omml));
-                continue;
-            }
-        }
-
-        // Recurse into child elements
-        rewrite_element(&mut el, pkg, rel_map, opts, summary, converted_rids);
-        new_children.push(Node::Element(el));
     }
 
-    parent.children = new_children;
-}
-
-/// Convert a `<w:r>` containing one or more MathType OLE objects.
-fn convert_ole_run(
-    run_el: &Element,
-    pkg: &Package,
-    rel_map: &HashMap<String, String>,
-    opts: &ToOmmlOptions,
-    summary: &mut ConversionSummary,
-    converted_rids: &mut HashSet<String>,
-) -> Vec<Element> {
-    // Check direct `<w:object>` children of `<w:r>` so multi-object runs are split cleanly
-    let obj_children: Vec<&Element> = run_el
-        .elements()
-        .filter(|c| c.is(NS_W, "object") || c.local == "object")
-        .collect();
-
-    if obj_children.len() > 1 {
-        let rpr = run_el.find(NS_W, "rPr").cloned();
-        let mut out = Vec::with_capacity(obj_children.len());
-        for obj in obj_children {
-            let oles = find_mathtype_ole_in_subtree(obj);
-            if oles.is_empty() {
-                let mut kept_run = Element::new(Some(NS_W), Some("w"), "r");
-                if let Some(ref p) = rpr {
-                    kept_run.push(p.clone());
-                }
-                kept_run.push(obj.clone());
-                out.push(kept_run);
-                continue;
-            }
-            summary.found += 1;
-            let eq_num = summary.found;
-            let ole_rid = get_r_attr(oles[0], "id");
-            let img_rids = collect_imagedata_rids(obj);
-            match ole_rid
-                .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
-                .and_then(|rid| {
-                    let res = convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts)?;
-                    Ok((rid, res))
-                }) {
-                Ok((rid, OmmlConvertOutcome::Converted(omml))) => {
-                    converted_rids.insert(rid.to_owned());
-                    converted_rids.extend(img_rids);
-                    summary.converted += 1;
-                    log::info!("Equation {eq_num}: converted OLE ({rid}) → m:oMath");
-                    out.push(omml);
-                }
-                Ok((rid, OmmlConvertOutcome::Skipped(reason))) => {
-                    summary.skipped += 1;
-                    log::warn!(
-                        "Equation {eq_num}: {reason} is not supported in OMML (OLE {rid}), skipping"
-                    );
-                    let mut kept_run = Element::new(Some(NS_W), Some("w"), "r");
-                    if let Some(ref p) = rpr {
-                        kept_run.push(p.clone());
-                    }
-                    kept_run.push(obj.clone());
-                    out.push(kept_run);
-                }
-                Err(e) => {
-                    summary.errors += 1;
-                    log::error!("Equation {eq_num}: {e}");
-                    let mut kept_run = Element::new(Some(NS_W), Some("w"), "r");
-                    if let Some(ref p) = rpr {
-                        kept_run.push(p.clone());
-                    }
-                    kept_run.push(obj.clone());
-                    out.push(kept_run);
-                }
-            }
-        }
-        return out;
+    // Apply splices in reverse document order so earlier sibling indices remain valid.
+    for (path, replacements) in splices.into_iter().rev() {
+        splice_at_path(doc_root, &path, replacements);
     }
 
-    // Single MathType OLE object inside `<w:r>`
-    summary.found += 1;
-    let eq_num = summary.found;
-    let oles = find_mathtype_ole_in_subtree(run_el);
-    let ole_rid = oles.first().and_then(|o| get_r_attr(o, "id"));
-    let img_rids = collect_imagedata_rids(run_el);
-
-    match ole_rid
-        .ok_or_else(|| Error::InvalidOle("OLEObject missing r:id".into()))
-        .and_then(|rid| {
-            let res = convert_ole_rid_to_omml_checked(rid, &img_rids, pkg, rel_map, opts)?;
-            Ok((rid, res))
-        }) {
-        Ok((rid, OmmlConvertOutcome::Converted(omml))) => {
-            converted_rids.insert(rid.to_owned());
-            converted_rids.extend(img_rids);
-            summary.converted += 1;
-            log::info!("Equation {eq_num}: converted OLE ({rid}) → m:oMath");
-            vec![omml]
-        }
-        Ok((rid, OmmlConvertOutcome::Skipped(reason))) => {
-            summary.skipped += 1;
-            log::warn!(
-                "Equation {eq_num}: {reason} is not supported in OMML (OLE {rid}), skipping"
-            );
-            vec![run_el.clone()]
-        }
-        Err(e) => {
-            summary.errors += 1;
-            log::error!("Equation {eq_num}: {e}");
-            vec![run_el.clone()]
-        }
-    }
-}
-
-/// Inspect a `<w:r>` without `<o:OLEObject>`: if it references a `.wmf` or `.emf` image that
-/// embeds MathType MTEF data, convert it to `<m:oMath>`.
-fn try_convert_metafile_run(
-    run_el: &Element,
-    pkg: &Package,
-    rel_map: &HashMap<String, String>,
-    opts: &ToOmmlOptions,
-    summary: &mut ConversionSummary,
-    converted_rids: &mut HashSet<String>,
-) -> Option<Element> {
-    let img_rids = collect_imagedata_rids(run_el);
-    for rid in img_rids {
-        let Some(target_path) = rel_map.get(&rid) else {
-            continue;
-        };
-        let lower = target_path.to_ascii_lowercase();
-        let is_wmf = lower.ends_with(".wmf");
-        let is_emf = lower.ends_with(".emf");
-        if !is_wmf && !is_emf {
-            continue;
-        }
-        let Some(img_bytes) = pkg.get(target_path) else {
-            continue;
-        };
-        let mtef_bytes = mtef_from_metafile(target_path, img_bytes);
-        let Some(mtef_bytes) = mtef_bytes else {
-            continue;
-        };
-
-        // Found a standalone WMF/EMF equation with embedded MTEF!
-        summary.found += 1;
-        let eq_num = summary.found;
-        let kind_str = if is_wmf { "WMF" } else { "EMF" };
-        match mtef_to_mathml(&mtef_bytes)
-            .ok_or_else(|| {
-                Error::InvalidMtef(format!("failed to decode {kind_str} MTEF in {target_path}"))
-            })
-            .and_then(|mml| convert_mathml_to_omml_checked(&mml, opts))
-        {
-            Ok(OmmlConvertOutcome::Converted(omml)) => {
-                converted_rids.insert(rid.clone());
-                summary.converted += 1;
-                log::info!("Equation {eq_num}: converted {kind_str} ({rid}) → m:oMath");
-                return Some(omml);
-            }
-            Ok(OmmlConvertOutcome::Skipped(reason)) => {
-                summary.skipped += 1;
-                log::warn!(
-                    "Equation {eq_num}: {reason} is not supported in OMML ({kind_str} {rid}), skipping"
-                );
-                return None;
-            }
-            Err(e) => {
-                summary.errors += 1;
-                log::error!("Equation {eq_num}: {e}");
-                return None;
-            }
-        }
-    }
-    None
+    Ok(())
 }
 
 // ── Orphan Cleanup ───────────────────────────────────────────────────────────

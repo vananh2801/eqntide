@@ -1,8 +1,10 @@
 //! The `.docx` zip package: relationship / content-type helpers and an
 //! in-memory entry list that preserves the original order.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
+
+use rayon::prelude::*;
 
 use crate::error::{Error, Result};
 use crate::xml::{Element, Node};
@@ -52,6 +54,31 @@ pub fn ensure_content_type(ct_root: &mut Element, part_name: &str, content_type:
         .elements()
         .any(|c| c.attr(None, "PartName") == Some(part_name))
     {
+        return;
+    }
+    let mut ov = Element::new(Some(NS_CT), ct_root.prefix.as_deref(), "Override");
+    ov.set_attr(None, None, "PartName", part_name);
+    ov.set_attr(None, None, "ContentType", content_type);
+    ct_root.push(ov);
+}
+
+/// Collect existing `Override` `PartName`s from `[Content_Types].xml` for O(1) membership checks.
+pub(super) fn collect_override_part_names(ct_root: &Element) -> HashSet<String> {
+    ct_root
+        .elements()
+        .filter(|c| c.local == "Override")
+        .filter_map(|c| c.attr(None, "PartName").map(str::to_owned))
+        .collect()
+}
+
+/// O(1) variant of [`ensure_content_type`] backed by a cached set of override `PartName`s.
+pub(super) fn ensure_content_type_indexed(
+    ct_root: &mut Element,
+    known_overrides: &mut HashSet<String>,
+    part_name: &str,
+    content_type: &str,
+) {
+    if !known_overrides.insert(part_name.to_owned()) {
         return;
     }
     let mut ov = Element::new(Some(NS_CT), ct_root.prefix.as_deref(), "Override");
@@ -178,22 +205,51 @@ impl Package {
     }
 
     pub(super) fn write(&self) -> Result<Vec<u8>> {
+        if self.entries.len() < 16 || rayon::current_num_threads() <= 1 {
+            return self.write_sequential();
+        }
+
+        let chunk_size =
+            (self.entries.len() / (rayon::current_num_threads().max(1) * 2)).clamp(8, 64);
+        let chunks: Vec<Result<Vec<u8>>> = self
+            .entries
+            .par_chunks(chunk_size)
+            .map(write_entries_zip)
+            .collect();
+
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        for e in &self.entries {
-            let mut opts = zip::write::FileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-            if let Some(m) = e.modified {
-                opts = opts.last_modified_time(m);
-            }
-            if e.is_dir {
-                w.add_directory(e.name.as_str(), opts)?;
-            } else {
-                w.start_file(e.name.as_str(), opts)?;
-                w.write_all(&e.data)?;
+        for chunk_res in chunks {
+            let chunk_bytes = chunk_res?;
+            let mut archive = zip::ZipArchive::new(Cursor::new(chunk_bytes))?;
+            for i in 0..archive.len() {
+                let file = archive.by_index(i)?;
+                w.raw_copy_file(file)?;
             }
         }
         Ok(w.finish()?.into_inner())
     }
+
+    fn write_sequential(&self) -> Result<Vec<u8>> {
+        write_entries_zip(&self.entries)
+    }
+}
+
+fn write_entries_zip(entries: &[Entry]) -> Result<Vec<u8>> {
+    let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for e in entries {
+        let mut opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        if let Some(m) = e.modified {
+            opts = opts.last_modified_time(m);
+        }
+        if e.is_dir {
+            w.add_directory(e.name.as_str(), opts)?;
+        } else {
+            w.start_file(e.name.as_str(), opts)?;
+            w.write_all(&e.data)?;
+        }
+    }
+    Ok(w.finish()?.into_inner())
 }
 
 #[cfg(test)]
@@ -216,5 +272,48 @@ mod tests {
             Err(e) => e,
         };
         assert!(err.to_string().contains("size limit"));
+    }
+
+    #[test]
+    fn parallel_package_write_preserves_order_dirs_and_payloads() {
+        let mut entries = Vec::new();
+        entries.push(Entry {
+            name: "word/".into(),
+            data: Vec::new(),
+            is_dir: true,
+            modified: None,
+        });
+        for i in 0..40 {
+            entries.push(Entry {
+                name: format!("word/part_{i:02}.bin"),
+                data: vec![(i % 251) as u8; 512 + i * 17],
+                is_dir: false,
+                modified: None,
+            });
+        }
+        let pkg = Package {
+            index: entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.name.clone(), i))
+                .collect(),
+            entries,
+        };
+
+        let bytes = pkg.write().unwrap();
+        let archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        assert_eq!(archive.len(), 41);
+        let roundtrip = Package::read(&bytes).unwrap();
+        assert_eq!(roundtrip.entries.len(), 41);
+        assert!(roundtrip.entries[0].is_dir);
+        assert_eq!(roundtrip.entries[0].name, "word/");
+        for i in 0..40 {
+            let name = format!("word/part_{i:02}.bin");
+            assert_eq!(roundtrip.entries[i + 1].name, name);
+            assert_eq!(
+                roundtrip.get(&name).unwrap(),
+                vec![(i % 251) as u8; 512 + i * 17].as_slice()
+            );
+        }
     }
 }

@@ -42,12 +42,20 @@ pub use options::{
     UpgradeTarget,
 };
 pub use package::{add_relationship, ensure_content_type, ensure_default_extension};
-pub use pipeline::{convert, convert_bytes, convert_bytes_with, convert_with};
+pub use pipeline::{
+    convert, convert_bytes, convert_bytes_with, convert_bytes_with_cancel, convert_with,
+    convert_with_cancel,
+};
 pub use to_omml::{
-    convert_bytes_to_omml, convert_bytes_to_omml_with, convert_to_omml, convert_to_omml_with,
+    convert_bytes_to_omml, convert_bytes_to_omml_with, convert_bytes_to_omml_with_cancel,
+    convert_to_omml, convert_to_omml_with, convert_to_omml_with_cancel,
 };
 
 pub use upgrade::{
     upgrade_legacy_mathtype_bytes, upgrade_legacy_mathtype_bytes_with,
-    upgrade_legacy_mathtype_docx, upgrade_legacy_mathtype_docx_with,
+    upgrade_legacy_mathtype_bytes_with_cancel, upgrade_legacy_mathtype_docx,
+    upgrade_legacy_mathtype_docx_with, upgrade_legacy_mathtype_docx_with_cancel,
 };
+
+#[cfg(test)]
+mod perf_tests;

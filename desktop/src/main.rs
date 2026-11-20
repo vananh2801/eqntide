@@ -126,6 +126,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("eqntide-desktop {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    if args.iter().any(|a| a == "--batch-worker") {
+        return batch::run_worker_stdio();
+    }
     let Some(instance) = instance::acquire(&args, tx.clone())? else {
         return Ok(());
     };

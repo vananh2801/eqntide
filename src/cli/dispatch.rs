@@ -7,6 +7,17 @@ use super::{
     is_docx_file, Args,
 };
 
+fn build_job_pool(jobs: Option<usize>) -> Option<rayon::ThreadPool> {
+    jobs.and_then(|n| rayon::ThreadPoolBuilder::new().num_threads(n).build().ok())
+}
+
+fn run_in_pool<R: Send>(pool: Option<&rayon::ThreadPool>, f: impl FnOnce() -> R + Send) -> R {
+    match pool {
+        Some(p) => p.install(f),
+        None => f(),
+    }
+}
+
 pub(super) fn run_conversion(args: &Args, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let Some(input) = args.input.as_deref() else {
         let _ = writeln!(err, "Error: missing input file or directory");
@@ -51,7 +62,8 @@ fn run_single_file(
         }
         None => default_file_output(input, args.to_omml, args.upgrade, args.upgrade_target),
     };
-    let summary = match convert_single_file(input, &output, args) {
+    let pool = build_job_pool(args.jobs);
+    let summary = match run_in_pool(pool.as_ref(), || convert_single_file(input, &output, args)) {
         Ok(summary) => summary,
         Err(error) => {
             let _ = writeln!(err, "Error: {error}");
@@ -110,12 +122,14 @@ fn run_directory(
         return 1;
     }
     let total_files = files.len();
+    let pool = build_job_pool(args.jobs);
     let mut files_succeeded = 0usize;
     let mut files_failed = 0usize;
     let mut total_found = 0usize;
     let mut total_converted = 0usize;
     let mut total_skipped = 0usize;
     let mut total_errors = 0usize;
+
     for (index, source) in files.iter().enumerate() {
         let relative = source.strip_prefix(input).unwrap_or(source.as_path());
         let destination = output_dir.join(relative);
@@ -128,7 +142,10 @@ fn run_directory(
                 relative.display()
             );
         }
-        match convert_single_file(source, &destination, args) {
+        let outcome = run_in_pool(pool.as_ref(), || {
+            convert_single_file(source, &destination, args)
+        });
+        match outcome {
             Ok(summary) => {
                 total_found += summary.found;
                 total_converted += summary.converted;

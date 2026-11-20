@@ -80,6 +80,10 @@ pub(super) struct Args {
     /// Font size (points) used to draw the preview pictures
     #[arg(long, value_name = "PT", default_value_t = 12.0, value_parser = parse_font_size)]
     font_size: f32,
+
+    /// Maximum parallel worker threads for batch and equation conversion (default: all CPU cores)
+    #[arg(short = 'j', long, value_name = "N", value_parser = parse_jobs)]
+    jobs: Option<usize>,
 }
 
 /// `--upgrade-target` values.
@@ -95,6 +99,17 @@ pub enum UpgradeTargetArg {
 pub(super) enum PreviewArg {
     Emf,
     Png,
+}
+
+fn parse_jobs(s: &str) -> Result<usize, String> {
+    let v: usize = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a positive integer"))?;
+    if v >= 1 {
+        Ok(v)
+    } else {
+        Err("jobs must be at least 1".into())
+    }
 }
 
 fn parse_font_size(s: &str) -> Result<f32, String> {
@@ -472,5 +487,55 @@ mod tests {
         assert!(String::from_utf8_lossy(&err).contains("1 skipped"));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_cli_directory_batch_honors_jobs_flag() {
+        let temp_root =
+            std::env::temp_dir().join(format!("eqntide_cli_jobs_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_root);
+        let input_dir = temp_root.join("in");
+        std::fs::create_dir_all(&input_dir).unwrap();
+
+        let docx_bytes = make_minimal_docx(
+            r#"<m:oMath><m:r><m:t>a</m:t></m:r><m:r><m:t>+</m:t></m:r><m:r><m:t>b</m:t></m:r></m:oMath>"#,
+        );
+        for i in 0..4 {
+            std::fs::write(input_dir.join(format!("doc_{i}.docx")), &docx_bytes).unwrap();
+        }
+
+        for (jobs, label) in [("1", "out_j1"), ("2", "out_j2")] {
+            let out_dir = temp_root.join(label);
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run_with_io(
+                [
+                    "eqntide-cli",
+                    input_dir.to_str().unwrap(),
+                    "-o",
+                    out_dir.to_str().unwrap(),
+                    "--jobs",
+                    jobs,
+                ],
+                &mut out,
+                &mut err,
+            );
+            assert_eq!(
+                code,
+                0,
+                "jobs={jobs} stderr: {}",
+                String::from_utf8_lossy(&err)
+            );
+            let stdout = String::from_utf8_lossy(&out);
+            assert!(
+                stdout.contains("Batch complete: 4/4 file(s) succeeded, 4/4 equation(s) converted"),
+                "stdout: {stdout}"
+            );
+            for i in 0..4 {
+                assert!(out_dir.join(format!("doc_{i}.docx")).is_file());
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_root);
     }
 }

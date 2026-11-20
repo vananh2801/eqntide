@@ -2,6 +2,9 @@
 //! each into an OLE object (plus preview picture).
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rayon::prelude::*;
 
 use crate::error::{Error, Result};
 use crate::mtef::encode::mathml_to_mtef_bytes;
@@ -18,7 +21,7 @@ use super::options::*;
 use super::package::*;
 
 /// The preview picture of one equation, in whichever format was chosen.
-struct Picture {
+pub(super) struct Picture {
     data: Vec<u8>,
     ext: &'static str,
     content_type: &'static str,
@@ -71,128 +74,295 @@ pub(super) fn element_at_mut<'a>(root: &'a mut Element, path: &[usize]) -> Optio
 
 // ── Conversion state ──────────────────────────────────────────────────────────
 
-pub(super) enum Outcome {
-    Converted,
-    Skipped,
-}
-
 pub(super) struct Job {
     pub(super) doc_root: Element,
     pub(super) rels_root: Element,
     pub(super) ct_root: Element,
+    pub(super) ct_overrides: HashSet<String>,
     pub(super) pkg: Package,
     pub(super) existing_ids: HashSet<String>,
+    pub(super) next_ole_rid: usize,
+    pub(super) next_img_rid: usize,
     pub(super) ole_index: usize,
     pub(super) img_index: usize,
     pub(super) opts: Options,
     pub(super) summary: ConversionSummary,
 }
 
+pub(super) struct EquationWorkItem {
+    pub(super) eq_num: usize,
+    pub(super) target_path: Vec<usize>,
+    pub(super) omath: Element,
+}
+
+pub(super) enum PreparedOutcome {
+    Converted {
+        ole_bin: Vec<u8>,
+        preview: Option<Picture>,
+        omath_fallback: Option<Box<Element>>,
+    },
+    Skipped(&'static str),
+}
+
+pub(super) enum CollectedItem {
+    Skipped(&'static str, usize),
+    Failed(usize, Error),
+}
+
+fn prepare_equation(
+    item: &EquationWorkItem,
+    opts: Options,
+    cancel: Option<&AtomicBool>,
+) -> Result<PreparedOutcome> {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
+    }
+
+    // 1. OMML → MathML
+    let mathml = omml_to_mathml(&item.omath)?;
+    if let Some(reason) = crate::mtef::check_mathtype_unsupported(&mathml) {
+        return Ok(PreparedOutcome::Skipped(reason));
+    }
+
+    // 2. MathML → MTEF binary
+    let eq_bytes = mathml_to_mtef_bytes(&mathml)?;
+    if eq_bytes.is_empty() {
+        return Ok(PreparedOutcome::Skipped("empty content"));
+    }
+
+    // 3. MTEF → Equation Native stream
+    let native_stream = make_equation_native(&eq_bytes);
+
+    // 4. Equation Native stream → OLE compound file
+    let ole_bin = make_ole(&native_stream)?;
+
+    // 4b. Preview picture (Word/WPS show the object through it).
+    let preview = match opts.mode {
+        EmbedMode::Preview => Some(match opts.preview {
+            PreviewFormat::Png => {
+                let p = render_preview(&mathml, opts.font_pt)?;
+                Picture {
+                    data: p.png,
+                    ext: "png",
+                    content_type: "image/png",
+                    width_pt: p.width_pt,
+                    height_pt: p.height_pt,
+                    depth_pt: p.depth_pt,
+                }
+            }
+            PreviewFormat::Emf => {
+                let complete_mtef = crate::mtef::build_mtef(&eq_bytes);
+                let p = render_emf_with_mtef(&mathml, opts.font_pt, Some(&complete_mtef))?;
+                Picture {
+                    data: p.emf,
+                    ext: "emf",
+                    content_type: "image/x-emf",
+                    width_pt: p.width_pt,
+                    height_pt: p.height_pt,
+                    depth_pt: p.depth_pt,
+                }
+            }
+        }),
+        EmbedMode::OmmlFallback => None,
+    };
+
+    let omath_fallback = if opts.mode == EmbedMode::OmmlFallback {
+        Some(Box::new(item.omath.clone()))
+    } else {
+        None
+    };
+
+    Ok(PreparedOutcome::Converted {
+        ole_bin,
+        preview,
+        omath_fallback,
+    })
+}
+
 impl Job {
     pub(super) fn new_rel_id(&mut self) -> String {
-        let mut i = 1;
-        while self.existing_ids.contains(&format!("rIdOle{i}")) {
-            i += 1;
+        loop {
+            let rid = format!("rIdOle{}", self.next_ole_rid);
+            self.next_ole_rid += 1;
+            if self.existing_ids.insert(rid.clone()) {
+                return rid;
+            }
         }
-        let rid = format!("rIdOle{i}");
-        self.existing_ids.insert(rid.clone());
-        rid
     }
 
-    /// Make `wanted` unique among the relationship ids (appending digits if needed).
-    pub(super) fn unique_id(&mut self, wanted: String) -> String {
-        let mut id = wanted.clone();
-        let mut n = 0;
-        while self.existing_ids.contains(&id) {
-            n += 1;
-            id = format!("{wanted}_{n}");
+    pub(super) fn new_img_rel_id(&mut self) -> String {
+        loop {
+            let rid = format!("rIdImg{}", self.next_img_rid);
+            self.next_img_rid += 1;
+            if self.existing_ids.insert(rid.clone()) {
+                return rid;
+            }
         }
-        self.existing_ids.insert(id.clone());
-        id
     }
 
-    pub(super) fn convert_one(&mut self, eq_num: usize, path: &[usize]) -> Result<Outcome> {
-        let omath = match element_at(&self.doc_root, path) {
-            Some(e) if e.is(NS_M, "oMath") => e.clone(),
-            _ => return Err(Error::Xml("equation node is no longer in the tree".into())),
-        };
+    /// Collect equations, run pure CPU conversion in parallel, and assemble DOM/package sequentially.
+    pub(super) fn convert_part_equations(
+        &mut self,
+        xml_path: &str,
+        paths: &[Vec<usize>],
+        global_eq_num: &mut usize,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<()> {
+        let mut collected: Vec<CollectedItem> = Vec::with_capacity(paths.len());
+        let mut work_items: Vec<EquationWorkItem> = Vec::with_capacity(paths.len());
 
-        // 1. OMML → MathML
-        let mathml = omml_to_mathml(&omath)?;
-        if let Some(reason) = crate::mtef::check_mathtype_unsupported(&mathml) {
-            self.summary.skipped += 1;
-            log::warn!("Equation {eq_num}: {reason} is not supported in MathType, skipping");
-            return Ok(Outcome::Skipped);
+        for path in paths {
+            *global_eq_num += 1;
+            let eq_num = *global_eq_num;
+            let omath = match element_at(&self.doc_root, path) {
+                Some(e) if e.is(NS_M, "oMath") => e.clone(),
+                _ => {
+                    collected.push(CollectedItem::Failed(
+                        eq_num,
+                        Error::Xml("equation node is no longer in the tree".into()),
+                    ));
+                    continue;
+                }
+            };
+
+            let Some((_, parent_path)) = path.split_last() else {
+                collected.push(CollectedItem::Failed(
+                    eq_num,
+                    Error::Xml("equation is the document root".into()),
+                ));
+                continue;
+            };
+            let Some(parent) = element_at(&self.doc_root, parent_path) else {
+                collected.push(CollectedItem::Failed(
+                    eq_num,
+                    Error::Xml("equation has no parent".into()),
+                ));
+                continue;
+            };
+            let target_path: Vec<usize> = if parent.local == "oMathPara" {
+                if parent.find_all(NS_M, "oMath").len() > 1 {
+                    collected.push(CollectedItem::Skipped(
+                        "oMathPara contains several equations; left as OMML",
+                        eq_num,
+                    ));
+                    continue;
+                }
+                if parent_path.is_empty() {
+                    collected.push(CollectedItem::Failed(
+                        eq_num,
+                        Error::Xml("oMathPara is the document root".into()),
+                    ));
+                    continue;
+                }
+                parent_path.to_vec()
+            } else {
+                path.clone()
+            };
+
+            let item = EquationWorkItem {
+                eq_num,
+                target_path,
+                omath,
+            };
+            // Reserve a placeholder slot in `collected`? Instead keep `work_items` separate
+            // and merge in `eq_num` order below.
+            work_items.push(item);
         }
 
-        // 2. MathML → MTEF binary
-        let eq_bytes = mathml_to_mtef_bytes(&mathml)?;
-        if eq_bytes.is_empty() {
-            self.summary.skipped += 1;
-            log::warn!("Equation {eq_num}: empty content, skipping");
-            return Ok(Outcome::Skipped);
-        }
-
-        // 3. MTEF → Equation Native stream
-        let native_stream = make_equation_native(&eq_bytes);
-
-        // 4. Equation Native stream → OLE compound file
-        let ole_bin = make_ole(&native_stream)?;
-
-        // 4b. Preview picture (Word/WPS show the object through it).
-        let preview = match self.opts.mode {
-            EmbedMode::Preview => Some(match self.opts.preview {
-                PreviewFormat::Png => {
-                    let p = render_preview(&mathml, self.opts.font_pt)?;
-                    Picture {
-                        data: p.png,
-                        ext: "png",
-                        content_type: "image/png",
-                        width_pt: p.width_pt,
-                        height_pt: p.height_pt,
-                        depth_pt: p.depth_pt,
-                    }
-                }
-                PreviewFormat::Emf => {
-                    let complete_mtef = crate::mtef::build_mtef(&eq_bytes);
-                    let p = render_emf_with_mtef(&mathml, self.opts.font_pt, Some(&complete_mtef))?;
-                    Picture {
-                        data: p.emf,
-                        ext: "emf",
-                        content_type: "image/x-emf",
-                        width_pt: p.width_pt,
-                        height_pt: p.height_pt,
-                        depth_pt: p.depth_pt,
-                    }
-                }
-            }),
-            EmbedMode::OmmlFallback => None,
-        };
-
-        // Decide what gets replaced. m:oMath may live directly in w:p, or be
-        // wrapped by m:oMathPara; in the latter case we replace the whole
-        // wrapper so no empty orphan oMathPara is left behind.
-        let Some((&omath_idx, parent_path)) = path.split_last() else {
-            return Err(Error::Xml("equation is the document root".into()));
-        };
-        let parent = element_at(&self.doc_root, parent_path)
-            .ok_or_else(|| Error::Xml("equation has no parent".into()))?;
-        let target_path: &[usize] = if parent.local == "oMathPara" {
-            if parent.find_all(NS_M, "oMath").len() > 1 {
-                // Replacing the wrapper would silently drop its other equations.
-                self.summary.skipped += 1;
-                log::warn!("Equation {eq_num}: oMathPara contains several equations; left as OMML");
-                return Ok(Outcome::Skipped);
-            }
-            if parent_path.is_empty() {
-                return Err(Error::Xml("oMathPara is the document root".into()));
-            }
-            parent_path
+        let opts = self.opts;
+        let prepared_results: Vec<Result<PreparedOutcome>> = if work_items.len() <= 1 {
+            work_items
+                .iter()
+                .map(|item| prepare_equation(item, opts, cancel))
+                .collect()
         } else {
-            path
+            work_items
+                .par_iter()
+                .map(|item| prepare_equation(item, opts, cancel))
+                .collect()
         };
-        let _ = omath_idx;
 
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
+
+        let mut work_iter = work_items.into_iter().zip(prepared_results).peekable();
+        let mut pre_iter = collected.into_iter().peekable();
+
+        loop {
+            let next_pre_eq = pre_iter.peek().map(|c| match c {
+                CollectedItem::Skipped(_, n) | CollectedItem::Failed(n, _) => *n,
+            });
+            let next_work_eq = work_iter.peek().map(|(w, _)| w.eq_num);
+
+            match (next_pre_eq, next_work_eq) {
+                (None, None) => break,
+                (Some(p), Some(w)) if p < w => {
+                    self.apply_collected_item(xml_path, pre_iter.next().unwrap());
+                }
+                (Some(_), None) => {
+                    self.apply_collected_item(xml_path, pre_iter.next().unwrap());
+                }
+                _ => {
+                    let (item, res) = work_iter.next().unwrap();
+                    match res {
+                        Ok(PreparedOutcome::Skipped(reason)) => {
+                            self.summary.skipped += 1;
+                            log::warn!(
+                                "Equation {}: {reason} is not supported in MathType, skipping",
+                                item.eq_num
+                            );
+                        }
+                        Ok(PreparedOutcome::Converted {
+                            ole_bin,
+                            preview,
+                            omath_fallback,
+                        }) => {
+                            if let Err(e) = self.assemble_converted(
+                                item.eq_num,
+                                &item.target_path,
+                                ole_bin,
+                                preview,
+                                omath_fallback.as_deref(),
+                            ) {
+                                self.summary.errors += 1;
+                                log::error!("Equation {} ({xml_path}): {e}", item.eq_num);
+                            }
+                        }
+                        Err(Error::Cancelled) => return Err(Error::Cancelled),
+                        Err(e) => {
+                            self.summary.errors += 1;
+                            log::error!("Equation {} ({xml_path}): {e}", item.eq_num);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn apply_collected_item(&mut self, xml_path: &str, item: CollectedItem) {
+        match item {
+            CollectedItem::Skipped(msg, eq_num) => {
+                self.summary.skipped += 1;
+                log::warn!("Equation {eq_num}: {msg}");
+            }
+            CollectedItem::Failed(eq_num, e) => {
+                self.summary.errors += 1;
+                log::error!("Equation {eq_num} ({xml_path}): {e}");
+            }
+        }
+    }
+
+    fn assemble_converted(
+        &mut self,
+        eq_num: usize,
+        target_path: &[usize],
+        ole_bin: Vec<u8>,
+        preview: Option<Picture>,
+        omath_fallback: Option<&Element>,
+    ) -> Result<()> {
         // 5. Store the .bin in the docx embeddings
         let bin_name = format!("word/embeddings/oleObject{}.bin", self.ole_index);
         self.pkg.set(&bin_name, ole_bin);
@@ -204,22 +374,25 @@ impl Job {
         add_relationship(&mut self.rels_root, &rel_id, REL_OLEOBJECT, &target);
 
         // 7. Add content type for .bin
-        ensure_content_type(&mut self.ct_root, &format!("/{bin_name}"), CT_OLEOBJECT);
+        ensure_content_type_indexed(
+            &mut self.ct_root,
+            &mut self.ct_overrides,
+            &format!("/{bin_name}"),
+            CT_OLEOBJECT,
+        );
 
         // 8. Replace the equation node in the document tree.
         let shape_id = format!("_x0000_i{}", 1024 + eq_num);
-        let alt = match &preview {
+        let alt = match preview {
             Some(pv) => {
-                // Bare MathType object + preview picture, as Word writes it.
                 let mut img_name = format!("word/media/equation{}.{}", self.img_index, pv.ext);
                 while self.pkg.contains(&img_name) {
                     self.img_index += 1;
                     img_name = format!("word/media/equation{}.{}", self.img_index, pv.ext);
                 }
                 self.img_index += 1;
-                self.pkg.set(&img_name, pv.data.clone());
-                let img_rid = format!("rIdImg{}", self.img_index - 1);
-                let img_rid = self.unique_id(img_rid);
+                self.pkg.set(&img_name, pv.data);
+                let img_rid = self.new_img_rel_id();
                 add_relationship(
                     &mut self.rels_root,
                     &img_rid,
@@ -243,12 +416,8 @@ impl Job {
             }
             None => {
                 let obj_id = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
-                make_ole_xml(
-                    &rel_id, &shape_id, &obj_id,
-                    914_400, // 1 inch wide  — default display size
-                    457_200, // 0.5 inch tall
-                    &omath,  // original equation kept as visible fallback
-                )
+                let omath = omath_fallback.expect("omath fallback provided in OmmlFallback mode");
+                make_ole_xml(&rel_id, &shape_id, &obj_id, 914_400, 457_200, omath)
             }
         };
 
@@ -261,6 +430,6 @@ impl Job {
 
         self.summary.converted += 1;
         log::info!("Equation {eq_num}: converted → {bin_name}");
-        Ok(Outcome::Converted)
+        Ok(())
     }
 }

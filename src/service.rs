@@ -227,6 +227,14 @@ pub fn decode_input_to_mathml(data: &str, format: &str) -> crate::error::Result<
 pub fn convert_document(
     req: &ConvertDocumentRequest,
 ) -> std::result::Result<ConvertDocumentResponse, ServiceError> {
+    convert_document_with_cancel(req, None)
+}
+
+/// Like [`convert_document`], supporting cooperative cancellation.
+pub fn convert_document_with_cancel(
+    req: &ConvertDocumentRequest,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> std::result::Result<ConvertDocumentResponse, ServiceError> {
     if req.input_path.contains('\0') || req.output_path.as_deref().is_some_and(|p| p.contains('\0'))
     {
         return Err(ServiceError::new(400, "invalid null byte in path"));
@@ -270,9 +278,9 @@ pub fn convert_document(
     };
     let summary = match req.target.as_str() {
         "omml" | "mathtype_to_omml" => {
-            convert_to_omml_with(input, output, &ToOmmlOptions::default())
+            convert_to_omml_with_cancel(input, output, &ToOmmlOptions::default(), cancel)
         }
-        "mathtype" | "omml_to_mathtype" => convert_with(
+        "mathtype" | "omml_to_mathtype" => convert_with_cancel(
             input,
             output,
             &Options {
@@ -280,9 +288,10 @@ pub fn convert_document(
                 preview,
                 ..Default::default()
             },
+            cancel,
         ),
         "upgrade_omml" | "legacy_to_omml" | "upgrade_modern_omml" => {
-            upgrade_legacy_mathtype_docx_with(
+            upgrade_legacy_mathtype_docx_with_cancel(
                 input,
                 output,
                 &UpgradeOptions {
@@ -290,10 +299,11 @@ pub fn convert_document(
                     font_pt: req.font_pt,
                     ..Default::default()
                 },
+                cancel,
             )
         }
         "upgrade_mathtype" | "legacy_to_mathtype" | "upgrade_modern_mathtype" => {
-            upgrade_legacy_mathtype_docx_with(
+            upgrade_legacy_mathtype_docx_with_cancel(
                 input,
                 output,
                 &UpgradeOptions {
@@ -301,6 +311,7 @@ pub fn convert_document(
                     font_pt: req.font_pt,
                     ..Default::default()
                 },
+                cancel,
             )
         }
         other => {
@@ -310,7 +321,10 @@ pub fn convert_document(
             ))
         }
     }
-    .map_err(|e| ServiceError::new(500, format!("document conversion error: {e}")))?;
+    .map_err(|e| match e {
+        crate::Error::Cancelled => ServiceError::new(499, "document conversion cancelled"),
+        other => ServiceError::new(500, format!("document conversion error: {other}")),
+    })?;
     Ok(ConvertDocumentResponse {
         status: "ok".into(),
         found: summary.found,
