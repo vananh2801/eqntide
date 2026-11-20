@@ -800,7 +800,19 @@ fn is_bigop_str(s: &str) -> bool {
 fn is_limit_function(s: &str) -> bool {
     matches!(
         s,
-        "lim" | "max" | "min" | "sup" | "inf" | "det" | "gcd" | "lcm" | "Pr" | "limsup" | "liminf"
+        "lim"
+            | "max"
+            | "min"
+            | "sup"
+            | "inf"
+            | "det"
+            | "gcd"
+            | "lcm"
+            | "Pr"
+            | "limsup"
+            | "liminf"
+            | "lim sup"
+            | "lim inf"
     )
 }
 
@@ -1143,10 +1155,15 @@ fn enc_mi(node: &MathNode) -> Vec<u8> {
     // 1. Known function name (`sin`, `cos`, `lim`, `ln`, …)
     if text.chars().count() > 1 && is_function(text) {
         let tf = if bold { TF_VECTOR } else { TF_FUNCTION };
-        return text
-            .chars()
-            .flat_map(|c| char_record(tf, c as u32))
-            .collect();
+        let mut out = Vec::new();
+        for c in text.chars() {
+            if c == ' ' {
+                out.extend(char_record(crate::mtef::typeface::TF_SPACE, 0xEB01));
+            } else {
+                out.extend(char_record(tf, c as u32));
+            }
+        }
+        return out;
     }
 
     // 2. Vietnamese / foreign text run inside `<mi>`

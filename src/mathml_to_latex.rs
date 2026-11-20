@@ -866,7 +866,25 @@ fn format_named_function(s: &str) -> Option<&'static str> {
 }
 
 fn is_operatorname_function(s: &str) -> bool {
-    matches!(s, "arccot" | "lcm" | "mod" | "sgn" | "tg" | "cotg")
+    matches!(
+        s,
+        "arccot"
+            | "arcsec"
+            | "arccsc"
+            | "sech"
+            | "csch"
+            | "arsinh"
+            | "arcosh"
+            | "artanh"
+            | "arcoth"
+            | "tg"
+            | "ctg"
+            | "cotg"
+            | "cosec"
+            | "lcm"
+            | "mod"
+            | "sgn"
+    )
 }
 
 fn is_named_function(s: &str) -> bool {

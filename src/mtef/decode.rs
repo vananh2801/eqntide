@@ -1259,6 +1259,14 @@ pub(super) fn apply_mover_to_list(objects: &mut Vec<MtefObj>) {
                     idx -= 1;
                     vec![b]
                 }
+            } else if function_char(&objects[base_idx]).is_some() {
+                let mut start = base_idx;
+                while start > 0 && function_char(&objects[start - 1]).is_some() {
+                    start -= 1;
+                }
+                let drained: Vec<MtefObj> = objects.drain(start..=base_idx).collect();
+                idx -= drained.len();
+                drained
             } else {
                 let b = objects.remove(base_idx);
                 idx -= 1;
@@ -1942,12 +1950,91 @@ fn build_pile_node(halign: &str, lines: &[Vec<MtefObj>]) -> MathNode {
     mtable
 }
 
+fn function_char(obj: &MtefObj) -> Option<char> {
+    match obj {
+        MtefObj::Char {
+            typeface,
+            mt_code,
+            is_textmode: false,
+            embells,
+        } if *typeface == TF_FUNCTION && embells.is_empty() => u8::try_from(*mt_code)
+            .ok()
+            .filter(|b| b.is_ascii_alphabetic())
+            .map(char::from),
+        _ => None,
+    }
+}
+
+fn normal_mi(text: &str) -> MathNode {
+    let mut node = MathNode::leaf("mi", text);
+    node.set_attr("mathvariant", "normal");
+    node
+}
+
 pub(super) fn convert_objs(objs: &[MtefObj]) -> Vec<MathNode> {
     let mut out = Vec::new();
-    for obj in objs {
-        if let Some(n) = convert_obj(obj) {
+    let mut i = 0;
+    while i < objs.len() {
+        if function_char(&objs[i]).is_some() {
+            let mut end = i;
+            let mut word = String::new();
+            while end < objs.len() {
+                if let Some(ch) = function_char(&objs[end]) {
+                    word.push(ch);
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            if word == "lim"
+                && end + 3 < objs.len()
+                && matches!(
+                    &objs[end],
+                    MtefObj::Char {
+                        mt_code: 0xEB01 | 0x0020,
+                        is_textmode: false,
+                        embells,
+                        ..
+                    } if embells.is_empty()
+                )
+            {
+                let next_word: String = objs[end + 1..objs.len().min(end + 4)]
+                    .iter()
+                    .filter_map(function_char)
+                    .collect();
+                if matches!(next_word.as_str(), "sup" | "inf")
+                    && objs.get(end + 4).and_then(function_char).is_none()
+                {
+                    out.push(normal_mi(&format!("lim {next_word}")));
+                    i = end + 4;
+                    continue;
+                }
+            }
+            if word.len() >= 2 {
+                let mut pos = 0;
+                while pos < word.len() {
+                    let matched_end = (pos + 2..=word.len())
+                        .rev()
+                        .find(|&cand| crate::symbols::is_function(&word[pos..cand]));
+                    if let Some(next_pos) = matched_end {
+                        out.push(normal_mi(&word[pos..next_pos]));
+                        pos = next_pos;
+                    } else if pos == 0 {
+                        out.push(normal_mi(&word));
+                        break;
+                    } else {
+                        out.push(normal_mi(&word[pos..]));
+                        break;
+                    }
+                }
+                i = end;
+                continue;
+            }
+        }
+        if let Some(n) = convert_obj(&objs[i]) {
             out.push(n);
         }
+        i += 1;
     }
     out
 }
@@ -2901,5 +2988,30 @@ mod tests {
         assert!(eq_harpoon.to_xml().contains('\u{21CC}'));
         assert!(left_double.to_xml().contains('\u{21C6}'));
         assert!(right_double.to_xml().contains('\u{21C4}'));
+    }
+
+    #[test]
+    fn function_char_runs_and_script_bases_coalesce_to_named_functions() {
+        for (latex, expected) in [
+            (r"y = \cos x", r"y=\cos x"),
+            (r"\sin^2 x", r"{\sin }^{2}x"),
+            (r"\operatorname{arccot} x", r"\operatorname{arccot} x"),
+            (r"\limsup_{n} x", r"\limsup"),
+            (r"\liminf_{n} x", r"\liminf"),
+        ] {
+            let parsed = crate::service::parse_latex_to_mathml(latex).unwrap();
+            let rec = crate::mathml_to_mtef_bytes(&parsed).unwrap();
+            let decoded = mtef_to_mathml(&super::super::build_mtef(&rec)).unwrap();
+            let roundtrip_latex = decoded.to_latex();
+            assert!(
+                !roundtrip_latex.contains(r"\mathrm{c}\mathrm{o}\mathrm{s}"),
+                "{latex} -> {roundtrip_latex}"
+            );
+            assert!(
+                roundtrip_latex.contains(expected),
+                "{latex} -> expected `{expected}` in `{roundtrip_latex}` (xml: {})",
+                decoded.to_xml()
+            );
+        }
     }
 }

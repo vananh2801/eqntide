@@ -33,7 +33,7 @@ RIBBON_SIZE = 32
 RIBBON_COLOR = "#1D78B8"
 
 DESKTOP_ICONS = (
-    # Sidebar 12 category tiles
+    # Sidebar 14 category tiles
     "history",
     "math-x-divide-y",
     "square-root-2",
@@ -44,8 +44,10 @@ DESKTOP_ICONS = (
     "matrix",
     "overline",
     "underline",
+    "math-sin",
     "math-equal-lower",
     "arrows-left-right",
+    "arrow-autofit-right",
     "math-avg",
     "alpha",
     "omega",

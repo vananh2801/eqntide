@@ -18,7 +18,7 @@ class RenderedIconsTests(unittest.TestCase):
         self.assertEqual(render_icons.check_all(), 0)
 
     def test_expected_icon_counts_and_dimensions(self):
-        self.assertEqual(len(render_icons.DESKTOP_ICONS), 28)
+        self.assertEqual(len(render_icons.DESKTOP_ICONS), 30)
         self.assertEqual(len(render_icons.RIBBON_ICONS), 5)
         expected_svgs = set(render_icons.DESKTOP_ICONS) | set(render_icons.RIBBON_ICONS)
         actual_svgs = {p.stem for p in render_icons.SVG_DIR.glob("*.svg")}

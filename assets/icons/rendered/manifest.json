@@ -7,6 +7,13 @@
       "size": 48,
       "svg_sha256": "fe5b11c4b98433c2f031041097d26d412dee4e5b755702b76d4d800bf692456f"
     },
+    "arrow-autofit-right": {
+      "color": "#FFFFFF",
+      "path": "assets/icons/rendered/arrow-autofit-right.png",
+      "png_sha256": "cc63fc934bc89da6f8548e17b17551908e4ee4b284f5d66507f94f19e7043889",
+      "size": 48,
+      "svg_sha256": "8cf256eec9811520fbd3a48f62bf88db675b224af8556d165d6099150816bcdc"
+    },
     "arrow-back-up": {
       "color": "#FFFFFF",
       "path": "assets/icons/rendered/arrow-back-up.png",
@@ -118,6 +125,13 @@
       "png_sha256": "c9f3ed0e66961aed4fdf2ff6d60008e4bed60c8619eaef008075bda80153c0c2",
       "size": 48,
       "svg_sha256": "5b0e440333bdb68f1c64d08ec7dff5930202b83b674b00535f049dab4dec3dee"
+    },
+    "math-sin": {
+      "color": "#FFFFFF",
+      "path": "assets/icons/rendered/math-sin.png",
+      "png_sha256": "f7e797ffde69d28b30f3e36e6b936c246ac2a672c2ca9b068e88162253bca4ab",
+      "size": 48,
+      "svg_sha256": "b8072f6e07c8fc352dd627a8f861a5ec403f88d739694af2620653312aecccd9"
     },
     "math-x-divide-y": {
       "color": "#FFFFFF",

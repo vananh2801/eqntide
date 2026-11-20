@@ -42,6 +42,9 @@ const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";
 fn tabler_icon_bytes(name: &str) -> &'static [u8] {
     match name {
         "alpha" => include_bytes!("../../assets/icons/rendered/alpha.png"),
+        "arrow-autofit-right" => {
+            include_bytes!("../../assets/icons/rendered/arrow-autofit-right.png")
+        }
         "arrow-back-up" => include_bytes!("../../assets/icons/rendered/arrow-back-up.png"),
         "arrow-forward-up" => include_bytes!("../../assets/icons/rendered/arrow-forward-up.png"),
         "arrows-left-right" => include_bytes!("../../assets/icons/rendered/arrows-left-right.png"),
@@ -58,6 +61,7 @@ fn tabler_icon_bytes(name: &str) -> &'static [u8] {
         "math-avg" => include_bytes!("../../assets/icons/rendered/math-avg.png"),
         "math-equal-lower" => include_bytes!("../../assets/icons/rendered/math-equal-lower.png"),
         "math-integral" => include_bytes!("../../assets/icons/rendered/math-integral.png"),
+        "math-sin" => include_bytes!("../../assets/icons/rendered/math-sin.png"),
         "math-x-divide-y" => include_bytes!("../../assets/icons/rendered/math-x-divide-y.png"),
         "matrix" => include_bytes!("../../assets/icons/rendered/matrix.png"),
         "omega" => include_bytes!("../../assets/icons/rendered/omega.png"),
@@ -1635,10 +1639,13 @@ impl App {
         let tokens = ThemeTokens::from_ui(ui);
         let enabled = ui.is_enabled();
         egui::Panel::bottom("sidebar-batch")
-            .exact_size(130.0)
-            .frame(
-                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, theme::SPACE_MD as i8)),
-            )
+            .exact_size(120.0)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                left: 0,
+                right: 0,
+                top: theme::SPACE_SM as i8,
+                bottom: 0,
+            }))
             .show_separator_line(false)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = theme::SPACE_SM;
@@ -1662,7 +1669,6 @@ impl App {
                     }
                 }
             });
-        ui.add_space(theme::SPACE_MD);
         let button_width = ((ui.available_width() - SIDEBAR_GAP) / 2.0)
             .floor()
             .max(48.0);

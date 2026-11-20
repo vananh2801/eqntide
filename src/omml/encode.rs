@@ -26,8 +26,9 @@ const NS_W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main
 pub(super) const KNOWN_FUNCTIONS: &[&str] = &[
     "arcsin", "arccos", "arctan", "arccot", "arcsec", "arccsc", "arsinh", "arcosh", "artanh",
     "arcoth", "sinh", "cosh", "tanh", "coth", "sech", "csch", "cotg", "cosec", "sin", "cos", "tan",
-    "cot", "sec", "csc", "tg", "ctg", "log", "ln", "lg", "exp", "lim", "limsup", "liminf", "max",
-    "min", "sup", "inf", "det", "dim", "deg", "gcd", "lcm", "arg", "ker", "hom", "mod", "Pr",
+    "cot", "sec", "csc", "tg", "ctg", "log", "ln", "lg", "exp", "lim", "limsup", "liminf",
+    "lim sup", "lim inf", "max", "min", "sup", "inf", "det", "dim", "deg", "gcd", "lcm", "arg",
+    "ker", "hom", "mod", "sgn", "Pr",
 ];
 
 // ── XML Element Helpers ──────────────────────────────────────────────────────

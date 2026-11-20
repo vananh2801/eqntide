@@ -1433,6 +1433,11 @@ fn symbol_or_alias(name: &str) -> Option<MathNode> {
         "dprime" => ("mo", "″"),
         "trprime" => ("mo", "‴"),
         "lg" => ("mi", "lg"),
+        "hom" => ("mi", "hom"),
+        "deg" => ("mi", "deg"),
+        "arg" => ("mi", "arg"),
+        "gcd" => ("mi", "gcd"),
+        "Pr" => ("mi", "Pr"),
         _ => return None,
     };
     Some(MathNode::leaf(tag, glyph))

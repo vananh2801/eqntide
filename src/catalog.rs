@@ -30,6 +30,7 @@ pub const GROUPS: &[(&str, &str)] = &[
     ("Matrices", "Matrices"),
     ("Embellishments", "Embellishments"),
     ("Bars", "Bars"),
+    ("Functions", "Functions"),
     ("LabeledArrows", "Labeled Arrows"),
     ("Boxes", "Boxes"),
     ("Relations", "Relations"),
@@ -389,12 +390,57 @@ catalog! {
         ("pre-both-post-sup", "Scripts", "Left sub/superscript & right superscript", "\\prescript{#?}{#?}{#?}^{#?}"),
         ("pre-both-post-sub", "Scripts", "Left sub/superscript & right subscript", "\\prescript{#?}{#?}{#?}_{#?}"),
         ("pre-both-post-both", "Scripts", "Left sub/superscript & right sub/superscript", "\\prescript{#?}{#?}{#?}_{#?}^{#?}"),
-        ("lim", "Scripts", "Limit (Ctrl+Shift+L)", "\\lim_{#? \\to #?}"),
-        ("max", "Scripts", "Constrained maximum", "\\max_{#?}"),
-        ("min", "Scripts", "Constrained minimum", "\\min_{#?}"),
         ("overset", "Scripts", "Overscript label", "\\overset{#?}{#?}"),
         ("underset", "Scripts", "Underscript label", "\\underset{#?}{#?}"),
         ("overunderset", "Scripts", "Overscript and underscript label", "\\overset{#?}{\\underset{#?}{#?}}"),
+        ("lim", "Functions", "Limit (Ctrl+Shift+L)", "\\lim_{#? \\to #?}"),
+        ("min", "Functions", "Constrained minimum", "\\min_{#?}"),
+        ("max", "Functions", "Constrained maximum", "\\max_{#?}"),
+        ("limsup", "Functions", "Limit superior", "\\limsup"),
+        ("liminf", "Functions", "Limit inferior", "\\liminf"),
+        ("sup", "Functions", "Supremum", "\\sup"),
+        ("inf", "Functions", "Infimum", "\\inf"),
+        ("sin", "Functions", "Sine", "\\sin"),
+        ("cos", "Functions", "Cosine", "\\cos"),
+        ("tan", "Functions", "Tangent", "\\tan"),
+        ("cot", "Functions", "Cotangent", "\\cot"),
+        ("sec", "Functions", "Secant", "\\sec"),
+        ("csc", "Functions", "Cosecant", "\\csc"),
+        ("arcsin", "Functions", "Inverse sine", "\\arcsin"),
+        ("arccos", "Functions", "Inverse cosine", "\\arccos"),
+        ("arctan", "Functions", "Inverse tangent", "\\arctan"),
+        ("arccot", "Functions", "Inverse cotangent", "\\operatorname{arccot}"),
+        ("arcsec", "Functions", "Inverse secant", "\\operatorname{arcsec}"),
+        ("arccsc", "Functions", "Inverse cosecant", "\\operatorname{arccsc}"),
+        ("sinh", "Functions", "Hyperbolic sine", "\\sinh"),
+        ("cosh", "Functions", "Hyperbolic cosine", "\\cosh"),
+        ("tanh", "Functions", "Hyperbolic tangent", "\\tanh"),
+        ("coth", "Functions", "Hyperbolic cotangent", "\\coth"),
+        ("sech", "Functions", "Hyperbolic secant", "\\operatorname{sech}"),
+        ("csch", "Functions", "Hyperbolic cosecant", "\\operatorname{csch}"),
+        ("arsinh", "Functions", "Inverse hyperbolic sine", "\\operatorname{arsinh}"),
+        ("arcosh", "Functions", "Inverse hyperbolic cosine", "\\operatorname{arcosh}"),
+        ("artanh", "Functions", "Inverse hyperbolic tangent", "\\operatorname{artanh}"),
+        ("arcoth", "Functions", "Inverse hyperbolic cotangent", "\\operatorname{arcoth}"),
+        ("tg", "Functions", "Tangent (tg)", "\\operatorname{tg}"),
+        ("ctg", "Functions", "Cotangent (ctg)", "\\operatorname{ctg}"),
+        ("cotg", "Functions", "Cotangent (cotg)", "\\operatorname{cotg}"),
+        ("cosec", "Functions", "Cosecant (cosec)", "\\operatorname{cosec}"),
+        ("log", "Functions", "Logarithm", "\\log"),
+        ("ln", "Functions", "Natural logarithm", "\\ln"),
+        ("lg", "Functions", "Common logarithm", "\\lg"),
+        ("exp", "Functions", "Exponential", "\\exp"),
+        ("det", "Functions", "Determinant", "\\det"),
+        ("dim", "Functions", "Dimension", "\\dim"),
+        ("ker", "Functions", "Kernel", "\\ker"),
+        ("hom", "Functions", "Homomorphism", "\\hom"),
+        ("deg", "Functions", "Degree", "\\deg"),
+        ("arg", "Functions", "Argument", "\\arg"),
+        ("gcd", "Functions", "Greatest common divisor", "\\gcd"),
+        ("lcm", "Functions", "Least common multiple", "\\operatorname{lcm}"),
+        ("sgn", "Functions", "Signum", "\\operatorname{sgn}"),
+        ("mod", "Functions", "Modulo", "\\operatorname{mod}"),
+        ("Pr", "Functions", "Probability", "\\Pr"),
         ("sum-side-lower", "Sums", "Sum with side lower limit", "\\sum\\nolimits_{#?} #?"),
         ("sum-side-both", "Sums", "Sum with side limits", "\\sum\\nolimits_{#?}^{#?} #?"),
         ("sum-stack-lower", "Sums", "Sum with stacked lower limit", "\\sum\\limits_{#?} #?"),
@@ -661,6 +707,20 @@ catalog! {
         ("sinh", "Sinh", "\\sinh"),
         ("cosh", "Cosh", "\\cosh"),
         ("tanh", "Tanh", "\\tanh"),
+        ("coth", "Coth", "\\coth"),
+        ("sech", "Hyperbolic secant", "\\operatorname{sech}"),
+        ("csch", "Hyperbolic cosecant", "\\operatorname{csch}"),
+        ("arccot", "Inverse cotangent", "\\operatorname{arccot}"),
+        ("arcsec", "Inverse secant", "\\operatorname{arcsec}"),
+        ("arccsc", "Inverse cosecant", "\\operatorname{arccsc}"),
+        ("arsinh", "Inverse hyperbolic sine", "\\operatorname{arsinh}"),
+        ("arcosh", "Inverse hyperbolic cosine", "\\operatorname{arcosh}"),
+        ("artanh", "Inverse hyperbolic tangent", "\\operatorname{artanh}"),
+        ("arcoth", "Inverse hyperbolic cotangent", "\\operatorname{arcoth}"),
+        ("tg", "Tangent (tg)", "\\operatorname{tg}"),
+        ("ctg", "Cotangent (ctg)", "\\operatorname{ctg}"),
+        ("cotg", "Cotangent (cotg)", "\\operatorname{cotg}"),
+        ("cosec", "Cosecant (cosec)", "\\operatorname{cosec}"),
         ("log", "Logarithm", "\\log"),
         ("ln", "Natural logarithm", "\\ln"),
         ("lg", "Common logarithm", "\\lg"),
@@ -670,8 +730,16 @@ catalog! {
         ("inf", "Infimum", "\\inf"),
         ("sup", "Supremum", "\\sup"),
         ("det", "Determinant", "\\det"),
+        ("dim", "Dimension", "\\dim"),
+        ("ker", "Kernel", "\\ker"),
+        ("hom", "Homomorphism", "\\hom"),
+        ("deg", "Degree", "\\deg"),
+        ("arg", "Argument", "\\arg"),
+        ("gcd", "Greatest common divisor", "\\gcd"),
         ("sgn", "Signum", "\\operatorname{sgn}"),
         ("lcm", "Least common multiple", "\\operatorname{lcm}"),
+        ("mod", "Modulo", "\\operatorname{mod}"),
+        ("Pr", "Probability", "\\Pr"),
         ("to", "Right arrow", "\\rightarrow"),
         ("gets", "Left arrow", "\\leftarrow"),
         ("iff", "If and only if", "\\Leftrightarrow"),
@@ -864,16 +932,20 @@ mod tests {
     }
 
     #[test]
-    fn catalog_has_unique_ids_and_twenty_nonempty_groups() {
+    fn catalog_has_unique_ids_and_twenty_one_nonempty_groups() {
         let ids: std::collections::HashSet<_> = ENTRIES.iter().map(|e| e.id).collect();
         assert_eq!(ids.len(), ENTRIES.len());
-        assert_eq!(GROUPS.len(), 20);
+        assert_eq!(GROUPS.len(), 21);
         for (group, _) in GROUPS {
             assert!(ENTRIES.iter().any(|e| e.group == *group), "{group}");
         }
         for e in ENTRIES {
             assert!(GROUPS.iter().any(|(g, _)| *g == e.group), "{}", e.id);
         }
+        let function_count = ENTRIES.iter().filter(|e| e.group == "Functions").count();
+        assert_eq!(function_count, 48);
+        assert!(!ENTRIES.iter().any(|e| e.group == "Scripts"
+            && matches!(e.id, "Scripts-lim" | "Scripts-min" | "Scripts-max")));
     }
 
     #[test]

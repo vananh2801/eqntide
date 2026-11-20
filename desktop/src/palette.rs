@@ -67,6 +67,12 @@ pub const UI_GROUPS: &[UiGroup] = &[
         catalog_groups: &["Embellishments", "Bars"],
     },
     UiGroup {
+        id: "Functions",
+        label: "Functions",
+        icons: &["math-sin"],
+        catalog_groups: &["Functions"],
+    },
+    UiGroup {
         id: "OperatorsAndRelations",
         label: "Operators & Relations",
         icons: &["math-equal-lower"],
@@ -76,7 +82,13 @@ pub const UI_GROUPS: &[UiGroup] = &[
         id: "Arrows",
         label: "Arrows",
         icons: &["arrows-left-right"],
-        catalog_groups: &["Arrows", "LabeledArrows"],
+        catalog_groups: &["Arrows"],
+    },
+    UiGroup {
+        id: "LabeledArrows",
+        label: "Labeled Arrows",
+        icons: &["arrow-autofit-right"],
+        catalog_groups: &["LabeledArrows"],
     },
     UiGroup {
         id: "LogicSetsSymbols",
@@ -201,7 +213,7 @@ mod tests {
 
     #[test]
     fn ui_groups_cover_every_catalog_group_and_render_visible_icons() {
-        assert_eq!(UI_GROUPS.len(), 12);
+        assert_eq!(UI_GROUPS.len(), 14);
         assert!(ui_group(DEFAULT_GROUP).is_some());
         assert!(!items_for_ui_group(DEFAULT_GROUP, &[]).is_empty());
 
@@ -242,6 +254,25 @@ mod tests {
         }
         assert!(group_contains("MatricesAndBoxes", "Matrices"));
         assert!(!group_contains("Fractions", "Matrices"));
+        let fn_items = items_for_ui_group("Functions", &[]);
+        assert!(fn_items.iter().any(|(_, _, src)| *src == r"\sin"));
+        assert!(fn_items
+            .iter()
+            .any(|(_, _, src)| *src == r"\lim_{#? \to #?}"));
+        assert!(fn_items.iter().any(|(_, _, src)| *src == r"\min_{#?}"));
+        assert!(fn_items.iter().any(|(_, _, src)| *src == r"\max_{#?}"));
+        let script_items = items_for_ui_group("Scripts", &[]);
+        assert!(!script_items
+            .iter()
+            .any(|(_, _, src)| matches!(*src, r"\lim_{#? \to #?}" | r"\min_{#?}" | r"\max_{#?}")));
+        let arrow_items = items_for_ui_group("Arrows", &[]);
+        assert!(!arrow_items.is_empty());
+        assert!(arrow_items.iter().all(|(_, _, src)| !src.contains("#?")));
+        let labeled_arrow_items = items_for_ui_group("LabeledArrows", &[]);
+        assert!(!labeled_arrow_items.is_empty());
+        assert!(labeled_arrow_items
+            .iter()
+            .all(|(_, _, src)| src.contains("#?")));
         assert!(items_for_ui_group(RECENT_GROUP, &[r"\frac{#?}{#?}", r"\alpha"]).len() == 2);
     }
 

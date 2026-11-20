@@ -742,4 +742,114 @@ mod tests {
             assert_eq!(err.status, 400, "font_pt={bad}");
         }
     }
+
+    #[test]
+    fn named_functions_roundtrip_across_latex_render_omml_and_mtef() {
+        let functions = [
+            (r"\sin x", "sin", r"\sin "),
+            (r"\cos x", "cos", r"\cos "),
+            (r"\tan x", "tan", r"\tan "),
+            (r"\cot x", "cot", r"\cot "),
+            (r"\sec x", "sec", r"\sec "),
+            (r"\csc x", "csc", r"\csc "),
+            (r"\arcsin x", "arcsin", r"\arcsin "),
+            (r"\arccos x", "arccos", r"\arccos "),
+            (r"\arctan x", "arctan", r"\arctan "),
+            (
+                r"\operatorname{arccot} x",
+                "arccot",
+                r"\operatorname{arccot}",
+            ),
+            (
+                r"\operatorname{arcsec} x",
+                "arcsec",
+                r"\operatorname{arcsec}",
+            ),
+            (
+                r"\operatorname{arccsc} x",
+                "arccsc",
+                r"\operatorname{arccsc}",
+            ),
+            (r"\sinh x", "sinh", r"\sinh "),
+            (r"\cosh x", "cosh", r"\cosh "),
+            (r"\tanh x", "tanh", r"\tanh "),
+            (r"\coth x", "coth", r"\coth "),
+            (r"\operatorname{sech} x", "sech", r"\operatorname{sech}"),
+            (r"\operatorname{csch} x", "csch", r"\operatorname{csch}"),
+            (
+                r"\operatorname{arsinh} x",
+                "arsinh",
+                r"\operatorname{arsinh}",
+            ),
+            (
+                r"\operatorname{arcosh} x",
+                "arcosh",
+                r"\operatorname{arcosh}",
+            ),
+            (
+                r"\operatorname{artanh} x",
+                "artanh",
+                r"\operatorname{artanh}",
+            ),
+            (
+                r"\operatorname{arcoth} x",
+                "arcoth",
+                r"\operatorname{arcoth}",
+            ),
+            (r"\operatorname{tg} x", "tg", r"\operatorname{tg}"),
+            (r"\operatorname{ctg} x", "ctg", r"\operatorname{ctg}"),
+            (r"\operatorname{cotg} x", "cotg", r"\operatorname{cotg}"),
+            (r"\operatorname{cosec} x", "cosec", r"\operatorname{cosec}"),
+            (r"\log x", "log", r"\log "),
+            (r"\ln x", "ln", r"\ln "),
+            (r"\lg x", "lg", r"\lg "),
+            (r"\exp x", "exp", r"\exp "),
+            (r"\limsup_{n} x", "lim sup", r"\limsup"),
+            (r"\liminf_{n} x", "lim inf", r"\liminf"),
+            (r"\sup S", "sup", r"\sup "),
+            (r"\inf S", "inf", r"\inf "),
+            (r"\det A", "det", r"\det "),
+            (r"\dim V", "dim", r"\dim "),
+            (r"\ker f", "ker", r"\ker "),
+            (r"\hom(A,B)", "hom", r"\hom "),
+            (r"\deg p", "deg", r"\deg "),
+            (r"\arg z", "arg", r"\arg "),
+            (r"\gcd(a,b)", "gcd", r"\gcd "),
+            (r"\operatorname{lcm}(a,b)", "lcm", r"\operatorname{lcm}"),
+            (r"\operatorname{sgn} x", "sgn", r"\operatorname{sgn}"),
+            (r"\operatorname{mod} m", "mod", r"\operatorname{mod}"),
+            (r"\Pr(A)", "Pr", r"\Pr "),
+        ];
+        for (src, expected_text, expected_latex) in functions {
+            let math = parse_latex_to_mathml(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+            assert!(
+                math.iter()
+                    .into_iter()
+                    .any(|n| n.text.trim() == expected_text
+                        && crate::symbols::is_function(n.text.trim())),
+                "{src}: expected upright function `{expected_text}` in {}",
+                math.to_xml()
+            );
+            assert!(
+                math.to_latex().contains(expected_latex),
+                "{src}: expected `{expected_latex}` in `{}`",
+                math.to_latex()
+            );
+            let omml = mathml_to_omml_xml(&math).unwrap_or_else(|e| panic!("omml {src}: {e}"));
+            assert!(omml.contains("oMath"), "{src}");
+            let mtef = mathml_to_mtef_bytes(&math).unwrap_or_else(|e| panic!("mtef {src}: {e}"));
+            assert!(!mtef.is_empty(), "{src}");
+            let decoded = crate::mtef::decode::mtef_to_mathml(&crate::mtef::build_mtef(&mtef))
+                .expect("mtef decode");
+            assert!(
+                !decoded.to_xml().contains("<mn> </mn>"),
+                "space decoded as mn for {src}: {}",
+                decoded.to_xml()
+            );
+            assert!(
+                crate::render::render_interactive(&math, 12.0).is_ok(),
+                "render {src}"
+            );
+        }
+    }
 }
