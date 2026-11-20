@@ -344,6 +344,16 @@ function insertUpgradedFlatOpcAtRange(doc, targetRange, convData, targetMode, fa
   var insertPos = targetRange.Start;
   var replaced = targetRange.End - insertPos;
   var originalEnd = getDocEnd(doc);
+  var origLeadingBreaks = 0;
+  while (origLeadingBreaks < 2 && targetRange.End + origLeadingBreaks < originalEnd) {
+    try {
+      var bCh = doc.Range(targetRange.End + origLeadingBreaks, targetRange.End + origLeadingBreaks + 1).Text;
+      if (bCh !== "\r" && bCh !== "\n") break;
+      origLeadingBreaks++;
+    } catch (_) {
+      break;
+    }
+  }
   var suffix = doc.Range(targetRange.End, Math.min(targetRange.End + 32, originalEnd)).Text;
 
   targetRange.InsertXML(packageXml);
@@ -376,14 +386,29 @@ function insertUpgradedFlatOpcAtRange(doc, targetRange, convData, targetMode, fa
 
   if (isMathTypePackage || targetMode === "flat_opc_mathtype") {
     try {
+      newEnd = getDocEnd(doc);
+      if (insertedEnd < insertPos) insertedEnd = insertPos;
+      if (insertedEnd > newEnd) insertedEnd = newEnd;
       var insertedRange = doc.Range(insertPos, insertedEnd);
       var pic = null;
-      if (insertedRange.InlineShapes) {
-        for (var idx = 1; idx <= insertedRange.InlineShapes.Count; idx++) {
-          var candidate = insertedRange.InlineShapes.Item(idx);
-          if (candidate.Range.Start === insertPos) {
+      var bestDiff = 999999;
+      var shapeCollections = [];
+      if (insertedRange.InlineShapes) shapeCollections.push(insertedRange.InlineShapes);
+      if (doc.InlineShapes) shapeCollections.push(doc.InlineShapes);
+      try {
+        if (doc.Content && doc.Content.InlineShapes) shapeCollections.push(doc.Content.InlineShapes);
+      } catch (_) {}
+      for (var c = 0; c < shapeCollections.length && !pic; c++) {
+        var shapes = shapeCollections[c];
+        if (!shapes || !shapes.Count) continue;
+        for (var idx = 1; idx <= shapes.Count; idx++) {
+          var candidate = shapes.Item(idx);
+          if (!candidate || !candidate.Range || typeof candidate.Range.Start !== "number") continue;
+          var diff = candidate.Range.Start - insertPos;
+          if (diff >= 0 && diff <= 5 && diff < bestDiff) {
+            bestDiff = diff;
             pic = candidate;
-            break;
+            if (diff === 0) break;
           }
         }
       }
@@ -400,7 +425,23 @@ function insertUpgradedFlatOpcAtRange(doc, targetRange, convData, targetMode, fa
         var depthPt = (typeof convData.depth_pt === "number") ? convData.depth_pt : 0;
         var pos = -Number((depthPt + docFontSize * 0.045).toFixed(1));
         var actualStart = (pic.Range && typeof pic.Range.Start === "number") ? pic.Range.Start : insertPos;
-        var shapeEnd = actualStart + 1;
+        var shapeEnd = (pic.Range && typeof pic.Range.End === "number" && pic.Range.End > actualStart)
+          ? pic.Range.End
+          : (actualStart + 1);
+        var curBreaks = 0;
+        var curEnd = getDocEnd(doc);
+        while (curBreaks < origLeadingBreaks + 2 && shapeEnd + curBreaks < curEnd) {
+          try {
+            var aCh = doc.Range(shapeEnd + curBreaks, shapeEnd + curBreaks + 1).Text;
+            if (aCh !== "\r" && aCh !== "\n") break;
+            curBreaks++;
+          } catch (_) {
+            break;
+          }
+        }
+        for (var eb = 0; eb < curBreaks - origLeadingBreaks; eb++) {
+          try { doc.Range(shapeEnd, shapeEnd + 1).Delete(); } catch (_) { break; }
+        }
         var shapeRange = doc.Range(actualStart, shapeEnd);
         if (shapeRange && shapeRange.Font) {
           shapeRange.Font.Position = pos;
@@ -413,9 +454,9 @@ function insertUpgradedFlatOpcAtRange(doc, targetRange, convData, targetMode, fa
           var para = shapeRange.Paragraphs ? shapeRange.Paragraphs.Item(1) : null;
           if (para && para.Range) {
             var pEnd = para.Range.End;
-            if (pEnd > 0) {
+            if (pEnd > shapeEnd) {
               var pMark = doc.Range(pEnd - 1, pEnd);
-              if (pMark && pMark.Font) {
+              if (pMark && (pMark.Text === "\r" || pMark.Text === "\n") && pMark.Font) {
                 pMark.Font.Position = 0;
                 pMark.Font.Subscript = false;
                 pMark.Font.Superscript = false;

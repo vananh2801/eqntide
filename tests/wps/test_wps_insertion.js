@@ -389,3 +389,369 @@ for (const addedBreak of ['\r', '\n', '\r\n']) {
 }
 }
 console.log('WPS taskpane upgrade regression tests passed');
+
+// 1. EditEquation & ToggleLatex must preserve full multi-character OLE InlineShape ranges (e.g. [285..311])
+//    instead of clamping them down to 1 character, while trimming any trailing CR/LF and keeping adjacent U+200C.
+{
+  const c = controller();
+  const olePlaceholder = '<' + 'EMBED Equation.DSMT4____' + '>'; // 26 chars
+  assert.equal(olePlaceholder.length, 26);
+  let text = 'Prefix ' + olePlaceholder + '\u200c suffix\r';
+  const oleStart = 'Prefix '.length;
+  const oleEnd = oleStart + olePlaceholder.length;
+  let capturedSessionReq = null;
+
+  const oleRange = {
+    Start: oleStart,
+    End: oleEnd,
+    Font: { Size: 12 },
+    WordOpenXML: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>',
+    Select() {}
+  };
+  const doc = {
+    get Content() { return { End: text.length }; },
+    Range(start, end) {
+      if (start === undefined) return { End: text.length };
+      return {
+        Start: start,
+        End: end,
+        Font: { Size: 12 },
+        get Text() { return text.slice(this.Start, this.End); },
+        get InlineShapes() {
+          const hit = (start <= oleStart && end >= oleEnd)
+            ? [{ Range: oleRange, OLEFormat: { ProgID: 'Equation.DSMT4' } }]
+            : [];
+          return { Count: hit.length, Item: idx => hit[idx - 1] };
+        },
+        Delete() { text = text.slice(0, this.Start) + text.slice(this.End); },
+        Select() {}
+      };
+    }
+  };
+  const selection = {
+    Start: oleStart,
+    End: oleEnd,
+    InlineShapes: { Count: 1, Item: () => ({ Range: oleRange, OLEFormat: { ProgID: 'Equation.DSMT4' } }) },
+    Range: oleRange
+  };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = cb => cb();
+  c.LaunchDesktopEditor = () => {};
+  c.WaitSession = () => {};
+  c.ajaxPost = (url, body, cb) => {
+    capturedSessionReq = JSON.parse(body);
+    cb(200, JSON.stringify({ session_id: 'sess-ole-26' }));
+  };
+
+  c.EditEquation();
+  assert.equal(c.g_editRangeStart, oleStart);
+  assert.equal(c.g_editRangeEnd, oleEnd + 1, 'must preserve full 26-char OLE field plus trailing U+200C');
+  assert.ok(capturedSessionReq);
+
+  // ToggleLatex on the same 26-char OLE InlineShape (both collapsed-cursor and selected)
+  // must replace the entire field, leaving zero orphan chars.
+  let toggleCursor = null;
+  const toggleShapeRange = {
+    Start: oleStart,
+    End: oleEnd,
+    WordOpenXML: oleRange.WordOpenXML,
+    Select() {}
+  };
+  const docToggle = {
+    get Content() { return { End: text.length }; },
+    Range(start, end) {
+      if (start === undefined) return { End: text.length };
+      return {
+        Start: start,
+        End: end,
+        Font: { Position: -5, Subscript: false, Superscript: false },
+        WordOpenXML: oleRange.WordOpenXML,
+        get Text() { return text.slice(this.Start, this.End); },
+        set Text(v) { text = text.slice(0, this.Start) + v + text.slice(this.End); },
+        get InlineShapes() {
+          const hit = (start <= oleStart && end >= oleEnd) || (start === oleStart && end === oleStart + 1)
+            ? [{ Range: toggleShapeRange }]
+            : [];
+          return { Count: hit.length, Item: idx => hit[idx - 1] };
+        },
+        Delete() { text = text.slice(0, this.Start) + text.slice(this.End); },
+        Select() { toggleCursor = this.Start; }
+      };
+    }
+  };
+  c.wps = {
+    Application: {
+      ActiveDocument: docToggle,
+      Selection: {
+        Start: oleStart,
+        End: oleStart,
+        InlineShapes: { Count: 1, Item: () => ({ Range: toggleShapeRange }) },
+        Range: docToggle.Range(oleStart, oleStart),
+        Collapse() {},
+        Font: { Position: -5, Subscript: false, Superscript: false }
+      }
+    }
+  };
+  c.ajaxPost = (url, body, cb) => cb(200, JSON.stringify({ result: '\\frac{\\pi}{3}' }));
+  c.ToggleLatex();
+  assert.equal(text, 'Prefix $\\frac{\\pi}{3}$ suffix\r');
+  assert.equal(toggleCursor, oleStart + '$\\frac{\\pi}{3}$'.length);
+}
+
+// 2. insertMathTypeAtDocRange + HandleSessionResult handle:
+//    - replacing a 26-char OLE range at document end
+//    - empty range.InlineShapes falling back to doc.InlineShapes
+//    - +1 start offset tolerance
+for (const atDocEnd of [false, true]) {
+  const c = controller();
+  const oldOle = '<' + 'OLD_EMBED_EQUATION_26CHR' + '>';
+  const newOle = '<' + 'NEW_EMBED_EQUATION_26CHR' + '>';
+  const suffix = atDocEnd ? '' : ' tail.\r';
+  let text = 'Start ' + oldOle + '\u200c' + suffix;
+  const editStart = 'Start '.length;
+  const editEnd = editStart + oldOle.length + 1;
+  const shapeFont = {};
+  const pic = { Range: { Start: editStart + 1, End: editStart + 1 + newOle.length, Font: shapeFont } };
+  let insertedAt = null;
+  const doc = {
+    get Content() { return { End: text.length }; },
+    // range.InlineShapes is intentionally empty; only doc.InlineShapes exposes the new shape at +1 offset.
+    get InlineShapes() { return { Count: 1, Item: () => pic }; },
+    Range(start, end) {
+      if (start === undefined) return { End: text.length };
+      return {
+        Start: start,
+        End: end,
+        Font: (start >= pic.Range.Start && end <= pic.Range.End) ? shapeFont : { Position: 0 },
+        get Text() { return text.slice(this.Start, this.End); },
+        InlineShapes: { Count: 0, Item: () => null },
+        Paragraphs: { Item: () => ({ Range: { Start: 0, End: text.length } }) },
+        Delete() { text = text.slice(0, this.Start) + text.slice(this.End); },
+        InsertXML(xml) {
+          insertedAt = this.Start;
+          const payload = ' ' + newOle + '\r';
+          text = text.slice(0, this.Start) + payload + text.slice(this.End);
+        },
+        Select() {}
+      };
+    }
+  };
+  c.wps = { Application: { ActiveDocument: doc, Selection: { Collapse() {}, Font: {} } } };
+  c.g_editRangeStart = editStart;
+  c.g_editRangeEnd = editEnd;
+  const packageXml = '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>';
+  c.HandleSessionResult({ status: 'ready', flat_opc: packageXml, width_pt: 24, height_pt: 14, depth_pt: 4, font_pt: 12 });
+  assert.equal(insertedAt, editStart);
+  assert.equal(text, 'Start  ' + newOle + suffix);
+  assert.equal(shapeFont.Position, -Number((4 + 12 * 0.045).toFixed(1)));
+  assert.equal(pic.Width, 24);
+  assert.equal(pic.Height, 14);
+}
+
+// 3. Taskpane insertUpgradedFlatOpcAtRange also falls back to doc.InlineShapes with +1 offset tolerance.
+{
+  const { context, windowObj } = taskpaneController('mathtype', 'document');
+  let text = 'Alpha # omega.\r';
+  const shapeFont = {};
+  const newPic = { Range: { Start: 7, End: 8, Font: shapeFont } };
+  const doc = {
+    get Content() { return { End: text.length }; },
+    get InlineShapes() { return { Count: 1, Item: () => newPic }; },
+    Range(start, end) {
+      if (start === undefined) return { End: text.length };
+      return {
+        Start: start,
+        End: end,
+        Font: (start >= newPic.Range.Start && end <= newPic.Range.End) ? shapeFont : { Position: 0 },
+        get Text() { return text.slice(this.Start, this.End); },
+        InlineShapes: { Count: 0, Item: () => null },
+        Paragraphs: { Item: () => ({ Range: { Start: 0, End: text.length } }) },
+        Delete() { text = text.slice(0, this.Start) + text.slice(this.End); },
+        InsertXML() {
+          text = text.slice(0, this.Start) + ' M\r' + text.slice(this.End);
+          this.End = this.Start + 3;
+        }
+      };
+    }
+  };
+  windowObj.wps = { Application: { ActiveDocument: doc, Selection: {} } };
+  const mathtypeXml = '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>';
+  const ok = context.insertUpgradedFlatOpcAtRange(
+    doc,
+    doc.Range(6, 7),
+    { result: mathtypeXml, width_pt: 18, height_pt: 11, depth_pt: 2 },
+    'flat_opc_mathtype',
+    12
+  );
+  assert.equal(ok, true);
+  assert.equal(newPic.Width, 18);
+  assert.equal(shapeFont.Position, -Number((2 + 12 * 0.045).toFixed(1)));
+}
+
+// 4. Separate InsertXML success with unexposed InlineShape (logs warning, no fatal alert)
+//    from genuine InsertXML error (logs error and alerts with reason).
+{
+  const alerts = [];
+  const logs = [];
+  const c = vm.createContext({
+    console,
+    DOMParser,
+    XMLSerializer,
+    alert: msg => alerts.push(msg)
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin/main.js'), 'utf8'), c);
+  c.wpsLog = msg => logs.push(msg);
+
+  let text = 'A B';
+  const docNoShape = {
+    get Content() { return { End: text.length }; },
+    InlineShapes: { Count: 0, Item: () => null },
+    Range(start, end) {
+      if (start === undefined) return { End: text.length };
+      return {
+        Start: start,
+        End: end,
+        Font: {},
+        get Text() { return text.slice(this.Start, this.End); },
+        InlineShapes: { Count: 0, Item: () => null },
+        Delete() { text = text.slice(0, this.Start) + text.slice(this.End); },
+        InsertXML() { text = text.slice(0, this.Start) + 'EQ' + text.slice(this.End); },
+        Select() {}
+      };
+    }
+  };
+  c.wps = { Application: { ActiveDocument: docNoShape, Selection: { Range: docNoShape.Range(2, 2), Collapse() {}, Font: {} } } };
+  c.HandleSessionResult({
+    status: 'ready',
+    flat_opc: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>'
+  });
+  assert.equal(alerts.length, 0, 'successful InsertXML without exposed InlineShape must not raise fatal alert');
+  assert.ok(logs.some(m => m.includes('no matching InlineShape was exposed')));
+  assert.equal(text, 'A EQB');
+
+  // Genuine InsertXML exception must log error and alert with concrete message.
+  const docThrows = {
+    get Content() { return { End: 3 }; },
+    Range(start, end) {
+      return {
+        Start: start || 0,
+        End: end || 0,
+        get Text() { return ''; },
+        InsertXML() { throw new Error('COM InsertXML rejected package'); }
+      };
+    }
+  };
+  c.wps = { Application: { ActiveDocument: docThrows, Selection: { Range: docThrows.Range(0, 0) } } };
+  c.HandleSessionResult({
+    status: 'ready',
+    flat_opc: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>'
+  });
+  assert.equal(alerts.length, 1);
+  assert.ok(alerts[0].includes('COM InsertXML rejected package'));
+  assert.ok(logs.some(m => m.includes('COM InsertXML rejected package')));
+}
+
+// 5. Batch ToggleLatex must strip extra trailing breaks after shapeEnd even when an adjacent
+//    inserted OLE shape causes the 32-char suffix comparison to mismatch.
+{
+  const c = controller();
+  let text = 'Cho $a=1$ và $b=2$ xong.\r';
+  const shapes = [];
+  let docEndBias = 0; // Simulates WPS field/end drift causing pre-pic suffix check to miss.
+  const doc = {
+    get Content() { return { End: text.length + docEndBias }; },
+    get InlineShapes() { return { Count: shapes.length, Item: idx => shapes[idx - 1] }; },
+    Range(start, end) {
+      if (start === undefined) return { End: text.length + docEndBias };
+      return {
+        Start: start,
+        End: end,
+        Font: { Size: 12, Position: 0 },
+        get Text() { return text.slice(this.Start, this.End); },
+        InlineShapes: { Count: 0, Item: () => null },
+        Paragraphs: { Item: () => ({ Range: { Start: 0, End: text.length } }) },
+        Delete() { text = text.slice(0, this.Start) + text.slice(this.End); },
+        InsertXML() {
+          const ole = '<' + 'OLE_26_CHARS_PLACEHOLDER' + '>';
+          assert.equal(ole.length, 26);
+          docEndBias = 1; // Causes insertedEnd to overshoot suffix match on pre-pic check.
+          text = text.slice(0, this.Start) + ole + '\r' + text.slice(this.End);
+          shapes.push({ Range: { Start: this.Start, End: this.Start + 26, Font: {} } });
+        },
+        Select() {}
+      };
+    }
+  };
+  const selection = {
+    Start: 0,
+    End: text.length - 1,
+    get Text() { return text.slice(this.Start, this.End); },
+    Range: doc.Range(0, text.length - 1),
+    Collapse() {},
+    Font: {}
+  };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = cb => cb();
+  const pkg = '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>';
+  c.ajaxPost = (url, body, cb) => cb(200, JSON.stringify({ result: pkg }));
+  c.ToggleLatex();
+  const ole = '<' + 'OLE_26_CHARS_PLACEHOLDER' + '>';
+  assert.equal(text, 'Cho ' + ole + ' và ' + ole + ' xong.\r', 'no extra newline after 1st or 2nd formula');
+}
+
+// 6. Collapsed cursor ToggleLatex inside $...$ after a 26-char OLE object (whose .Text is only 1 char '#')
+//    must resolve the exact $...$ under the cursor rather than shifting by +25 chars.
+{
+  const c = controller();
+  const ole26 = '<' + 'OLE_26_CHARS_PLACEHOLDER' + '>';
+  // Document positions have 26 chars for the OLE object, while paragraph .Text represents it as 1 char '#'.
+  const docText = 'Eq ' + ole26 + ' and $\\frac{3\\pi}{4}$ plus $\\frac{5\\pi}{4}$.\r';
+  const paraVisibleText = 'Eq # and $\\frac{3\\pi}{4}$ plus $\\frac{5\\pi}{4}$.\r';
+  const targetStart = docText.indexOf('$\\frac{3\\pi}{4}$');
+  const targetEnd = targetStart + '$\\frac{3\\pi}{4}$'.length;
+  const curPos = targetStart + 5; // inside $\frac{3\pi}{4}$
+  function sliceToParaText(start, end) {
+    const raw = docText.slice(start, end);
+    return raw.replace(ole26, '#');
+  }
+  let convertedLatex = null;
+  let insertedRange = null;
+  const doc = {
+    get Content() { return { End: docText.length }; },
+    Range(start, end) {
+      if (start === undefined) return { End: docText.length };
+      return {
+        Start: start,
+        End: end,
+        Font: { Size: 12 },
+        get Text() { return sliceToParaText(this.Start, this.End); },
+        InlineShapes: { Count: 0, Item: () => null },
+        OMaths: { Count: 0 }
+      };
+    }
+  };
+  const selection = {
+    Start: curPos,
+    End: curPos,
+    Paragraphs: {
+      Item: () => ({
+        Range: { Start: 0, End: docText.length, Text: paraVisibleText }
+      })
+    },
+    Range: doc.Range(curPos, curPos)
+  };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = cb => cb();
+  c.insertMathTypeAtDocRange = (d, rng) => {
+    insertedRange = { start: rng.Start, end: rng.End, text: docText.slice(rng.Start, rng.End) };
+    return {};
+  };
+  c.ajaxPost = (url, body, cb) => {
+    convertedLatex = JSON.parse(body).data;
+    cb(200, JSON.stringify({ result: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>' }));
+  };
+  c.ToggleLatex();
+  assert.equal(convertedLatex, '\\frac{3\\pi}{4}');
+  assert.deepEqual(insertedRange, { start: targetStart, end: targetEnd, text: '$\\frac{3\\pi}{4}$' });
+}
+console.log('WPS MathType OLE range, fallback, and error-diagnostic tests passed');
