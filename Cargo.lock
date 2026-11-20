@@ -1137,7 +1137,7 @@ checksum = "cfc1cc505827f4c23eedc297975a0fd038268d41293f389dd8ff3b574aefab19"
 
 [[package]]
 name = "eqntide"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "ab_glyph",
  "ab_glyph_rasterizer",
@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "eqntide-desktop"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "directories",
  "eframe",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "eqntide-editor"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "eqntide",
 ]
