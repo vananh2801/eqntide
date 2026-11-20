@@ -33,6 +33,19 @@ pub const PX_PER_PT: f32 = 8.0;
 
 const MAX_PIXELS: usize = 6_000_000;
 const MAX_WIDTH_PX: usize = 20_000;
+pub(crate) const MIN_FONT_PT: f32 = 1.0;
+pub(crate) const MAX_FONT_PT: f32 = 200.0;
+
+pub(crate) fn validate_font_pt(font_pt: f32) -> Result<f32> {
+    if font_pt.is_finite() && (MIN_FONT_PT..=MAX_FONT_PT).contains(&font_pt) {
+        Ok(font_pt)
+    } else {
+        Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("font_pt must be finite and between {MIN_FONT_PT} and {MAX_FONT_PT}"),
+        )))
+    }
+}
 
 /// A rendered equation picture and its size/baseline in points.
 #[derive(Debug, Clone)]

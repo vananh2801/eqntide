@@ -227,6 +227,16 @@ pub fn decode_input_to_mathml(data: &str, format: &str) -> crate::error::Result<
 pub fn convert_document(
     req: &ConvertDocumentRequest,
 ) -> std::result::Result<ConvertDocumentResponse, ServiceError> {
+    if req.input_path.contains('\0') || req.output_path.as_deref().is_some_and(|p| p.contains('\0'))
+    {
+        return Err(ServiceError::new(400, "invalid null byte in path"));
+    }
+    if !req.font_pt.is_finite() || !(1.0..=200.0).contains(&req.font_pt) {
+        return Err(ServiceError::new(
+            400,
+            "font_pt must be a finite number between 1.0 and 200.0",
+        ));
+    }
     let input = std::path::Path::new(&req.input_path);
     if !input.exists() {
         return Err(ServiceError::new(
@@ -244,6 +254,15 @@ pub fn convert_document(
         ));
     }
     let output = req.output_path.as_deref().unwrap_or(&req.input_path);
+    if !std::path::Path::new(output)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("docx"))
+    {
+        return Err(ServiceError::new(
+            400,
+            "output_path must have a .docx extension",
+        ));
+    }
     let preview = if req.preview.eq_ignore_ascii_case("png") {
         PreviewFormat::Png
     } else {
@@ -305,6 +324,12 @@ pub fn convert_document(
 pub fn convert_snippet(
     req: &ConvertSnippetRequest,
 ) -> std::result::Result<ConvertSnippetResponse, ServiceError> {
+    if !req.font_pt.is_finite() || !(1.0..=200.0).contains(&req.font_pt) {
+        return Err(ServiceError::new(
+            400,
+            "font_pt must be a finite number between 1.0 and 200.0",
+        ));
+    }
     let math = decode_input_to_mathml(&req.data, &req.from)
         .map_err(|e| ServiceError::new(422, format!("failed to parse input equation: {e}")))?;
     let mut response = ConvertSnippetResponse {
@@ -702,5 +727,19 @@ mod tests {
         }
         let sub_sup = parse_latex_to_mathml(r"f''_0^1").unwrap();
         assert_eq!(sub_sup.to_latex(), r"{f''}_{0}^{1}");
+    }
+
+    #[test]
+    fn convert_snippet_rejects_non_finite_or_out_of_range_font_pt() {
+        for bad in [f32::NAN, f32::INFINITY, 0.0, -1.0, 10_000.0] {
+            let err = convert_snippet(&ConvertSnippetRequest {
+                data: "x+1".into(),
+                from: "latex".into(),
+                to: "emf".into(),
+                font_pt: bad,
+            })
+            .unwrap_err();
+            assert_eq!(err.status, 400, "font_pt={bad}");
+        }
     }
 }

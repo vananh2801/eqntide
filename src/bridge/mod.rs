@@ -20,9 +20,10 @@ pub mod uri;
 
 pub use protocol::*;
 pub use server::{
-    start_bridge_server, start_bridge_server_with_callback,
-    start_bridge_server_with_window_requests, DesktopWindowRequest, ServerHandle, WindowCallback,
-    WindowRequestCallback, DEFAULT_HOST, DEFAULT_PORT,
+    bridge_token_path, load_or_create_bridge_token, start_bridge_server,
+    start_bridge_server_with_callback, start_bridge_server_with_token,
+    start_bridge_server_with_window_requests, user_data_dir, DesktopWindowRequest, ServerHandle,
+    WindowCallback, WindowRequestCallback, BRIDGE_TOKEN_HEADER, DEFAULT_HOST, DEFAULT_PORT,
 };
 pub use session::{SessionManager, SessionState};
 pub use uri::{format_custom_uri, parse_custom_uri, CustomUriAction};

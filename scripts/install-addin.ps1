@@ -87,6 +87,19 @@ if ($Uninstall) {
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsTargetPath -Recurse -Force
     Copy-Item -Path (Join-Path $WpsAddinDir "*") -Destination $WpsVersionPath -Recurse -Force
 
+    $BridgeDataDir = Join-Path $env:LOCALAPPDATA "eqntide\EqnTide\data"
+    New-Item -ItemType Directory -Path $BridgeDataDir -Force | Out-Null
+    $BridgeTokenFile = Join-Path $BridgeDataDir "bridge.token"
+    $BridgeToken = if (Test-Path -LiteralPath $BridgeTokenFile) { (Get-Content -Raw -LiteralPath $BridgeTokenFile).Trim() } else { "" }
+    if ($BridgeToken.Length -lt 16) {
+        $BridgeToken = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
+        [IO.File]::WriteAllText($BridgeTokenFile, ($BridgeToken + "`n"), [Text.UTF8Encoding]::new($false))
+    }
+    $TokenJs = "// Generated per-user EqnTide bridge token`nwindow.EQNTIDE_BRIDGE_TOKEN = `"$BridgeToken`";`n"
+    foreach ($DestDir in @($WpsTargetPath, $WpsVersionPath)) {
+        [IO.File]::WriteAllText((Join-Path $DestDir "bridge-token.js"), $TokenJs, [Text.UTF8Encoding]::new($false))
+    }
+
     $PublishXml = Join-Path $WpsBasePath "publish.xml"
     if (Test-Path $PublishXml) { [xml]$config = Get-Content -Raw $PublishXml } else { [xml]$config = '<jsplugins />' }
     foreach ($Node in @($config.DocumentElement.ChildNodes)) {

@@ -22,6 +22,31 @@ echo "=========================================================="
 
 OS="$(uname -s)"
 
+ensure_linux_bridge_token() {
+  local DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/eqntide"
+  local TOKEN_FILE="${DATA_DIR}/bridge.token"
+  mkdir -p "${DATA_DIR}"
+  chmod 700 "${DATA_DIR}"
+  if [[ ! -s "${TOKEN_FILE}" ]]; then
+    python3 -c 'import secrets, sys; sys.stdout.write(secrets.token_hex(32) + "\n")' > "${TOKEN_FILE}"
+  fi
+  chmod 600 "${TOKEN_FILE}"
+  tr -d '\r\n' < "${TOKEN_FILE}"
+}
+
+write_wps_token_script() {
+  local DEST_DIR="$1"
+  local TOKEN="$2"
+  local TOKEN_JS="${DEST_DIR}/bridge-token.js"
+  python3 - "$TOKEN_JS" "$TOKEN" <<'PY'
+import json, os, sys
+path, token = sys.argv[1], sys.argv[2]
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write("// Generated per-user EqnTide bridge token\nwindow.EQNTIDE_BRIDGE_TOKEN = " + json.dumps(token) + ";\n")
+os.chmod(path, 0o600)
+PY
+}
+
 # ------------------------------------------------------------------------------
 # Linux Installation (WPS Office JS Add-in)
 # ------------------------------------------------------------------------------
@@ -30,6 +55,10 @@ install_linux_wps() {
     "${HOME}/.local/share/Kingsoft/wps/jsaddons"
     "${HOME}/.local/share/Kingsoft/wps_intl/jsaddons"
   )
+  local BRIDGE_TOKEN=""
+  if [[ "${ACTION}" != "uninstall" ]]; then
+    BRIDGE_TOKEN="$(ensure_linux_bridge_token)"
+  fi
 
   for TARGET_BASE in "${DIRS[@]}"; do
     local TARGET_DIR="${TARGET_BASE}/EqnTide"
@@ -54,10 +83,12 @@ install_linux_wps() {
     mkdir -p "${TARGET_DIR}"
     if [[ -d "${TARGET_VERSION_DIR}" && ! -L "${TARGET_VERSION_DIR}" ]]; then
       cp -r "${WPS_ADDIN_DIR}"/* "${TARGET_VERSION_DIR}/"
+      write_wps_token_script "${TARGET_VERSION_DIR}" "${BRIDGE_TOKEN}"
     else
       ln -sfn EqnTide "${TARGET_VERSION_DIR}"
     fi
     cp -r "${WPS_ADDIN_DIR}"/* "${TARGET_DIR}/"
+    write_wps_token_script "${TARGET_DIR}" "${BRIDGE_TOKEN}"
 
     python3 "${SCRIPT_DIR}/configure_wps.py" "${TARGET_BASE}"
 

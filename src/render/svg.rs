@@ -23,6 +23,7 @@ pub struct SvgPreview {
 
 /// Render `math` (a `<math>` tree) at `font_pt` points per em as vector SVG.
 pub fn render_svg(math: &MathNode, font_pt: f32) -> Result<SvgPreview> {
+    let font_pt = super::validate_font_pt(font_pt)?;
     let (b, em) = layout::layout_math(math, font_pt)?;
     let f = fonts();
     let (min_x, max_x, min_y, max_y) = b.ink_bounds(f);
@@ -142,5 +143,17 @@ mod tests {
         assert!(preview.svg.contains("fill=\"currentColor\""));
         assert!(preview.svg.contains("<path d=\""));
         assert!(preview.width_pt > 0.0 && preview.height_pt > 0.0);
+    }
+
+    #[test]
+    fn rejects_invalid_or_extreme_font_pt_in_svg_and_emf() {
+        let math = MathNode::parse("<math><mi>x</mi></math>").unwrap();
+        for bad in [f32::NAN, f32::INFINITY, 0.0, -5.0, 5000.0] {
+            assert!(render_svg(&math, bad).is_err(), "svg font_pt={bad}");
+            assert!(
+                crate::render::emf::render_emf(&math, bad).is_err(),
+                "emf font_pt={bad}"
+            );
+        }
     }
 }

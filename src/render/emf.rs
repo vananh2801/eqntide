@@ -108,6 +108,7 @@ pub fn render_emf_with_mtef(
     font_pt: f32,
     mtef: Option<&[u8]>,
 ) -> Result<EmfPreview> {
+    let font_pt = super::validate_font_pt(font_pt)?;
     let (b, em) = layout::layout_math(math, font_pt)?;
     let f = fonts();
     let (min_x, max_x, min_y, max_y) = b.ink_bounds(f);

@@ -4,10 +4,13 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::xml::{Element, Node};
 
 use super::consts::*;
+
+const MAX_DOCX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_DOCX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 
 pub fn ensure_default_extension(ct_root: &mut Element, ext: &str, content_type: &str) {
     if ct_root.elements().any(|c| {
@@ -78,14 +81,34 @@ impl Package {
             entries: Vec::with_capacity(archive.len()),
             index: HashMap::new(),
         };
+        let mut total_uncompressed: u64 = 0;
         for i in 0..archive.len() {
-            let mut f = archive.by_index(i)?;
+            let f = archive.by_index(i)?;
             let name = f.name().to_owned();
             let is_dir = f.is_dir();
             let modified = Some(f.last_modified());
             let mut data = Vec::new();
             if !is_dir {
-                f.read_to_end(&mut data)?;
+                if f.size() > MAX_DOCX_ENTRY_BYTES {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("ZIP entry '{name}' exceeds maximum uncompressed size limit"),
+                    )));
+                }
+                f.take(MAX_DOCX_ENTRY_BYTES + 1).read_to_end(&mut data)?;
+                if data.len() as u64 > MAX_DOCX_ENTRY_BYTES {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("ZIP entry '{name}' exceeds maximum uncompressed size limit"),
+                    )));
+                }
+                total_uncompressed = total_uncompressed.saturating_add(data.len() as u64);
+                if total_uncompressed > MAX_DOCX_TOTAL_BYTES {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "DOCX archive exceeds maximum total decompressed size limit",
+                    )));
+                }
             }
             match pkg.index.get(&name) {
                 // Duplicate names: the last entry wins, like Python's ZipFile.read.
@@ -170,5 +193,28 @@ impl Package {
             }
         }
         Ok(w.finish()?.into_inner())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_compressed_docx_entry_is_rejected() {
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        w.start_file("word/document.xml", opts).unwrap();
+        let chunk = vec![b'A'; 1024 * 1024];
+        for _ in 0..65 {
+            w.write_all(&chunk).unwrap();
+        }
+        let zip_bytes = w.finish().unwrap().into_inner();
+        let err = match Package::read(&zip_bytes) {
+            Ok(_) => panic!("65 MiB entry must be rejected"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("size limit"));
     }
 }

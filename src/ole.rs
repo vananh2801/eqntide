@@ -349,6 +349,8 @@ struct CfbHeader {
     num_difat_sects: usize,
 }
 
+const MAX_CFB_MINI_CUTOFF: usize = 65_536;
+
 impl CfbHeader {
     fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < SECTOR || data.get(0..8)? != MAGIC {
@@ -360,12 +362,17 @@ impl CfbHeader {
         if !(7..=16).contains(&sector_shift) || !(4..=sector_shift).contains(&mini_shift) {
             return None;
         }
+        let sector_size = 1usize << sector_shift;
+        let mini_cutoff = get_u32(data, 56)? as usize;
+        if mini_cutoff > MAX_CFB_MINI_CUTOFF {
+            return None;
+        }
 
         Some(Self {
-            sector_size: 1usize << sector_shift,
+            sector_size,
             mini_sector_size: 1usize << mini_shift,
             first_dir_sect: get_u32(data, 48)?,
-            mini_cutoff: get_u32(data, 56)? as usize,
+            mini_cutoff,
             first_minifat_sect: get_u32(data, 60)?,
             num_minifat_sects: get_u32(data, 64)? as usize,
             first_difat_sect: get_u32(data, 68)?,
@@ -388,9 +395,11 @@ fn read_chain(
 ) -> Vec<u8> {
     let mut out = Vec::new();
     let mut cur = start_sect;
-    let max_sectors = fat.len().max(1024);
+    let total_file_sectors = data.len() / sector_size;
+    let max_sectors = fat.len().min(total_file_sectors).max(1);
+    let mut visited = std::collections::HashSet::new();
     let mut steps = 0;
-    while cur < DIFSECT && steps < max_sectors {
+    while cur < DIFSECT && steps < max_sectors && visited.insert(cur) {
         let Some(slice) = read_sector(data, sector_size, cur) else {
             break;
         };
@@ -418,11 +427,14 @@ fn read_mini_chain(
     minifat: &[u32],
     target: &DirItem,
 ) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(target.size);
+    let bounded_size = target.size.min(mini_stream.len());
+    let mut out = Vec::with_capacity(bounded_size);
     let mut cur = target.start_sect;
-    let max_steps = minifat.len().max(1024);
+    let total_mini_sectors = mini_stream.len() / mini_sector_size + 1;
+    let max_steps = minifat.len().min(total_mini_sectors).max(1);
+    let mut visited = std::collections::HashSet::new();
     let mut steps = 0;
-    while cur < DIFSECT && steps < max_steps && out.len() < target.size {
+    while cur < DIFSECT && steps < max_steps && out.len() < bounded_size && visited.insert(cur) {
         let off = (cur as usize).checked_mul(mini_sector_size)?;
         let end = (off + mini_sector_size).min(mini_stream.len());
         if off >= mini_stream.len() {
@@ -432,8 +444,8 @@ fn read_mini_chain(
         cur = minifat.get(cur as usize).copied().unwrap_or(ENDOFCHAIN);
         steps += 1;
     }
-    if out.len() > target.size {
-        out.truncate(target.size);
+    if out.len() > bounded_size {
+        out.truncate(bounded_size);
     }
     Some(out)
 }
@@ -476,8 +488,12 @@ fn collect_fat_sector_ids(data: &[u8], header: &CfbHeader) -> Option<Vec<u32>> {
     }
 
     let mut difat_sect = header.first_difat_sect;
-    for _ in 0..header.num_difat_sects {
-        if difat_sect >= DIFSECT {
+    let max_difat = header
+        .num_difat_sects
+        .min(data.len() / header.sector_size + 1);
+    let mut visited_difat = std::collections::HashSet::new();
+    for _ in 0..max_difat {
+        if difat_sect >= DIFSECT || !visited_difat.insert(difat_sect) {
             break;
         }
         let Some(sector) = read_sector(data, header.sector_size, difat_sect) else {
@@ -665,6 +681,51 @@ mod legacy_preview_tests {
             assert!(crate::mtef::decode::mtef_to_mathml(&repaired).is_some());
             assert_eq!(repair_legacy_metafile_mtef(broken.clone(), None), broken);
         }
+    }
+
+    #[test]
+    fn crafted_cfb_headers_and_cycles_fail_cleanly_without_oom_or_hang() {
+        // 1. Oversized mini_cutoff + huge directory stream size must fail cleanly.
+        let mut bad_cutoff = vec![0u8; 1024];
+        bad_cutoff[0..8].copy_from_slice(&MAGIC);
+        put_u16(&mut bad_cutoff, 30, 9);
+        put_u16(&mut bad_cutoff, 32, 6);
+        put_u32(&mut bad_cutoff, 56, u32::MAX);
+        assert!(read_ole_stream(&bad_cutoff, MTEF_STREAM_NAMES).is_none());
+
+        // 2. Huge num_difat_sects with self-referencing DIFAT sector 0 must not loop.
+        let mut cyclic_difat = vec![0u8; 1024];
+        cyclic_difat[0..8].copy_from_slice(&MAGIC);
+        put_u16(&mut cyclic_difat, 30, 9);
+        put_u16(&mut cyclic_difat, 32, 6);
+        put_u32(&mut cyclic_difat, 56, 4096);
+        put_u32(&mut cyclic_difat, 68, 0);
+        put_u32(&mut cyclic_difat, 72, u32::MAX);
+        for i in 0..CFB_HEADER_DIFAT_ENTRIES {
+            put_u32(&mut cyclic_difat, 76 + i * 4, FREESECT);
+        }
+        assert!(read_ole_stream(&cyclic_difat, MTEF_STREAM_NAMES).is_none());
+
+        // 3. Valid make_ole -> extract_mtef_from_ole and MathML decode round-trip stay intact.
+        let mml = crate::MathNode::parse("<math><mi>x</mi></math>").unwrap();
+        let eq_bytes = crate::mtef::encode::mathml_to_mtef_bytes(&mml).unwrap();
+        let native = crate::mtef::make_equation_native(&eq_bytes);
+        let ole = make_ole(&native).unwrap();
+        let extracted = extract_mtef_from_ole(&ole).unwrap();
+        assert_eq!(extracted, native[28..]);
+        assert!(crate::mtef::decode::ole_to_mathml(&ole).is_some());
+
+        // 4. Oversized DirItem.size on an otherwise valid OLE is clamped/rejected cleanly.
+        let mut oversized_dir = ole.clone();
+        let mut patched = false;
+        for chunk in oversized_dir.as_chunks_mut::<128>().0 {
+            if chunk.starts_with(b"E\0q\0u\0a\0t\0i\0o\0n\0 \0N\0a\0t\0i\0v\0e\0") {
+                put_u32(chunk, 120, u32::MAX);
+                patched = true;
+            }
+        }
+        assert!(patched);
+        let _ = read_ole_stream(&oversized_dir, MTEF_STREAM_NAMES);
     }
 }
 

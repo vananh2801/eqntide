@@ -203,6 +203,7 @@ Public Sub UpgradeMathTypeMacro()
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
     http.Open "POST", BRIDGE_ROOT & "/convert/document", False
     http.setRequestHeader "Content-Type", "application/json"
+    SetBridgeTokenHeader http
 
     Dim payload As String
     payload = "{""input_path"":" & JsonEscape(docPath) & ",""target"":" & JsonEscape(targetMode) & "}"
@@ -275,6 +276,7 @@ Private Sub EditInNativeDesktop(ByVal editExisting As Boolean)
         http.setTimeouts 1000, 1000, 2000, 3000
         http.Open "POST", BRIDGE_ROOT & "/session/open", False
         http.setRequestHeader "Content-Type", "application/json"
+        SetBridgeTokenHeader http
         http.send "{""data"":" & JsonEscape(inputData) & ",""format"":" & JsonEscape(inputFormat) & ",""target_mode"":""mathtype"",""font_pt"":" & Replace(CStr(fontPt), ",", ".") & "}"
         response = ""
         If Err.Number = 0 Then
@@ -293,6 +295,7 @@ Private Sub EditInNativeDesktop(ByVal editExisting As Boolean)
         Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
         http.setTimeouts 1000, 1000, 2000, 3000
         http.Open "GET", BRIDGE_ROOT & "/session/" & sessionId & "/wait?timeout=1", False
+        SetBridgeTokenHeader http
         http.send
         If http.Status <> 200 Then Err.Raise vbObjectError + 102, , "The editing session is no longer available."
         response = http.responseText
@@ -315,6 +318,7 @@ EditError:
     If Len(sessionId) > 0 Then
         http.Open "POST", BRIDGE_ROOT & "/session/" & sessionId & "/cancel", False
         http.setRequestHeader "Content-Type", "application/json"
+        SetBridgeTokenHeader http
         http.send "{}"
     End If
     MsgBox "Cannot complete native editing: " & message, vbExclamation, "EqnTide"
@@ -411,6 +415,32 @@ Private Function StripDelimiters(ByVal s As String) As String
     End If
 End Function
 
+Private Function ReadBridgeToken() As String
+    On Error GoTo TokenError
+    Dim shell As Object, fso As Object, tokenPath As String, ts As Object
+    Set shell = CreateObject("WScript.Shell")
+    tokenPath = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\eqntide\EqnTide\data\bridge.token"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso.FileExists(tokenPath) Then
+        Set ts = fso.OpenTextFile(tokenPath, 1, False)
+        If Not ts.AtEndOfStream Then
+            ReadBridgeToken = Trim(Replace(Replace(ts.ReadAll, vbCr, ""), vbLf, ""))
+        End If
+        ts.Close
+    End If
+    Exit Function
+TokenError:
+    ReadBridgeToken = ""
+End Function
+
+Private Sub SetBridgeTokenHeader(ByVal http As Object)
+    Dim token As String
+    token = ReadBridgeToken()
+    If Len(token) > 0 Then
+        http.setRequestHeader "X-EqnTide-Token", token
+    End If
+End Sub
+
 Private Function CallBridge(ByVal dataStr As String, ByVal fromFmt As String, ByVal toFmt As String) As String
     On Error GoTo HttpError
 
@@ -419,6 +449,7 @@ Private Function CallBridge(ByVal dataStr As String, ByVal fromFmt As String, By
 
     http.Open "POST", BRIDGE_URL, False
     http.setRequestHeader "Content-Type", "application/json"
+    SetBridgeTokenHeader http
 
     Dim payload As String
     payload = "{""data"":" & JsonEscape(dataStr) & ",""from"":""" & fromFmt & """,""to"":""" & toFmt & """}"
@@ -443,14 +474,27 @@ HttpError:
 End Function
 
 Private Function JsonEscape(ByVal s As String) As String
-    Dim res As String
-    res = Replace(s, "\", "\\")
-    res = Replace(res, """", "\""")
-    res = Replace(res, vbCrLf, "\n")
-    res = Replace(res, vbCr, "\n")
-    res = Replace(res, vbLf, "\n")
-    res = Replace(res, vbTab, "\t")
-    JsonEscape = """" & res & """"
+    Dim i As Long, ch As String, code As Long, out As String
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        code = AscW(ch) And &HFFFF&
+        Select Case code
+            Case 92: out = out & "\\"
+            Case 34: out = out & "\"""
+            Case 8: out = out & "\b"
+            Case 12: out = out & "\f"
+            Case 10: out = out & "\n"
+            Case 13: out = out & "\r"
+            Case 9: out = out & "\t"
+            Case Else
+                If code < 32 Then
+                    out = out & "\u" & Right$("0000" & Hex$(code), 4)
+                Else
+                    out = out & ch
+                End If
+        End Select
+    Next i
+    JsonEscape = """" & out & """"
 End Function
 
 Private Function ExtractJsonResult(ByVal json As String) As String

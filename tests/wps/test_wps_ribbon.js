@@ -108,4 +108,37 @@ assert.equal(setup().c.OnAutoEquationTab, undefined);
   assert.match(taskpaneHtml, /id="btn-start-upgrade"[\s\S]*?<svg[\s\S]*?<\/svg>/);
   assert.match(taskpaneHtml, /id="btn-disk-upgrade"[\s\S]*?<svg[\s\S]*?<\/svg>/);
 }
+
+// Bridge token header X-EqnTide-Token is sent on API calls (and skipped on /health).
+{
+  function makeXhrCtx(sourceRel) {
+    const sent = [];
+    class MockXhr {
+      open(method, url) { this.method = method; this.url = url; this.headers = {}; }
+      setRequestHeader(k, v) { this.headers[k] = v; }
+      send() { sent.push({ method: this.method, url: this.url, headers: this.headers }); }
+    }
+    const ctx = vm.createContext({
+      console,
+      XMLHttpRequest: MockXhr,
+      setTimeout() { return 1; },
+      clearTimeout() {},
+      setInterval() { return 1; },
+      window: { addEventListener() {}, EQNTIDE_BRIDGE_TOKEN: 'secret-token-value' },
+      document: { getElementById: () => ({ addEventListener() {} }) }
+    });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin', sourceRel), 'utf8'), ctx);
+    return { ctx, sent };
+  }
+
+  for (const rel of ['main.js', 'taskpane.js']) {
+    const { ctx, sent } = makeXhrCtx(rel);
+    ctx.ajaxGet('http://127.0.0.1:17890/health', () => {});
+    ctx.ajaxGet('http://127.0.0.1:17890/session/abc/wait', () => {});
+    ctx.ajaxPost('http://127.0.0.1:17890/convert/snippet', '{}', () => {});
+    assert.equal(sent[0].headers['X-EqnTide-Token'], undefined, `${rel} /health omits token`);
+    assert.equal(sent[1].headers['X-EqnTide-Token'], 'secret-token-value', `${rel} GET includes token`);
+    assert.equal(sent[2].headers['X-EqnTide-Token'], 'secret-token-value', `${rel} POST includes token`);
+  }
+}
 console.log('WPS equation tab regression tests passed');

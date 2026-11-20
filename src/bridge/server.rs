@@ -25,6 +25,18 @@ pub const DEFAULT_PORT: u16 = 17890;
 /// Default bind host address.
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 
+/// HTTP header carrying the per-user bridge authentication token.
+pub const BRIDGE_TOKEN_HEADER: &str = "X-EqnTide-Token";
+
+/// Maximum accepted HTTP request body size (16 MiB).
+const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+
+/// Maximum concurrent HTTP worker threads (including long-poll waiters).
+const MAX_CONCURRENT_REQUESTS: usize = 128;
+
+/// Maximum session retention age before stale cleanup evicts entries and temp EMF files.
+const SESSION_MAX_AGE: Duration = Duration::from_secs(3600);
+
 /// Callback invoked when a session is opened or window show is requested.
 /// Arguments: `(session_id, mathml, latex)`
 pub type WindowCallback =
@@ -50,6 +62,7 @@ pub struct ServerHandle {
     active_requests: Arc<AtomicUsize>,
     thread: Option<JoinHandle<()>>,
     addr: SocketAddr,
+    auth_token: String,
 }
 
 struct ActiveRequest(Arc<AtomicUsize>);
@@ -68,6 +81,11 @@ impl ServerHandle {
     /// The actual bound address of the server.
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Per-user authentication token required by protected bridge endpoints.
+    pub fn auth_token(&self) -> &str {
+        &self.auth_token
     }
 
     /// Access the shared session manager.
@@ -95,6 +113,154 @@ impl Drop for ServerHandle {
     }
 }
 
+// ── Per-User Bridge Token & Private Storage ───────────────────────────────────
+
+/// Return the per-user local data directory for EqnTide state/tokens.
+pub fn user_data_dir() -> Option<std::path::PathBuf> {
+    directories::ProjectDirs::from("com", "eqntide", "EqnTide")
+        .map(|dirs| dirs.data_local_dir().to_path_buf())
+}
+
+/// Return the path to the per-user bridge authentication token file.
+pub fn bridge_token_path() -> Option<std::path::PathBuf> {
+    user_data_dir().map(|dir| dir.join("bridge.token"))
+}
+
+fn generate_random_token() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+fn is_valid_token_format(token: &str) -> bool {
+    token.len() >= 16 && token.bytes().all(|b| b.is_ascii_graphic())
+}
+
+fn ensure_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
+fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    ensure_private_dir(parent)?;
+    let temp_path = parent.join(format!(".tmp-{}", uuid::Uuid::new_v4().simple()));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let write_res = (|| -> std::io::Result<()> {
+        let mut f = opts.open(&temp_path)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o600));
+        }
+        std::fs::rename(&temp_path, path)?;
+        Ok(())
+    })();
+    if write_res.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    write_res
+}
+
+fn wps_jsaddons_install_dirs() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    #[cfg(target_os = "windows")]
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let base = std::path::PathBuf::from(appdata).join("Kingsoft/wps/jsaddons");
+        out.push(base.join("EqnTide"));
+        out.push(base.join("EqnTide_1.0.0"));
+    }
+    #[cfg(not(target_os = "windows"))]
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        for sub in [
+            ".local/share/Kingsoft/wps/jsaddons",
+            ".local/share/Kingsoft/wps_intl/jsaddons",
+        ] {
+            let base = home.join(sub);
+            out.push(base.join("EqnTide"));
+            out.push(base.join("EqnTide_1.0.0"));
+        }
+    }
+    out
+}
+
+fn sync_wps_addin_token(token: &str) {
+    let payload = format!(
+        "// Generated per-user EqnTide bridge token\nwindow.EQNTIDE_BRIDGE_TOKEN = \"{token}\";\n"
+    );
+    for dir in wps_jsaddons_install_dirs() {
+        if dir.is_dir() {
+            let target = dir.join("bridge-token.js");
+            let _ = write_private_file(&target, payload.as_bytes());
+        }
+    }
+}
+
+/// Load or create the persistent per-user bridge token inside `dir`.
+pub fn load_or_create_bridge_token_in(dir: &std::path::Path) -> crate::error::Result<String> {
+    ensure_private_dir(dir)?;
+    let path = dir.join("bridge.token");
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        let trimmed = raw.trim();
+        if is_valid_token_format(trimmed) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+            return Ok(trimmed.to_owned());
+        }
+    }
+    let token = generate_random_token();
+    write_private_file(&path, format!("{token}\n").as_bytes())?;
+    Ok(token)
+}
+
+/// Load or create the persistent per-user bridge authentication token and sync it
+/// to any installed per-user WPS JS Add-in directory.
+pub fn load_or_create_bridge_token() -> crate::error::Result<String> {
+    let dir = user_data_dir().ok_or_else(|| {
+        crate::error::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "could not resolve per-user EqnTide data directory",
+        ))
+    })?;
+    let token = load_or_create_bridge_token_in(&dir)?;
+    sync_wps_addin_token(&token);
+    Ok(token)
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 // ── Security Hardening: Host Validation & Origin Whitelist ──────────────────────
 
 /// Validate that the `Host` header resolves strictly to local loopback (anti-DNS Rebinding).
@@ -113,21 +279,18 @@ pub fn is_valid_host(host: &str) -> bool {
     matches!(host_part, "127.0.0.1" | "localhost" | "::1")
 }
 
-/// Validate that the `Origin` header matches trusted localhost, Office Add-in, or WPS origins.
+/// Validate that the `Origin` header matches trusted localhost, HTTPS Office Add-in, or WPS origins.
 pub fn is_allowed_origin(origin: &str) -> bool {
     let origin = origin.trim();
-    if origin.is_empty() || origin == "null" {
-        return true;
+    if origin.is_empty() || origin.eq_ignore_ascii_case("null") {
+        return false;
     }
-    // File or custom schemes used by desktop WebViews / Add-in iframes
-    if origin.starts_with("file://")
-        || origin.starts_with("wps-addon:")
-        || origin.starts_with("vscode-webview://")
-    {
+    // Custom/local schemes used by WPS Add-in WebViews
+    if origin.starts_with("file://") || origin.starts_with("wps-addon:") {
         return true;
     }
 
-    let Some((_scheme, rest)) = origin.split_once("://") else {
+    let Some((scheme, rest)) = origin.split_once("://") else {
         return false;
     };
     let host_and_port = rest.split('/').next().unwrap_or("").trim();
@@ -141,9 +304,14 @@ pub fn is_allowed_origin(origin: &str) -> bool {
         host_and_port.split(':').next().unwrap_or(host_and_port)
     };
 
-    // 1. Localhost origins
+    // 1. Localhost origins (HTTP or HTTPS)
     if matches!(host, "127.0.0.1" | "localhost" | "::1") {
-        return true;
+        return scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    }
+
+    // Remote Office/WPS origins MUST use HTTPS
+    if !scheme.eq_ignore_ascii_case("https") {
+        return false;
     }
 
     // 2. Microsoft Office Add-in origins
@@ -183,25 +351,22 @@ fn get_header<'a>(req: &'a Request, name: &str) -> Option<&'a str> {
 
 /// Attach standard CORS headers and Private Network Access (PNA) header to a response.
 fn add_cors_headers(response: &mut HttpResponse, origin: Option<&str>) {
-    let allow_origin = match origin {
-        Some(o) if !o.is_empty() && o != "null" => o,
-        _ => "*",
-    };
-
-    let headers = [
-        ("Access-Control-Allow-Origin", allow_origin),
+    let mut headers: Vec<(&str, &str)> = vec![
         (
             "Access-Control-Allow-Methods",
             "GET, POST, OPTIONS, PUT, DELETE",
         ),
         (
             "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, X-Requested-With, Access-Control-Request-Private-Network",
+            "Content-Type, Authorization, X-Requested-With, X-EqnTide-Token, Access-Control-Request-Private-Network",
         ),
         ("Access-Control-Allow-Private-Network", "true"),
         ("Access-Control-Max-Age", "86400"),
         ("Vary", "Origin"),
     ];
+    if let Some(o) = origin.filter(|o| !o.is_empty() && !o.eq_ignore_ascii_case("null")) {
+        headers.insert(0, ("Access-Control-Allow-Origin", o));
+    }
     for (name, val) in headers {
         if let Ok(h) = Header::from_bytes(name.as_bytes(), val.as_bytes()) {
             response.add_header(h);
@@ -243,10 +408,31 @@ fn empty_cors_response(status_code: u16, origin: Option<&str>) -> HttpResponse {
     resp
 }
 
-fn read_body(req: &mut Request) -> String {
-    let mut buf = String::new();
-    let _ = req.as_reader().read_to_string(&mut buf);
-    buf
+enum BodyReadError {
+    TooLarge,
+    Io,
+}
+
+fn read_body(req: &mut Request) -> Result<String, BodyReadError> {
+    use std::io::Read;
+    let mut raw = Vec::new();
+    let mut limited = req.as_reader().take((MAX_BODY_BYTES + 1) as u64);
+    limited
+        .read_to_end(&mut raw)
+        .map_err(|_| BodyReadError::Io)?;
+    if raw.len() > MAX_BODY_BYTES {
+        return Err(BodyReadError::TooLarge);
+    }
+    String::from_utf8(raw).map_err(|_| BodyReadError::Io)
+}
+
+fn body_error_response(err: BodyReadError, origin: Option<&str>) -> HttpResponse {
+    match err {
+        BodyReadError::TooLarge => error_response(413, "payload too large", origin),
+        BodyReadError::Io => {
+            error_response(400, "invalid or unreadable UTF-8 request body", origin)
+        }
+    }
 }
 
 fn parse_query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
@@ -286,7 +472,10 @@ fn handle_window_show(
     window_cb: Option<&WindowRequestCallback>,
     origin: Option<&str>,
 ) -> HttpResponse {
-    let body = read_body(req);
+    let body = match read_body(req) {
+        Ok(b) => b,
+        Err(err) => return body_error_response(err, origin),
+    };
     let show_req: WindowShowRequest = serde_json::from_str(&body).unwrap_or_default();
     let session_id = show_req
         .session_id
@@ -321,37 +510,68 @@ fn handle_window_show(
     )
 }
 
+fn is_safe_relative_addin_path(rel_path: &str) -> bool {
+    if rel_path.is_empty()
+        || rel_path.contains('\0')
+        || rel_path.contains('%')
+        || rel_path.contains('\\')
+        || rel_path.contains(':')
+        || rel_path.starts_with('/')
+    {
+        return false;
+    }
+    let path = std::path::Path::new(rel_path);
+    let mut has_normal = false;
+    for comp in path.components() {
+        match comp {
+            std::path::Component::Normal(seg) => {
+                let s = seg.to_string_lossy();
+                if s.starts_with('.') || s.eq_ignore_ascii_case("bridge-token.js") {
+                    return false;
+                }
+                has_normal = true;
+            }
+            _ => return false,
+        }
+    }
+    has_normal
+}
+
 /// Serve static files for Office Word/WPS Add-ins directly from the bridge server.
 fn serve_addin_file(folder: &str, rel_path: &str, origin: Option<&str>) -> Option<HttpResponse> {
-    if rel_path.contains("..") || rel_path.starts_with('/') || rel_path.starts_with('\\') {
+    if !is_safe_relative_addin_path(rel_path) {
         return None;
     }
 
     // Installed resources belong to the binary's version, even on build hosts
     // where the original repository path still exists.
-    let mut candidates = Vec::new();
+    let mut base_candidates = Vec::new();
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
-            candidates.push(parent.join(folder).join(rel_path));
+            base_candidates.push(parent.join(folder));
         }
     }
-    candidates.push(std::path::PathBuf::from(folder).join(rel_path));
-    candidates.push(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join(folder)
-            .join(rel_path),
-    );
+    base_candidates.push(std::path::PathBuf::from(folder));
+    base_candidates.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(folder));
 
     let mut found_bytes = None;
     let mut resolved_path = None;
 
-    for candidate in &candidates {
-        if candidate.is_file() {
-            if let Ok(bytes) = std::fs::read(candidate) {
-                found_bytes = Some(bytes);
-                resolved_path = Some(candidate.clone());
-                break;
-            }
+    for base in &base_candidates {
+        let Ok(canon_base) = std::fs::canonicalize(base) else {
+            continue;
+        };
+        let candidate = canon_base.join(rel_path);
+        let Ok(canon_candidate) = std::fs::canonicalize(&candidate) else {
+            continue;
+        };
+        if !canon_candidate.starts_with(&canon_base) || !canon_candidate.is_file() {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&canon_candidate) {
+            found_bytes = Some(bytes);
+            resolved_path = Some(canon_candidate);
+            break;
         }
     }
 
@@ -426,6 +646,26 @@ pub fn start_bridge_server_with_window_requests(
     addr: &str,
     window_cb: Option<WindowRequestCallback>,
 ) -> crate::error::Result<ServerHandle> {
+    let auth_token = if cfg!(test) {
+        generate_random_token()
+    } else {
+        load_or_create_bridge_token()?
+    };
+    start_bridge_server_with_token(addr, window_cb, auth_token)
+}
+
+/// Start the local HTTP bridge server with an explicit authentication token.
+pub fn start_bridge_server_with_token(
+    addr: &str,
+    window_cb: Option<WindowRequestCallback>,
+    auth_token: String,
+) -> crate::error::Result<ServerHandle> {
+    if !is_valid_token_format(&auth_token) {
+        return Err(crate::error::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid bridge authentication token format",
+        )));
+    }
     let server = Server::http(addr).map_err(|e| {
         crate::error::Error::Io(std::io::Error::other(format!(
             "failed to bind HTTP server to {addr}: {e}"
@@ -445,6 +685,7 @@ pub fn start_bridge_server_with_window_requests(
     let server_clone = Arc::clone(&server_arc);
     let session_clone = session_mgr.clone();
     let running_clone = Arc::clone(&running);
+    let token_clone = auth_token.clone();
 
     let thread = std::thread::spawn(move || {
         while running_clone.load(Ordering::SeqCst) {
@@ -456,13 +697,28 @@ pub fn start_bridge_server_with_window_requests(
                 }
             };
 
+            if active_for_server.load(Ordering::SeqCst) >= MAX_CONCURRENT_REQUESTS {
+                let _ = request.respond(error_response(
+                    503,
+                    "service unavailable: too many concurrent requests",
+                    None,
+                ));
+                continue;
+            }
+
             let session_for_worker = session_clone.clone();
             let window_cb_for_worker = window_cb.clone();
             let active_for_worker = Arc::clone(&active_for_server);
+            let token_for_worker = token_clone.clone();
             active_for_worker.fetch_add(1, Ordering::SeqCst);
             std::thread::spawn(move || {
                 let _active = ActiveRequest(active_for_worker);
-                handle_http_request(request, session_for_worker, window_cb_for_worker);
+                handle_http_request(
+                    request,
+                    session_for_worker,
+                    window_cb_for_worker,
+                    &token_for_worker,
+                );
             });
         }
     });
@@ -474,6 +730,7 @@ pub fn start_bridge_server_with_window_requests(
         active_requests,
         thread: Some(thread),
         addr: bound_addr,
+        auth_token,
     })
 }
 
@@ -481,6 +738,7 @@ fn handle_http_request(
     mut req: Request,
     session_mgr: SessionManager,
     window_cb: Option<WindowRequestCallback>,
+    auth_token: &str,
 ) {
     let method = req.method().clone();
     let raw_url = req.url().to_owned();
@@ -489,17 +747,24 @@ fn handle_http_request(
         None => (raw_url.as_str(), None),
     };
 
-    // 1. Host Header Validation (anti-DNS Rebinding)
-    if let Some(host) = get_header(&req, "Host") {
-        if !is_valid_host(host) {
-            log::warn!("Rejected request with untrusted Host header: {host}");
-            let _ = req.respond(error_response(
-                403,
-                "forbidden: invalid Host header (DNS rebinding protection)",
-                None,
-            ));
-            return;
-        }
+    // 1. Host Header Validation (anti-DNS Rebinding, including HTTP/1.0 without Host)
+    let Some(host) = get_header(&req, "Host") else {
+        log::warn!("Rejected request missing Host header");
+        let _ = req.respond(error_response(
+            403,
+            "forbidden: missing Host header (DNS rebinding protection)",
+            None,
+        ));
+        return;
+    };
+    if !is_valid_host(host) {
+        log::warn!("Rejected request with untrusted Host header: {host}");
+        let _ = req.respond(error_response(
+            403,
+            "forbidden: invalid Host header (DNS rebinding protection)",
+            None,
+        ));
+        return;
     }
 
     // 2. Origin Header Validation (anti-CSRF from untrusted websites)
@@ -520,11 +785,29 @@ fn handle_http_request(
         return;
     }
 
+    // 4. Public read-only routes (health check & static add-in assets)
+    if method == Method::Get && path == "/health" {
+        respond(req, health_response(origin));
+        return;
+    }
     if method == Method::Get {
         if let Some(resp) = serve_addin_route(path, origin) {
             let _ = req.respond(resp);
             return;
         }
+    }
+
+    // 5. Per-user Authentication Token Validation for all API routes
+    let authorized = get_header(&req, BRIDGE_TOKEN_HEADER).is_some_and(|provided| {
+        constant_time_eq(provided.trim().as_bytes(), auth_token.as_bytes())
+    });
+    if !authorized {
+        let _ = req.respond(error_response(
+            401,
+            "unauthorized: invalid or missing bridge token",
+            origin,
+        ));
+        return;
     }
 
     if let Some(response) = handle_session_route(
@@ -540,17 +823,21 @@ fn handle_http_request(
         return;
     }
 
-    // 4. Routing
+    // 6. Routing
     match (method, path) {
-        (Method::Get, "/health") => respond(req, health_response(origin)),
-
         (Method::Post, "/window/show") => {
             let response = handle_window_show(&mut req, &session_mgr, window_cb.as_ref(), origin);
             respond(req, response)
         }
 
         (Method::Post, "/log") => {
-            let body = read_body(&mut req);
+            let body = match read_body(&mut req) {
+                Ok(b) => b,
+                Err(err) => {
+                    respond(req, body_error_response(err, origin));
+                    return;
+                }
+            };
             let trimmed = body.trim();
             eprintln!("[WPS Addin] {trimmed}");
             log::info!("[WPS Addin] {trimmed}");
@@ -562,31 +849,6 @@ fn handle_http_request(
         (Method::Post, "/convert/snippet" | "/convert") => handle_snippet_conversion(req, origin),
 
         (Method::Post, "/convert/document") => handle_document_conversion(req, origin),
-
-        (Method::Post, "/open/folder") => {
-            let body = read_body(&mut req);
-            let payload: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-            if let Some(path_str) = payload.get("path").and_then(|v| v.as_str()) {
-                let p = std::path::Path::new(path_str);
-                let target_dir = if p.is_file() {
-                    p.parent().unwrap_or(p)
-                } else {
-                    p
-                };
-                #[cfg(target_os = "windows")]
-                let _ = std::process::Command::new("explorer")
-                    .arg(target_dir)
-                    .spawn();
-                #[cfg(target_os = "macos")]
-                let _ = std::process::Command::new("open").arg(target_dir).spawn();
-                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(target_dir)
-                    .spawn();
-            }
-            let resp = json_response(200, &serde_json::json!({"status": "ok"}), origin);
-            let _ = req.respond(resp);
-        }
 
         _ => {
             let resp = error_response(404, "not found", origin);
@@ -668,7 +930,11 @@ fn handle_session_open(
     window_cb: Option<&WindowRequestCallback>,
     origin: Option<&str>,
 ) -> HttpResponse {
-    let body = read_body(req);
+    session_mgr.cleanup_stale(SESSION_MAX_AGE);
+    let body = match read_body(req) {
+        Ok(b) => b,
+        Err(err) => return body_error_response(err, origin),
+    };
     let open_req: SessionOpenRequest = match serde_json::from_str(&body) {
         Ok(request) => request,
         Err(error) => {
@@ -676,7 +942,6 @@ fn handle_session_open(
         }
     };
     let trimmed_data = open_req.data.trim();
-    let _ = std::fs::write("/tmp/last_open_req.xml", trimmed_data.as_bytes());
     eprintln!(
         "POST /session/open received payload len={}",
         trimmed_data.len()
@@ -763,7 +1028,8 @@ fn handle_session_wait(
     let timeout_secs = query
         .and_then(|query| parse_query_param(query, "timeout"))
         .and_then(|timeout| timeout.parse::<u64>().ok())
-        .unwrap_or(300);
+        .unwrap_or(300)
+        .clamp(1, 300);
     match session_mgr.wait_session(session_id, Duration::from_secs(timeout_secs)) {
         Some(SessionState::Ready {
             mathml,
@@ -815,13 +1081,26 @@ fn handle_session_update(
     if session_id.is_empty() {
         return error_response(400, "missing session id in path", origin);
     }
-    let body = read_body(req);
+    if uuid::Uuid::parse_str(session_id).is_err() || session_mgr.get_session(session_id).is_none() {
+        return error_response(404, "session not found", origin);
+    }
+    let body = match read_body(req) {
+        Ok(b) => b,
+        Err(err) => return body_error_response(err, origin),
+    };
     let update: SessionUpdateRequest = match serde_json::from_str(&body) {
         Ok(update) => update,
         Err(error) => {
             return error_response(400, &format!("invalid JSON payload: {error}"), origin)
         }
     };
+    if !update.font_pt.is_finite() || !(1.0..=200.0).contains(&update.font_pt) {
+        return error_response(
+            400,
+            "font_pt must be a finite number between 1.0 and 200.0",
+            origin,
+        );
+    }
     let math = match MathNode::parse(&update.mathml) {
         Ok(math) => math,
         Err(error) => {
@@ -955,7 +1234,14 @@ fn handle_session_cancel(
 
 /// Convert one equation snippet without coupling conversion details to routing.
 fn handle_snippet_conversion(mut req: Request, origin: Option<&str>) {
-    let result = serde_json::from_str::<ConvertSnippetRequest>(&read_body(&mut req));
+    let body = match read_body(&mut req) {
+        Ok(b) => b,
+        Err(err) => {
+            let _ = req.respond(body_error_response(err, origin));
+            return;
+        }
+    };
+    let result = serde_json::from_str::<ConvertSnippetRequest>(&body);
     let response = match result {
         Ok(input) => match crate::service::convert_snippet(&input) {
             Ok(output) => json_response(200, &output, origin),
@@ -967,7 +1253,14 @@ fn handle_snippet_conversion(mut req: Request, origin: Option<&str>) {
 }
 
 fn handle_document_conversion(mut req: Request, origin: Option<&str>) {
-    let result = serde_json::from_str::<ConvertDocumentRequest>(&read_body(&mut req));
+    let body = match read_body(&mut req) {
+        Ok(b) => b,
+        Err(err) => {
+            let _ = req.respond(body_error_response(err, origin));
+            return;
+        }
+    };
+    let result = serde_json::from_str::<ConvertDocumentRequest>(&body);
     let response = match result {
         Ok(input) => match crate::service::convert_document(&input) {
             Ok(output) => json_response(200, &output, origin),
@@ -1120,15 +1413,26 @@ mod tests {
 
     #[test]
     fn origin_policy_after_legacy_desktop_removal() {
-        for origin in ["tauri://app", "http://tauri.localhost"] {
-            assert!(!is_allowed_origin(origin));
+        for origin in [
+            "",
+            "null",
+            "NULL",
+            "tauri://app",
+            "http://tauri.localhost",
+            "vscode-webview://123",
+            "http://appsforoffice.microsoft.com",
+            "http://wps.cn",
+        ] {
+            assert!(!is_allowed_origin(origin), "should reject origin: {origin}");
         }
         for origin in [
             "http://127.0.0.1:17890",
+            "http://localhost:3000",
             "https://appsforoffice.microsoft.com",
+            "https://www.wps.cn",
             "wps-addon://eqntide",
         ] {
-            assert!(is_allowed_origin(origin));
+            assert!(is_allowed_origin(origin), "should allow origin: {origin}");
         }
     }
 
@@ -1155,18 +1459,23 @@ mod tests {
                 .map(|s| s.as_str()),
             Some("http://localhost:3000")
         );
+        assert!(resp
+            .headers
+            .get("access-control-allow-headers")
+            .is_some_and(|h| h.contains("X-EqnTide-Token")));
 
-        // 2. Test GET /health
+        // 2. Test GET /health without Origin does not emit wildcard Access-Control-Allow-Origin
         let get_req = format!("GET /health HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         let resp = send_raw_http(addr, &get_req);
         assert_eq!(resp.status, 200);
+        assert!(!resp.headers.contains_key("access-control-allow-origin"));
         let health: HealthResponse = serde_json::from_str(&resp.body).expect("json parse");
         assert_eq!(health.status, "ok");
         assert_eq!(health.server, "eqntide-bridge");
     }
 
     #[test]
-    fn test_security_dns_rebinding_rejected() {
+    fn test_security_dns_rebinding_and_missing_host_rejected() {
         let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
         let addr = server_handle.addr();
 
@@ -1178,20 +1487,28 @@ mod tests {
         let resp = send_raw_http(addr, &rebinding_req);
         assert_eq!(resp.status, 403);
         assert!(resp.body.contains("DNS rebinding"));
+
+        // HTTP/1.0 request without Host header must also be rejected
+        let no_host_req = "GET /health HTTP/1.0\r\nConnection: close\r\n\r\n";
+        let resp = send_raw_http(addr, no_host_req);
+        assert_eq!(resp.status, 403);
+        assert!(resp.body.contains("missing Host"));
     }
 
     #[test]
-    fn test_security_untrusted_origin_rejected() {
+    fn test_security_untrusted_and_null_origin_rejected() {
         let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
         let addr = server_handle.addr();
 
-        // Send request from random malicious web origin
-        let req = format!(
-            "GET /health HTTP/1.1\r\nHost: {addr}\r\nOrigin: https://malicious-website.xyz\r\nConnection: close\r\n\r\n"
-        );
-        let resp = send_raw_http(addr, &req);
-        assert_eq!(resp.status, 403);
-        assert!(resp.body.contains("untrusted Origin"));
+        for bad_origin in ["https://malicious-website.xyz", "null", "http://office.com"] {
+            let req = format!(
+                "GET /health HTTP/1.1\r\nHost: {addr}\r\nOrigin: {bad_origin}\r\nConnection: close\r\n\r\n"
+            );
+            let resp = send_raw_http(addr, &req);
+            assert_eq!(resp.status, 403, "origin={bad_origin}");
+            assert!(resp.body.contains("untrusted Origin"));
+            assert!(!resp.headers.contains_key("access-control-allow-origin"));
+        }
     }
 
     #[test]
@@ -1217,12 +1534,13 @@ mod tests {
     fn test_session_lifecycle_longpoll() {
         let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
         let addr = server_handle.addr();
+        let token = server_handle.auth_token().to_owned();
 
         // 1. Open a new session with OMML input
         let raw_omml = r#"<w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath></w:p>"#;
         let open_payload = format!("{{\"data\": \"{}\", \"format\": \"omml\"}}", raw_omml);
         let open_req = format!(
-            "POST /session/open HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /session/open HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             open_payload.len(),
             open_payload
         );
@@ -1234,9 +1552,10 @@ mod tests {
 
         // 2. In background thread, perform the long-poll wait
         let sid_clone = session_id.clone();
+        let token_clone = token.clone();
         let wait_handle = std::thread::spawn(move || {
             let wait_req = format!(
-                "GET /session/{sid_clone}/wait?timeout=10 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+                "GET /session/{sid_clone}/wait?timeout=10 HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token_clone}\r\nConnection: close\r\n\r\n"
             );
             let resp = send_raw_http(addr, &wait_req);
             let wait_res: SessionWaitResponse =
@@ -1249,7 +1568,7 @@ mod tests {
         let upd_payload =
             r#"{"mathml": "<math><mi>y</mi><mo>=</mo><mn>2</mn></math>", "target_mode": "omml"}"#;
         let upd_req = format!(
-            "POST /session/{session_id}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /session/{session_id}/update HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             upd_payload.len(),
             upd_payload
         );
@@ -1275,6 +1594,7 @@ mod tests {
             start_bridge_server_with_window_requests("127.0.0.1:0", Some(Arc::new(|_| {})))
                 .unwrap();
         let addr = server.addr();
+        let token = server.auth_token().to_owned();
         for (initial, saved, data) in [
             ("mathtype", "omml", ""),
             ("mathtype", "omml", "<math><mi>x</mi></math>"),
@@ -1284,17 +1604,17 @@ mod tests {
             let body = serde_json::json!({"data":data,"format":"mathml","target_mode":initial})
                 .to_string();
             let response = send_raw_http(addr, &format!(
-                "POST /session/open HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+                "POST /session/open HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
             assert_eq!(response.status, 200);
             let opened: SessionOpenResponse = serde_json::from_str(&response.body).unwrap();
             let sid = opened.session_id;
             let body = serde_json::json!({"mathml":"<math><mi>y</mi></math>","target_mode":saved})
                 .to_string();
             let response = send_raw_http(addr, &format!(
-                "POST /session/{sid}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+                "POST /session/{sid}/update HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
             assert_eq!(response.status, 200);
             let response = send_raw_http(addr, &format!(
-                "GET /session/{sid}/wait?timeout=1 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"));
+                "GET /session/{sid}/wait?timeout=1 HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nConnection: close\r\n\r\n"));
             assert_eq!(response.status, 200);
             let result: SessionWaitResponse = serde_json::from_str(&response.body).unwrap();
             assert_eq!(result.status, "ready");
@@ -1321,10 +1641,11 @@ mod tests {
     fn test_convert_snippet_stateless() {
         let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
         let addr = server_handle.addr();
+        let token = server_handle.auth_token().to_owned();
 
         let snip_payload = r#"{"data": "<math><mi>a</mi><mo>+</mo><mi>b</mi></math>", "from": "mathml", "to": "flat_opc_omml"}"#;
         let snip_req = format!(
-            "POST /convert/snippet HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /convert/snippet HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             snip_payload.len(),
             snip_payload
         );
@@ -1340,7 +1661,7 @@ mod tests {
         // Test EMF snippet export
         let emf_payload = r#"{"data": "<math><mi>x</mi><mo>+</mo><mn>1</mn></math>", "from": "mathml", "to": "emf"}"#;
         let emf_req = format!(
-            "POST /convert/snippet HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /convert/snippet HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             emf_payload.len(),
             emf_payload
         );
@@ -1354,7 +1675,7 @@ mod tests {
         // Test PNG snippet export
         let png_payload = r#"{"data": "<math><mi>x</mi><mo>+</mo><mn>1</mn></math>", "from": "mathml", "to": "png"}"#;
         let png_req = format!(
-            "POST /convert/snippet HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /convert/snippet HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             png_payload.len(),
             png_payload
         );
@@ -1370,10 +1691,11 @@ mod tests {
     fn test_session_open_with_mathml_generates_latex() {
         let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
         let addr = server_handle.addr();
+        let token = server_handle.auth_token().to_owned();
 
         let open_payload = r#"{"data": "<math><mi>x</mi><mo>=</mo><mfrac><mi>a</mi><mi>b</mi></mfrac></math>", "format": "mathml", "target_mode": "mathtype"}"#;
         let open_req = format!(
-            "POST /session/open HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "POST /session/open HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             open_payload.len(),
             open_payload
         );
@@ -1388,6 +1710,7 @@ mod tests {
     fn test_server_serves_addin_files() {
         let server_handle = start_bridge_server("127.0.0.1:0").expect("start test server");
         let addr = server_handle.addr();
+        let token = server_handle.auth_token().to_owned();
 
         // Removed Word web endpoints stay unavailable even on upgraded installs.
         // Word now uses the VBA template and the session/conversion API only.
@@ -1396,8 +1719,13 @@ mod tests {
             "/word-addin/manifest.xml",
             "/word-addin/commands.js",
         ] {
-            let request =
+            let unauth =
                 format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+            assert_eq!(send_raw_http(addr, &unauth).status, 401);
+
+            let request = format!(
+                "GET {path} HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nConnection: close\r\n\r\n"
+            );
             assert_eq!(send_raw_http(addr, &request).status, 404);
         }
 
@@ -1426,8 +1754,9 @@ mod tests {
         let server =
             start_bridge_server_with_window_requests("127.0.0.1:0", Some(callback)).unwrap();
         let addr = server.addr();
+        let token = server.auth_token().to_owned();
         let body = r#"{"tab":"batch"}"#;
-        let response=send_raw_http(addr,&format!("POST /window/show HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()));
+        let response=send_raw_http(addr,&format!("POST /window/show HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()));
         assert_eq!(response.status, 200);
         assert_eq!(
             rx.recv_timeout(Duration::from_secs(2))
@@ -1442,7 +1771,8 @@ mod tests {
         });
         let legacy = start_bridge_server_with_callback("127.0.0.1:0", Some(callback)).unwrap();
         let addr = legacy.addr();
-        let response=send_raw_http(addr,&format!("POST /window/show HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"));
+        let token = legacy.auth_token().to_owned();
+        let response=send_raw_http(addr,&format!("POST /window/show HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"));
         assert_eq!(response.status, 200);
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), "");
     }
@@ -1450,6 +1780,7 @@ mod tests {
     fn session_get_preserves_target_and_reports_completed_state() {
         let callback: WindowCallback = Arc::new(|_, _, _, _| {});
         let server = start_bridge_server_with_callback("127.0.0.1:0", Some(callback)).unwrap();
+        let token = server.auth_token().to_owned();
         let id = server.session_manager().create_session_with_target(
             "<math><mi>x</mi></math>".into(),
             None,
@@ -1460,7 +1791,7 @@ mod tests {
         let get = || {
             send_raw_http(
                 addr,
-                &format!("GET /session/{id} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
+                &format!("GET /session/{id} HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nConnection: close\r\n\r\n"),
             )
         };
         let response: serde_json::Value = serde_json::from_str(&get().body).unwrap();
@@ -1474,8 +1805,9 @@ mod tests {
     fn legacy_vba_convert_route_uses_the_native_snippet_service() {
         let server = start_bridge_server("127.0.0.1:0").unwrap();
         let addr = server.addr();
+        let token = server.auth_token().to_owned();
         let body = r#"{"data":"x+1","from":"latex","to":"omml"}"#;
-        let response=send_raw_http(addr,&format!("POST /convert HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()));
+        let response=send_raw_http(addr,&format!("POST /convert HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()));
         assert_eq!(response.status, 200);
         let json: serde_json::Value = serde_json::from_str(&response.body).unwrap();
         assert!(json["result"].as_str().unwrap().contains("oMath"));
@@ -1484,12 +1816,13 @@ mod tests {
     fn bridge_tracks_longpoll_until_its_response_is_written() {
         let server = start_bridge_server("127.0.0.1:0").unwrap();
         let addr = server.addr();
+        let token = server.auth_token().to_owned();
         let id = server
             .session_manager()
             .create_session("<math/>".into(), None, None);
         let sid = id.clone();
         let request = std::thread::spawn(move || {
-            send_raw_http(addr,&format!("GET /session/{sid}/wait?timeout=5 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"))
+            send_raw_http(addr,&format!("GET /session/{sid}/wait?timeout=5 HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nConnection: close\r\n\r\n"))
         });
         let start = std::time::Instant::now();
         while server.pending_requests() == 0 && start.elapsed() < Duration::from_secs(2) {
@@ -1507,6 +1840,7 @@ mod tests {
     fn session_update_validates_target_compatibility() {
         let server = start_bridge_server("127.0.0.1:0").unwrap();
         let addr = server.addr();
+        let token = server.auth_token().to_owned();
 
         // 1. OMML session rejects longdiv with 422
         let omml_sid = server.session_manager().create_session_with_target(
@@ -1523,7 +1857,7 @@ mod tests {
         .to_string();
         let resp = send_raw_http(
             addr,
-            &format!("POST /session/{omml_sid}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
+            &format!("POST /session/{omml_sid}/update HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
         );
         assert_eq!(resp.status, 422, "body: {}", resp.body);
 
@@ -1542,9 +1876,10 @@ mod tests {
         .to_string();
         let resp_mt = send_raw_http(
             addr,
-            &format!("POST /session/{mt_sid}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body_mt}", body_mt.len()),
+            &format!("POST /session/{mt_sid}/update HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body_mt}", body_mt.len()),
         );
         assert_eq!(resp_mt.status, 200, "body: {}", resp_mt.body);
+        assert!(server.session_manager().remove_session(&mt_sid));
 
         // 3. MathType session rejects verticalstrike with 422
         let mt_sid2 = server.session_manager().create_session_with_target(
@@ -1561,8 +1896,157 @@ mod tests {
         .to_string();
         let resp_vs = send_raw_http(
             addr,
-            &format!("POST /session/{mt_sid2}/update HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body_vs}", body_vs.len()),
+            &format!("POST /session/{mt_sid2}/update HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body_vs}", body_vs.len()),
         );
         assert_eq!(resp_vs.status, 422, "body: {}", resp_vs.body);
+    }
+
+    #[test]
+    fn unauthenticated_and_wrong_token_requests_are_rejected_with_401() {
+        let server = start_bridge_server("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+
+        for (method, path, body) in [
+            ("GET", "/session/latest", ""),
+            ("POST", "/session/open", "{}"),
+            ("POST", "/window/show", "{}"),
+            ("POST", "/log", "hi"),
+            ("POST", "/convert/snippet", "{}"),
+            ("POST", "/convert/document", "{}"),
+        ] {
+            let unauth = format!(
+                "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            assert_eq!(send_raw_http(addr, &unauth).status, 401, "{method} {path}");
+
+            let wrong = format!(
+                "{method} {path} HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: wrong-token-value\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            assert_eq!(send_raw_http(addr, &wrong).status, 401, "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn addin_static_serving_blocks_traversal_and_drive_prefixes() {
+        assert!(!is_safe_relative_addin_path("C:/Windows/win.ini"));
+        assert!(!is_safe_relative_addin_path(r"C:\Users\secret.txt"));
+        assert!(!is_safe_relative_addin_path("../Cargo.toml"));
+        assert!(!is_safe_relative_addin_path("..%2fCargo.toml"));
+        assert!(!is_safe_relative_addin_path("bridge-token.js"));
+        assert!(!is_safe_relative_addin_path(".hidden"));
+        assert!(is_safe_relative_addin_path("main.js"));
+        assert!(is_safe_relative_addin_path("assets/icons/tex-32.png"));
+
+        let server = start_bridge_server("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        for bad_path in [
+            "/wps-addin/C:/Windows/win.ini",
+            "/wps-addin/C:%5CWindows%5Cwin.ini",
+            "/wps-addin/%2e%2e/Cargo.toml",
+            "/wps-addin/../Cargo.toml",
+            "/wps-addin/bridge-token.js",
+        ] {
+            let req =
+                format!("GET {bad_path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+            assert_eq!(send_raw_http(addr, &req).status, 404, "{bad_path}");
+        }
+    }
+
+    #[test]
+    fn open_folder_removed_and_document_output_extension_validated() {
+        let server = start_bridge_server("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let token = server.auth_token().to_owned();
+
+        let body = r#"{"path":"/tmp"}"#;
+        let open_folder = format!(
+            "POST /open/folder HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        assert_eq!(send_raw_http(addr, &open_folder).status, 404);
+
+        let dir = std::env::temp_dir().join(format!(
+            "eqntide_doc_test_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input_docx = dir.join("sample.docx");
+        std::fs::write(&input_docx, b"not-a-zip").unwrap();
+        let bad_out = dir.join("evil.bat");
+        let doc_body = serde_json::json!({
+            "input_path": input_docx.to_string_lossy(),
+            "output_path": bad_out.to_string_lossy(),
+            "target": "omml"
+        })
+        .to_string();
+        let doc_req = format!(
+            "POST /convert/document HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{doc_body}",
+            doc_body.len()
+        );
+        assert_eq!(send_raw_http(addr, &doc_req).status, 400);
+        assert!(!bad_out.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invalid_session_update_writes_no_emf_and_oversized_body_returns_413() {
+        let server = start_bridge_server("127.0.0.1:0").unwrap();
+        let addr = server.addr();
+        let token = server.auth_token().to_owned();
+
+        let bogus_id = "not-a-uuid-and-missing";
+        let expected_emf = std::env::temp_dir().join(format!("eqntide_{bogus_id}.emf"));
+        let _ = std::fs::remove_file(&expected_emf);
+        let upd_body = r#"{"mathml":"<math><mi>x</mi></math>","target_mode":"mathtype"}"#;
+        let upd_req = format!(
+            "POST /session/{bogus_id}/update HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{upd_body}",
+            upd_body.len()
+        );
+        assert_eq!(send_raw_http(addr, &upd_req).status, 404);
+        assert!(!expected_emf.exists());
+
+        let too_big = "a".repeat(MAX_BODY_BYTES + 16);
+        let big_req = format!(
+            "POST /log HTTP/1.1\r\nHost: {addr}\r\n{BRIDGE_TOKEN_HEADER}: {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{too_big}",
+            too_big.len()
+        );
+        assert_eq!(send_raw_http(addr, &big_req).status, 413);
+    }
+
+    #[test]
+    fn token_persistence_and_stale_session_cleanup_remove_temp_emfs() {
+        let dir = std::env::temp_dir().join(format!(
+            "eqntide_tok_test_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tok1 = load_or_create_bridge_token_in(&dir).unwrap();
+        let tok2 = load_or_create_bridge_token_in(&dir).unwrap();
+        assert_eq!(tok1, tok2);
+        assert!(tok1.len() >= 32);
+
+        let mgr = SessionManager::new();
+        let sid = mgr.create_session_with_target("<math/>".into(), None, Some(12.0), "mathtype");
+        let emf_path = dir.join(format!("eqntide_{sid}.emf"));
+        std::fs::write(&emf_path, b"emf-data").unwrap();
+        mgr.update_session(
+            &sid,
+            "<math/>".into(),
+            "<pkg:package/>".into(),
+            "<m:oMath/>".into(),
+            Some(emf_path.to_string_lossy().into_owned()),
+            Some(10.0),
+            Some(10.0),
+            Some(2.0),
+            Some(12.0),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        mgr.cleanup_stale(Duration::from_millis(5));
+        assert!(mgr.get_session(&sid).is_none());
+        assert!(!emf_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -183,9 +183,17 @@ impl SessionManager {
             lock.get(id).cloned().ok_or("session not found")?
         };
 
-        {
+        let old_emf = {
             let mut data = entry.data.lock().unwrap();
+            let old = match &data.state {
+                SessionState::Ready { emf_path, .. } => emf_path.clone(),
+                _ => None,
+            };
             data.state = SessionState::Cancelled;
+            old
+        };
+        if let Some(path) = old_emf {
+            let _ = std::fs::remove_file(path);
         }
         entry.cond.notify_all();
         Ok(())
@@ -219,19 +227,52 @@ impl SessionManager {
 
     /// Remove a session from the manager.
     pub fn remove_session(&self, id: &str) -> bool {
-        let mut lock = self.sessions.lock().unwrap();
-        lock.remove(id).is_some()
+        let removed = {
+            let mut lock = self.sessions.lock().unwrap();
+            lock.remove(id)
+        };
+        if let Some(entry) = removed {
+            if let Ok(data) = entry.data.lock() {
+                if let SessionState::Ready {
+                    emf_path: Some(ref path),
+                    ..
+                } = data.state
+                {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            true
+        } else {
+            false
+        }
     }
 
-    /// Clean up sessions older than `max_age`.
+    /// Clean up sessions older than `max_age` and remove associated temporary EMF files.
     pub fn cleanup_stale(&self, max_age: Duration) {
-        let mut lock = self.sessions.lock().unwrap();
-        lock.retain(|_, entry| {
-            if let Ok(data) = entry.data.lock() {
-                data.created_at.elapsed() < max_age
-            } else {
-                false
-            }
-        });
+        let mut stale_emfs = Vec::new();
+        {
+            let mut lock = self.sessions.lock().unwrap();
+            lock.retain(|_, entry| {
+                if let Ok(data) = entry.data.lock() {
+                    if data.created_at.elapsed() < max_age {
+                        true
+                    } else {
+                        if let SessionState::Ready {
+                            emf_path: Some(ref path),
+                            ..
+                        } = data.state
+                        {
+                            stale_emfs.push(path.clone());
+                        }
+                        false
+                    }
+                } else {
+                    false
+                }
+            });
+        }
+        for path in stale_emfs {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

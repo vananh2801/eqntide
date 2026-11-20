@@ -3,27 +3,29 @@
  * Automatically wakes up the app via cold-start if bridge is offline.
  */
 function ensureBridgeRunning(callback) {
-  ajaxGet(BRIDGE_URL + "/health", function (status) {
-    if (status === 200) {
-      callback();
-    } else {
-      ColdStartDesktopEditor();
-      var attempts = 0;
-      var poll = setInterval(function () {
-        attempts++;
-        ajaxGet(BRIDGE_URL + "/health", function (s) {
-          if (s === 200) {
-            clearInterval(poll);
-            callback();
-          } else if (attempts >= 30) {
-            clearInterval(poll);
-            setTimeout(function () {
-              alert("EqnTide is currently not running.\n\nPlease launch EqnTide from your application menu, then try again.");
-            }, 50);
-          }
-        });
-      }, 500);
-    }
+  refreshBridgeToken(function () {
+    ajaxGet(BRIDGE_URL + "/health", function (status) {
+      if (status === 200) {
+        callback();
+      } else {
+        ColdStartDesktopEditor();
+        var attempts = 0;
+        var poll = setInterval(function () {
+          attempts++;
+          ajaxGet(BRIDGE_URL + "/health", function (s) {
+            if (s === 200) {
+              clearInterval(poll);
+              refreshBridgeToken(callback);
+            } else if (attempts >= 30) {
+              clearInterval(poll);
+              setTimeout(function () {
+                alert("EqnTide is currently not running.\n\nPlease launch EqnTide from your application menu, then try again.");
+              }, 50);
+            }
+          });
+        }, 500);
+      }
+    });
   });
 }
 
@@ -32,6 +34,74 @@ function ensureBridgeRunning(callback) {
 // Connected to the EqnTide local bridge (http://127.0.0.1:17890)
 
 var BRIDGE_URL = "http://127.0.0.1:17890";
+var BRIDGE_TOKEN_HEADER = "X-EqnTide-Token";
+var g_bridgeToken = null;
+
+function getBridgeToken() {
+  if (g_bridgeToken) return g_bridgeToken;
+  try {
+    if (typeof window !== "undefined" && window.EQNTIDE_BRIDGE_TOKEN) {
+      g_bridgeToken = String(window.EQNTIDE_BRIDGE_TOKEN).trim();
+      if (g_bridgeToken) return g_bridgeToken;
+    }
+  } catch (_) {}
+  try {
+    if (typeof EQNTIDE_BRIDGE_TOKEN === "string" && EQNTIDE_BRIDGE_TOKEN.trim()) {
+      g_bridgeToken = EQNTIDE_BRIDGE_TOKEN.trim();
+      return g_bridgeToken;
+    }
+  } catch (_) {}
+  try {
+    if (typeof wps !== "undefined" && wps && wps.FileSystem && typeof wps.FileSystem.ReadFile === "function") {
+      var candidates = [];
+      if (wps.Env && typeof wps.Env.GetHomePath === "function") {
+        candidates.push(wps.Env.GetHomePath() + "/.local/share/eqntide/bridge.token");
+      }
+      if (typeof navigator !== "undefined" && /win/i.test(navigator.platform || "")) {
+        try {
+          if (wps.Env && typeof wps.Env.GetTempPath === "function") {
+            var localApp = wps.Env.GetTempPath().replace(/[\\/]+Temp[\\/]?$/i, "");
+            if (localApp) candidates.push(localApp + "\\eqntide\\EqnTide\\data\\bridge.token");
+          }
+        } catch (_) {}
+      }
+      for (var i = 0; i < candidates.length; i++) {
+        try {
+          var raw = wps.FileSystem.ReadFile(candidates[i]);
+          if (raw && String(raw).trim()) {
+            g_bridgeToken = String(raw).trim();
+            return g_bridgeToken;
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  return "";
+}
+
+function refreshBridgeToken(callback) {
+  if (getBridgeToken()) {
+    if (callback) callback();
+    return;
+  }
+  try {
+    if (typeof document !== "undefined" && document && document.head) {
+      var script = document.createElement("script");
+      script.type = "text/javascript";
+      script.src = "bridge-token.js?t=" + Date.now();
+      script.onload = function () {
+        getBridgeToken();
+        if (callback) callback();
+      };
+      script.onerror = function () {
+        if (callback) callback();
+      };
+      document.head.appendChild(script);
+      return;
+    }
+  } catch (_) {}
+  if (callback) callback();
+}
 var g_ribbonUI = null;
 var g_editTargetRange = null;
 var g_editRangeStart = null;
@@ -1786,6 +1856,10 @@ function WaitSession(sessionId, callback) {
 function ajaxGet(url, callback) {
   var xhr = new XMLHttpRequest();
   xhr.open("GET", url, true);
+  if (url.indexOf("/health") === -1) {
+    var token = getBridgeToken();
+    if (token) xhr.setRequestHeader(BRIDGE_TOKEN_HEADER, token);
+  }
   xhr.onreadystatechange = function () {
     if (xhr.readyState === 4) {
       callback(xhr.status, xhr.responseText);
@@ -1802,6 +1876,8 @@ function ajaxPost(url, payload, callback) {
   var xhr = new XMLHttpRequest();
   xhr.open("POST", url, true);
   xhr.setRequestHeader("Content-Type", "application/json");
+  var token = getBridgeToken();
+  if (token) xhr.setRequestHeader(BRIDGE_TOKEN_HEADER, token);
   xhr.onreadystatechange = function () {
     if (xhr.readyState === 4) {
       callback(xhr.status, xhr.responseText);
