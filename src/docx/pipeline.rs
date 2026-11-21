@@ -69,14 +69,22 @@ pub fn convert_bytes_with_cancel(
         return Err(Error::Cancelled);
     }
     let pkg = Package::read(input)?;
+    let (pkg, summary) = convert_package_with_cancel(pkg, opts, cancel)?;
+    Ok((pkg.write()?, summary))
+}
+
+fn convert_package_with_cancel(
+    mut pkg: Package,
+    opts: &Options,
+    cancel: Option<&AtomicBool>,
+) -> Result<(Package, ConversionSummary)> {
     if !pkg.contains(DOC_XML_PATH) {
         return Err(Error::MissingPart(DOC_XML_PATH.into()));
     }
 
-    let ct_root = xml::parse(
-        pkg.get(CT_PATH)
-            .ok_or_else(|| Error::MissingPart(CT_PATH.into()))?,
-    )?;
+    let ct_root = pkg
+        .load_xml(CT_PATH)?
+        .ok_or_else(|| Error::MissingPart(CT_PATH.into()))?;
     let ct_overrides = collect_override_part_names(&ct_root);
 
     // Scan existing embeddings to avoid name collisions.
@@ -86,11 +94,10 @@ pub fn convert_bytes_with_cancel(
     }
 
     let parts = discover_omml_parts(&pkg);
-    let dummy_root = xml::parse(b"<root/>")?;
 
     let mut job = Job {
-        doc_root: dummy_root.clone(),
-        rels_root: dummy_root,
+        doc_root: xml::Element::new(None, None, "root"),
+        rels_root: xml::Element::new(None, None, "root"),
         ct_root,
         ct_overrides,
         pkg,
@@ -109,10 +116,9 @@ pub fn convert_bytes_with_cancel(
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             return Err(Error::Cancelled);
         }
-        let Some(xml_bytes) = job.pkg.get(&xml_path) else {
+        let Some(doc_root) = job.pkg.load_xml(&xml_path)? else {
             continue;
         };
-        let doc_root = xml::parse(xml_bytes)?;
         let mut paths = Vec::new();
         collect_omath_paths(&doc_root, &mut Vec::new(), &mut paths);
         if paths.is_empty() && xml_path != DOC_XML_PATH {
@@ -120,7 +126,10 @@ pub fn convert_bytes_with_cancel(
         }
 
         let rels_path = rels_path_for(&xml_path);
-        let rels_root = xml::parse(job.pkg.get(&rels_path).unwrap_or(EMPTY_RELS))?;
+        let rels_root = match job.pkg.load_xml(&rels_path)? {
+            Some(root) => root,
+            None => xml::parse(EMPTY_RELS)?,
+        };
         let existing_ids: HashSet<String> = rels_root
             .elements()
             .filter_map(|c| c.attr(None, "Id").map(str::to_owned))
@@ -138,6 +147,10 @@ pub fn convert_bytes_with_cancel(
         super::ole_xml::sanitize_document_baselines(&mut job.doc_root);
         job.pkg.set(&xml_path, xml::to_bytes(&job.doc_root));
         job.pkg.set(&rels_path, xml::to_bytes(&job.rels_root));
+
+        // Release finished XML DOMs immediately before loading the next part.
+        job.doc_root = xml::Element::new(None, None, "root");
+        job.rels_root = xml::Element::new(None, None, "root");
     }
 
     log::info!("Found {} equation(s)", job.summary.found);
@@ -150,7 +163,7 @@ pub fn convert_bytes_with_cancel(
     } = job;
     pkg.set(CT_PATH, xml::to_bytes(&ct_root));
 
-    Ok((pkg.write()?, summary))
+    Ok((pkg, summary))
 }
 
 /// Convert every OMML equation in `input_path` and write `output_path`.
@@ -185,19 +198,10 @@ pub fn convert_with_cancel(
     if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
         return Err(Error::Cancelled);
     }
-    let input = std::fs::read(input_path.as_ref())?;
-    let (output, summary) = convert_bytes_with_cancel(&input, opts, cancel)?;
-    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
-        return Err(Error::Cancelled);
-    }
-    let out_path = output_path.as_ref();
-    if let Some(parent) = out_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-    std::fs::write(out_path, output)?;
-    log::info!("Saved → {}", out_path.display());
+    let pkg = Package::open(input_path.as_ref())?;
+    let (mut pkg, summary) = convert_package_with_cancel(pkg, opts, cancel)?;
+    pkg.write_to_file_atomic(output_path.as_ref(), cancel)?;
+    log::info!("Saved → {}", output_path.as_ref().display());
     Ok(summary)
 }
 
@@ -354,6 +358,93 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, Error::Cancelled));
         assert!(!out_path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_chunked_omml_to_mathtype_over_300_equations_is_deterministic() {
+        let valid_eq = r#"<m:oMath><m:r><m:t>x</m:t></m:r><m:r><m:t>+</m:t></m:r><m:r><m:t>1</m:t></m:r></m:oMath>"#;
+        let skipped_eq = r#"<m:oMath><m:borderBox><m:borderBoxPr><m:hideTop m:val="1"/><m:hideBot m:val="1"/><m:hideLeft m:val="1"/><m:hideRight m:val="1"/><m:strikeV m:val="1"/></m:borderBoxPr><m:e><m:r><m:t>y</m:t></m:r></m:e></m:borderBox></m:oMath>"#;
+
+        let mut body = String::new();
+        for i in 0..300 {
+            body.push_str("<w:p>");
+            if i == 150 {
+                body.push_str(skipped_eq);
+            } else {
+                body.push_str(valid_eq);
+            }
+            body.push_str("</w:p>");
+        }
+        let doc_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+  <w:body>{body}</w:body>
+</w:document>"#
+        );
+        let ct_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        w.start_file("[Content_Types].xml", opts).unwrap();
+        w.write_all(ct_xml.as_bytes()).unwrap();
+        w.start_file("word/document.xml", opts).unwrap();
+        w.write_all(doc_xml.as_bytes()).unwrap();
+        let header = b"<w:hdr xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:p/></w:hdr>";
+        w.start_file(
+            "word/header1.xml",
+            opts.compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        w.write_all(header).unwrap();
+        w.start_file("word/media/untouched.png", opts).unwrap();
+        w.write_all(b"keep-media").unwrap();
+        let src_docx = w.finish().unwrap().into_inner();
+
+        let (bytes_out, sum_bytes) = convert_bytes(&src_docx).unwrap();
+        assert_eq!(sum_bytes.found, 300);
+        assert_eq!(sum_bytes.converted, 299);
+        assert_eq!(sum_bytes.skipped, 1);
+        assert_eq!(sum_bytes.errors, 0);
+
+        let dir = std::env::temp_dir().join(format!("eqntide_chunked_o2m_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let in_path = dir.join("in.docx");
+        let out_path = dir.join("out.docx");
+        std::fs::write(&in_path, &src_docx).unwrap();
+
+        let sum_file = convert(&in_path, &out_path).unwrap();
+        assert_eq!(sum_file, sum_bytes);
+
+        let pkg_bytes = Package::read(&bytes_out).unwrap();
+        let pkg_file = Package::read(&std::fs::read(&out_path).unwrap()).unwrap();
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&out_path).unwrap()).unwrap();
+        assert_eq!(
+            zip.by_name("word/header1.xml").unwrap().compression(),
+            zip::CompressionMethod::Stored
+        );
+        assert_eq!(pkg_file.get("word/header1.xml"), Some(header.as_slice()));
+        drop(zip);
+        assert_eq!(pkg_bytes.part_names(), pkg_file.part_names());
+        assert_eq!(
+            pkg_file.get("word/media/untouched.png").unwrap(),
+            b"keep-media"
+        );
+        for i in 1..=299 {
+            let bin = format!("word/embeddings/oleObject{i}.bin");
+            let img = format!("word/media/equation{i}.emf");
+            assert_eq!(pkg_bytes.get(&bin), pkg_file.get(&bin), "mismatch {bin}");
+            assert_eq!(pkg_bytes.get(&img), pkg_file.get(&img), "mismatch {img}");
+        }
+        assert!(!pkg_file.contains("word/embeddings/oleObject300.bin"));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

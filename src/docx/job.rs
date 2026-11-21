@@ -89,10 +89,12 @@ pub(super) struct Job {
     pub(super) summary: ConversionSummary,
 }
 
-pub(super) struct EquationWorkItem {
+const EQUATION_CHUNK_SIZE: usize = 128;
+
+pub(super) struct EquationWorkItem<'a> {
     pub(super) eq_num: usize,
     pub(super) target_path: Vec<usize>,
-    pub(super) omath: Element,
+    pub(super) omath: &'a Element,
 }
 
 pub(super) enum PreparedOutcome {
@@ -110,7 +112,7 @@ pub(super) enum CollectedItem {
 }
 
 fn prepare_equation(
-    item: &EquationWorkItem,
+    omath: &Element,
     opts: Options,
     cancel: Option<&AtomicBool>,
 ) -> Result<PreparedOutcome> {
@@ -119,7 +121,7 @@ fn prepare_equation(
     }
 
     // 1. OMML → MathML
-    let mathml = omml_to_mathml(&item.omath)?;
+    let mathml = omml_to_mathml(omath)?;
     if let Some(reason) = crate::mtef::check_mathtype_unsupported(&mathml) {
         return Ok(PreparedOutcome::Skipped(reason));
     }
@@ -167,7 +169,7 @@ fn prepare_equation(
     };
 
     let omath_fallback = if opts.mode == EmbedMode::OmmlFallback {
-        Some(Box::new(item.omath.clone()))
+        Some(Box::new(omath.clone()))
     } else {
         None
     };
@@ -200,7 +202,8 @@ impl Job {
         }
     }
 
-    /// Collect equations, run pure CPU conversion in parallel, and assemble DOM/package sequentially.
+    /// Collect equations, run pure CPU conversion in bounded parallel chunks,
+    /// and assemble DOM/package sequentially per chunk to cap peak memory.
     pub(super) fn convert_part_equations(
         &mut self,
         xml_path: &str,
@@ -208,131 +211,144 @@ impl Job {
         global_eq_num: &mut usize,
         cancel: Option<&AtomicBool>,
     ) -> Result<()> {
-        let mut collected: Vec<CollectedItem> = Vec::with_capacity(paths.len());
-        let mut work_items: Vec<EquationWorkItem> = Vec::with_capacity(paths.len());
-
-        for path in paths {
-            *global_eq_num += 1;
-            let eq_num = *global_eq_num;
-            let omath = match element_at(&self.doc_root, path) {
-                Some(e) if e.is(NS_M, "oMath") => e.clone(),
-                _ => {
-                    collected.push(CollectedItem::Failed(
-                        eq_num,
-                        Error::Xml("equation node is no longer in the tree".into()),
-                    ));
-                    continue;
-                }
-            };
-
-            let Some((_, parent_path)) = path.split_last() else {
-                collected.push(CollectedItem::Failed(
-                    eq_num,
-                    Error::Xml("equation is the document root".into()),
-                ));
-                continue;
-            };
-            let Some(parent) = element_at(&self.doc_root, parent_path) else {
-                collected.push(CollectedItem::Failed(
-                    eq_num,
-                    Error::Xml("equation has no parent".into()),
-                ));
-                continue;
-            };
-            let target_path: Vec<usize> = if parent.local == "oMathPara" {
-                if parent.find_all(NS_M, "oMath").len() > 1 {
-                    collected.push(CollectedItem::Skipped(
-                        "oMathPara contains several equations; left as OMML",
-                        eq_num,
-                    ));
-                    continue;
-                }
-                if parent_path.is_empty() {
-                    collected.push(CollectedItem::Failed(
-                        eq_num,
-                        Error::Xml("oMathPara is the document root".into()),
-                    ));
-                    continue;
-                }
-                parent_path.to_vec()
-            } else {
-                path.clone()
-            };
-
-            let item = EquationWorkItem {
-                eq_num,
-                target_path,
-                omath,
-            };
-            // Reserve a placeholder slot in `collected`? Instead keep `work_items` separate
-            // and merge in `eq_num` order below.
-            work_items.push(item);
-        }
-
         let opts = self.opts;
-        let prepared_results: Vec<Result<PreparedOutcome>> = if work_items.len() <= 1 {
-            work_items
-                .iter()
-                .map(|item| prepare_equation(item, opts, cancel))
-                .collect()
-        } else {
-            work_items
-                .par_iter()
-                .map(|item| prepare_equation(item, opts, cancel))
-                .collect()
-        };
+        for chunk_paths in paths.chunks(EQUATION_CHUNK_SIZE) {
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                return Err(Error::Cancelled);
+            }
 
-        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
-            return Err(Error::Cancelled);
-        }
+            let mut collected: Vec<CollectedItem> = Vec::new();
+            let mut metas: Vec<(usize, Vec<usize>)> = Vec::with_capacity(chunk_paths.len());
+            let mut prepared_results: Vec<Result<PreparedOutcome>>;
 
-        let mut work_iter = work_items.into_iter().zip(prepared_results).peekable();
-        let mut pre_iter = collected.into_iter().peekable();
+            {
+                let doc_ref = &self.doc_root;
+                let mut work_items: Vec<EquationWorkItem<'_>> =
+                    Vec::with_capacity(chunk_paths.len());
 
-        loop {
-            let next_pre_eq = pre_iter.peek().map(|c| match c {
-                CollectedItem::Skipped(_, n) | CollectedItem::Failed(n, _) => *n,
-            });
-            let next_work_eq = work_iter.peek().map(|(w, _)| w.eq_num);
-
-            match (next_pre_eq, next_work_eq) {
-                (None, None) => break,
-                (Some(p), Some(w)) if p < w => {
-                    self.apply_collected_item(xml_path, pre_iter.next().unwrap());
-                }
-                (Some(_), None) => {
-                    self.apply_collected_item(xml_path, pre_iter.next().unwrap());
-                }
-                _ => {
-                    let (item, res) = work_iter.next().unwrap();
-                    match res {
-                        Ok(PreparedOutcome::Skipped(reason)) => {
-                            self.summary.skipped += 1;
-                            log::warn!(
-                                "Equation {}: {reason} is not supported in MathType, skipping",
-                                item.eq_num
-                            );
+                for path in chunk_paths {
+                    *global_eq_num += 1;
+                    let eq_num = *global_eq_num;
+                    let omath = match element_at(doc_ref, path) {
+                        Some(e) if e.is(NS_M, "oMath") => e,
+                        _ => {
+                            collected.push(CollectedItem::Failed(
+                                eq_num,
+                                Error::Xml("equation node is no longer in the tree".into()),
+                            ));
+                            continue;
                         }
-                        Ok(PreparedOutcome::Converted {
-                            ole_bin,
-                            preview,
-                            omath_fallback,
-                        }) => {
-                            if let Err(e) = self.assemble_converted(
-                                item.eq_num,
-                                &item.target_path,
+                    };
+
+                    let Some((_, parent_path)) = path.split_last() else {
+                        collected.push(CollectedItem::Failed(
+                            eq_num,
+                            Error::Xml("equation is the document root".into()),
+                        ));
+                        continue;
+                    };
+                    let Some(parent) = element_at(doc_ref, parent_path) else {
+                        collected.push(CollectedItem::Failed(
+                            eq_num,
+                            Error::Xml("equation has no parent".into()),
+                        ));
+                        continue;
+                    };
+                    let target_path: Vec<usize> = if parent.local == "oMathPara" {
+                        if parent.find_all(NS_M, "oMath").len() > 1 {
+                            collected.push(CollectedItem::Skipped(
+                                "oMathPara contains several equations; left as OMML",
+                                eq_num,
+                            ));
+                            continue;
+                        }
+                        if parent_path.is_empty() {
+                            collected.push(CollectedItem::Failed(
+                                eq_num,
+                                Error::Xml("oMathPara is the document root".into()),
+                            ));
+                            continue;
+                        }
+                        parent_path.to_vec()
+                    } else {
+                        path.clone()
+                    };
+
+                    work_items.push(EquationWorkItem {
+                        eq_num,
+                        target_path,
+                        omath,
+                    });
+                }
+
+                prepared_results = if work_items.len() <= 1 {
+                    work_items
+                        .iter()
+                        .map(|item| prepare_equation(item.omath, opts, cancel))
+                        .collect()
+                } else {
+                    work_items
+                        .par_iter()
+                        .map(|item| prepare_equation(item.omath, opts, cancel))
+                        .collect()
+                };
+
+                for item in work_items {
+                    metas.push((item.eq_num, item.target_path));
+                }
+            }
+
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                return Err(Error::Cancelled);
+            }
+
+            let mut work_iter = metas.into_iter().zip(prepared_results.drain(..)).peekable();
+            let mut pre_iter = collected.into_iter().peekable();
+
+            loop {
+                let next_pre_eq = pre_iter.peek().map(|c| match c {
+                    CollectedItem::Skipped(_, n) | CollectedItem::Failed(n, _) => *n,
+                });
+                let next_work_eq = work_iter.peek().map(|((eq_num, _), _)| *eq_num);
+
+                match (next_pre_eq, next_work_eq) {
+                    (None, None) => break,
+                    (Some(p), Some(w)) if p < w => {
+                        self.apply_collected_item(xml_path, pre_iter.next().unwrap());
+                    }
+                    (Some(_), None) => {
+                        self.apply_collected_item(xml_path, pre_iter.next().unwrap());
+                    }
+                    _ => {
+                        let ((eq_num, target_path), res) = work_iter.next().unwrap();
+                        match res {
+                            Ok(PreparedOutcome::Skipped(reason)) => {
+                                self.summary.skipped += 1;
+                                log::warn!(
+                                    "Equation {eq_num}: {reason} is not supported in MathType, skipping"
+                                );
+                            }
+                            Ok(PreparedOutcome::Converted {
                                 ole_bin,
                                 preview,
-                                omath_fallback.as_deref(),
-                            ) {
-                                self.summary.errors += 1;
-                                log::error!("Equation {} ({xml_path}): {e}", item.eq_num);
+                                omath_fallback,
+                            }) => {
+                                if let Err(e) = self.assemble_converted(
+                                    eq_num,
+                                    &target_path,
+                                    ole_bin,
+                                    preview,
+                                    omath_fallback.as_deref(),
+                                ) {
+                                    self.summary.errors += 1;
+                                    log::error!("Equation {eq_num} ({xml_path}): {e}");
+                                }
                             }
-                        }
-                        Err(Error::Cancelled) => return Err(Error::Cancelled),
-                        Err(e) => {
-                            self.summary.errors += 1;
-                            log::error!("Equation {} ({xml_path}): {e}", item.eq_num);
+                            Err(Error::Cancelled) => return Err(Error::Cancelled),
+                            Err(e) => {
+                                self.summary.errors += 1;
+                                log::error!("Equation {eq_num} ({xml_path}): {e}");
+                            }
                         }
                     }
                 }

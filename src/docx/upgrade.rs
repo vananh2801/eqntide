@@ -30,17 +30,20 @@ use crate::render::emf::render_emf_with_mtef;
 use crate::xml::{self, Element, Node};
 
 use super::consts::*;
+use super::job::{element_at, element_at_mut};
 use super::ole_xml::{make_object_run, sanitize_document_baselines};
 use super::options::{ConversionSummary, ToOmmlOptions, UpgradeOptions, UpgradeTarget};
 use super::package::{
     add_relationship, collect_override_part_names, ensure_content_type_indexed,
-    ensure_default_extension, Package,
+    ensure_default_extension, Package, PartLookup,
 };
 use super::to_omml::{
     build_rel_map, cleanup_unreferenced_files, collect_imagedata_rids, collect_referenced_rids,
-    convert_bytes_to_omml_with_cancel, discover_content_parts, find_mathtype_ole_in_subtree,
-    get_r_attr, rels_path_for_part,
+    convert_bytes_to_omml_with_cancel, convert_to_omml_with_cancel, discover_content_parts,
+    find_mathtype_ole_in_subtree, get_r_attr, rels_path_for_part,
 };
+
+const UPGRADE_CHUNK_SIZE: usize = 128;
 
 // ── Public Entry Points ──────────────────────────────────────────────────────
 
@@ -71,12 +74,19 @@ pub fn upgrade_legacy_mathtype_docx_with_cancel(
     if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
         return Err(Error::Cancelled);
     }
-    let input = std::fs::read(input_path.as_ref())?;
-    let (output, summary) = upgrade_legacy_mathtype_bytes_with_cancel(&input, opts, cancel)?;
-    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
-        return Err(Error::Cancelled);
+    if opts.target == UpgradeTarget::ModernOmml {
+        return convert_to_omml_with_cancel(
+            input_path,
+            output_path,
+            &ToOmmlOptions {
+                math_font: opts.math_font.clone(),
+            },
+            cancel,
+        );
     }
-    std::fs::write(output_path.as_ref(), output)?;
+    let pkg = Package::open(input_path.as_ref())?;
+    let (mut pkg, summary) = upgrade_package_with_cancel(pkg, opts, cancel)?;
+    pkg.write_to_file_atomic(output_path.as_ref(), cancel)?;
     log::info!("Saved upgraded docx → {}", output_path.as_ref().display());
     Ok(summary)
 }
@@ -113,15 +123,23 @@ pub fn upgrade_legacy_mathtype_bytes_with_cancel(
         );
     }
 
-    let mut pkg = Package::read(input)?;
+    let pkg = Package::read(input)?;
+    let (pkg, summary) = upgrade_package_with_cancel(pkg, opts, cancel)?;
+    Ok((pkg.write()?, summary))
+}
+
+fn upgrade_package_with_cancel(
+    mut pkg: Package,
+    opts: &UpgradeOptions,
+    cancel: Option<&AtomicBool>,
+) -> Result<(Package, ConversionSummary)> {
     if !pkg.contains(DOC_XML_PATH) {
         return Err(Error::MissingPart(DOC_XML_PATH.into()));
     }
 
-    let mut ct_root = xml::parse(
-        pkg.get(CT_PATH)
-            .ok_or_else(|| Error::MissingPart(CT_PATH.into()))?,
-    )?;
+    let mut ct_root = pkg
+        .load_xml(CT_PATH)?
+        .ok_or_else(|| Error::MissingPart(CT_PATH.into()))?;
     let mut ct_overrides = collect_override_part_names(&ct_root);
 
     let (mut ole_index, mut img_index) = next_package_part_indices(&pkg);
@@ -156,7 +174,7 @@ pub fn upgrade_legacy_mathtype_bytes_with_cancel(
         return Err(Error::Cancelled);
     }
     pkg.set(CT_PATH, xml::to_bytes(&ct_root));
-    Ok((pkg.write()?, summary))
+    Ok((pkg, summary))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -172,12 +190,11 @@ fn upgrade_content_part(
     candidate_files_to_remove: &mut HashSet<String>,
     cancel: Option<&AtomicBool>,
 ) -> Result<()> {
-    let Some(xml_bytes) = pkg.get(xml_path) else {
+    let Some(mut doc_root) = pkg.load_xml(xml_path)? else {
         return Ok(());
     };
-    let mut doc_root = xml::parse(xml_bytes)?;
     let rels_path = rels_path_for_part(xml_path);
-    let rels_opt = pkg.get(&rels_path).map(xml::parse).transpose()?;
+    let rels_opt = pkg.load_xml(&rels_path)?;
     let rel_map = rels_opt
         .as_ref()
         .map(|rels| build_rel_map(rels, xml_path))
@@ -195,75 +212,108 @@ fn upgrade_content_part(
     let mut items = Vec::new();
     collect_upgrade_items(&doc_root, &mut Vec::new(), &mut items);
 
-    let prepared: Vec<Result<UpgradePrepared>> = if items.len() <= 1 {
-        items
-            .iter()
-            .map(|item| prepare_upgrade_item(item, pkg, &rel_map, opts.font_pt, cancel))
-            .collect()
-    } else {
-        items
-            .par_iter()
-            .map(|item| prepare_upgrade_item(item, pkg, &rel_map, opts.font_pt, cancel))
-            .collect()
-    };
+    for chunk in items.chunks(UPGRADE_CHUNK_SIZE) {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
 
-    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
-        return Err(Error::Cancelled);
-    }
+        let part_paths: Vec<String> = {
+            let chunk_refs: Vec<(&UpgradeWorkRef, &Element)> = chunk
+                .iter()
+                .filter_map(|w| element_at(&doc_root, &w.path).map(|el| (w, el)))
+                .collect();
+            collect_upgrade_chunk_part_paths(&chunk_refs, &rel_map)
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        };
+        let chunk_cache = pkg.load_transient_batch(part_paths.iter().map(String::as_str))?;
 
-    for (item, res) in items.into_iter().zip(prepared) {
-        let prep = res?;
-        match prep {
-            UpgradePrepared::NotAnEquation => {}
-            UpgradePrepared::Skipped {
-                reason,
-                extra_context,
-            } => {
-                summary.found += 1;
-                let eq_num = summary.found;
-                summary.skipped += 1;
-                if let Some(ctx) = extra_context {
-                    log::warn!(
-                        "Equation {eq_num}: {reason} is not supported in MathType ({ctx}), skipping"
-                    );
-                } else {
-                    log::warn!(
-                        "Equation {eq_num}: {reason} is not supported in MathType, skipping"
-                    );
-                }
+        let prepared: Vec<Result<UpgradePrepared>> = {
+            let chunk_refs: Vec<(&UpgradeWorkRef, &Element)> = chunk
+                .iter()
+                .filter_map(|w| element_at(&doc_root, &w.path).map(|el| (w, el)))
+                .collect();
+            let lookup = PartLookup {
+                pkg,
+                cache: &chunk_cache,
+            };
+            if chunk_refs.len() <= 1 {
+                chunk_refs
+                    .iter()
+                    .map(|(w, el)| {
+                        prepare_upgrade_item(w.kind, el, &lookup, &rel_map, opts.font_pt, cancel)
+                    })
+                    .collect()
+            } else {
+                chunk_refs
+                    .par_iter()
+                    .map(|(w, el)| {
+                        prepare_upgrade_item(w.kind, el, &lookup, &rel_map, opts.font_pt, cancel)
+                    })
+                    .collect()
             }
-            UpgradePrepared::Failed { err } => {
-                summary.found += 1;
-                let eq_num = summary.found;
-                summary.errors += 1;
-                log::error!("Equation {eq_num}: {err}");
-            }
-            UpgradePrepared::Ready {
-                ole_bin,
-                preview,
-                rids_to_retire,
-                log_label,
-            } => {
-                summary.found += 1;
-                let eq_num = summary.found;
-                let mut ctx = UpgradeAssembleCtx {
-                    pkg,
-                    rels_root: &mut rels_root,
-                    ct_root,
-                    ct_overrides,
-                    existing_ids: &mut existing_ids,
-                    next_ole_rid: &mut next_ole_rid,
-                    next_img_rid: &mut next_img_rid,
-                    ole_index,
-                    img_index,
-                };
-                let modern_run = assemble_modern_ole_run(ole_bin, preview, eq_num, &mut ctx);
-                if let Some(slot_el) = element_at_mut(&mut doc_root, &item.path) {
-                    *slot_el = modern_run;
+        };
+        drop(chunk_cache);
+
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
+
+        for (item, res) in chunk.iter().zip(prepared) {
+            let prep = res?;
+            match prep {
+                UpgradePrepared::NotAnEquation => {}
+                UpgradePrepared::Skipped {
+                    reason,
+                    extra_context,
+                } => {
+                    summary.found += 1;
+                    let eq_num = summary.found;
+                    summary.skipped += 1;
+                    if let Some(ctx) = extra_context {
+                        log::warn!(
+                            "Equation {eq_num}: {reason} is not supported in MathType ({ctx}), skipping"
+                        );
+                    } else {
+                        log::warn!(
+                            "Equation {eq_num}: {reason} is not supported in MathType, skipping"
+                        );
+                    }
                 }
-                converted_rids.extend(rids_to_retire);
-                summary.converted += 1;
-                log::info!("Equation {eq_num}: {log_label}");
+                UpgradePrepared::Failed { err } => {
+                    summary.found += 1;
+                    let eq_num = summary.found;
+                    summary.errors += 1;
+                    log::error!("Equation {eq_num}: {err}");
+                }
+                UpgradePrepared::Ready {
+                    ole_bin,
+                    preview,
+                    rids_to_retire,
+                    log_label,
+                } => {
+                    summary.found += 1;
+                    let eq_num = summary.found;
+                    let mut ctx = UpgradeAssembleCtx {
+                        pkg,
+                        rels_root: &mut rels_root,
+                        ct_root,
+                        ct_overrides,
+                        existing_ids: &mut existing_ids,
+                        next_ole_rid: &mut next_ole_rid,
+                        next_img_rid: &mut next_img_rid,
+                        ole_index,
+                        img_index,
+                    };
+                    let modern_run = assemble_modern_ole_run(ole_bin, preview, eq_num, &mut ctx);
+                    if let Some(slot_el) = element_at_mut(&mut doc_root, &item.path) {
+                        *slot_el = modern_run;
+                    }
+                    converted_rids.extend(rids_to_retire);
+                    summary.converted += 1;
+                    log::info!("Equation {eq_num}: {log_label}");
+                }
             }
         }
     }
@@ -340,7 +390,7 @@ fn next_unique_id(existing: &mut HashSet<String>, prefix: &str) -> String {
 fn convert_ole_rid_to_mathml(
     rid: &str,
     image_ids: &[String],
-    pkg: &Package,
+    pkg: &PartLookup<'_>,
     rel_map: &HashMap<String, String>,
 ) -> Result<MathNode> {
     if let Some(math) = super::to_omml::preferred_metafile_math(image_ids, rid, pkg, rel_map) {
@@ -378,16 +428,16 @@ struct UpgradeAssembleCtx<'a> {
     img_index: &'a mut usize,
 }
 
+#[derive(Clone, Copy)]
 enum UpgradeWorkKind {
     AlternateContent,
     OleRun,
     MetafileRun,
 }
 
-struct UpgradeWorkItem {
+struct UpgradeWorkRef {
     path: Vec<usize>,
     kind: UpgradeWorkKind,
-    el: Element,
 }
 
 enum UpgradePrepared {
@@ -407,18 +457,7 @@ enum UpgradePrepared {
     },
 }
 
-fn element_at_mut<'a>(root: &'a mut Element, path: &[usize]) -> Option<&'a mut Element> {
-    let mut cur = root;
-    for &idx in path {
-        match cur.children.get_mut(idx)? {
-            Node::Element(c) => cur = c,
-            _ => return None,
-        }
-    }
-    Some(cur)
-}
-
-fn collect_upgrade_items(el: &Element, path: &mut Vec<usize>, out: &mut Vec<UpgradeWorkItem>) {
+fn collect_upgrade_items(el: &Element, path: &mut Vec<usize>, out: &mut Vec<UpgradeWorkRef>) {
     for (i, child) in el.children.iter().enumerate() {
         let Node::Element(c) = child else {
             continue;
@@ -427,29 +466,26 @@ fn collect_upgrade_items(el: &Element, path: &mut Vec<usize>, out: &mut Vec<Upgr
         if (c.is(NS_MC, "AlternateContent") || c.local == "AlternateContent")
             && !find_mathtype_ole_in_subtree(c).is_empty()
         {
-            out.push(UpgradeWorkItem {
+            out.push(UpgradeWorkRef {
                 path: path.clone(),
                 kind: UpgradeWorkKind::AlternateContent,
-                el: c.clone(),
             });
             path.pop();
             continue;
         }
         if c.is(NS_W, "r") {
             if !find_mathtype_ole_in_subtree(c).is_empty() {
-                out.push(UpgradeWorkItem {
+                out.push(UpgradeWorkRef {
                     path: path.clone(),
                     kind: UpgradeWorkKind::OleRun,
-                    el: c.clone(),
                 });
                 path.pop();
                 continue;
             }
             if !collect_imagedata_rids(c).is_empty() {
-                out.push(UpgradeWorkItem {
+                out.push(UpgradeWorkRef {
                     path: path.clone(),
                     kind: UpgradeWorkKind::MetafileRun,
-                    el: c.clone(),
                 });
                 path.pop();
                 continue;
@@ -458,6 +494,42 @@ fn collect_upgrade_items(el: &Element, path: &mut Vec<usize>, out: &mut Vec<Upgr
         collect_upgrade_items(c, path, out);
         path.pop();
     }
+}
+
+fn collect_upgrade_chunk_part_paths<'a>(
+    items: &[(&UpgradeWorkRef, &Element)],
+    rel_map: &'a HashMap<String, String>,
+) -> Vec<&'a str> {
+    let mut paths = Vec::new();
+    for (work, el) in items {
+        match work.kind {
+            UpgradeWorkKind::AlternateContent | UpgradeWorkKind::OleRun => {
+                for ole in find_mathtype_ole_in_subtree(el) {
+                    if let Some(rid) = get_r_attr(ole, "id") {
+                        if let Some(p) = rel_map.get(rid) {
+                            paths.push(p.as_str());
+                        }
+                    }
+                }
+                for rid in collect_imagedata_rids(el) {
+                    if let Some(p) = rel_map.get(&rid) {
+                        paths.push(p.as_str());
+                    }
+                }
+            }
+            UpgradeWorkKind::MetafileRun => {
+                for rid in collect_imagedata_rids(el) {
+                    if let Some(p) = rel_map.get(&rid) {
+                        let lower = p.to_ascii_lowercase();
+                        if lower.ends_with(".wmf") || lower.ends_with(".emf") {
+                            paths.push(p.as_str());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    paths
 }
 
 fn compute_modern_ole_payload(
@@ -476,8 +548,9 @@ fn compute_modern_ole_payload(
 }
 
 fn prepare_upgrade_item(
-    item: &UpgradeWorkItem,
-    pkg: &Package,
+    kind: UpgradeWorkKind,
+    el: &Element,
+    pkg: &PartLookup<'_>,
     rel_map: &HashMap<String, String>,
     font_pt: f32,
     cancel: Option<&AtomicBool>,
@@ -486,21 +559,20 @@ fn prepare_upgrade_item(
         return Err(Error::Cancelled);
     }
 
-    match item.kind {
+    match kind {
         UpgradeWorkKind::AlternateContent => {
-            let ole_nodes = find_mathtype_ole_in_subtree(&item.el);
+            let ole_nodes = find_mathtype_ole_in_subtree(el);
             let ole_rid = ole_nodes[0]
                 .attr(Some(NS_R), "id")
                 .or_else(|| ole_nodes[0].attr(None, "id"));
-            let img_rids = collect_imagedata_rids(&item.el);
+            let img_rids = collect_imagedata_rids(el);
 
             let mathml_opt = match ole_rid {
                 Some(rid) => convert_ole_rid_to_mathml(rid, &img_rids, pkg, rel_map).ok(),
                 None => None,
             }
             .or_else(|| {
-                item.el
-                    .find(NS_MC, "Fallback")
+                el.find(NS_MC, "Fallback")
                     .and_then(|fb| fb.find(NS_M, "oMath"))
                     .and_then(|omath| crate::omml::decode::omml_to_mathml(omath).ok())
             });
@@ -538,9 +610,9 @@ fn prepare_upgrade_item(
             }
         }
         UpgradeWorkKind::OleRun => {
-            let oles = find_mathtype_ole_in_subtree(&item.el);
+            let oles = find_mathtype_ole_in_subtree(el);
             let ole_rid = oles.first().and_then(|o| get_r_attr(o, "id"));
-            let img_rids = collect_imagedata_rids(&item.el);
+            let img_rids = collect_imagedata_rids(el);
 
             let mathml_res = match ole_rid {
                 Some(rid) => convert_ole_rid_to_mathml(rid, &img_rids, pkg, rel_map),
@@ -573,7 +645,7 @@ fn prepare_upgrade_item(
             }
         }
         UpgradeWorkKind::MetafileRun => {
-            let img_rids = collect_imagedata_rids(&item.el);
+            let img_rids = collect_imagedata_rids(el);
             for rid in img_rids {
                 let Some(target_path) = rel_map.get(&rid) else {
                     continue;
@@ -880,5 +952,61 @@ mod tests {
 
         let pkg = Package::read(&out_docx).unwrap();
         assert!(!pkg.contains("word/embeddings/oleObject1.bin"));
+    }
+
+    #[test]
+    fn test_chunked_upgrade_over_200_equations_matches_bytes_output() {
+        let mut body = String::new();
+        for _ in 0..200 {
+            body.push_str("<w:p><m:oMath><m:r><m:t>x</m:t></m:r><m:r><m:t>+</m:t></m:r><m:r><m:t>2</m:t></m:r></m:oMath></w:p>");
+        }
+        let doc_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+  <w:body>{body}</w:body>
+</w:document>"#
+        );
+        let ct_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::FileOptions::default();
+        w.start_file("[Content_Types].xml", opts).unwrap();
+        w.write_all(ct_xml.as_bytes()).unwrap();
+        w.start_file("word/document.xml", opts).unwrap();
+        w.write_all(doc_xml.as_bytes()).unwrap();
+        let omml_src = w.finish().unwrap().into_inner();
+
+        let (mt_src, _) = crate::docx::convert_bytes(&omml_src).unwrap();
+        let (bytes_upg, sum_bytes) = upgrade_legacy_mathtype_bytes(&mt_src).unwrap();
+        assert_eq!(sum_bytes.found, 200);
+        assert_eq!(sum_bytes.converted, 200);
+
+        let dir = std::env::temp_dir().join(format!("eqntide_chunked_upg_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let in_path = dir.join("mt.docx");
+        let out_path = dir.join("upg.docx");
+        std::fs::write(&in_path, &mt_src).unwrap();
+
+        let sum_file = upgrade_legacy_mathtype_docx(&in_path, &out_path).unwrap();
+        assert_eq!(sum_file, sum_bytes);
+
+        let pkg_bytes = Package::read(&bytes_upg).unwrap();
+        let pkg_file = Package::read(&std::fs::read(&out_path).unwrap()).unwrap();
+        assert_eq!(pkg_bytes.part_names(), pkg_file.part_names());
+        for i in 1..=200 {
+            let bin = format!("word/embeddings/oleObject{i}.bin");
+            let img = format!("word/media/equation{i}.emf");
+            assert_eq!(pkg_bytes.get(&bin), pkg_file.get(&bin), "mismatch {bin}");
+            assert_eq!(pkg_bytes.get(&img), pkg_file.get(&img), "mismatch {img}");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

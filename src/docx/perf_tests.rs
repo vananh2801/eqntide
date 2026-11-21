@@ -156,3 +156,86 @@ fn perf_phase_breakdown_500_equations() {
         );
     }
 }
+
+#[cfg(target_os = "linux")]
+fn proc_memory_kb() -> (Option<usize>, Option<usize>) {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return (None, None);
+    };
+    let mut rss = None;
+    let mut hwm = None;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            rss = rest.split_whitespace().next().and_then(|s| s.parse().ok());
+        } else if let Some(rest) = line.strip_prefix("VmHWM:") {
+            hwm = rest.split_whitespace().next().and_then(|s| s.parse().ok());
+        }
+    }
+    (rss, hwm)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn proc_memory_kb() -> (Option<usize>, Option<usize>) {
+    (None, None)
+}
+
+fn fmt_kb(kb: Option<usize>) -> String {
+    kb.map(|v| format!("{:.1} MB", v as f64 / 1024.0))
+        .unwrap_or_else(|| "n/a".into())
+}
+
+#[test]
+#[ignore = "memory benchmark: run manually with cargo test --release --lib docx::perf_tests::perf_memory_omml_to_mathtype_3000 -- --ignored --nocapture"]
+fn perf_memory_omml_to_mathtype_3000() {
+    let _ = crate::render::font::fonts();
+    let dir = std::env::temp_dir().join(format!("eqntide_mem_o2m_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let in_path = dir.join("omml_3000.docx");
+    let out_path = dir.join("mt_3000.docx");
+    std::fs::write(&in_path, build_omml_docx(3000)).unwrap();
+
+    let (rss_before, _) = proc_memory_kb();
+    let t0 = Instant::now();
+    let summary = crate::docx::convert(&in_path, &out_path).unwrap();
+    let dt = t0.elapsed();
+    let (rss_after, hwm) = proc_memory_kb();
+    assert_eq!(summary.converted, 3000);
+    eprintln!(
+        "[3000 eqs OMML->MT] elapsed={:.1}ms | rss_before={} | rss_after={} | peak_hwm={}",
+        dt.as_secs_f64() * 1e3,
+        fmt_kb(rss_before),
+        fmt_kb(rss_after),
+        fmt_kb(hwm),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+#[ignore = "memory benchmark: run manually with cargo test --release --lib docx::perf_tests::perf_memory_mathtype_to_omml_3000 -- --ignored --nocapture"]
+fn perf_memory_mathtype_to_omml_3000() {
+    let _ = crate::render::font::fonts();
+    let dir = std::env::temp_dir().join(format!("eqntide_mem_m2o_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let omml_path = dir.join("omml_3000.docx");
+    let mt_path = dir.join("mt_3000.docx");
+    let out_path = dir.join("omml_back_3000.docx");
+    std::fs::write(&omml_path, build_omml_docx(3000)).unwrap();
+    crate::docx::convert(&omml_path, &mt_path).unwrap();
+
+    let (rss_before, _) = proc_memory_kb();
+    let t0 = Instant::now();
+    let summary = crate::docx::convert_to_omml(&mt_path, &out_path).unwrap();
+    let dt = t0.elapsed();
+    let (rss_after, hwm) = proc_memory_kb();
+    assert_eq!(summary.converted, 3000);
+    eprintln!(
+        "[3000 eqs MT->OMML] elapsed={:.1}ms | rss_before={} | rss_after={} | peak_hwm={}",
+        dt.as_secs_f64() * 1e3,
+        fmt_kb(rss_before),
+        fmt_kb(rss_after),
+        fmt_kb(hwm),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

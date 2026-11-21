@@ -12,6 +12,7 @@
 //!   like the prefix `w`"; the serialiser reuses an in-scope prefix or adds an
 //!   `xmlns` declaration where one is missing.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use quick_xml::events::{BytesStart, Event};
@@ -26,17 +27,90 @@ pub const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 const MAX_DEPTH: usize = 256;
 
 /// `(prefix, uri)`; `prefix == None` is the default namespace.
-type NsDecl = (Option<String>, String);
+type NsDecl = (Option<Cow<'static, str>>, Cow<'static, str>);
+
+/// Intern common OOXML / MathML / VML / OLE namespace URIs as static slices so
+/// parsed DOM nodes avoid allocating a fresh heap `String` per element/attribute.
+pub(crate) fn intern_ns(s: &str) -> Cow<'static, str> {
+    match s {
+        "http://schemas.openxmlformats.org/wordprocessingml/2006/main" => {
+            Cow::Borrowed("http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+        }
+        "http://schemas.openxmlformats.org/officeDocument/2006/math" => {
+            Cow::Borrowed("http://schemas.openxmlformats.org/officeDocument/2006/math")
+        }
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships" => {
+            Cow::Borrowed("http://schemas.openxmlformats.org/officeDocument/2006/relationships")
+        }
+        "urn:schemas-microsoft-com:vml" => Cow::Borrowed("urn:schemas-microsoft-com:vml"),
+        "urn:schemas-microsoft-com:office:office" => {
+            Cow::Borrowed("urn:schemas-microsoft-com:office:office")
+        }
+        "http://schemas.openxmlformats.org/markup-compatibility/2006" => {
+            Cow::Borrowed("http://schemas.openxmlformats.org/markup-compatibility/2006")
+        }
+        "http://schemas.openxmlformats.org/package/2006/relationships" => {
+            Cow::Borrowed("http://schemas.openxmlformats.org/package/2006/relationships")
+        }
+        "http://schemas.openxmlformats.org/package/2006/content-types" => {
+            Cow::Borrowed("http://schemas.openxmlformats.org/package/2006/content-types")
+        }
+        "http://schemas.openxmlformats.org/drawingml/2006/main" => {
+            Cow::Borrowed("http://schemas.openxmlformats.org/drawingml/2006/main")
+        }
+        "http://schemas.openxmlformats.org/drawingml/2006/picture" => {
+            Cow::Borrowed("http://schemas.openxmlformats.org/drawingml/2006/picture")
+        }
+        "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" => {
+            Cow::Borrowed("http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing")
+        }
+        "http://schemas.microsoft.com/office/word/2010/wordml" => {
+            Cow::Borrowed("http://schemas.microsoft.com/office/word/2010/wordml")
+        }
+        "http://schemas.microsoft.com/office/2006/xmlPackage" => {
+            Cow::Borrowed("http://schemas.microsoft.com/office/2006/xmlPackage")
+        }
+        "http://www.w3.org/1998/Math/MathML" => Cow::Borrowed("http://www.w3.org/1998/Math/MathML"),
+        XML_NS => Cow::Borrowed(XML_NS),
+        "urn:mathtype:oleobject" => Cow::Borrowed("urn:mathtype:oleobject"),
+        "" => Cow::Borrowed(""),
+        _ => Cow::Owned(s.to_owned()),
+    }
+}
+
+/// Intern common XML prefixes as static slices so DOM nodes avoid small heap `String`s.
+pub(crate) fn intern_prefix(s: &str) -> Cow<'static, str> {
+    match s {
+        "w" => Cow::Borrowed("w"),
+        "m" => Cow::Borrowed("m"),
+        "r" => Cow::Borrowed("r"),
+        "v" => Cow::Borrowed("v"),
+        "o" => Cow::Borrowed("o"),
+        "mc" => Cow::Borrowed("mc"),
+        "a" => Cow::Borrowed("a"),
+        "pic" => Cow::Borrowed("pic"),
+        "wp" => Cow::Borrowed("wp"),
+        "w14" => Cow::Borrowed("w14"),
+        "w15" => Cow::Borrowed("w15"),
+        "w16" => Cow::Borrowed("w16"),
+        "wps" => Cow::Borrowed("wps"),
+        "wpc" => Cow::Borrowed("wpc"),
+        "pkg" => Cow::Borrowed("pkg"),
+        "mtype" => Cow::Borrowed("mtype"),
+        "xml" => Cow::Borrowed("xml"),
+        _ => Cow::Owned(s.to_owned()),
+    }
+}
 
 /// An attribute (namespace declarations are stored separately).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attr {
     /// Prefix as written (or hinted) — only meaningful when `ns` is `Some`.
-    pub prefix: Option<String>,
+    pub prefix: Option<Cow<'static, str>>,
     /// Local name.
     pub local: String,
     /// Namespace URI, if any.
-    pub ns: Option<String>,
+    pub ns: Option<Cow<'static, str>>,
     /// Unescaped value.
     pub value: String,
 }
@@ -58,13 +132,13 @@ pub enum Node {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Element {
     /// Prefix as parsed / hinted. `None` means "default namespace (or none)".
-    pub prefix: Option<String>,
+    pub prefix: Option<Cow<'static, str>>,
     /// Local name.
     pub local: String,
     /// Namespace URI, if any.
-    pub ns: Option<String>,
+    pub ns: Option<Cow<'static, str>>,
     /// Namespace declarations made *on this element*, in source order.
-    pub nsdecls: Vec<(Option<String>, String)>,
+    pub nsdecls: Vec<(Option<Cow<'static, str>>, Cow<'static, str>)>,
     /// Attributes in source order.
     pub attrs: Vec<Attr>,
     /// Child nodes in document order.
@@ -75,9 +149,9 @@ impl Element {
     /// Create an empty element.
     pub fn new(ns: Option<&str>, prefix: Option<&str>, local: &str) -> Self {
         Element {
-            prefix: prefix.map(str::to_owned),
+            prefix: prefix.map(intern_prefix),
             local: local.to_owned(),
-            ns: ns.map(str::to_owned),
+            ns: ns.map(intern_ns),
             nsdecls: Vec::new(),
             attrs: Vec::new(),
             children: Vec::new(),
@@ -87,7 +161,7 @@ impl Element {
     /// Builder-style `xmlns[:prefix]="uri"` declaration on this element.
     pub fn with_nsdecl(mut self, prefix: Option<&str>, uri: &str) -> Self {
         self.nsdecls
-            .push((prefix.map(str::to_owned), uri.to_owned()));
+            .push((prefix.map(intern_prefix), intern_ns(uri)));
         self
     }
 
@@ -102,9 +176,9 @@ impl Element {
             return;
         }
         self.attrs.push(Attr {
-            prefix: prefix.map(str::to_owned),
+            prefix: prefix.map(intern_prefix),
             local: local.to_owned(),
-            ns: ns.map(str::to_owned),
+            ns: ns.map(intern_ns),
             value: value.to_owned(),
         });
     }
@@ -215,20 +289,20 @@ fn default_known_ns(prefix: &str) -> Option<&'static str> {
     }
 }
 
-fn lookup_in_scope<'a>(scope: &'a [NsDecl], prefix: Option<&str>) -> Option<&'a str> {
+fn lookup_in_scope(scope: &[NsDecl], prefix: Option<&str>) -> Option<Cow<'static, str>> {
     if prefix == Some("xml") {
-        return Some(XML_NS);
+        return Some(Cow::Borrowed(XML_NS));
     }
     for (p, u) in scope.iter().rev() {
         if p.as_deref() == prefix {
-            return if u.is_empty() { None } else { Some(u.as_str()) };
+            return if u.is_empty() { None } else { Some(u.clone()) };
         }
     }
     None
 }
 
-fn lookup_for_parse<'a>(scope: &'a [NsDecl], prefix: Option<&str>) -> Option<&'a str> {
-    lookup_in_scope(scope, prefix).or_else(|| prefix.and_then(default_known_ns))
+fn lookup_for_parse(scope: &[NsDecl], prefix: Option<&str>) -> Option<Cow<'static, str>> {
+    lookup_in_scope(scope, prefix).or_else(|| prefix.and_then(default_known_ns).map(Cow::Borrowed))
 }
 
 fn split_qname(q: &str) -> (Option<&str>, &str) {
@@ -240,17 +314,14 @@ fn split_qname(q: &str) -> (Option<&str>, &str) {
 
 /// Build an [`Element`] from a start tag; pushes its declarations onto `scope`.
 fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: usize) -> Result<Element> {
-    let qname = std::str::from_utf8(e.name().as_ref())
-        .map_err(|err| xml_err(err, pos))?
-        .to_owned();
+    let qname_bytes = e.name();
+    let qname = std::str::from_utf8(qname_bytes.as_ref()).map_err(|err| xml_err(err, pos))?;
 
     let mut nsdecls: Vec<NsDecl> = Vec::new();
     let mut raw_attrs: Vec<(String, String)> = Vec::new();
     for a in e.attributes() {
         let a = a.map_err(|err| xml_err(err, pos))?;
-        let key = std::str::from_utf8(a.key.as_ref())
-            .map_err(|err| xml_err(err, pos))?
-            .to_owned();
+        let key = std::str::from_utf8(a.key.as_ref()).map_err(|err| xml_err(err, pos))?;
         let raw = std::str::from_utf8(&a.value).map_err(|err| xml_err(err, pos))?;
         // Attribute-value normalisation: literal whitespace becomes a space.
         let normalised: String = normalize_newlines(raw)
@@ -261,46 +332,38 @@ fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: usize) -
             .map_err(|err| xml_err(err, pos))?
             .into_owned();
         if key == "xmlns" {
-            nsdecls.push((None, value));
+            nsdecls.push((None, intern_ns(&value)));
         } else if let Some(p) = key.strip_prefix("xmlns:") {
-            nsdecls.push((Some(p.to_owned()), value));
+            nsdecls.push((Some(intern_prefix(p)), intern_ns(&value)));
         } else {
-            raw_attrs.push((key, value));
+            raw_attrs.push((key.to_owned(), value));
         }
     }
     scope.extend(nsdecls.iter().cloned());
 
-    let (eprefix, elocal) = split_qname(&qname);
+    let (eprefix, elocal) = split_qname(qname);
     let ens = match eprefix {
-        Some(p) => Some(
-            lookup_for_parse(scope, Some(p))
-                .ok_or_else(|| {
-                    Error::Xml(format!(
-                        "unbound namespace prefix '{p}' (byte offset {pos})"
-                    ))
-                })?
-                .to_owned(),
-        ),
-        None => lookup_for_parse(scope, None).map(str::to_owned),
+        Some(p) => Some(lookup_for_parse(scope, Some(p)).ok_or_else(|| {
+            Error::Xml(format!(
+                "unbound namespace prefix '{p}' (byte offset {pos})"
+            ))
+        })?),
+        None => lookup_for_parse(scope, None),
     };
 
     let mut attrs = Vec::with_capacity(raw_attrs.len());
     for (key, value) in raw_attrs {
         let (p, l) = split_qname(&key);
         let ns = match p {
-            Some(p) => Some(
-                lookup_for_parse(scope, Some(p))
-                    .ok_or_else(|| {
-                        Error::Xml(format!(
-                            "unbound namespace prefix '{p}' (byte offset {pos})"
-                        ))
-                    })?
-                    .to_owned(),
-            ),
+            Some(p) => Some(lookup_for_parse(scope, Some(p)).ok_or_else(|| {
+                Error::Xml(format!(
+                    "unbound namespace prefix '{p}' (byte offset {pos})"
+                ))
+            })?),
             None => None,
         };
         attrs.push(Attr {
-            prefix: p.map(str::to_owned),
+            prefix: p.map(intern_prefix),
             local: l.to_owned(),
             ns,
             value,
@@ -308,7 +371,7 @@ fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: usize) -
     }
 
     Ok(Element {
-        prefix: eprefix.map(str::to_owned),
+        prefix: eprefix.map(intern_prefix),
         local: elocal.to_owned(),
         ns: ens,
         nsdecls,
@@ -522,13 +585,15 @@ impl XmlSerializer {
         hint: Option<&str>,
         uri: &str,
         is_attr: bool,
-    ) -> Option<String> {
+    ) -> Option<Cow<'static, str>> {
         // 1. The hinted prefix already means `uri` here.
         match hint {
-            Some(h) if lookup_in_scope(&self.scope, Some(h)) == Some(uri) => {
-                return Some(h.to_owned());
+            Some(h) if lookup_in_scope(&self.scope, Some(h)).as_deref() == Some(uri) => {
+                return Some(intern_prefix(h));
             }
-            None if !is_attr && lookup_in_scope(&self.scope, None) == Some(uri) => return None,
+            None if !is_attr && lookup_in_scope(&self.scope, None).as_deref() == Some(uri) => {
+                return None
+            }
             _ => {}
         }
         // 2. Some other (visible) prefix already means `uri`.
@@ -538,16 +603,17 @@ impl XmlSerializer {
             .rev()
             .filter(|(p, u)| p.is_some() && u == uri)
             .map(|(p, _)| p.clone())
-            .find(|p| lookup_in_scope(&self.scope, p.as_deref()) == Some(uri));
+            .find(|p| lookup_in_scope(&self.scope, p.as_deref()).as_deref() == Some(uri));
         if let Some(Some(p)) = candidate {
             return Some(p);
         }
         // 3. Declare it here.
-        let (prefix, decl): (Option<String>, NsDecl) = match hint {
+        let (prefix, decl): (Option<Cow<'static, str>>, NsDecl) = match hint {
             Some(h) if lookup_in_scope(&self.scope, Some(h)).is_none() => {
-                (Some(h.to_owned()), (Some(h.to_owned()), uri.to_owned()))
+                let hp = intern_prefix(h);
+                (Some(hp.clone()), (Some(hp), intern_ns(uri)))
             }
-            None if !is_attr => (None, (None, uri.to_owned())),
+            None if !is_attr => (None, (None, intern_ns(uri))),
             _ => {
                 let mut p;
                 loop {
@@ -557,7 +623,8 @@ impl XmlSerializer {
                         break;
                     }
                 }
-                (Some(p.clone()), (Some(p), uri.to_owned()))
+                let cp: Cow<'static, str> = Cow::Owned(p);
+                (Some(cp.clone()), (Some(cp), intern_ns(uri)))
             }
         };
         self.scope.push(decl.clone());
@@ -572,7 +639,7 @@ impl XmlSerializer {
             None => {
                 // No namespace: make sure no default namespace leaks in.
                 if lookup_in_scope(&self.scope, None).is_some() {
-                    let d: NsDecl = (None, String::new());
+                    let d: NsDecl = (None, Cow::Borrowed(""));
                     self.scope.push(d.clone());
                     decls.push(d);
                 }
@@ -766,5 +833,32 @@ mod tests {
             to_string(&root),
             "<root><!--note--><?target value?><child/></root>"
         );
+    }
+
+    #[test]
+    fn interns_standard_ooxml_namespaces_and_prefixes_without_heap_alloc() {
+        let doc = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:v="urn:schemas-microsoft-com:vml"
+            xmlns:o="urn:schemas-microsoft-com:office:office"
+            xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+            <mc:AlternateContent><w:r><m:oMath><m:r><m:t w:space="preserve">x</m:t></m:r></m:oMath><v:shape o:ole=""><v:imagedata r:id="rId1"/></v:shape></w:r></mc:AlternateContent>
+        </w:document>"#;
+        let root = parse(doc).expect("valid OOXML");
+        for (p, u) in &root.nsdecls {
+            assert!(matches!(p.as_ref(), Some(Cow::Borrowed(_))));
+            assert!(matches!(u, Cow::Borrowed(_)));
+        }
+        for el in root.iter() {
+            assert!(matches!(el.prefix.as_ref(), Some(Cow::Borrowed(_))));
+            assert!(matches!(el.ns.as_ref(), Some(Cow::Borrowed(_))));
+            for attr in &el.attrs {
+                if attr.prefix.is_some() {
+                    assert!(matches!(attr.prefix.as_ref(), Some(Cow::Borrowed(_))));
+                    assert!(matches!(attr.ns.as_ref(), Some(Cow::Borrowed(_))));
+                }
+            }
+        }
     }
 }
