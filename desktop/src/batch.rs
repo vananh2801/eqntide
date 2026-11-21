@@ -923,7 +923,7 @@ mod tests {
                 TreeRow::Group {
                     key: "root:/drive_a/docs_a/ch1".into(),
                     label: "ch1".into(),
-                    hover_path: Some("/drive_a/docs_a/ch1".into()),
+                    hover_path: Some(root_a.join("ch1").display().to_string()),
                     depth: 1,
                     collapsed: false,
                     descendant_indices: vec![0],
