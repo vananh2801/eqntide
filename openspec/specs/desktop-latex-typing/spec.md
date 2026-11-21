@@ -7,7 +7,7 @@ Enables fast, uninterrupted LaTeX command typing on the desktop Equation Canvas 
 ## Requirements
 
 ### Requirement: Buffered raw LaTeX command input on Equation Canvas
-When typing a backslash (`\`) command on the Equation Canvas, the editor SHALL buffer the complete expression—including `{`, `}`, `_`, `^`, operators, numbers, and spaces—without prematurely committing or jumping into placeholder boxes until the user commits with `Enter`.
+In Math mode, a backslash (`\`) starts command entry on the Equation Canvas. The editor SHALL buffer the expression until `Enter`. Inside a Text span, a backslash SHALL be inserted as a literal character.
 
 #### Scenario: Brace arguments do not prematurely jump into placeholder boxes
 - **WHEN** the user types `\mathbb{R}` or `\math` followed by `{` while entering a command on the Equation Canvas
@@ -23,7 +23,7 @@ When typing a backslash (`\`) command on the Equation Canvas, the editor SHALL b
 
 #### Scenario: Standalone template command name still supports placeholder fallback on Enter
 - **WHEN** the user types only a standalone template command name such as `\frac` without brace arguments and presses `Enter`
-- **THEN** the editor inserts the template structure (wrapping any active selection) as before
+- **THEN** the editor inserts the template structure and wraps any active selection. The `\text` command requires a complete braced argument before Enter can insert text
 
 #### Scenario: Invalid buffered expression stays editable on Enter
 - **WHEN** the user presses `Enter` on an incomplete or invalid buffered LaTeX expression
@@ -39,6 +39,10 @@ The Equation Canvas command popup SHALL suggest matching command names while the
 #### Scenario: Space does not commit or dismiss the command buffer
 - **WHEN** the user types `\lim_{x` followed by a space on the Equation Canvas
 - **THEN** the space is appended to the command buffer and the expression is not committed
+
+#### Scenario: A space after a bare command name leaves the buffer unchanged
+- **WHEN** the command buffer contains only a command name such as `\text` and the user presses Space
+- **THEN** the buffer stays open with the same command name
 
 ### Requirement: Initial focus on window launch and session activation
 When the desktop window opens, loads an incoming equation session, or returns from non-editor tabs to the editor view, the application SHALL focus the user's configured startup focus target (`Equation canvas` or `LaTeX source`).
