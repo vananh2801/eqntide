@@ -9,6 +9,19 @@ Private Const wdKeyAlt As Long = 1024
 Private Const wdKeyBackslash As Long = 220
 Private Const wdKeyCategoryMacro As Long = 1
 Private Const wdCollapseEnd As Long = 0
+Private Const wdInlineShapeEmbeddedOLEObject As Long = 1
+Private Const wdInlineShapeLinkedOLEObject As Long = 2
+Private Const wdInlineShapePicture As Long = 3
+Private Const wdInlineShapeLinkedPicture As Long = 4
+
+Private Const BRIDGE_ERR_NONE As Long = 0
+Private Const BRIDGE_ERR_HTTP As Long = 1
+Private Const BRIDGE_ERR_CONNECT As Long = 2
+
+Private m_CachedBridgeToken As String
+Private m_SnippetHttp As Object
+Private m_LastYield As Double
+Private m_LastStatus As Double
 
 ' =========================================================================
 ' Ribbon Callbacks
@@ -47,45 +60,36 @@ End Sub
 ' =========================================================================
 
 Public Sub ToggleLatexMacro()
+    Dim prevScreenUpdating As Boolean
+    Dim prevPagination As Boolean
+    Dim hasUndoRecord As Boolean
+    prevScreenUpdating = True
+    prevPagination = True
+    On Error Resume Next
+    prevScreenUpdating = Application.ScreenUpdating
+    Application.ScreenUpdating = False
+    prevPagination = Application.Options.Pagination
+    Application.Options.Pagination = False
+    Application.UndoRecord.StartCustomRecord "EqnTide Toggle LaTeX"
+    If Err.Number = 0 Then hasUndoRecord = True
+    Err.Clear
     On Error GoTo ErrorHandler
+
+    m_LastYield = Timer
+    m_LastStatus = m_LastYield
 
     Dim sel As Object
     Set sel = Selection
 
-    ' Case 1: Cursor is on / inside an existing OMML equation -> Convert to LaTeX text
-    If sel.OMaths.Count > 0 Then
-        Dim om As Object
-        Set om = sel.OMaths(1)
-        Dim omXml As String
-        omXml = om.Range.WordOpenXML
-
-        Dim latexStr As String
-        latexStr = CallBridge(omXml, "flat_opc", "latex")
-
-        If Len(latexStr) > 0 Then
-            om.Range.Text = "$" & latexStr & "$"
-        End If
-        Exit Sub
-    End If
-
-    ' MathType OLE created by Toggle/Insert/Edit must also toggle back to text.
-    If sel.InlineShapes.Count = 1 Then
-        Dim shapeRange As Object
-        Set shapeRange = sel.InlineShapes(1).Range.Duplicate
-        latexStr = CallBridge(shapeRange.WordOpenXML, "flat_opc", "latex")
-        If Len(latexStr) > 0 Then shapeRange.Text = "$" & latexStr & "$"
-        Exit Sub
-    End If
-
-    ' Case 2: Selected text contains LaTeX or plain text selected
+    Dim scope As Object
+    Set scope = sel.Range.Duplicate
+    Dim atCaret As Boolean
+    atCaret = (scope.Start = scope.End)
+    Dim caretPos As Long
+    caretPos = scope.Start
+    If atCaret Then Set scope = scope.Paragraphs(1).Range.Duplicate
     Dim txt As String
-    txt = sel.Text
-
-    If Len(Trim(txt)) = 0 Then
-        ' Expand selection to current paragraph or word if nothing selected
-        MsgBox "Please select a LaTeX expression (e.g. $x+1=2$) or an equation.", vbInformation, "EqnTide"
-        Exit Sub
-    End If
+    txt = scope.Text
 
     ' Check if text has LaTeX delimiters $...$, $$...$$, \[...\], \(...\)
     Dim reg As Object
@@ -93,41 +97,219 @@ Public Sub ToggleLatexMacro()
     reg.Global = True
     reg.IgnoreCase = True
     reg.MultiLine = True
-    ' Pattern to match $...$, $$...$$, \[...\], \(...\)
-    reg.Pattern = "(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\$)(?:\\.|[^$\\\n])+\$)"
+    ' Pattern to match $...$, $$...$$, \[...\], \(...\) without crossing paragraph breaks for inline $ / \(
+    reg.Pattern = "(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([^\r\n\x07]+?\\\)|\$(?!\$)(?:\\.|[^$\\\r\n])+\$)"
 
     Dim matches As Object
     Set matches = reg.Execute(txt)
 
+    Dim i As Long, handled As Boolean, stepCount As Long
+    Dim batchFound As Long, batchConverted As Long
+    Dim bridgeAborted As Boolean, lastHttpErr As String, errKind As Long
+    Dim m As Object, subRng As Object
     If matches.Count > 0 Then
-        ' Batch convert all matches in selection
-        Dim i As Long
-        Dim startOffset As Long
-        startOffset = sel.Range.Start
-
-        ' Process backwards so character positions dont shift
-        For i = matches.Count - 1 To 0 Step -1
-            Dim m As Object
-            Set m = matches(i)
-            Dim fullMatch As String
-            fullMatch = m.Value
-
-            Dim rawLatex As String
-            rawLatex = StripDelimiters(fullMatch)
-
-            Dim flatOpc As String
-            flatOpc = CallBridge(rawLatex, "latex", "flat_opc_mathtype")
-
-            If Len(flatOpc) > 0 Then
-                Dim subRng As Object
-                Set subRng = ActiveDocument.Range(startOffset + m.FirstIndex, startOffset + m.FirstIndex + m.Length)
-                InsertFlatOpcInline subRng, flatOpc, False
+        Dim matchValues() As String
+        Dim matchFirstIdx() As Long
+        Dim matchLengths() As Long
+        Dim validCount As Long
+        ReDim matchValues(0 To matches.Count - 1)
+        ReDim matchFirstIdx(0 To matches.Count - 1)
+        ReDim matchLengths(0 To matches.Count - 1)
+        validCount = 0
+        For Each m In matches
+            If IsValidLatexMatch(m.Value) Then
+                matchValues(validCount) = m.Value
+                matchFirstIdx(validCount) = m.FirstIndex
+                matchLengths(validCount) = m.Length
+                validCount = validCount + 1
             End If
+            YieldIfNeeded m_LastYield
+        Next m
+
+        If validCount > 0 Then
+            Dim matchStarts() As Long, matchEnds() As Long
+            ReDim matchStarts(0 To validCount - 1)
+            ReDim matchEnds(0 To validCount - 1)
+            Dim scanMin As Long, cumShift As Long
+            scanMin = scope.Start
+            cumShift = 0
+            For i = 0 To validCount - 1
+                Set subRng = ResolveMatchRange(scope, matchValues(i), scope.Start + matchFirstIdx(i) + cumShift, scanMin, scope.End)
+                If Not subRng Is Nothing Then
+                    matchStarts(i) = subRng.Start
+                    matchEnds(i) = subRng.End
+                    scanMin = subRng.End
+                    cumShift = subRng.End - (scope.Start + matchFirstIdx(i) + matchLengths(i))
+                Else
+                    matchStarts(i) = -1
+                    matchEnds(i) = -1
+                End If
+                If (i And 31) = 0 Then UpdateProgressStatus m_LastStatus, i, 0
+                YieldIfNeeded m_LastYield
+            Next i
+
+            Set subRng = scope.Duplicate
+            For i = validCount - 1 To 0 Step -1
+                If matchStarts(i) < 0 Then
+                    If Not atCaret Then
+                        Err.Raise vbObjectError + 112, , "Word's text range differs from the selected formula. Select the formula alone."
+                    End If
+                ElseIf Not atCaret Or (matchStarts(i) <= caretPos And caretPos <= matchEnds(i)) Then
+                    subRng.SetRange matchStarts(i), matchEnds(i)
+                    If subRng.Text <> matchValues(i) Then
+                        Err.Raise vbObjectError + 112, , "Word's text range differs from the selected formula. Select the formula alone."
+                    End If
+                    batchFound = batchFound + 1
+                    Dim rawLatex As String, flatOpc As String
+                    rawLatex = StripDelimiters(matchValues(i))
+                    flatOpc = CallBridgeEx(rawLatex, "latex", "flat_opc_mathtype", False, errKind, lastHttpErr)
+                    If errKind = BRIDGE_ERR_CONNECT Then
+                        bridgeAborted = True
+                        Exit For
+                    End If
+                    If Len(flatOpc) > 0 Then
+                        InsertFlatOpcInline subRng, flatOpc, False
+                        batchConverted = batchConverted + 1
+                    End If
+                    handled = True
+                    stepCount = stepCount + 1
+                    UpdateProgressStatus m_LastStatus, stepCount, validCount
+                    YieldIfNeeded m_LastYield
+                    If atCaret Then Exit For
+                End If
+            Next i
+        End If
+    End If
+    If bridgeAborted Or handled Then GoTo Cleanup
+
+    Set scope = sel.Range.Duplicate
+    Dim latexStr As String
+    Dim omathsCol As Object, om As Object, mathRange As Object, omStart As Long
+    Set omathsCol = scope.OMaths
+    If omathsCol.Count = 0 And atCaret Then Set omathsCol = sel.OMaths
+    Dim omCount As Long, omIdx As Long
+    omCount = omathsCol.Count
+    If omCount > 0 Then
+        Dim omList() As Object
+        ReDim omList(1 To omCount)
+        omIdx = 0
+        For Each om In omathsCol
+            omIdx = omIdx + 1
+            If omIdx > UBound(omList) Then ReDim Preserve omList(1 To omIdx + 64)
+            Set omList(omIdx) = om
+            YieldIfNeeded m_LastYield
+        Next om
+        For i = omIdx To 1 Step -1
+            Set om = omList(i)
+            Set mathRange = om.Range.Duplicate
+            omStart = mathRange.Start
+            batchFound = batchFound + 1
+            latexStr = CallBridgeEx(CompactFlatOpc(mathRange.WordOpenXML), "flat_opc", "latex", False, errKind, lastHttpErr)
+            If errKind = BRIDGE_ERR_CONNECT Then
+                bridgeAborted = True
+                Exit For
+            End If
+            If Len(latexStr) > 0 Then
+                om.Remove
+                mathRange.SetRange omStart, omStart
+                mathRange.Text = "$" & latexStr & "$"
+                mathRange.Font.Position = 0
+                mathRange.Font.Subscript = False
+                mathRange.Font.Superscript = False
+                batchConverted = batchConverted + 1
+            End If
+            handled = True
+            stepCount = stepCount + 1
+            UpdateProgressStatus m_LastStatus, stepCount, omIdx
+            YieldIfNeeded m_LastYield
         Next i
+    End If
+    If bridgeAborted Then GoTo Cleanup
+
+    Dim shapesCol As Object, shape As Object, shapeRange As Object, shapeXml As String
+    Set shapesCol = scope.InlineShapes
+    If shapesCol.Count = 0 Then Set shapesCol = sel.InlineShapes
+    Dim rawShapeCount As Long
+    rawShapeCount = shapesCol.Count
+    If rawShapeCount > 0 Then
+        Dim shapeList() As Object
+        Dim shapeClass() As Long
+        ReDim shapeList(1 To rawShapeCount)
+        ReDim shapeClass(1 To rawShapeCount)
+        Dim eqCandidateCount As Long, scanIdx As Long, cls As Long
+        eqCandidateCount = 0
+        scanIdx = 0
+        For Each shape In shapesCol
+            scanIdx = scanIdx + 1
+            cls = QuickClassifyShape(shape)
+            If cls >= 0 Then
+                eqCandidateCount = eqCandidateCount + 1
+                If eqCandidateCount > UBound(shapeList) Then
+                    ReDim Preserve shapeList(1 To eqCandidateCount + 64)
+                    ReDim Preserve shapeClass(1 To eqCandidateCount + 64)
+                End If
+                Set shapeList(eqCandidateCount) = shape
+                shapeClass(eqCandidateCount) = cls
+            End If
+            If (scanIdx And 31) = 0 Then UpdateProgressStatus m_LastStatus, scanIdx, 0
+            YieldIfNeeded m_LastYield
+        Next shape
+
+        For i = eqCandidateCount To 1 Step -1
+            Set shape = shapeList(i)
+            Set shapeRange = shape.Range.Duplicate
+            cls = shapeClass(i)
+            shapeXml = ""
+            On Error Resume Next
+            shapeXml = shapeRange.WordOpenXML
+            On Error GoTo ErrorHandler
+            If cls = 1 Then
+                batchFound = batchFound + 1
+            ElseIf IsEquationShape(shape, shapeXml) Then
+                batchFound = batchFound + 1
+            Else
+                shapeXml = ""
+            End If
+            If Len(shapeXml) > 0 Then
+                latexStr = CallBridgeEx(CompactFlatOpc(shapeXml), "flat_opc", "latex", False, errKind, lastHttpErr)
+                If errKind = BRIDGE_ERR_CONNECT Then
+                    bridgeAborted = True
+                    Exit For
+                End If
+                If Len(latexStr) > 0 Then
+                    TrimTrailingRangeBreaks shapeRange
+                    shapeRange.Text = "$" & latexStr & "$"
+                    shapeRange.Font.Position = 0
+                    shapeRange.Font.Subscript = False
+                    shapeRange.Font.Superscript = False
+                    batchConverted = batchConverted + 1
+                End If
+                handled = True
+                stepCount = stepCount + 1
+                UpdateProgressStatus m_LastStatus, stepCount, eqCandidateCount
+            End If
+            YieldIfNeeded m_LastYield
+        Next i
+    End If
+    If bridgeAborted Or handled Then GoTo Cleanup
+    If atCaret Then
+        MsgBox "Place the cursor inside a delimited LaTeX formula or select an equation.", vbInformation, "EqnTide"
     Else
-        ' No delimiters, assume entire selected text is pure LaTeX formula
+        If shapesCol.Count > 0 Or omathsCol.Count > 0 Or InStr(txt, ChrW$(1)) > 0 Or InStr(txt, ChrW$(&HFFFC)) > 0 Or InStr(txt, Chr$(7)) > 0 Or InStr(txt, vbTab) > 0 Then
+            MsgBox "Place the cursor inside a delimited LaTeX formula or select an equation.", vbInformation, "EqnTide"
+            GoTo Cleanup
+        End If
+        ' No delimiters, assume entire selected text is pure LaTeX formula (single short block)
         Dim cleanLatex As String
-        cleanLatex = Trim(Replace(Replace(txt, vbCr, ""), vbLf, ""))
+        cleanLatex = Trim(txt)
+        Do While Len(cleanLatex) > 0 And (Right$(cleanLatex, 1) = vbCr Or Right$(cleanLatex, 1) = vbLf)
+            cleanLatex = Left$(cleanLatex, Len(cleanLatex) - 1)
+        Loop
+        cleanLatex = Trim(cleanLatex)
+        If Len(cleanLatex) > 1000 Or ((InStr(cleanLatex, vbCr) > 0 Or InStr(cleanLatex, vbLf) > 0) And Left$(cleanLatex, 6) <> "\begin") Then
+            MsgBox "Place the cursor inside a delimited LaTeX formula or select an equation.", vbInformation, "EqnTide"
+            GoTo Cleanup
+        End If
         If Len(cleanLatex) > 0 Then
             Dim opc As String
             opc = CallBridge(cleanLatex, "latex", "flat_opc_mathtype")
@@ -137,9 +319,32 @@ Public Sub ToggleLatexMacro()
         End If
     End If
 
+Cleanup:
+    On Error Resume Next
+    If hasUndoRecord Then Application.UndoRecord.EndCustomRecord
+    Application.Options.Pagination = prevPagination
+    Application.ScreenUpdating = prevScreenUpdating
+    Application.StatusBar = False
+    On Error GoTo 0
+    If Not bridgeAborted Then
+        If batchFound > 1 Then
+            MsgBox "Toggle LaTeX Succeeded!" & vbCrLf & vbCrLf & _
+                   "Found: " & batchFound & vbCrLf & _
+                   "Converted: " & batchConverted & vbCrLf & _
+                   "Errors: " & (batchFound - batchConverted), vbInformation, "EqnTide"
+        ElseIf batchFound = 1 And batchConverted = 0 And Len(lastHttpErr) > 0 Then
+            MsgBox lastHttpErr, vbExclamation, "EqnTide Bridge"
+        End If
+    End If
     Exit Sub
 
 ErrorHandler:
+    On Error Resume Next
+    If hasUndoRecord Then Application.UndoRecord.EndCustomRecord
+    Application.Options.Pagination = prevPagination
+    Application.ScreenUpdating = prevScreenUpdating
+    Application.StatusBar = False
+    On Error GoTo 0
     MsgBox "Error in Toggle LaTeX: " & Err.Description, vbExclamation, "EqnTide"
 End Sub
 
@@ -195,10 +400,11 @@ Public Sub UpgradeMathTypeMacro()
         targetMode = "upgrade_omml"
     End If
 
-    ' Save current document state to disk before converting
-    doc.Save
-
-    ' Call bridge /convert/document
+    If doc.ReadOnly Then
+        MsgBox "This document is read-only. Save a writable copy before upgrading it.", vbInformation, "EqnTide"
+        Exit Sub
+    End If
+    Dim reopenNeeded As Boolean
     Dim http As Object
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
     http.Open "POST", BRIDGE_ROOT & "/convert/document", False
@@ -207,8 +413,20 @@ Public Sub UpgradeMathTypeMacro()
 
     Dim payload As String
     payload = "{""input_path"":" & JsonEscape(docPath) & ",""target"":" & JsonEscape(targetMode) & "}"
+    doc.Save
+    If Not doc.Saved Then Err.Raise vbObjectError + 110, , "Word did not save the document."
+    doc.Close 0
+    Dim openDoc As Object
+    For Each openDoc In Application.Documents
+        If StrComp(openDoc.FullName, docPath, vbTextCompare) = 0 Then
+            Err.Raise vbObjectError + 111, , "Word did not close the document."
+        End If
+    Next openDoc
+    reopenNeeded = True
     http.send payload
 
+    Documents.Open docPath
+    reopenNeeded = False
     If http.Status = 200 Then
         Dim resp As String
         resp = http.responseText
@@ -216,10 +434,6 @@ Public Sub UpgradeMathTypeMacro()
         found = ExtractJsonField(resp, "found")
         converted = ExtractJsonField(resp, "converted")
         errors = ExtractJsonField(resp, "errors")
-
-        ' Reopen document to display fresh upgraded equations
-        doc.Close 0 ' wdDoNotSaveChanges = 0
-        Documents.Open docPath
 
         MsgBox "Upgrade Succeeded!" & vbCrLf & vbCrLf & _
                "Equations Found: " & found & vbCrLf & _
@@ -231,7 +445,16 @@ Public Sub UpgradeMathTypeMacro()
     Exit Sub
 
 UpgradeError:
-    MsgBox "Cannot upgrade equations: " & Err.Description, vbExclamation, "EqnTide"
+    Dim detail As String
+    detail = Err.Description
+    If reopenNeeded Then
+        On Error Resume Next
+        Err.Clear
+        Documents.Open docPath
+        If Err.Number <> 0 Then detail = detail & vbCrLf & "Open the saved document at: " & docPath
+        On Error GoTo 0
+    End If
+    MsgBox "Cannot upgrade equations: " & detail, vbExclamation, "EqnTide"
 End Sub
 
 Public Sub BatchConverterMacro()
@@ -328,30 +551,200 @@ End Sub
 ' Helper Functions
 ' =========================================================================
 
-Private Sub InsertFlatOpcInline(ByVal target As Object, ByVal flatOpc As String, ByVal moveCursorAfter As Boolean)
-    Dim doc As Object
-    Set doc = ActiveDocument
+Private Sub YieldIfNeeded(ByRef lastYield As Double)
+    Dim nowT As Double
+    nowT = Timer
+    If nowT < lastYield Or (nowT - lastYield) >= 0.15 Then
+        DoEvents
+        lastYield = Timer
+    End If
+End Sub
 
-    ' Never swallow an existing trailing paragraph mark if the selection ends with one.
+Private Sub UpdateProgressStatus(ByRef lastStatus As Double, ByVal doneCount As Long, ByVal totalCount As Long)
+    Dim nowT As Double
+    nowT = Timer
+    If nowT < lastStatus Or (nowT - lastStatus) >= 0.25 Then
+        On Error Resume Next
+        If totalCount > 0 Then
+            Application.StatusBar = "EqnTide: Converting equations (" & doneCount & " / " & totalCount & ")..."
+        Else
+            Application.StatusBar = "EqnTide: Scanning equations (" & doneCount & ")..."
+        End If
+        On Error GoTo 0
+        lastStatus = Timer
+    End If
+End Sub
+
+Private Sub TrimTrailingRangeBreaks(ByVal target As Object)
+    Dim tail As Object
+    Set tail = target.Duplicate
     Do While target.End > target.Start
-        Dim tailCh As String
-        tailCh = doc.Range(target.End - 1, target.End).Text
-        If tailCh <> vbCr And tailCh <> vbLf Then Exit Do
+        tail.SetRange target.End - 1, target.End
+        If tail.Text <> vbCr And tail.Text <> vbLf And tail.Text <> Chr$(7) Then Exit Do
         target.End = target.End - 1
     Loop
+End Sub
+
+Private Function IsValidLatexMatch(ByVal rawMatch As String) As Boolean
+    If Len(rawMatch) = 0 Or Len(rawMatch) > 2000 Then Exit Function
+    If InStr(1, rawMatch, ChrW$(1), vbBinaryCompare) > 0 Then Exit Function
+    If InStr(1, rawMatch, ChrW$(&HFFFC), vbBinaryCompare) > 0 Then Exit Function
+    If InStr(1, rawMatch, Chr$(7), vbBinaryCompare) > 0 Then Exit Function
+    If InStr(1, rawMatch, vbCr & vbCr, vbBinaryCompare) > 0 Then Exit Function
+    If InStr(1, rawMatch, vbLf & vbLf, vbBinaryCompare) > 0 Then Exit Function
+    If Len(Trim$(StripDelimiters(rawMatch))) = 0 Then Exit Function
+    IsValidLatexMatch = True
+End Function
+
+' Returns 1 if definitely an equation, -1 if definitely NOT an equation, 0 if XML check is needed.
+Private Function QuickClassifyShape(ByVal shape As Object) As Long
+    On Error Resume Next
+    If shape.AlternativeText = "EqnTide equation" Then
+        QuickClassifyShape = 1
+        Exit Function
+    End If
+    Dim st As Long
+    st = 0
+    st = shape.Type
+    If st = wdInlineShapeEmbeddedOLEObject Or st = wdInlineShapeLinkedOLEObject Then
+        Dim progId As String
+        progId = ""
+        progId = LCase$(shape.OLEFormat.ProgID)
+        If Len(progId) > 0 Then
+            If progId Like "equation.*" Or progId Like "mathtype*" Then
+                QuickClassifyShape = 1
+            Else
+                QuickClassifyShape = -1
+            End If
+            Exit Function
+        End If
+        QuickClassifyShape = 0
+        Exit Function
+    End If
+    If st = wdInlineShapePicture Or st = wdInlineShapeLinkedPicture Then
+        QuickClassifyShape = 0
+        Exit Function
+    End If
+    If st > 0 Then
+        QuickClassifyShape = -1
+    Else
+        QuickClassifyShape = 0
+    End If
+    On Error GoTo 0
+End Function
+
+Private Function IsBloatedFlatOpcPart(ByVal lowerPartName As String) As Boolean
+    If Len(lowerPartName) = 0 Then Exit Function
+    Select Case lowerPartName
+        Case "/word/styles.xml", "/word/styleswitheffects.xml", "/word/numbering.xml", _
+             "/word/fonttable.xml", "/word/settings.xml", "/word/websettings.xml"
+            IsBloatedFlatOpcPart = True
+            Exit Function
+    End Select
+    If Left$(lowerPartName, 12) = "/word/theme/" _
+        Or Left$(lowerPartName, 10) = "/docprops/" _
+        Or Left$(lowerPartName, 11) = "/customxml/" Then
+        IsBloatedFlatOpcPart = True
+    End If
+End Function
+
+Private Function CompactFlatOpc(ByVal xml As String) As String
+    If Len(xml) < 16384 Then
+        CompactFlatOpc = xml
+        Exit Function
+    End If
+    Dim firstPart As Long
+    firstPart = InStr(1, xml, "<pkg:part ", vbBinaryCompare)
+    If firstPart = 0 Then
+        CompactFlatOpc = xml
+        Exit Function
+    End If
+
+    Dim parts() As String
+    Dim cap As Long, cnt As Long
+    cap = 16
+    ReDim parts(0 To cap - 1)
+    parts(0) = Left$(xml, firstPart - 1)
+    cnt = 1
+
+    Dim pos As Long, tagEnd As Long, partEnd As Long, tailPos As Long
+    Dim partName As String, nameStart As Long, nameEnd As Long, headerText As String
+    pos = firstPart
+    tailPos = firstPart
+    Do While pos > 0
+        tagEnd = InStr(pos, xml, ">", vbBinaryCompare)
+        If tagEnd = 0 Then
+            CompactFlatOpc = xml
+            Exit Function
+        End If
+        If Mid$(xml, tagEnd - 1, 1) = "/" Then
+            partEnd = tagEnd + 1
+        Else
+            partEnd = InStr(tagEnd + 1, xml, "</pkg:part>", vbBinaryCompare)
+            If partEnd = 0 Then
+                CompactFlatOpc = xml
+                Exit Function
+            End If
+            partEnd = partEnd + 11
+        End If
+
+        headerText = Mid$(xml, pos, tagEnd - pos + 1)
+        partName = ""
+        nameStart = InStr(1, headerText, "pkg:name=""", vbBinaryCompare)
+        If nameStart = 0 Then nameStart = InStr(1, headerText, "name=""", vbBinaryCompare)
+        If nameStart > 0 Then
+            nameStart = InStr(nameStart, headerText, """", vbBinaryCompare) + 1
+            nameEnd = InStr(nameStart, headerText, """", vbBinaryCompare)
+            If nameEnd > nameStart Then
+                partName = LCase$(Mid$(headerText, nameStart, nameEnd - nameStart))
+                If Left$(partName, 1) <> "/" Then partName = "/" & partName
+            End If
+        End If
+
+        If Not IsBloatedFlatOpcPart(partName) Then
+            If cnt >= cap Then
+                cap = cap * 2
+                ReDim Preserve parts(0 To cap - 1)
+            End If
+            parts(cnt) = Mid$(xml, pos, partEnd - pos)
+            cnt = cnt + 1
+        End If
+
+        tailPos = partEnd
+        pos = InStr(partEnd, xml, "<pkg:part ", vbBinaryCompare)
+    Loop
+
+    If tailPos <= Len(xml) Then
+        If cnt >= cap Then
+            cap = cap + 1
+            ReDim Preserve parts(0 To cap - 1)
+        End If
+        parts(cnt) = Mid$(xml, tailPos)
+        cnt = cnt + 1
+    End If
+
+    ReDim Preserve parts(0 To cnt - 1)
+    CompactFlatOpc = Join(parts, "")
+End Function
+
+Private Sub InsertFlatOpcInline(ByVal target As Object, ByVal flatOpc As String, ByVal moveCursorAfter As Boolean)
+    TrimTrailingRangeBreaks target
+    Dim tail As Object
+    Set tail = target.Duplicate
 
     Dim insertPos As Long
     insertPos = target.Start
     Dim replaced As Long
     replaced = target.End - insertPos
     Dim originalEnd As Long
-    originalEnd = doc.Content.End
+    originalEnd = target.StoryLength
     Dim suffixLen As Long
     suffixLen = 32
     If target.End + suffixLen > originalEnd Then suffixLen = originalEnd - target.End
     Dim suffix As String
     If suffixLen > 0 Then
-        suffix = doc.Range(target.End, target.End + suffixLen).Text
+        tail.SetRange target.End, target.End + suffixLen
+        suffix = tail.Text
     Else
         suffix = ""
     End If
@@ -359,7 +752,7 @@ Private Sub InsertFlatOpcInline(ByVal target As Object, ByVal flatOpc As String,
     target.InsertXML flatOpc
 
     Dim newEnd As Long
-    newEnd = doc.Content.End
+    newEnd = target.StoryLength
     Dim insertedEnd As Long
     insertedEnd = insertPos + newEnd - originalEnd + replaced
 
@@ -368,7 +761,8 @@ Private Sub InsertFlatOpcInline(ByVal target As Object, ByVal flatOpc As String,
         verifyLen = Len(suffix)
         Dim actualSuffix As String
         If verifyLen > 0 And insertedEnd + verifyLen <= newEnd Then
-            actualSuffix = doc.Range(insertedEnd, insertedEnd + verifyLen).Text
+            tail.SetRange insertedEnd, insertedEnd + verifyLen
+            actualSuffix = tail.Text
         ElseIf verifyLen = 0 Then
             actualSuffix = ""
         Else
@@ -379,9 +773,10 @@ Private Sub InsertFlatOpcInline(ByVal target As Object, ByVal flatOpc As String,
             Dim ch As String
             For breaks = 1 To 2
                 If insertedEnd <= insertPos Then Exit For
-                ch = doc.Range(insertedEnd - 1, insertedEnd).Text
+                tail.SetRange insertedEnd - 1, insertedEnd
+                ch = tail.Text
                 If ch <> vbCr And ch <> vbLf Then Exit For
-                doc.Range(insertedEnd - 1, insertedEnd).Delete
+                tail.Delete
                 insertedEnd = insertedEnd - 1
             Next breaks
         End If
@@ -389,7 +784,8 @@ Private Sub InsertFlatOpcInline(ByVal target As Object, ByVal flatOpc As String,
 
     If moveCursorAfter And insertedEnd >= insertPos Then
         Dim afterRng As Object
-        Set afterRng = doc.Range(insertedEnd, insertedEnd)
+        Set afterRng = target.Duplicate
+        afterRng.SetRange insertedEnd, insertedEnd
         afterRng.Select
         On Error Resume Next
         Selection.Collapse wdCollapseEnd
@@ -399,6 +795,98 @@ Private Sub InsertFlatOpcInline(ByVal target As Object, ByVal flatOpc As String,
         On Error GoTo 0
     End If
 End Sub
+
+Private Function IsEquationShape(ByVal shape As Object, ByVal shapeXml As String) As Boolean
+    Dim cls As Long
+    cls = QuickClassifyShape(shape)
+    If cls = 1 Then
+        IsEquationShape = True
+        Exit Function
+    ElseIf cls = -1 Then
+        Exit Function
+    End If
+    If InStr(1, shapeXml, "Equation.", vbTextCompare) > 0 _
+        Or InStr(1, shapeXml, "MathType", vbTextCompare) > 0 _
+        Or InStr(1, shapeXml, "EqnTide equation", vbTextCompare) > 0 Then
+        IsEquationShape = True
+    End If
+End Function
+
+Private Function ResolveMatchRange(ByVal scope As Object, ByVal expected As String, ByVal guessStart As Long, ByVal minStart As Long, ByVal maxEnd As Long) As Object
+    Dim matchLen As Long
+    matchLen = Len(expected)
+    If matchLen = 0 Or maxEnd - minStart < matchLen Then Exit Function
+
+    Dim probe As Object
+    Set probe = scope.Duplicate
+    If guessStart >= minStart And guessStart + matchLen <= maxEnd Then
+        probe.SetRange guessStart, guessStart + matchLen
+        If probe.Text = expected Then
+            Set ResolveMatchRange = probe
+            Exit Function
+        End If
+    End If
+
+    Dim winStart As Long, winEnd As Long
+    winStart = guessStart - 256
+    If winStart < minStart Then winStart = minStart
+    winEnd = guessStart + matchLen + 256
+    If winEnd > maxEnd Then winEnd = maxEnd
+    If winEnd - winStart >= matchLen Then
+        Set ResolveMatchRange = ScanRangeForMatch(probe, expected, winStart, winEnd)
+        If Not ResolveMatchRange Is Nothing Then Exit Function
+    End If
+
+    Set ResolveMatchRange = ScanRangeForMatch(probe, expected, minStart, maxEnd)
+End Function
+
+Private Function ScanRangeForMatch(ByVal probe As Object, ByVal expected As String, ByVal rangeStart As Long, ByVal rangeEnd As Long) As Object
+    Dim matchLen As Long
+    matchLen = Len(expected)
+    If rangeEnd - rangeStart < matchLen Then Exit Function
+
+    Dim firstCh As String
+    firstCh = Left$(expected, 1)
+    Dim chunkSpan As Long, overlap As Long
+    chunkSpan = 512
+    overlap = matchLen + 8
+    Dim chunkStart As Long, chunkEnd As Long, chunkText As String
+    Dim pos As Long, scanEnd As Long, hitIdx As Long, guessPos As Long
+    For chunkStart = rangeStart To rangeEnd - matchLen Step chunkSpan
+        chunkEnd = chunkStart + chunkSpan + overlap
+        If chunkEnd > rangeEnd Then chunkEnd = rangeEnd
+        probe.SetRange chunkStart, chunkEnd
+        chunkText = probe.Text
+        hitIdx = InStr(1, chunkText, expected, vbBinaryCompare)
+        If hitIdx > 0 Then
+            If Len(chunkText) = (chunkEnd - chunkStart) Then
+                guessPos = chunkStart + hitIdx - 1
+                If guessPos + matchLen <= rangeEnd Then
+                    probe.SetRange guessPos, guessPos + matchLen
+                    If probe.Text = expected Then
+                        Set ScanRangeForMatch = probe
+                        Exit Function
+                    End If
+                End If
+            End If
+            scanEnd = chunkEnd - matchLen
+            If scanEnd > chunkStart + chunkSpan + overlap - matchLen Then scanEnd = chunkStart + chunkSpan + overlap - matchLen
+            For pos = chunkStart To scanEnd
+                probe.SetRange pos, pos + 1
+                If probe.Text = firstCh Then
+                    probe.SetRange pos, pos + matchLen
+                    If probe.Text = expected Then
+                        Set ScanRangeForMatch = probe
+                        Exit Function
+                    End If
+                End If
+                YieldIfNeeded m_LastYield
+            Next pos
+        End If
+        YieldIfNeeded m_LastYield
+        If chunkEnd >= rangeEnd Then Exit For
+    Next chunkStart
+End Function
 
 Private Function StripDelimiters(ByVal s As String) As String
     s = Trim(s)
@@ -416,6 +904,10 @@ Private Function StripDelimiters(ByVal s As String) As String
 End Function
 
 Private Function ReadBridgeToken() As String
+    If Len(m_CachedBridgeToken) > 0 Then
+        ReadBridgeToken = m_CachedBridgeToken
+        Exit Function
+    End If
     On Error GoTo TokenError
     Dim shell As Object, fso As Object, tokenPath As String, ts As Object
     Set shell = CreateObject("WScript.Shell")
@@ -424,10 +916,11 @@ Private Function ReadBridgeToken() As String
     If fso.FileExists(tokenPath) Then
         Set ts = fso.OpenTextFile(tokenPath, 1, False)
         If Not ts.AtEndOfStream Then
-            ReadBridgeToken = Trim(Replace(Replace(ts.ReadAll, vbCr, ""), vbLf, ""))
+            m_CachedBridgeToken = Trim(Replace(Replace(ts.ReadAll, vbCr, ""), vbLf, ""))
         End If
         ts.Close
     End If
+    ReadBridgeToken = m_CachedBridgeToken
     Exit Function
 TokenError:
     ReadBridgeToken = ""
@@ -442,58 +935,75 @@ Private Sub SetBridgeTokenHeader(ByVal http As Object)
 End Sub
 
 Private Function CallBridge(ByVal dataStr As String, ByVal fromFmt As String, ByVal toFmt As String) As String
-    On Error GoTo HttpError
+    Dim errKind As Long, errMsg As String
+    CallBridge = CallBridgeEx(dataStr, fromFmt, toFmt, True, errKind, errMsg)
+End Function
 
-    Dim http As Object
-    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
-
-    http.Open "POST", BRIDGE_URL, False
-    http.setRequestHeader "Content-Type", "application/json"
-    SetBridgeTokenHeader http
-
+Private Function CallBridgeEx(ByVal dataStr As String, ByVal fromFmt As String, ByVal toFmt As String, ByVal showHttpErrors As Boolean, ByRef errKind As Long, ByRef errMsg As String) As String
+    errKind = BRIDGE_ERR_NONE
+    errMsg = ""
     Dim payload As String
     payload = "{""data"":" & JsonEscape(dataStr) & ",""from"":""" & fromFmt & """,""to"":""" & toFmt & """}"
 
-    http.send payload
+    Dim attempt As Long
+    For attempt = 1 To 2
+        On Error GoTo HttpError
+        If m_SnippetHttp Is Nothing Then
+            Set m_SnippetHttp = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+        End If
+        m_SnippetHttp.setTimeouts 2000, 2000, 5000, 15000
+        m_SnippetHttp.Open "POST", BRIDGE_URL, False
+        m_SnippetHttp.setRequestHeader "Content-Type", "application/json"
+        SetBridgeTokenHeader m_SnippetHttp
+        m_SnippetHttp.send payload
 
-    If http.Status = 200 Then
-        Dim resp As String
-        resp = http.responseText
-        ' Simple JSON extract of 'result' field
-        CallBridge = ExtractJsonResult(resp)
-    Else
-        MsgBox "Bridge Server returned HTTP " & http.Status & ": " & http.responseText, vbExclamation, "EqnTide Bridge"
-        CallBridge = ""
-    End If
-    Exit Function
+        If m_SnippetHttp.Status = 200 Then
+            CallBridgeEx = ExtractJsonResult(m_SnippetHttp.responseText)
+        Else
+            errKind = BRIDGE_ERR_HTTP
+            errMsg = "Bridge Server returned HTTP " & m_SnippetHttp.Status & ": " & m_SnippetHttp.responseText
+            If showHttpErrors Then
+                MsgBox errMsg, vbExclamation, "EqnTide Bridge"
+            End If
+            CallBridgeEx = ""
+        End If
+        Exit Function
 
 HttpError:
-    MsgBox "Cannot connect to Bridge Server at " & BRIDGE_URL & vbCrLf & _
+        Set m_SnippetHttp = Nothing
+        Resume RetryNext
+RetryNext:
+    Next attempt
+
+    errKind = BRIDGE_ERR_CONNECT
+    errMsg = "Cannot connect to Bridge Server at " & BRIDGE_URL
+    MsgBox errMsg & vbCrLf & _
            "Please ensure eqntide-desktop.exe (or start-server.bat) is running!", vbCritical, "EqnTide"
-    CallBridge = ""
+    CallBridgeEx = ""
 End Function
 
 Private Function JsonEscape(ByVal s As String) As String
-    Dim i As Long, ch As String, code As Long, out As String
-    For i = 1 To Len(s)
-        ch = Mid$(s, i, 1)
-        code = AscW(ch) And &HFFFF&
-        Select Case code
-            Case 92: out = out & "\\"
-            Case 34: out = out & "\"""
-            Case 8: out = out & "\b"
-            Case 12: out = out & "\f"
-            Case 10: out = out & "\n"
-            Case 13: out = out & "\r"
-            Case 9: out = out & "\t"
-            Case Else
-                If code < 32 Then
-                    out = out & "\u" & Right$("0000" & Hex$(code), 4)
-                Else
-                    out = out & ch
-                End If
-        End Select
-    Next i
+    If Len(s) = 0 Then
+        JsonEscape = """"""
+        Exit Function
+    End If
+    Dim out As String
+    out = s
+    If InStr(1, out, "\", vbBinaryCompare) > 0 Then out = Replace$(out, "\", "\\", 1, -1, vbBinaryCompare)
+    If InStr(1, out, """", vbBinaryCompare) > 0 Then out = Replace$(out, """", "\""", 1, -1, vbBinaryCompare)
+    If InStr(1, out, vbCr, vbBinaryCompare) > 0 Then out = Replace$(out, vbCr, "\r", 1, -1, vbBinaryCompare)
+    If InStr(1, out, vbLf, vbBinaryCompare) > 0 Then out = Replace$(out, vbLf, "\n", 1, -1, vbBinaryCompare)
+    If InStr(1, out, vbTab, vbBinaryCompare) > 0 Then out = Replace$(out, vbTab, "\t", 1, -1, vbBinaryCompare)
+    If InStr(1, out, ChrW$(8), vbBinaryCompare) > 0 Then out = Replace$(out, ChrW$(8), "\b", 1, -1, vbBinaryCompare)
+    If InStr(1, out, ChrW$(12), vbBinaryCompare) > 0 Then out = Replace$(out, ChrW$(12), "\f", 1, -1, vbBinaryCompare)
+    Dim c As Long
+    For c = 0 To 31
+        If c <> 8 And c <> 9 And c <> 10 And c <> 12 And c <> 13 Then
+            If InStr(1, out, ChrW$(c), vbBinaryCompare) > 0 Then
+                out = Replace$(out, ChrW$(c), "\u" & Right$("0000" & Hex$(c), 4), 1, -1, vbBinaryCompare)
+            End If
+        End If
+    Next c
     JsonEscape = """" & out & """"
 End Function
 
@@ -502,37 +1012,89 @@ Private Function ExtractJsonResult(ByVal json As String) As String
 End Function
 
 Private Function ExtractJsonField(ByVal json As String, ByVal field As String) As String
-    Dim pos As Long, i As Long, value As String, ch As String
-    pos = InStr(json, """" & field & """")
+    Dim pos As Long, i As Long, ch As String
+    pos = InStr(1, json, """" & field & """", vbBinaryCompare)
     If pos = 0 Then Exit Function
-    pos = InStr(pos + Len(field) + 2, json, ":")
+    pos = InStr(pos + Len(field) + 2, json, ":", vbBinaryCompare)
     If pos = 0 Then Exit Function
     pos = pos + 1
-    Do While pos <= Len(json) And (Mid(json, pos, 1) = " " Or Mid(json, pos, 1) = vbTab)
+    Do While pos <= Len(json)
+        ch = Mid$(json, pos, 1)
+        If ch <> " " And ch <> vbTab And ch <> vbCr And ch <> vbLf Then Exit Do
         pos = pos + 1
     Loop
-    If Mid(json, pos, 1) <> """" Then Exit Function
-    i = pos + 1
-    Do While i <= Len(json)
-        ch = Mid(json, i, 1)
-        If ch = """" Then
-            ExtractJsonField = value
-            Exit Function
-        ElseIf ch = "\" Then
+    If pos > Len(json) Then Exit Function
+    If Mid$(json, pos, 1) Like "#" Then
+        i = pos
+        Do While i <= Len(json)
+            If Not (Mid$(json, i, 1) Like "#") Then Exit Do
             i = i + 1
-            ch = Mid(json, i, 1)
-            Select Case ch
-                Case "n": value = value & vbLf
-                Case "r": value = value & vbCr
-                Case "t": value = value & vbTab
-                Case "u"
-                    value = value & ChrW(CLng("&H" & Mid(json, i + 1, 4)))
-                    i = i + 4
-                Case Else: value = value & ch
-            End Select
-        Else
-            value = value & ch
+        Loop
+        ExtractJsonField = Mid$(json, pos, i - pos)
+        Exit Function
+    End If
+    If Mid$(json, pos, 1) <> """" Then Exit Function
+
+    i = pos + 1
+    Dim chunks() As String
+    Dim cap As Long, cnt As Long
+    cap = 16
+    cnt = 0
+    ReDim chunks(0 To cap - 1)
+
+    Dim nextQuote As Long, nextSlash As Long, escChar As String, decoded As String
+    Do While i <= Len(json)
+        nextQuote = InStr(i, json, """", vbBinaryCompare)
+        If nextQuote = 0 Then Exit Function
+        nextSlash = InStr(i, json, "\", vbBinaryCompare)
+        If nextSlash = 0 Or nextQuote < nextSlash Then
+            If cnt = 0 Then
+                ExtractJsonField = Mid$(json, i, nextQuote - i)
+                Exit Function
+            End If
+            If nextQuote > i Then
+                If cnt >= cap Then
+                    cap = cap * 2
+                    ReDim Preserve chunks(0 To cap - 1)
+                End If
+                chunks(cnt) = Mid$(json, i, nextQuote - i)
+                cnt = cnt + 1
+            End If
+            ReDim Preserve chunks(0 To cnt - 1)
+            ExtractJsonField = Join(chunks, "")
+            Exit Function
         End If
-        i = i + 1
+
+        If nextSlash > i Then
+            If cnt >= cap Then
+                cap = cap * 2
+                ReDim Preserve chunks(0 To cap - 1)
+            End If
+            chunks(cnt) = Mid$(json, i, nextSlash - i)
+            cnt = cnt + 1
+        End If
+
+        If nextSlash + 1 > Len(json) Then Exit Function
+        escChar = Mid$(json, nextSlash + 1, 1)
+        Select Case escChar
+            Case "n": decoded = vbLf: i = nextSlash + 2
+            Case "r": decoded = vbCr: i = nextSlash + 2
+            Case "t": decoded = vbTab: i = nextSlash + 2
+            Case "b": decoded = ChrW$(8): i = nextSlash + 2
+            Case "f": decoded = ChrW$(12): i = nextSlash + 2
+            Case "u"
+                If nextSlash + 5 > Len(json) Then Exit Function
+                decoded = ChrW$(CLng("&H" & Mid$(json, nextSlash + 2, 4)))
+                i = nextSlash + 6
+            Case Else
+                decoded = escChar
+                i = nextSlash + 2
+        End Select
+        If cnt >= cap Then
+            cap = cap * 2
+            ReDim Preserve chunks(0 To cap - 1)
+        End If
+        chunks(cnt) = decoded
+        cnt = cnt + 1
     Loop
 End Function

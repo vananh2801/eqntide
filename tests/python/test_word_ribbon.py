@@ -59,11 +59,49 @@ class WordRibbon(unittest.TestCase):
 
     def test_packaged_word_output_policy_uses_dual_mathtype_package(self):
         source = self.modules['EqnTideMacros']
-        self.assertIn('CallBridge(rawLatex, "latex", "flat_opc_mathtype")', source)
+        self.assertIn('CallBridgeEx(rawLatex, "latex", "flat_opc_mathtype"', source)
         self.assertIn('CallBridge(cleanLatex, "latex", "flat_opc_mathtype")', source)
         self.assertNotIn('"flat_opc_omml"', source)
         self.assertIn('""target_mode"":""mathtype""', source)
-        self.assertIn('CallBridge(shapeRange.WordOpenXML, "flat_opc", "latex")', source)
+        self.assertIn('CallBridgeEx(CompactFlatOpc(shapeXml), "flat_opc", "latex"', source)
+
+    def test_upgrade_releases_word_file_before_bridge_and_reopens_on_error(self):
+        macro = self.modules['EqnTideMacros'].split('Public Sub UpgradeMathTypeMacro()', 1)[1].split('End Sub', 1)[0]
+        close = macro.index('doc.Close 0')
+        send = macro.index('http.send payload')
+        self.assertLess(macro.index('If Not doc.Saved Then'), close)
+        self.assertLess(close, send)
+        self.assertGreater(macro.index('Documents.Open docPath'), send)
+        self.assertIn('Documents.Open docPath', macro.split('UpgradeError:', 1)[1])
+
+    def test_toggle_latex_declares_word_constants_for_option_explicit(self):
+        source = self.modules['EqnTideMacros']
+        self.assertIn('Option Explicit', source)
+        self.assertIn('Private Const wdInlineShapeEmbeddedOLEObject As Long = 1', source)
+        self.assertIn('Private Const wdCollapseEnd As Long = 0', source)
+        self.assertIn('Private Function ResolveMatchRange(', source)
+        self.assertIn('Private Function IsEquationShape(', source)
+        self.assertIn('Private Function CompactFlatOpc(', source)
+        toggle = source.split('Public Sub ToggleLatexMacro()', 1)[1].split('End Sub', 1)[0]
+        self.assertIn('om.Remove', toggle)
+        self.assertIn('ResolveMatchRange(', toggle)
+        self.assertIn('IsEquationShape(shape, shapeXml)', toggle)
+        self.assertIn('For Each shape In shapesCol', toggle)
+        self.assertIn('For Each om In omathsCol', toggle)
+        self.assertNotIn('shapesCol(i)', toggle)
+        self.assertNotIn('omathsCol(i)', toggle)
+        self.assertEqual(toggle.count('shapeRange.WordOpenXML'), 1)
+        self.assertIn('Application.Options.Pagination = False', toggle)
+        self.assertIn('Application.UndoRecord.StartCustomRecord', toggle)
+
+    def test_json_helpers_avoid_quadratic_char_concatenation(self):
+        source = self.modules['EqnTideMacros']
+        escape_fn = source.split('Private Function JsonEscape(', 1)[1].split('End Function', 1)[0]
+        extract_fn = source.split('Private Function ExtractJsonField(', 1)[1].split('End Function', 1)[0]
+        self.assertIn('Replace$(', escape_fn)
+        self.assertNotIn('out = out & ch', escape_fn)
+        self.assertIn('Join(chunks, "")', extract_fn)
+        self.assertNotIn('value = value & ch', extract_fn)
 
     def test_all_flat_opc_insertions_use_inline_break_cleanup(self):
         source = self.modules['EqnTideMacros']
@@ -74,7 +112,8 @@ class WordRibbon(unittest.TestCase):
         self.assertIn('InsertFlatOpcInline sel.Range.Duplicate, opc, True', source)
         self.assertIn('InsertFlatOpcInline target, flatOpc, True', source)
         self.assertIn('If actualSuffix = suffix Then', source)
-        self.assertIn('doc.Range(insertedEnd - 1, insertedEnd).Delete', source)
+        self.assertIn('tail.SetRange insertedEnd - 1, insertedEnd', source)
+        self.assertIn('tail.Delete', source)
 
 
 if __name__ == '__main__':
