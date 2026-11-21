@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::mathml::MathNode;
 use crate::omml::decode::NS_M;
 use crate::symbols::prime_order;
-use crate::xml::{Element, Node};
+use crate::xml::{Element, Node, XML_NS};
 
 mod fences;
 mod normalization;
@@ -351,7 +351,7 @@ impl MathmlEncoder {
                     _ => "\u{200A}",
                 };
                 Ok(self
-                    .encode_run(&MathNode::leaf("mtext", text))
+                    .encode_run(&MathNode::leaf("mspace", text))
                     .into_iter()
                     .collect())
             }
@@ -696,6 +696,9 @@ impl MathmlEncoder {
             }
         };
 
+        if node.tag == "mtext" {
+            r_pr.push(m_el("nor"));
+        }
         if let Some(scr_val) = scr {
             r_pr.push(m_val_el("scr", scr_val));
         }
@@ -707,6 +710,11 @@ impl MathmlEncoder {
         }
 
         let mut t = m_el("t");
+        if node.tag == "mtext"
+            && (clean.starts_with(char::is_whitespace) || clean.ends_with(char::is_whitespace))
+        {
+            t.set_attr(Some(XML_NS), Some("xml"), "space", "preserve");
+        }
         t.children.push(Node::Text(clean));
         r.push(t);
         Some(r)
@@ -1265,6 +1273,31 @@ pub fn apply_math_font(omml: &mut Element, font: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn math_text_runs_have_normal_text_properties() {
+        for (text, space) in [
+            ("với x", None),
+            ("cm", None),
+            ("m ", Some("preserve")),
+            (" ", Some("preserve")),
+        ] {
+            let xml = mathml_to_omml_xml(&MathNode::leaf("mtext", text)).unwrap();
+            let omml = crate::xml::parse(xml.as_bytes()).unwrap();
+            let run = omml.find(NS_M, "r").unwrap();
+            let props = run.find(NS_M, "rPr").unwrap();
+            assert!(props.find(NS_M, "nor").is_some(), "{xml}");
+            let style = props.find(NS_M, "sty").unwrap();
+            assert_eq!(style.attr(Some(NS_M), "val"), Some("p"));
+            let token = run.find(NS_M, "t").unwrap();
+            assert_eq!(token.attr(Some(XML_NS), "space"), space);
+            assert_eq!(token.text(), text);
+            assert_eq!(
+                omml_to_mathml(&omml).unwrap().children[0].children,
+                [MathNode::leaf("mtext", text)]
+            );
+        }
+    }
+
     #[test]
     fn default_token_styles_are_explicit_in_nested_equations() {
         let math = MathNode::parse("<math><mfrac><mn>1</mn><mn>2</mn></mfrac><mi>x</mi><mo>+</mo><mn>3</mn><mo>=</mo><mn>0</mn><mi>sin</mi><mtext>text</mtext><ms>string</ms></math>").unwrap();

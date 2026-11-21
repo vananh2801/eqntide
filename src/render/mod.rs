@@ -414,8 +414,18 @@ pub fn render_interactive_alpha_scaled(
         baseline: oy / PX_PER_PT,
     });
     for region in &mut regions {
-        region.carets.sort_by(f32::total_cmp);
-        region.carets.dedup_by(|a, b| (*a - *b).abs() < 0.001);
+        let text_positions = region
+            .path
+            .iter()
+            .try_fold(math, |node, &index| node.children.get(index))
+            .is_some_and(|node| {
+                node.tag == "mtext" && region.carets.len() == node.text.chars().count() + 1
+            });
+        // Text offsets index the original characters, including zero-width combining marks.
+        if !text_positions {
+            region.carets.sort_by(f32::total_cmp);
+            region.carets.dedup_by(|a, b| (*a - *b).abs() < 0.001);
+        }
     }
 
     let scale = raster_scale.clamp(0.25, 1.0);
@@ -573,6 +583,53 @@ mod interactive_tests {
         assert_eq!(region.carets.len(), 3);
         assert!(region.carets[1] - region.carets[0] > region.carets[2] - region.carets[1]);
     }
+
+    #[test]
+    fn text_caret_positions_include_spaces_and_combining_marks() {
+        let math = MathNode::parse("<math><mtext>e\u{0302}\u{0301} x</mtext></math>").unwrap();
+        let preview = render_interactive(&math, 12.0).unwrap();
+        let region = preview.regions.iter().find(|r| r.path == [0]).unwrap();
+        assert_eq!(region.carets.len(), 6);
+        assert!(region.carets[4] > region.carets[3]);
+    }
+
+    #[test]
+    fn standalone_text_spaces_advance_layout_and_emf() {
+        use font::Face;
+
+        let empty = MathNode::new("math");
+        let blank_emf = emf::render_emf(&empty, 12.0).unwrap();
+        for ch in [' ', '\u{00A0}'] {
+            let math =
+                MathNode::with_children("math", vec![MathNode::leaf("mtext", &ch.to_string())]);
+            let (b, em) = layout::layout_math(&math, 12.0).unwrap();
+            let advance = fonts().advance(Face::Text, ch, em);
+            assert!(advance > 0.0);
+            assert_eq!(b.w, advance);
+            assert!(emf::render_emf(&math, 12.0).unwrap().width_pt > blank_emf.width_pt);
+        }
+    }
+
+    #[test]
+    fn unit_with_trailing_space_uses_text_glyph_and_advance() {
+        use font::Face;
+
+        for (ch, space) in [('m', ' '), ('s', '\u{00A0}')] {
+            let math = MathNode::with_children(
+                "math",
+                vec![MathNode::leaf("mtext", &format!("{ch}{space}"))],
+            );
+            let (b, em) = layout::layout_math(&math, 12.0).unwrap();
+            assert!(matches!(
+                b.items.first(),
+                Some(Item::Glyph { ch: glyph, face: Face::Text, .. }) if *glyph == ch
+            ));
+            let expected =
+                fonts().advance(Face::Text, ch, em) + fonts().advance(Face::Text, space, em);
+            assert!((b.w - expected).abs() < 0.0001);
+        }
+    }
+
     fn integral_regions(xml: &str) -> (HitRegion, HitRegion, HitRegion) {
         let preview = render_interactive(&MathNode::parse(xml).unwrap(), 12.0).unwrap();
         let find = |path: &[usize]| {

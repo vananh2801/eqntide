@@ -1,11 +1,13 @@
-use eqntide::mtef::build_mtef;
 use eqntide::mtef::decode::mtef_to_mathml;
 use eqntide::mtef::encode::mathml_to_mtef_bytes;
+use eqntide::mtef::{build_mtef, make_equation_native};
 use eqntide::omml::{mathml_to_omml_xml, omml_to_mathml, NS_M};
 use eqntide::render::render_preview;
 use eqntide::service::parse_latex_to_mathml;
 use eqntide::xml;
-use eqntide::{mathml_to_latex, MathNode};
+use eqntide::{
+    extract_mtef_from_emf, make_ole, mathml_to_latex, ole_to_mathml, render_emf, MathNode,
+};
 
 fn count_omml(root: &xml::Element, local: &str) -> usize {
     root.iter()
@@ -25,6 +27,83 @@ fn collect_text(node: &MathNode) -> String {
 fn decode_omml_str(omml_xml: &str) -> MathNode {
     let root = xml::parse(omml_xml.as_bytes()).expect("valid OMML XML");
     omml_to_mathml(&root).expect("decode OMML")
+}
+
+fn roundtrip_text_through_mathtype(math: &MathNode, expected: &str) -> MathNode {
+    let records = mathml_to_mtef_bytes(math).unwrap();
+    let mtef = build_mtef(&records);
+    let ole = make_ole(&make_equation_native(&records)).unwrap();
+    let decoded = ole_to_mathml(&ole).unwrap();
+    assert_eq!(mtef_to_mathml(&mtef).unwrap(), decoded);
+    assert_eq!(collect_text(&decoded).replace('\u{00A0}', " "), expected);
+    let spaces: usize = decoded
+        .find_all("mtext")
+        .into_iter()
+        .map(|node| node.text.matches('\u{00A0}').count())
+        .sum();
+    assert_eq!(spaces, expected.matches(' ').count());
+
+    let emf = render_emf(math, 12.0).unwrap();
+    assert_eq!(extract_mtef_from_emf(&emf.emf).unwrap(), mtef);
+    assert!(!render_preview(math, 12.0).unwrap().png.is_empty());
+    decoded
+}
+
+#[test]
+fn omml_text_and_unit_spaces_survive_mathtype() {
+    for (runs, expected) in [
+        (
+            r#"<m:r><m:t>5</m:t></m:r><m:r><m:t xml:space="preserve"> </m:t></m:r><m:r><m:rPr><m:nor/></m:rPr><m:t>cm</m:t></m:r>"#,
+            "5 cm",
+        ),
+        (
+            r#"<m:r><m:rPr><m:nor/></m:rPr><m:t xml:space="preserve">với </m:t></m:r>"#,
+            "với ",
+        ),
+        (
+            r#"<m:r><m:rPr><m:sty m:val="p"/></m:rPr><m:t xml:space="preserve">m </m:t></m:r>"#,
+            "m ",
+        ),
+    ] {
+        let math = decode_omml_str(&format!(r#"<m:oMath xmlns:m="{NS_M}">{runs}</m:oMath>"#));
+        assert_eq!(collect_text(&math), expected);
+        roundtrip_text_through_mathtype(&math, expected);
+    }
+}
+
+#[test]
+fn mathtype_text_characters_recombine_into_one_latex_text_span() {
+    let source = r"\text{ khi}x\text{ với }";
+    let math = parse_latex_to_mathml(source).unwrap();
+    let roundtrip = roundtrip_text_through_mathtype(&math, " khix với ");
+    assert_eq!(mathml_to_latex(&roundtrip), source);
+}
+
+#[test]
+fn latex_text_and_spaces_survive_mathtype_and_latex_serialization() {
+    for (source, expected) in [
+        (r"\text{hello world}", "hello world"),
+        (r"\text{5 cm}", "5 cm"),
+        (r"\text{m/s}", "m/s"),
+        (r"\text{ với  }", " với  "),
+        (r"\text{m }", "m "),
+        (r"\text{ }", " "),
+    ] {
+        let math = parse_latex_to_mathml(source).unwrap();
+        let roundtrip = roundtrip_text_through_mathtype(&math, expected);
+        let latex = mathml_to_latex(&roundtrip);
+        let reparsed = parse_latex_to_mathml(&latex).unwrap();
+        assert_eq!(collect_text(&reparsed), expected, "{source} -> {latex}");
+        assert_eq!(
+            reparsed
+                .find_all("mtext")
+                .iter()
+                .map(|span| span.text.matches(' ').count())
+                .sum::<usize>(),
+            expected.matches(' ').count(),
+            "{source} -> {latex}",
+        );
+    }
 }
 
 fn roundtrip_omml_mtef_omml(latex: &str) -> (String, MathNode, String, MathNode) {

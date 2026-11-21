@@ -413,6 +413,47 @@ pub fn convert_snippet(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latex_text_preserves_plain_text_and_decodes_escapes() {
+        for (latex, expected) in [
+            (r"\text{hello world}", "hello world"),
+            (r"\text{5 cm}", "5 cm"),
+            (r"\text{m/s}", "m/s"),
+            (r"\text{ }", " "),
+            (r"\text{ với  {x} }", " với  {x} "),
+            (
+                r"\text{a\_b \& \{c\} \% \$ \# \textbackslash{} \\ \textbackslash}",
+                "a_b & {c} % $ # \\ \\ \\",
+            ),
+            (r"\text{a\ b~c}", "a b\u{00A0}c"),
+        ] {
+            let math = parse_latex_to_mathml(latex).unwrap();
+            assert_eq!(
+                math.children,
+                [MathNode::leaf("mtext", expected)],
+                "{latex}"
+            );
+        }
+        assert!(parse_latex_to_mathml(r"\text{unclosed {group}").is_err());
+    }
+
+    #[test]
+    fn latex_text_works_inside_math_structures() {
+        let math = parse_latex_to_mathml(
+            r"\begin{cases}\frac{\text{5 cm}}{2} & \text{ với }x \\ \overset{\text{m/s}}{x} & \text{ }_1\end{cases}",
+        )
+        .unwrap();
+        let spans: Vec<_> = math
+            .iter()
+            .into_iter()
+            .filter(|node| node.tag == "mtext")
+            .map(|node| node.text.as_str())
+            .collect();
+        assert_eq!(spans, ["5 cm", " với ", "m/s", " "]);
+        assert!(math.iter().iter().any(|node| node.tag == "msub"));
+    }
+
     #[test]
     fn dfrac_converts_through_both_office_toggle_targets() {
         for to in ["flat_opc_omml", "flat_opc_mathtype"] {

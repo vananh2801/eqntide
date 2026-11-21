@@ -61,6 +61,10 @@ impl LBox {
         } else {
             carets.push(self.w);
         }
+        self.mark_with_carets(node, carets);
+    }
+
+    pub(crate) fn mark_with_carets(&mut self, node: &crate::MathNode, carets: Vec<f32>) {
         self.hits.push(RawHit {
             carets,
             key: node as *const _ as usize,

@@ -67,7 +67,7 @@ impl Layout {
         let mut atoms: Vec<Atom> = Vec::new();
         for kid in kids {
             let atom_start = atoms.len();
-            // Ignore standalone spacing elements or empty token nodes.
+            // Skip empty tokens while keeping explicit text and math spaces.
             let text_clean: String = kid
                 .text
                 .chars()
@@ -75,6 +75,7 @@ impl Layout {
                 .collect();
             if (kid.tag == "mo" || kid.tag == "mtext")
                 && text_clean.is_empty()
+                && !(kid.tag == "mtext" && kid.text.contains([' ', '\u{00A0}']))
                 && !kid
                     .text
                     .chars()
@@ -136,37 +137,39 @@ impl Layout {
                     }
                 }
                 "mtext" => {
-                    let t = kid.text.trim();
-                    if !t.is_empty() {
-                        let bold = kid.attr("mathvariant") == Some("bold");
-                        // If it's a sequence of digits (e.g. "2025" or a single digit "2")
-                        if t.chars().all(|c| c.is_ascii_digit()) {
-                            let face = if bold {
-                                Face::VectorMatrix
-                            } else {
-                                Face::Number
-                            };
-                            atoms.push(Atom {
-                                class: Class::Ord, // Ord + Ord gets 0.0 spacing (tightly packed)
-                                b: self.text_styled(t, face, em, ssty),
-                                delim: None,
-                                fence_role: FenceRole::Neutral,
-                                is_table: false,
-                            });
-                        } else if t.chars().count() == 1 {
-                            // Single character symbol, operator, relation, or punctuation (e.g. '=', '≈', ',')
-                            self.atoms_mo(t, None, em, &mut atoms, ssty);
+                    let text = &kid.text;
+                    let digits = text.chars().all(|c| c.is_ascii_digit());
+                    if !digits && text.chars().count() == 1 && !text_clean.is_empty() {
+                        self.atoms_mo(text, None, em, &mut atoms, ssty);
+                    } else {
+                        let face = if kid.attr("mathvariant") == Some("bold") {
+                            Face::VectorMatrix
+                        } else if digits {
+                            Face::Number
                         } else {
-                            // Normal text words (Vietnamese words, text labels); preserve boundary spaces
-                            let face = if bold { Face::VectorMatrix } else { Face::Text };
-                            atoms.push(Atom {
-                                class: Class::Ord,
-                                b: self.text_styled(&kid.text, face, em, ssty),
-                                delim: None,
-                                fence_role: FenceRole::Neutral,
-                                is_table: false,
-                            });
+                            Face::Text
+                        };
+                        let mut b = self.text_styled(text, face, em, ssty);
+                        let mut x = 0.0;
+                        let mut carets = vec![x];
+                        for ch in text.chars() {
+                            x += self.f.advance_styled(face, ch, em, ssty);
+                            carets.push(x);
                         }
+                        b.mark_with_carets(kid, carets);
+                        if b.asc == 0.0 && b.desc == 0.0 {
+                            if let Some(hit) = b.hits.last_mut() {
+                                hit.asc = 0.72 * em;
+                                hit.desc = 0.22 * em;
+                            }
+                        }
+                        atoms.push(Atom {
+                            class: Class::Ord,
+                            b,
+                            delim: None,
+                            fence_role: FenceRole::Neutral,
+                            is_table: false,
+                        });
                     }
                 }
                 _ => {

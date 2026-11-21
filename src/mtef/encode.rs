@@ -1272,9 +1272,6 @@ fn enc_mo(node: &MathNode) -> Vec<u8> {
 }
 
 fn enc_mtext(node: &MathNode) -> Vec<u8> {
-    if node.text.trim().is_empty() {
-        return Vec::new();
-    }
     let variant = node.attr("mathvariant");
     let bold = matches!(variant, Some("bold") | Some("bold-italic"));
     let default_tf = if bold { TF_VECTOR } else { TF_TEXT };
@@ -1325,6 +1322,21 @@ mod tests {
         ))
         .unwrap()
     }
+    #[test]
+    fn space_only_text_emits_text_space_records() {
+        for text in [" ", "\u{00A0}", " \u{00A0} "] {
+            let count = text.chars().count();
+            let math = MathNode::with_children("math", vec![MathNode::leaf("mtext", text)]);
+            assert_eq!(
+                mathml_to_mtef_bytes(&math).unwrap(),
+                char_record(TF_TEXT, 0x20).repeat(count),
+            );
+            let decoded = decoded(&math);
+            let runs = &decoded.children[0].children;
+            assert_eq!(runs, &vec![MathNode::leaf("mtext", "\u{00A0}"); count]);
+        }
+    }
+
     #[test]
     fn palette_spacing_fraction_and_matrix_variants_survive_mtef() {
         for width in ["0.166667em", "0.222222em", "0.277778em", "1em", "2em"] {

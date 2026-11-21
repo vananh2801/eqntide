@@ -232,8 +232,7 @@ fn parse_at(source: &str, depth: usize) -> Result<MathNode> {
             output.push_str(&source[start..scanner.pos]);
             continue;
         }
-        // Text arguments are opaque: their backslashes are not math commands.
-        if matches!(name.as_str(), "text" | "operatorname") {
+        if name == "operatorname" {
             scanner.argument()?;
             output.push_str(&source[start..scanner.pos]);
             continue;
@@ -253,6 +252,37 @@ fn parse_at(source: &str, depth: usize) -> Result<MathNode> {
     replace_markers(&mut math, &marker, &scanner.nodes);
     flatten_prime_superscripts(&mut math);
     Ok(math)
+}
+
+fn unescape_text(mut source: &str) -> String {
+    let mut text = String::with_capacity(source.len());
+    while let Some(ch) = source.chars().next() {
+        source = &source[ch.len_utf8()..];
+        if ch == '\\' {
+            let command = [
+                ("textbackslash", '\\'),
+                ("textasciitilde", '~'),
+                ("textasciicircum", '^'),
+            ]
+            .into_iter()
+            .find(|(name, _)| source.starts_with(name) && command_end(source, name.len()));
+            if let Some((name, value)) = command {
+                let rest = &source[name.len()..];
+                source = rest.strip_prefix("{}").unwrap_or(rest);
+                text.push(value);
+                continue;
+            }
+            if let Some(escaped @ ('{' | '}' | '_' | '&' | '%' | '$' | '#' | '\\' | ' ')) =
+                source.chars().next()
+            {
+                source = &source[escaped.len_utf8()..];
+                text.push(escaped);
+                continue;
+            }
+        }
+        text.push(if ch == '~' { '\u{00A0}' } else { ch });
+    }
+    text
 }
 
 fn rewrite_script_pairs(src: &str, marker: &str, nodes: &mut Vec<MathNode>) -> Result<String> {
@@ -848,6 +878,7 @@ impl<'a> Scanner<'a> {
             return Ok(Some(node));
         }
         let node = match name {
+            "text" => MathNode::leaf("mtext", &unescape_text(self.argument()?)),
             "frac" | "dfrac" | "tfrac" | "sfrac" | "tsfrac" | "atopfrac" => {
                 let a = self.math_argument()?;
                 let b = self.math_argument()?;

@@ -54,7 +54,7 @@ fn format_node(node: &MathNode, out: &mut String) {
         "mi" => format_identifier(node, out),
         "mn" => out.push_str(node.text.trim()),
         "mo" => format_operator(node, out),
-        "mtext" => format_text(node, out),
+        "mtext" => format_text(&node.text, out),
         "mfrac" => format_fraction(node, out),
         "msqrt" => format_square_root(node, out),
         "mroot" => format_indexed_root(node, out),
@@ -118,7 +118,15 @@ fn format_children(node: &MathNode, out: &mut String) {
     while i < children.len() {
         let needs_space = ends_with_control_word(out);
         let mut piece = String::new();
-        if i + 2 < children.len()
+        if children[i].tag == "mtext" {
+            // MathType decodes text as individual character nodes.
+            let mut text = String::new();
+            while let Some(child) = children.get(i).filter(|child| child.tag == "mtext") {
+                text.push_str(&child.text);
+                i += 1;
+            }
+            format_text(&text, &mut piece);
+        } else if i + 2 < children.len()
             && is_binom_triple(&children[i], &children[i + 1], &children[i + 2])
         {
             format_binom(&children[i + 1], &mut piece);
@@ -236,8 +244,7 @@ fn format_operator(node: &MathNode, out: &mut String) {
     }
 }
 
-fn format_text(node: &MathNode, out: &mut String) {
-    let text = node.text.trim();
+fn format_text(text: &str, out: &mut String) {
     if text.is_empty() {
         return;
     }
@@ -903,6 +910,9 @@ fn escape_latex_text(s: &str) -> String {
             '#' => res.push_str("\\#"),
             '_' => res.push_str("\\_"),
             '\\' => res.push_str("\\textbackslash{}"),
+            '~' => res.push_str("\\textasciitilde{}"),
+            '^' => res.push_str("\\textasciicircum{}"),
+            '\u{00A0}' => res.push(' '),
             _ => res.push(c),
         }
     }
@@ -910,11 +920,32 @@ fn escape_latex_text(s: &str) -> String {
 }
 
 fn clean_latex_output(s: &str) -> String {
-    // Normalise multiple spaces and clean up edges
+    // Collapse math-mode whitespace while copying text arguments verbatim.
+    const TEXT_START: &str = r"\text{";
     let mut result = String::with_capacity(s.len());
     let mut prev_space = false;
-    for c in s.chars() {
-        if c.is_whitespace() {
+    let mut chars = s.char_indices();
+    let mut text_depth = 0;
+    let mut escaped = false;
+    while let Some((offset, c)) = chars.next() {
+        if text_depth > 0 {
+            result.push(c);
+            if !escaped {
+                match c {
+                    '{' => text_depth += 1,
+                    '}' => text_depth -= 1,
+                    _ => {}
+                }
+            }
+        } else if !escaped && c == '\\' && s[offset..].starts_with(TEXT_START) {
+            result.push_str(TEXT_START);
+            for _ in 1..TEXT_START.len() {
+                chars.next();
+            }
+            text_depth = 1;
+            prev_space = false;
+            continue;
+        } else if c.is_whitespace() {
             if !prev_space {
                 result.push(' ');
                 prev_space = true;
@@ -923,6 +954,7 @@ fn clean_latex_output(s: &str) -> String {
             result.push(c);
             prev_space = false;
         }
+        escaped = !escaped && c == '\\';
     }
     result.trim().to_string()
 }
@@ -1008,6 +1040,25 @@ mod tests {
         );
 
         assert_eq!(latex, "\\sin x\\text{price\\_\\&\\{tax\\}}");
+    }
+
+    #[test]
+    fn text_serialization_roundtrips_spaces_and_escapes() {
+        for (text, expected_latex, expected_text) in [
+            (" ", r"\text{ }", " "),
+            ("\u{00A0}\u{00A0}", r"\text{  }", "  "),
+            (" với  m\u{00A0}", r"\text{ với  m }", " với  m "),
+            (
+                r" \ {x}_$&%#~^ ",
+                r"\text{ \textbackslash{} \{x\}\_\$\&\%\#\textasciitilde{}\textasciicircum{} }",
+                r" \ {x}_$&%#~^ ",
+            ),
+        ] {
+            let latex = MathNode::leaf("mtext", text).to_latex();
+            assert_eq!(latex, expected_latex);
+            let math = crate::service::parse_latex_to_mathml(&latex).unwrap();
+            assert_eq!(math.children, [MathNode::leaf("mtext", expected_text)]);
+        }
     }
 
     #[test]

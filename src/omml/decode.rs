@@ -351,9 +351,12 @@ impl OmmlConverter {
         if text.is_empty() {
             return None;
         }
-        if text
-            .chars()
-            .all(|c| crate::symbols::misc::unicode_space_em(c).is_some())
+        let r_pr = node.find(NS_M, "rPr");
+        let is_nor = m_bool(r_pr, "nor");
+        if !is_nor
+            && text
+                .chars()
+                .all(|c| crate::symbols::misc::unicode_space_em(c).is_some())
         {
             let width: f32 = text
                 .chars()
@@ -363,19 +366,19 @@ impl OmmlConverter {
             space.set_attr("width", &format!("{width:.6}em"));
             return Some(space);
         }
-        let r_pr = node.find(NS_M, "rPr");
         let sty = m_val(r_pr, "sty", None);
         let scr = m_val(r_pr, "scr", None);
-        let is_nor = m_bool(r_pr, "nor");
+        let is_text_space = |c| matches!(c, ' ' | '\u{00A0}');
 
-        // Use `<mtext>` when `<m:nor/>` is set, or when `<m:sty m:val="p"/>` wraps
-        // natural-language text (with spaces or non-ASCII Latin/Vietnamese letters).
+        // Preserve explicit normal text, standalone spaces, and plain-style
+        // text with spaces or non-ASCII Latin/Vietnamese letters.
         // Upright math identifiers (`sin`, `cos`, `log`, `lim`, differential `d`, `Φ`)
         // in Word have `<m:sty m:val="p"/>` without `<m:nor/>` and should stay `<mi>`.
-        if (is_nor
+        if is_nor
+            || text.chars().all(is_text_space)
             || (sty.as_deref() == Some("p")
-                && (crate::symbols::has_foreign_letters(&text) || text.trim().contains(' '))))
-            && scr.is_none()
+                && scr.is_none()
+                && (text.contains(is_text_space) || crate::symbols::has_foreign_letters(&text)))
         {
             let mut el = MathNode::leaf("mtext", &text);
             if matches!(sty.as_deref(), Some("b") | Some("bi")) {
@@ -806,6 +809,40 @@ mod tests {
         TM_BAR, TM_BOX, TM_DIRAC, TM_FRACT, TM_INTEG, TM_INTERVAL, TM_STRIKE, TM_SUBSUP,
     };
     use crate::xml;
+
+    #[test]
+    fn decode_text_and_unit_spaces_without_reclassifying_math_runs() {
+        for (props, text, tag, expected) in [
+            (r"<m:nor/>", "cm", "mtext", "cm"),
+            (
+                r#"<m:nor/><m:scr m:val="script"/>"#,
+                "với ",
+                "mtext",
+                "với ",
+            ),
+            (r"<m:nor/>", "\u{2009}", "mtext", "\u{2009}"),
+            (r#"<m:sty m:val="p"/>"#, " cm", "mtext", " cm"),
+            (r#"<m:sty m:val="p"/>"#, "m ", "mtext", "m "),
+            (r#"<m:sty m:val="p"/>"#, "khi x", "mtext", "khi x"),
+            (r#"<m:sty m:val="p"/>"#, "m\u{00A0}", "mtext", "m\u{00A0}"),
+            ("", " ", "mtext", " "),
+            ("", " \u{00A0}", "mtext", " \u{00A0}"),
+            (r#"<m:sty m:val="p"/>"#, "sin", "mi", "sin"),
+            ("", "x", "mi", "x"),
+            ("", "ab", "mi", "ab"),
+            ("", " + ", "mo", "+"),
+            ("", " 5 ", "mn", "5"),
+        ] {
+            let xml = format!(
+                r#"<m:oMath xmlns:m="{NS_M}"><m:r><m:rPr>{props}</m:rPr><m:t xml:space="preserve">{text}</m:t></m:r></m:oMath>"#
+            );
+            let math = omml_to_mathml(&xml::parse(xml.as_bytes()).unwrap()).unwrap();
+            let runs = &math.children[0].children;
+            assert_eq!(runs.len(), 1, "{xml}");
+            assert_eq!(runs[0].tag, tag, "{xml}");
+            assert_eq!(runs[0].text, expected, "{xml}");
+        }
+    }
 
     fn parse_and_encode(omml_body: &str) -> Vec<u8> {
         let xml_str = format!(
