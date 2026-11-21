@@ -201,7 +201,9 @@ for (const branch of ['single', 'selected', 'batch']) {
 }
 // Batch LaTeX toggle skips 422 unsupported formulas while still converting supported ones.
 {
+  const alerts = [];
   const c = controller();
+  c.alert = msg => alerts.push(msg);
   let text = 'Before $\\enclose{verticalstrike}{x}$ middle $\\frac{1}{2}$ after';
   const replaced = [];
   const doc = {
@@ -228,6 +230,8 @@ for (const branch of ['single', 'selected', 'batch']) {
   c.ToggleLatex();
   assert.equal(replaced.length, 1);
   assert.equal(replaced[0].text, '$\\frac{1}{2}$');
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /Found: 2[\s\S]*Converted: 1[\s\S]*Skipped\/Errors: 1/);
 }
 console.log('WPS toggle tests using bug_toggle_v1 XML fixture passed');
 
@@ -654,7 +658,9 @@ for (const atDocEnd of [false, true]) {
 // 5. Batch ToggleLatex must strip extra trailing breaks after shapeEnd even when an adjacent
 //    inserted OLE shape causes the 32-char suffix comparison to mismatch.
 {
+  const alerts = [];
   const c = controller();
+  c.alert = msg => alerts.push(msg);
   let text = 'Cho $a=1$ và $b=2$ xong.\r';
   const shapes = [];
   let docEndBias = 0; // Simulates WPS field/end drift causing pre-pic suffix check to miss.
@@ -755,3 +761,485 @@ for (const atDocEnd of [false, true]) {
   assert.deepEqual(insertedRange, { start: targetStart, end: targetEnd, text: '$\\frac{3\\pi}{4}$' });
 }
 console.log('WPS MathType OLE range, fallback, and error-diagnostic tests passed');
+
+// 7. Highlighted range with mixed formatting (Windows WPS Font.Size = 9999999 / wdUndefined)
+//    must clamp font_pt to a valid size instead of sending 9999999 and getting HTTP 400.
+{
+  const alerts = [];
+  const c = controller();
+  c.alert = msg => alerts.push(msg);
+  let text = 'Cho $a=1$ và $b=2$ xong.\r';
+  const sentFonts = [];
+  const doc = {
+    get Content() { return { End: text.length }; },
+    Range(start, end) {
+      if (start === undefined) return { End: text.length };
+      return {
+        Start: start,
+        End: end,
+        Font: { Size: 9999999 },
+        get Text() { return text.slice(this.Start, this.End); },
+        InlineShapes: { Count: 0, Item: () => null },
+        Paragraphs: { Item: () => ({ Range: { Start: 0, End: text.length } }) },
+        Delete() { text = text.slice(0, this.Start) + text.slice(this.End); },
+        InsertXML() { text = text.slice(0, this.Start) + 'M' + text.slice(this.End); },
+        Select() {}
+      };
+    }
+  };
+  const selection = {
+    Start: 0,
+    End: text.length - 1,
+    get Text() { return text.slice(this.Start, this.End); },
+    Range: { Start: 0, End: text.length - 1, Font: { Size: 9999999 } },
+    Font: { Size: 9999999 },
+    Collapse() {}
+  };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = cb => cb();
+  c.ajaxPost = (url, body, cb) => {
+    const req = JSON.parse(body);
+    sentFonts.push(req.font_pt);
+    assert.ok(req.font_pt >= 1 && req.font_pt <= 200, 'font_pt must never be wdUndefined 9999999');
+    cb(200, JSON.stringify({ result: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>' }));
+  };
+  c.ToggleLatex();
+  assert.deepEqual(sentFonts, [12, 12]);
+  assert.equal(text, 'Cho M và M xong.\r');
+}
+
+// 8. WPS UpgradeLegacyEquations & taskpane disk upgrade:
+//    - On Windows, create a temporary blank tab before closing the sole document so WPS
+//      stays open (keeping the add-in/taskpane alive), close target doc to release lock,
+//      run /convert/document, reopen target doc, and close temp tab.
+//    - On Linux, keep the document open during /convert/document and hot-refresh after alert.
+{
+  for (const status of [200, 500]) {
+    const events = [];
+    const alerts = [];
+    const c = vm.createContext({
+      console,
+      DOMParser,
+      XMLSerializer,
+      confirm: () => true,
+      alert: msg => alerts.push(msg)
+    });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin/main.js'), 'utf8'), c);
+    c.wpsLog = () => {};
+    let openDocs = 1;
+    let isTargetOpen = true;
+    const tempDoc = {
+      Close(saveChanges) { events.push(['tempClose', saveChanges]); openDocs--; }
+    };
+    const doc = {
+      FullName: 'C:\\docs\\sample.docx',
+      ReadOnly: false,
+      Saved: true,
+      Save() { events.push('save'); },
+      Close(saveChanges) { events.push(['close', saveChanges]); isTargetOpen = false; openDocs--; }
+    };
+    const app = {
+      ActiveDocument: doc,
+      Documents: {
+        get Count() { return openDocs; },
+        Item() { return isTargetOpen ? doc : tempDoc; },
+        Add() { events.push('addTemp'); openDocs++; return tempDoc; },
+        Open(p) { events.push(['open', p]); isTargetOpen = true; openDocs++; return doc; }
+      }
+    };
+    c.wps = { Application: app };
+    c.ensureBridgeRunning = cb => cb();
+    c.ajaxPost = (url, body, cb) => {
+      events.push(['post', url, isTargetOpen, openDocs]);
+      assert.equal(isTargetOpen, false, 'target doc must be closed before /convert/document on Windows');
+      assert.ok(openDocs >= 1, 'WPS must retain at least 1 open document so the window/add-in stays alive');
+      cb(status, status === 200 ? JSON.stringify({ found: 3, converted: 3, errors: 0 }) : '{"error":"boom"}');
+    };
+    c.UpgradeLegacyEquations();
+    assert.deepEqual(events, [
+      'save',
+      'addTemp',
+      ['close', false],
+      ['post', 'http://127.0.0.1:17890/convert/document', false, 1],
+      ['open', 'C:\\docs\\sample.docx'],
+      ['tempClose', false]
+    ]);
+    assert.equal(isTargetOpen, true, 'document must be reopened after conversion');
+    assert.equal(openDocs, 1, 'temporary blank document must be closed');
+    assert.equal(alerts.length, 1);
+  }
+
+  // Linux path: keeps document open during /convert/document, alerts, then hot-refreshes.
+  {
+    const events = [];
+    const c = vm.createContext({
+      console,
+      DOMParser,
+      XMLSerializer,
+      navigator: { platform: 'Linux x86_64' },
+      confirm: () => true,
+      alert: () => events.push('alert')
+    });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin/main.js'), 'utf8'), c);
+    c.wpsLog = () => {};
+    let isTargetOpen = true;
+    const doc = {
+      FullName: '/home/user/sample.docx',
+      ReadOnly: false,
+      Saved: true,
+      Save() { events.push('save'); },
+      Close(saveChanges) { events.push(['close', saveChanges]); isTargetOpen = false; }
+    };
+    const app = {
+      ActiveDocument: doc,
+      Documents: {
+        get Count() { return isTargetOpen ? 1 : 0; },
+        Item() { return doc; },
+        Open(p) { events.push(['open', p]); isTargetOpen = true; return doc; }
+      }
+    };
+    c.wps = { Application: app };
+    c.ensureBridgeRunning = cb => cb();
+    c.ajaxPost = (url, body, cb) => {
+      events.push(['post', url, isTargetOpen]);
+      assert.equal(isTargetOpen, true, 'Linux does not close document before /convert/document');
+      cb(200, JSON.stringify({ found: 3, converted: 3, errors: 0 }));
+    };
+    c.UpgradeLegacyEquations();
+    assert.deepEqual(events, [
+      'save',
+      ['post', 'http://127.0.0.1:17890/convert/document', true],
+      'alert',
+      ['close', false],
+      ['open', '/home/user/sample.docx']
+    ]);
+    assert.equal(isTargetOpen, true);
+  }
+
+  for (const status of [200, 500]) {
+    const events = [];
+    const alerts = [];
+    function makeEl(extra = {}) {
+      return Object.assign({
+        textContent: '', value: '', disabled: false, style: {},
+        classList: { remove() {}, add() {} }, listeners: {},
+        addEventListener(type, fn) { this.listeners[type] = fn; }
+      }, extra);
+    }
+    const elements = {
+      'bridge-status-badge': makeEl(),
+      'bridge-status-text': makeEl(),
+      'upgrade-target': makeEl({ value: 'mathtype' }),
+      'btn-start-upgrade': makeEl(),
+      'upgrade-progress-box': makeEl(),
+      'upgrade-progress-bar': makeEl(),
+      'upgrade-progress-text': makeEl(),
+      'stat-found': makeEl(),
+      'stat-upgraded': makeEl(),
+      'stat-errors': makeEl(),
+      'btn-disk-upgrade': makeEl(),
+      'btn-disk-upgrade-label': makeEl()
+    };
+    const windowObj = { addEventListener() {}, wps: null };
+    const ctx = vm.createContext({
+      console, DOMParser, XMLSerializer,
+      setInterval() { return 1; },
+      alert: msg => alerts.push(msg),
+      window: windowObj,
+      document: { getElementById: id => elements[id] || makeEl(), querySelector: () => null }
+    });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin/taskpane.js'), 'utf8'), ctx);
+    let openDocs = 1;
+    let isTargetOpen = true;
+    const tempDoc = {
+      Close(saveChanges) { events.push(['tempClose', saveChanges]); openDocs--; }
+    };
+    const doc = {
+      FullName: 'C:\\docs\\sample.docx',
+      ReadOnly: false,
+      Saved: true,
+      Save() { events.push('save'); },
+      Close(saveChanges) { events.push(['close', saveChanges]); isTargetOpen = false; openDocs--; }
+    };
+    windowObj.wps = {
+      Application: {
+        ActiveDocument: doc,
+        Documents: {
+          get Count() { return openDocs; },
+          Item() { return isTargetOpen ? doc : tempDoc; },
+          Add() { events.push('addTemp'); openDocs++; return tempDoc; },
+          Open(p) { events.push(['open', p]); isTargetOpen = true; openDocs++; return doc; }
+        }
+      }
+    };
+    ctx.ajaxPost = (url, body, cb) => {
+      events.push(['post', url, isTargetOpen, openDocs]);
+      assert.equal(isTargetOpen, false, 'taskpane disk upgrade must close target doc before /convert/document on Windows');
+      assert.ok(openDocs >= 1, 'taskpane must retain at least 1 open document so taskpane WebView stays alive');
+      cb(status, status === 200 ? JSON.stringify({ found: 2, converted: 2, errors: 0 }) : '{"error":"fail"}');
+    };
+    elements['btn-disk-upgrade'].listeners.click();
+    assert.deepEqual(events, [
+      'save',
+      'addTemp',
+      ['close', false],
+      ['post', 'http://127.0.0.1:17890/convert/document', false, 1],
+      ['open', 'C:\\docs\\sample.docx'],
+      ['tempClose', false]
+    ]);
+    assert.equal(isTargetOpen, true);
+    assert.equal(openDocs, 1);
+    assert.equal(elements['btn-disk-upgrade'].disabled, false);
+    assert.equal(alerts.length, 1);
+  }
+}
+console.log('WPS batch font_pt clamping and Windows disk-upgrade lock-release tests passed');
+
+// 9. Large multi-page ToggleLatex batch must bound concurrent HTTP requests (<= 8, avoiding bridge 503),
+//    yield DOM replacements across chunks via setTimeout, and use cumShift so OLE offsets stay O(1).
+{
+  const timers = [];
+  const alerts = [];
+  const c = vm.createContext({
+    console,
+    DOMParser,
+    XMLSerializer,
+    setTimeout(fn) { timers.push(fn); return timers.length; },
+    alert: msg => alerts.push(msg)
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin/main.js'), 'utf8'), c);
+  c.wpsLog = () => {};
+
+  const ole26 = '<' + 'OLE_26_CHARS_PLACEHOLDER' + '>';
+  const formulaCount = 35;
+  let docText = 'Start ' + ole26 + ' ';
+  let visibleText = 'Start # ';
+  for (let i = 0; i < formulaCount; i++) {
+    const f = `$x_${i}$`;
+    docText += f + ' ';
+    visibleText += f + ' ';
+  }
+
+  let rangeCalls = 0;
+  function visibleSlice(s, e) {
+    return docText.slice(s, e).replace(ole26, '#');
+  }
+  const doc = {
+    get Content() { return { End: docText.length }; },
+    Range(start, end) {
+      if (start === undefined) return { End: docText.length };
+      return {
+        Start: start,
+        End: end,
+        Font: { Size: 12 },
+        get Text() { rangeCalls++; return visibleSlice(this.Start, this.End); },
+        InlineShapes: { Count: 0, Item: () => null },
+        Paragraphs: { Item: () => ({ Range: { Start: 0, End: docText.length } }) },
+        Delete() { docText = docText.slice(0, this.Start) + docText.slice(this.End); },
+        InsertXML() { docText = docText.slice(0, this.Start) + 'M' + docText.slice(this.End); },
+        Select() {}
+      };
+    }
+  };
+  const selection = {
+    Start: 0,
+    End: docText.length,
+    get Text() { return visibleText; },
+    Range: { Start: 0, End: docText.length, Font: { Size: 12 } },
+    Collapse() {}
+  };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = cb => cb();
+
+  const pending = [];
+  let maxInFlight = 0;
+  let totalSent = 0;
+  c.ajaxPost = (url, body, cb) => {
+    totalSent++;
+    pending.push(cb);
+    if (pending.length > maxInFlight) maxInFlight = pending.length;
+  };
+
+  c.ToggleLatex();
+  assert.ok(rangeCalls < 200, `cumShift + chunked scan must avoid O(N^2) COM calls (got ${rangeCalls})`);
+  assert.equal(maxInFlight, 8, 'must cap concurrent HTTP requests to 8');
+  while (pending.length > 0) {
+    const cb = pending.shift();
+    cb(200, JSON.stringify({ result: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>' }));
+  }
+  assert.equal(totalSent, formulaCount);
+  // Drain yielded DOM chunk timers.
+  while (timers.length > 0) {
+    timers.shift()();
+  }
+  assert.ok(!docText.includes('$x_'), 'all 35 formulas must be converted');
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /Found: 35[\s\S]*Converted: 35[\s\S]*Skipped\/Errors: 0/);
+}
+console.log('WPS large-batch bounded concurrency, chunked DOM, and cumShift tests passed');
+
+// 10. Ctrl+A across a multi-page exam containing prose with '=', '-', and equations must convert
+//     the equations to LaTeX (NOT treat the entire document as one bare LaTeX formula via isLatexText),
+//     and stray cross-blank-line $$ must not swallow pages.
+{
+  const c = controller();
+  const examText = 'ĐỀ 1\rĐỀ KIỂM TRA GIỮA HỌC KÌ I\rThời gian làm bài: 90 phút - không tính.\rCâu 1: Cho u_1 = 3 và u_2 = 5 - 1.\rCâu 2: Chọn đáp án đúng.';
+  const selection = {
+    Start: 0,
+    End: examText.length,
+    Text: examText,
+    Range: { Start: 0, End: examText.length, Font: { Size: 12 } }
+  };
+  const doc = {};
+  const fakeEq = [{ start: 80, end: 85, xml: '<m:oMath/>', isDisplay: false }];
+  let latexCalled = false;
+  let eqCalled = false;
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = cb => cb();
+  c.findAllEquationTargetsInRange = () => fakeEq;
+  c.batchLatexToMathType = () => { latexCalled = true; };
+  c.batchEquationToLatex = (_d, _s, targets) => {
+    eqCalled = true;
+    assert.equal(targets.length, 1);
+  };
+  c.ToggleLatex();
+  assert.equal(latexCalled, false, 'multi-page prose with = and - must not trigger bare-LaTeX batch');
+  assert.equal(eqCalled, true, 'must fall through to converting equations in selection');
+
+  // Even without equations, multi-paragraph prose with '=' and '-' must not become one equation,
+  // and stray $$ across blank lines must not swallow multiple paragraphs.
+  assert.equal(c.isLatexText(examText), false);
+  assert.equal(c.isLatexText('Câu 10: Cho cấp số cộng với u_1 = 3 và u_2 = 5 - 1'), false);
+  assert.equal(c.isLatexText('x^2 + 1 = 0'), true);
+  assert.equal(c.findAllLatexMatches('$$start\r\n\r\nmiddle\r\n\r\nend$$').length, 0);
+}
+console.log('WPS Ctrl+A full-document prose vs equation priority tests passed');
+
+// 11. compactFlatOpcXml strips bloated styles/numbering parts and batchEquationToLatex skips
+//     redundant WordOpenXML reads for MathType InlineShapes; taskpane btn-start-upgrade
+//     bounds concurrent HTTP requests (<= 8) and chunks DOM updates via setTimeout.
+{
+  const c = controller();
+  const bloatedStyles = 'S'.repeat(20000);
+  const bloatedNumbering = 'N'.repeat(10000);
+  const fullPkg =
+    '<?xml version="1.0"?><pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">' +
+    '<pkg:part pkg:name="/word/document.xml" pkg:contentType="text/xml"><pkg:xmlData><w:document/></pkg:xmlData></pkg:part>' +
+    '<pkg:part pkg:name="/word/styles.xml" pkg:contentType="text/xml"><pkg:xmlData>' + bloatedStyles + '</pkg:xmlData></pkg:part>' +
+    '<pkg:part pkg:name="/word/numbering.xml" pkg:contentType="text/xml"><pkg:xmlData>' + bloatedNumbering + '</pkg:xmlData></pkg:part>' +
+    '<pkg:part pkg:name="/word/embeddings/oleObject1.bin" pkg:contentType="application/vnd.openxmlformats-officedocument.oleObject"><pkg:binaryData>QUJD</pkg:binaryData></pkg:part>' +
+    '</pkg:package>';
+  const compacted = c.compactFlatOpcXml(fullPkg);
+  assert.ok(compacted.length < 1000, 'compacted Flat OPC must strip styles.xml and numbering.xml');
+  assert.ok(compacted.includes('/word/document.xml'));
+  assert.ok(compacted.includes('/word/embeddings/oleObject1.bin'));
+  assert.ok(!compacted.includes('/word/styles.xml'));
+  assert.ok(!compacted.includes('/word/numbering.xml'));
+
+  let docText = 'A # B';
+  let extraWordOpenXmlReads = 0;
+  const doc = {
+    get Content() { return { End: docText.length }; },
+    Range(start, end) {
+      if (start === undefined) return { End: docText.length };
+      return {
+        Start: start, End: end, Font: { Position: 0 },
+        get Text() { return docText.slice(this.Start, this.End); },
+        set Text(v) { docText = docText.slice(0, this.Start) + v + docText.slice(this.End); },
+        get WordOpenXML() { extraWordOpenXmlReads++; return ''; },
+        InlineShapes: { Count: 0, Item: () => null },
+        OMaths: { Count: 0, Item: () => null }
+      };
+    }
+  };
+  const targets = [{ start: 2, end: 3, xml: '<o:OLEObject ProgID="Equation.DSMT4"/>', isDisplay: false, isOmml: false }];
+  c.wps = { Application: { ActiveDocument: doc, Selection: { Collapse() {}, Font: {} } } };
+  c.ajaxPost = (_u, _b, cb) => cb(200, JSON.stringify({ result: 'x^2' }));
+  c.batchEquationToLatex(doc, {}, targets);
+  assert.equal(extraWordOpenXmlReads, 0, 'MathType OLE replacement must not re-read target.WordOpenXML');
+  assert.equal(targets[0].xml, null, 'request XML must be released once sent');
+  assert.equal(docText, 'A $x^2$ B');
+}
+{
+  const timers = [];
+  function makeEl(extra = {}) {
+    return Object.assign({
+      textContent: '', value: '', disabled: false, style: {},
+      classList: { remove() {}, add() {} }, listeners: {},
+      addEventListener(type, fn) { this.listeners[type] = fn; }
+    }, extra);
+  }
+  const elements = {
+    'bridge-status-badge': makeEl(),
+    'bridge-status-text': makeEl(),
+    'upgrade-target': makeEl({ value: 'mathtype' }),
+    'btn-start-upgrade': makeEl(),
+    'upgrade-progress-box': makeEl(),
+    'upgrade-progress-bar': makeEl(),
+    'upgrade-progress-text': makeEl(),
+    'stat-found': makeEl(),
+    'stat-upgraded': makeEl(),
+    'stat-errors': makeEl(),
+    'btn-disk-upgrade': makeEl()
+  };
+  const windowObj = { addEventListener() {}, wps: null };
+  const ctx = vm.createContext({
+    console, DOMParser, XMLSerializer,
+    setTimeout(fn) { timers.push(fn); return timers.length; },
+    setInterval() { return 1; },
+    alert: msg => { throw Error(msg); },
+    window: windowObj,
+    document: { getElementById: id => elements[id] || makeEl(), querySelector: () => ({ value: 'document' }) }
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../wps-addin/taskpane.js'), 'utf8'), ctx);
+
+  const count = 30;
+  let docText = '#'.repeat(count);
+  const shapesArr = Array.from({ length: count }, (_, idx) => ({
+    Type: 1,
+    OLEFormat: { ProgID: 'Equation.3' },
+    Range: { Start: idx, End: idx + 1, Font: { Size: 12 }, WordOpenXML: '<o:OLEObject ProgID="Equation.3"/>' }
+  }));
+  let shapeLookups = 0;
+  const doc = {
+    get Content() {
+      return {
+        End: docText.length,
+        InlineShapes: { Count: count, Item: i => shapesArr[i - 1] },
+        OMaths: { Count: 0, Item: () => null }
+      };
+    },
+    InlineShapes: {
+      get Count() { return count; },
+      Item(i) { shapeLookups++; return shapesArr[i - 1]; }
+    },
+    Range(start, end) {
+      if (start === undefined) return { End: docText.length };
+      return {
+        Start: start, End: end, Font: { Position: 0 },
+        get Text() { return docText.slice(this.Start, this.End); },
+        InlineShapes: { Count: 0, Item: () => null },
+        Paragraphs: { Item: () => ({ Range: { Start: 0, End: docText.length } }) },
+        Delete() { docText = docText.slice(0, this.Start) + docText.slice(this.End); },
+        InsertXML() { docText = docText.slice(0, this.Start) + 'M' + docText.slice(this.End); }
+      };
+    }
+  };
+  windowObj.wps = { Application: { ActiveDocument: doc, Selection: { Start: 0, End: 0, Font: {} } } };
+  const pending = [];
+  let maxInFlight = 0;
+  ctx.ajaxPost = (_u, _b, cb) => {
+    pending.push(cb);
+    if (pending.length > maxInFlight) maxInFlight = pending.length;
+  };
+  elements['btn-start-upgrade'].listeners.click();
+  assert.equal(maxInFlight, 8, 'taskpane upgrade must cap concurrent HTTP requests to 8');
+  while (pending.length > 0) {
+    pending.shift()(200, JSON.stringify({ result: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>' }));
+  }
+  assert.ok(timers.length >= 1, 'taskpane DOM replacements must yield between chunks');
+  while (timers.length > 0) timers.shift()();
+  assert.equal(elements['stat-upgraded'].textContent, String(count));
+  assert.ok(shapeLookups < count * 10, `binary search must avoid O(N^2) InlineShapes scans (got ${shapeLookups})`);
+}
+console.log('WPS Flat OPC compaction & taskpane bounded-concurrency tests passed');

@@ -17,7 +17,9 @@ function getBridgeToken() {
     if (typeof wps !== "undefined" && wps && wps.FileSystem && typeof wps.FileSystem.ReadFile === "function") {
       var candidates = [];
       if (wps.Env && typeof wps.Env.GetHomePath === "function") {
-        candidates.push(wps.Env.GetHomePath() + "/.local/share/eqntide/bridge.token");
+        var homePath = wps.Env.GetHomePath();
+        candidates.push(homePath + "/.local/share/eqntide/bridge.token");
+        candidates.push(homePath + "/Library/Application Support/com.eqntide.EqnTide/bridge.token");
       }
       if (typeof navigator !== "undefined" && /win/i.test(navigator.platform || "")) {
         try {
@@ -102,8 +104,53 @@ function checkBridgeHealth() {
   });
 }
 
+function isWindowsClient(filePath) {
+  try {
+    if (typeof navigator !== "undefined") {
+      if (/win/i.test(navigator.platform || "") || /windows/i.test(navigator.userAgent || "")) {
+        return true;
+      }
+    }
+  } catch (_) {}
+  if (typeof filePath === "string" && (/^[a-zA-Z]:[\\/]/.test(filePath) || /^\\\\/.test(filePath))) {
+    return true;
+  }
+  return false;
+}
+
+function isDocumentOpenInApp(app, filePath) {
+  try {
+    if (!app || !app.Documents || !filePath) return false;
+    var target = String(filePath).toLowerCase();
+    for (var i = 1; i <= app.Documents.Count; i++) {
+      var d = app.Documents.Item(i);
+      if (d && d.FullName && String(d.FullName).toLowerCase() === target) {
+        return true;
+      }
+    }
+  } catch (_) {}
+  return false;
+}
+
+function reopenDocumentInApp(app, filePath) {
+  var targetApp = app;
+  try {
+    if (!targetApp || !targetApp.Documents || typeof targetApp.Documents.Open !== "function") {
+      if (window.wps) {
+        targetApp = (typeof window.wps.WpsApplication === "function") ? window.wps.WpsApplication() : window.wps.Application;
+      }
+    }
+  } catch (_) {}
+  var opened = targetApp.Documents.Open(filePath);
+  try {
+    if (opened && typeof opened.Activate === "function") opened.Activate();
+  } catch (_) {}
+  return opened;
+}
+
 // Instant Disk Upgrade (WPS Native FullName)
 btnDiskUpgrade.addEventListener("click", function () {
+  var tempBlankDoc = null;
   try {
     var app = window.wps ? window.wps.Application : null;
     var doc = app ? app.ActiveDocument : null;
@@ -111,9 +158,30 @@ btnDiskUpgrade.addEventListener("click", function () {
       alert("Please save this document as a .docx file on disk first.");
       return;
     }
+    if (doc.ReadOnly) {
+      alert("This document is read-only. Save a writable copy before upgrading it.");
+      return;
+    }
 
     var filePath = doc.FullName;
+    var needsPreClose = isWindowsClient(filePath);
     doc.Save();
+    if (doc.Saved === false) {
+      alert("WPS did not save the document. Upgrade cancelled.");
+      return;
+    }
+    if (needsPreClose) {
+      // Keep WPS Writer & this taskpane alive when closing the only open document.
+      if (app.Documents && app.Documents.Count <= 1 && typeof app.Documents.Add === "function") {
+        try { tempBlankDoc = app.Documents.Add(); } catch (_) { tempBlankDoc = null; }
+      }
+      doc.Close(false);
+      if (isDocumentOpenInApp(app, filePath)) {
+        try { if (tempBlankDoc) tempBlankDoc.Close(false); } catch (_) {}
+        alert("WPS did not close the document. Close it manually or use Scan & Upgrade Equations above.");
+        return;
+      }
+    }
 
     btnDiskUpgrade.disabled = true;
     (btnDiskUpgradeLabel || btnDiskUpgrade).textContent = "Converting on disk...";
@@ -130,19 +198,43 @@ btnDiskUpgrade.addEventListener("click", function () {
         btnDiskUpgrade.disabled = false;
         (btnDiskUpgradeLabel || btnDiskUpgrade).textContent = "Upgrade Active File via Rust Core";
 
-        if (status === 200) {
-          var res = JSON.parse(responseText);
-          alert("Instant Conversion Done!\n\nFound: " + res.found + "\nUpgraded: " + res.converted + "\nErrors: " + res.errors);
+        if (needsPreClose) {
+          var reopenErr = null;
           try {
-            doc.Close(false);
-            app.Documents.Open(filePath);
-          } catch (_) {}
+            reopenDocumentInApp(app, filePath);
+          } catch (openErr) {
+            reopenErr = openErr;
+          }
+          try { if (tempBlankDoc) tempBlankDoc.Close(false); } catch (_) {}
+
+          if (status === 200) {
+            var res = JSON.parse(responseText);
+            var okMsg = "Instant Conversion Done!\n\nFound: " + res.found + "\nUpgraded: " + res.converted + "\nErrors: " + res.errors;
+            if (reopenErr) okMsg += "\n\nPlease reopen the file at: " + filePath;
+            alert(okMsg);
+          } else {
+            var msg = "Conversion failed: " + responseText;
+            if (reopenErr) msg += "\n\nOpen the saved document at: " + filePath;
+            alert(msg);
+          }
         } else {
-          alert("Conversion failed: " + responseText);
+          if (status === 200) {
+            var resLinux = JSON.parse(responseText);
+            alert("Instant Conversion Done!\n\nFound: " + resLinux.found + "\nUpgraded: " + resLinux.converted + "\nErrors: " + resLinux.errors);
+            try {
+              doc.Close(false);
+              reopenDocumentInApp(app, filePath);
+            } catch (_) {}
+          } else {
+            alert("Conversion failed: " + responseText);
+          }
         }
       }
     );
   } catch (err) {
+    try { if (tempBlankDoc) tempBlankDoc.Close(false); } catch (_) {}
+    btnDiskUpgrade.disabled = false;
+    (btnDiskUpgradeLabel || btnDiskUpgrade).textContent = "Upgrade Active File via Rust Core";
     alert("Error: " + err);
   }
 });
@@ -164,6 +256,79 @@ function hasEquationInXml(xmlStr) {
   );
 }
 
+function isBloatedFlatOpcPart(lowerPartName) {
+  if (!lowerPartName) return false;
+  if (
+    lowerPartName === "/word/styles.xml" ||
+    lowerPartName === "/word/styleswitheffects.xml" ||
+    lowerPartName === "/word/numbering.xml" ||
+    lowerPartName === "/word/fonttable.xml" ||
+    lowerPartName === "/word/settings.xml" ||
+    lowerPartName === "/word/websettings.xml"
+  ) {
+    return true;
+  }
+  return (
+    lowerPartName.indexOf("/word/theme/") === 0 ||
+    lowerPartName.indexOf("/docprops/") === 0 ||
+    lowerPartName.indexOf("/customxml/") === 0
+  );
+}
+
+function compactFlatOpcXml(xml) {
+  if (!xml || typeof xml !== "string" || xml.length < 16384) return xml;
+  var firstPart = xml.indexOf("<pkg:part ");
+  if (firstPart === -1) return xml;
+  var out = [xml.slice(0, firstPart)];
+  var pos = firstPart;
+  var tailPos = firstPart;
+  while (pos !== -1) {
+    var tagEnd = xml.indexOf(">", pos);
+    if (tagEnd === -1) return xml;
+    var partEnd;
+    if (xml.charAt(tagEnd - 1) === "/") {
+      partEnd = tagEnd + 1;
+    } else {
+      var closeIdx = xml.indexOf("</pkg:part>", tagEnd + 1);
+      if (closeIdx === -1) return xml;
+      partEnd = closeIdx + 11;
+    }
+    var header = xml.slice(pos, tagEnd + 1);
+    var m = /(?:pkg:)?name=["']([^"']+)["']/i.exec(header);
+    var partName = m ? m[1].toLowerCase() : "";
+    if (partName && partName.charAt(0) !== "/") partName = "/" + partName;
+    if (!isBloatedFlatOpcPart(partName)) {
+      out.push(xml.slice(pos, partEnd));
+    }
+    tailPos = partEnd;
+    pos = xml.indexOf("<pkg:part ", partEnd);
+  }
+  if (tailPos < xml.length) out.push(xml.slice(tailPos));
+  return out.join("");
+}
+
+function quickClassifyShape(shape) {
+  if (!shape) return 0;
+  try {
+    if (shape.AlternativeText === "EqnTide equation") return 1;
+  } catch (_) {}
+  var st = 0;
+  try {
+    if (typeof shape.Type === "number") st = shape.Type;
+  } catch (_) {}
+  if (st === 1 || st === 2) {
+    try {
+      var progId = shape.OLEFormat && shape.OLEFormat.ProgID ? String(shape.OLEFormat.ProgID).toLowerCase() : "";
+      if (progId) {
+        return (progId.indexOf("equation.") === 0 || progId.indexOf("mathtype") === 0) ? 1 : -1;
+      }
+    } catch (_) {}
+    return 0;
+  }
+  if (st === 3 || st === 4 || st === 0) return 0;
+  return -1;
+}
+
 function isEquationShape(shape, xmlStr) {
   if (hasEquationInXml(xmlStr)) return true;
   if (!shape) return false;
@@ -179,15 +344,20 @@ function isEquationShape(shape, xmlStr) {
 }
 
 function getTargetFontSize(range, app) {
-  var size = 12.0;
+  var candidates = [];
   try {
-    if (range && range.Font && range.Font.Size > 0) {
-      size = Number(range.Font.Size);
-    } else if (app && app.Selection && app.Selection.Font && app.Selection.Font.Size > 0) {
-      size = Number(app.Selection.Font.Size);
-    }
+    if (range && range.Font) candidates.push(Number(range.Font.Size));
   } catch (_) {}
-  return (size > 0 && isFinite(size)) ? size : 12.0;
+  try {
+    if (app && app.Selection && app.Selection.Font) candidates.push(Number(app.Selection.Font.Size));
+  } catch (_) {}
+  for (var i = 0; i < candidates.length; i++) {
+    var size = candidates[i];
+    if (typeof size === "number" && isFinite(size) && size >= 1.0 && size <= 200.0) {
+      return size;
+    }
+  }
+  return 12.0;
 }
 
 function getDocEnd(doc) {
@@ -222,9 +392,11 @@ function findUpgradeTargets(scope, app, doc) {
   function processShape(shape) {
     if (!shape || !shape.Range) return;
     try {
+      var cls = quickClassifyShape(shape);
+      if (cls < 0) return;
       var sXml = "";
       try { sXml = shape.Range.WordOpenXML || ""; } catch (_) {}
-      if (!sXml || !isEquationShape(shape, sXml)) return;
+      if (!sXml || (cls !== 1 && !isEquationShape(shape, sXml))) return;
       var sStart = shape.Range.Start;
       var sEnd = shape.Range.End;
       if (typeof sStart !== "number" || typeof sEnd !== "number") return;
@@ -232,7 +404,7 @@ function findUpgradeTargets(scope, app, doc) {
       list.push({
         start: sStart,
         end: sEnd,
-        xml: sXml,
+        xml: compactFlatOpcXml(sXml),
         fontPt: getTargetFontSize(shape.Range, app)
       });
     } catch (_) {}
@@ -250,7 +422,7 @@ function findUpgradeTargets(scope, app, doc) {
       list.push({
         start: oStart,
         end: oEnd,
-        xml: oXml,
+        xml: compactFlatOpcXml(oXml),
         fontPt: getTargetFontSize(omath.Range, app)
       });
     } catch (_) {}
@@ -329,6 +501,91 @@ function extractLastMathText(packageXml) {
   return last;
 }
 
+function findInsertedShapeByPos(doc, insertedRange, insertPos) {
+  var pic = null;
+  var bestDiff = 999999;
+  var shapeCollections = [];
+  if (insertedRange && insertedRange.InlineShapes) shapeCollections.push(insertedRange.InlineShapes);
+  if (doc && doc.InlineShapes) shapeCollections.push(doc.InlineShapes);
+  try {
+    if (doc && doc.Content && doc.Content.InlineShapes) shapeCollections.push(doc.Content.InlineShapes);
+  } catch (_) {}
+  for (var c = 0; c < shapeCollections.length; c++) {
+    var shapes = shapeCollections[c];
+    var count = shapes && shapes.Count ? shapes.Count : 0;
+    if (!count) continue;
+    if (count > 16) {
+      var lo = 1, hi = count;
+      while (lo <= hi) {
+        var mid = (lo + hi) >> 1;
+        var midItem = shapes.Item(mid);
+        if (!midItem || !midItem.Range || typeof midItem.Range.Start !== "number") break;
+        var midDiff = midItem.Range.Start - insertPos;
+        if (midDiff >= 0 && midDiff <= 5 && midDiff < bestDiff) {
+          bestDiff = midDiff;
+          pic = midItem;
+          if (midDiff === 0) return pic;
+        }
+        if (midItem.Range.Start < insertPos) lo = mid + 1;
+        else hi = mid - 1;
+      }
+      var winStart = Math.max(1, lo - 3);
+      var winEnd = Math.min(count, lo + 3);
+      for (var wi = winStart; wi <= winEnd; wi++) {
+        var wCand = shapes.Item(wi);
+        if (!wCand || !wCand.Range || typeof wCand.Range.Start !== "number") continue;
+        var wDiff = wCand.Range.Start - insertPos;
+        if (wDiff >= 0 && wDiff <= 5 && wDiff < bestDiff) {
+          bestDiff = wDiff;
+          pic = wCand;
+          if (wDiff === 0) return pic;
+        }
+      }
+      if (pic) return pic;
+    }
+    for (var idx = 1; idx <= count; idx++) {
+      var candidate = shapes.Item(idx);
+      if (!candidate || !candidate.Range || typeof candidate.Range.Start !== "number") continue;
+      var diff = candidate.Range.Start - insertPos;
+      if (diff >= 0 && diff <= 5 && diff < bestDiff) {
+        bestDiff = diff;
+        pic = candidate;
+        if (diff === 0) return pic;
+      }
+    }
+    if (pic) return pic;
+  }
+  return null;
+}
+
+function findInsertedOMathByPos(doc, omathRange, insertPos) {
+  if (omathRange && omathRange.OMaths && omathRange.OMaths.Count > 0) {
+    return omathRange.OMaths.Item(1);
+  }
+  var omaths = doc && doc.OMaths ? doc.OMaths : null;
+  var count = omaths && omaths.Count ? omaths.Count : 0;
+  if (!count) return null;
+  if (count > 16) {
+    var lo = 1, hi = count;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      var midItem = omaths.Item(mid);
+      if (!midItem || !midItem.Range || typeof midItem.Range.Start !== "number") break;
+      var mStart = midItem.Range.Start;
+      if (mStart >= insertPos && mStart <= insertPos + 1) return midItem;
+      if (mStart < insertPos) lo = mid + 1;
+      else hi = mid - 1;
+    }
+  }
+  for (var i = 1; i <= count; i++) {
+    var oCandidate = omaths.Item(i);
+    if (oCandidate && oCandidate.Range && oCandidate.Range.Start >= insertPos && oCandidate.Range.Start <= insertPos + 1) {
+      return oCandidate;
+    }
+  }
+  return null;
+}
+
 function insertUpgradedFlatOpcAtRange(doc, targetRange, convData, targetMode, fallbackFontPt) {
   var packageXml = convData && (convData.flat_opc || convData.result);
   if (!doc || !targetRange || !packageXml || typeof targetRange.InsertXML !== "function") {
@@ -390,28 +647,7 @@ function insertUpgradedFlatOpcAtRange(doc, targetRange, convData, targetMode, fa
       if (insertedEnd < insertPos) insertedEnd = insertPos;
       if (insertedEnd > newEnd) insertedEnd = newEnd;
       var insertedRange = doc.Range(insertPos, insertedEnd);
-      var pic = null;
-      var bestDiff = 999999;
-      var shapeCollections = [];
-      if (insertedRange.InlineShapes) shapeCollections.push(insertedRange.InlineShapes);
-      if (doc.InlineShapes) shapeCollections.push(doc.InlineShapes);
-      try {
-        if (doc.Content && doc.Content.InlineShapes) shapeCollections.push(doc.Content.InlineShapes);
-      } catch (_) {}
-      for (var c = 0; c < shapeCollections.length && !pic; c++) {
-        var shapes = shapeCollections[c];
-        if (!shapes || !shapes.Count) continue;
-        for (var idx = 1; idx <= shapes.Count; idx++) {
-          var candidate = shapes.Item(idx);
-          if (!candidate || !candidate.Range || typeof candidate.Range.Start !== "number") continue;
-          var diff = candidate.Range.Start - insertPos;
-          if (diff >= 0 && diff <= 5 && diff < bestDiff) {
-            bestDiff = diff;
-            pic = candidate;
-            if (diff === 0) break;
-          }
-        }
-      }
+      var pic = findInsertedShapeByPos(doc, insertedRange, insertPos);
       if (pic) {
         try { pic.AlternativeText = "EqnTide equation"; } catch (_) {}
         if (typeof convData.width_pt === "number" && convData.width_pt > 0) {
@@ -479,18 +715,7 @@ function insertUpgradedFlatOpcAtRange(doc, targetRange, convData, targetMode, fa
   } else {
     try {
       var omathRange = doc.Range(insertPos, insertedEnd);
-      var equation = null;
-      if (omathRange.OMaths && omathRange.OMaths.Count > 0) {
-        equation = omathRange.OMaths.Item(1);
-      } else if (doc.OMaths) {
-        for (var i = 1; i <= doc.OMaths.Count; i++) {
-          var oCandidate = doc.OMaths.Item(i);
-          if (oCandidate.Range.Start >= insertPos && oCandidate.Range.Start <= insertPos + 1) {
-            equation = oCandidate;
-            break;
-          }
-        }
-      }
+      var equation = findInsertedOMathByPos(doc, omathRange, insertPos);
       if (equation) {
         equation.Type = 1;
         if (equation.Range && equation.Range.Font) equation.Range.Font.Position = 0;
@@ -499,6 +724,62 @@ function insertUpgradedFlatOpcAtRange(doc, targetRange, convData, targetMode, fa
   }
 
   return true;
+}
+
+var TASKPANE_HTTP_CONCURRENCY = 8;
+var TASKPANE_DOM_CHUNK_SIZE = 10;
+
+function runBoundedQueue(items, maxConcurrent, worker, onDone) {
+  var total = items.length;
+  if (total === 0) {
+    onDone();
+    return;
+  }
+  var nextIndex = 0;
+  var finished = 0;
+  var inFlight = 0;
+  var concurrency = Math.max(1, Math.min(maxConcurrent, total));
+
+  function pump() {
+    while (inFlight < concurrency && nextIndex < total) {
+      var idx = nextIndex++;
+      inFlight++;
+      worker(items[idx], idx, function () {
+        inFlight--;
+        finished++;
+        if (finished === total) {
+          onDone();
+        } else {
+          pump();
+        }
+      });
+    }
+  }
+  pump();
+}
+
+function applyItemsInChunks(items, chunkSize, applyItem, onDone) {
+  var total = items.length;
+  var idx = 0;
+  var canYield = (typeof setTimeout === "function") && total > chunkSize;
+
+  function step() {
+    var end = Math.min(total, idx + chunkSize);
+    while (idx < end) {
+      applyItem(items[idx], idx);
+      idx++;
+    }
+    if (idx < total) {
+      if (canYield) {
+        setTimeout(step, 0);
+      } else {
+        step();
+      }
+    } else {
+      onDone();
+    }
+  }
+  step();
 }
 
 // In-Memory Equation Upgrader
@@ -551,12 +832,16 @@ btnStartUpgrade.addEventListener("click", function () {
     var total = targets.length;
     var completed = 0;
 
-    for (var i = 0; i < total; i++) {
-      (function (item) {
+    runBoundedQueue(
+      targets,
+      TASKPANE_HTTP_CONCURRENCY,
+      function (item, _idx, done) {
+        var payloadXml = item.xml;
+        item.xml = null;
         ajaxPost(
           BRIDGE_URL + "/convert/snippet",
           JSON.stringify({
-            data: item.xml,
+            data: payloadXml,
             from: "flat_opc",
             to: targetMode,
             font_pt: item.fontPt
@@ -583,42 +868,47 @@ btnStartUpgrade.addEventListener("click", function () {
               errorCount++;
               statErrors.textContent = String(errorCount);
             }
-
-            if (completed === total) {
-              targets.sort(function (a, b) { return b.start - a.start; });
-              for (var j = 0; j < targets.length; j++) {
-                var targetItem = targets[j];
-                if (!targetItem.convData) continue;
-                try {
-                  var targetRange = doc.Range(targetItem.start, targetItem.end);
-                  if (insertUpgradedFlatOpcAtRange(doc, targetRange, targetItem.convData, targetMode, targetItem.fontPt)) {
-                    upgradedCount++;
-                    statUpgraded.textContent = String(upgradedCount);
-                  } else {
-                    errorCount++;
-                    statErrors.textContent = String(errorCount);
-                  }
-                } catch (_) {
-                  errorCount++;
-                  statErrors.textContent = String(errorCount);
-                }
-              }
-
-              try {
-                var curSel = app.Selection;
-                if (curSel && curSel.Start === curSel.End && curSel.Font) {
-                  curSel.Font.Position = 0;
-                  curSel.Font.Subscript = false;
-                  curSel.Font.Superscript = false;
-                }
-              } catch (_) {}
-
-              finishUpgrade(foundCount, upgradedCount);
-            }
+            done();
           }
         );
-      })(targets[i]);
-    }
+      },
+      function () {
+        targets.sort(function (a, b) { return b.start - a.start; });
+        applyItemsInChunks(
+          targets,
+          TASKPANE_DOM_CHUNK_SIZE,
+          function (targetItem) {
+            if (!targetItem.convData) return;
+            try {
+              var targetRange = doc.Range(targetItem.start, targetItem.end);
+              if (insertUpgradedFlatOpcAtRange(doc, targetRange, targetItem.convData, targetMode, targetItem.fontPt)) {
+                upgradedCount++;
+                statUpgraded.textContent = String(upgradedCount);
+              } else {
+                errorCount++;
+                statErrors.textContent = String(errorCount);
+              }
+            } catch (_) {
+              errorCount++;
+              statErrors.textContent = String(errorCount);
+            }
+            targetItem.convData = null;
+          },
+          function () {
+            try {
+              var curSel = app.Selection;
+              if (curSel && curSel.Start === curSel.End && curSel.Font) {
+                curSel.Font.Position = 0;
+                curSel.Font.Subscript = false;
+                curSel.Font.Superscript = false;
+              }
+            } catch (_) {}
+
+            finishUpgrade(foundCount, upgradedCount);
+          }
+        );
+      }
+    );
   } catch (err) {
     console.error("WPS upgrade error:", err);
     finishUpgrade(foundCount, upgradedCount);

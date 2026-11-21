@@ -55,7 +55,9 @@ function getBridgeToken() {
     if (typeof wps !== "undefined" && wps && wps.FileSystem && typeof wps.FileSystem.ReadFile === "function") {
       var candidates = [];
       if (wps.Env && typeof wps.Env.GetHomePath === "function") {
-        candidates.push(wps.Env.GetHomePath() + "/.local/share/eqntide/bridge.token");
+        var homePath = wps.Env.GetHomePath();
+        candidates.push(homePath + "/.local/share/eqntide/bridge.token");
+        candidates.push(homePath + "/Library/Application Support/com.eqntide.EqnTide/bridge.token");
       }
       if (typeof navigator !== "undefined" && /win/i.test(navigator.platform || "")) {
         try {
@@ -138,20 +140,100 @@ function hasEquationInXml(xmlStr) {
   );
 }
 
+function isBloatedFlatOpcPart(lowerPartName) {
+  if (!lowerPartName) return false;
+  if (
+    lowerPartName === "/word/styles.xml" ||
+    lowerPartName === "/word/styleswitheffects.xml" ||
+    lowerPartName === "/word/numbering.xml" ||
+    lowerPartName === "/word/fonttable.xml" ||
+    lowerPartName === "/word/settings.xml" ||
+    lowerPartName === "/word/websettings.xml"
+  ) {
+    return true;
+  }
+  return (
+    lowerPartName.indexOf("/word/theme/") === 0 ||
+    lowerPartName.indexOf("/docprops/") === 0 ||
+    lowerPartName.indexOf("/customxml/") === 0
+  );
+}
+
+function compactFlatOpcXml(xml) {
+  if (!xml || typeof xml !== "string" || xml.length < 16384) return xml;
+  var firstPart = xml.indexOf("<pkg:part ");
+  if (firstPart === -1) return xml;
+  var out = [xml.slice(0, firstPart)];
+  var pos = firstPart;
+  var tailPos = firstPart;
+  while (pos !== -1) {
+    var tagEnd = xml.indexOf(">", pos);
+    if (tagEnd === -1) return xml;
+    var partEnd;
+    if (xml.charAt(tagEnd - 1) === "/") {
+      partEnd = tagEnd + 1;
+    } else {
+      var closeIdx = xml.indexOf("</pkg:part>", tagEnd + 1);
+      if (closeIdx === -1) return xml;
+      partEnd = closeIdx + 11;
+    }
+    var header = xml.slice(pos, tagEnd + 1);
+    var m = /(?:pkg:)?name=["']([^"']+)["']/i.exec(header);
+    var partName = m ? m[1].toLowerCase() : "";
+    if (partName && partName.charAt(0) !== "/") partName = "/" + partName;
+    if (!isBloatedFlatOpcPart(partName)) {
+      out.push(xml.slice(pos, partEnd));
+    }
+    tailPos = partEnd;
+    pos = xml.indexOf("<pkg:part ", partEnd);
+  }
+  if (tailPos < xml.length) out.push(xml.slice(tailPos));
+  return out.join("");
+}
+
+function quickClassifyShape(shape) {
+  if (!shape) return 0;
+  try {
+    if (shape.AlternativeText === "EqnTide equation") return 1;
+  } catch (_) {}
+  var st = 0;
+  try {
+    if (typeof shape.Type === "number") st = shape.Type;
+  } catch (_) {}
+  if (st === 1 || st === 2) {
+    try {
+      var progId = shape.OLEFormat && shape.OLEFormat.ProgID ? String(shape.OLEFormat.ProgID).toLowerCase() : "";
+      if (progId) {
+        return (progId.indexOf("equation.") === 0 || progId.indexOf("mathtype") === 0) ? 1 : -1;
+      }
+    } catch (_) {}
+    return 0;
+  }
+  if (st === 3 || st === 4 || st === 0) return 0;
+  return -1;
+}
+
 /**
  * Check if raw text looks like a LaTeX math formula.
  */
 function isLatexText(text) {
   if (!text || typeof text !== "string") return false;
   var t = text.trim();
-  return (
+  if (!t || t.length > 1000) return false;
+  // Never treat selections containing embedded objects, table cell markers, or tabs as one bare formula.
+  if (/[\u0001\u0007\t]/.test(t)) return false;
+  // Multi-paragraph prose is not a single bare formula unless it is a LaTeX environment block.
+  var isBeginEnv = t.indexOf("\\begin") === 0 && /\\end\{[^}]+\}\s*$/.test(t);
+  if (/[\r\n]/.test(t) && !isBeginEnv) return false;
+
+  if (
     (t.startsWith("$") && t.endsWith("$")) ||
     (t.startsWith("\\[") && t.endsWith("\\]")) ||
     (t.startsWith("\\(") && t.endsWith("\\)")) ||
     t.indexOf("\\frac") !== -1 ||
     t.indexOf("\\dfrac") !== -1 ||
     t.indexOf("\\sqrt") !== -1 ||
-    t.startsWith("\\begin") ||
+    isBeginEnv ||
     t.indexOf("\\sum") !== -1 ||
     t.indexOf("\\int") !== -1 ||
     t.indexOf("\\alpha") !== -1 ||
@@ -161,9 +243,19 @@ function isLatexText(text) {
     t.indexOf("\\pm") !== -1 ||
     t.indexOf("\\le") !== -1 ||
     t.indexOf("\\ge") !== -1 ||
-    t.indexOf("\\ne") !== -1 ||
-    (t.indexOf("=") !== -1 && (t.indexOf("+") !== -1 || t.indexOf("-") !== -1 || t.indexOf("^") !== -1 || t.indexOf("_") !== -1))
-  );
+    t.indexOf("\\ne") !== -1
+  ) {
+    return true;
+  }
+
+  if (t.length <= 120 && t.indexOf("=") !== -1 &&
+      (t.indexOf("+") !== -1 || t.indexOf("-") !== -1 || t.indexOf("^") !== -1 || t.indexOf("_") !== -1)) {
+    // Reject natural-language sentences containing punctuation/multiple prose words.
+    var proseWords = t.match(/[A-Za-z\u00C0-\u024F\u1E00-\u1EFF]{3,}/g);
+    if (proseWords && proseWords.length >= 3) return false;
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -459,23 +551,36 @@ function OnAction(control) {
  * Opens a new session in desktop editor and inserts the resulting Flat OPC XML.
  */
 
+function isValidFontSizePt(size) {
+  return typeof size === "number" && isFinite(size) && size >= 1.0 && size <= 200.0;
+}
+
 function getDocumentFontSize(range) {
-  var size = 12.0;
+  var candidates = [];
   try {
-    if (range && range.Font && range.Font.Size > 0) {
-      size = Number(range.Font.Size);
-    } else {
-      var app = wps.WpsApplication();
-      if (app && app.Selection && app.Selection.Font && app.Selection.Font.Size > 0) {
-        size = Number(app.Selection.Font.Size);
-      } else if (app && app.ActiveDocument && app.ActiveDocument.ActiveWindow && app.ActiveDocument.ActiveWindow.Selection && app.ActiveDocument.ActiveWindow.Selection.Font && app.ActiveDocument.ActiveWindow.Selection.Font.Size > 0) {
-        size = Number(app.ActiveDocument.ActiveWindow.Selection.Font.Size);
-      }
-    }
+    if (range && range.Font) candidates.push(Number(range.Font.Size));
   } catch (e) {
     wpsLog("getDocumentFontSize error: " + e);
   }
-  return (size > 0 && isFinite(size)) ? size : 12.0;
+  try {
+    var app = (typeof wps !== "undefined" && wps)
+      ? (typeof wps.WpsApplication === "function" ? wps.WpsApplication() : wps.Application)
+      : null;
+    if (app && app.Selection && app.Selection.Font) {
+      candidates.push(Number(app.Selection.Font.Size));
+    }
+    if (app && app.ActiveDocument && app.ActiveDocument.ActiveWindow &&
+        app.ActiveDocument.ActiveWindow.Selection &&
+        app.ActiveDocument.ActiveWindow.Selection.Font) {
+      candidates.push(Number(app.ActiveDocument.ActiveWindow.Selection.Font.Size));
+    }
+  } catch (e2) {
+    wpsLog("getDocumentFontSize fallback error: " + e2);
+  }
+  for (var i = 0; i < candidates.length; i++) {
+    if (isValidFontSizePt(candidates[i])) return candidates[i];
+  }
+  return 12.0;
 }
 
 function InsertEquation() {
@@ -645,11 +750,15 @@ function findEnclosingLatexInPara(text, relPos) {
  */
 function findAllLatexMatches(text) {
   if (!text || typeof text !== "string") return [];
-  var regex = /(\$\$[\s\S]*?\$\$)|(\\\[[\s\S]*?\\\])|(\\\([\s\S]*?\\\))|(\$(?:\\\$|[^\$\r\n])+?\$)/g;
+  var regex = /(\$\$[\s\S]*?\$\$)|(\\\[[\s\S]*?\\\])|(\\\([^\r\n\u0007]*?\\\))|(\$(?:\\\$|[^\$\r\n])+?\$)/g;
   var matches = [];
   var m;
   while ((m = regex.exec(text)) !== null) {
     var raw = m[0];
+    // Reject implausible spans (e.g. stray unclosed $$ / \[ matching across pages, blank lines, or table cells).
+    if (raw.length > 2000 || /[\u0001\u0007]/.test(raw) || /(?:\r\n|\r|\n)\s*(?:\r\n|\r|\n)/.test(raw)) {
+      continue;
+    }
     var isDisplay = false;
     var inner = raw;
     if (raw.startsWith("$$") && raw.endsWith("$$") && raw.length >= 4) {
@@ -665,6 +774,7 @@ function findAllLatexMatches(text) {
       isDisplay = false;
       inner = raw.slice(1, -1).trim();
     }
+    if (!inner) continue;
     matches.push({
       start: m.index,
       end: m.index + raw.length,
@@ -863,19 +973,65 @@ function countLeadingBreaks(doc, pos, maxPos, limit) {
 
 function findExactRangeInBounds(doc, fromPos, toPos, expected) {
   if (!doc || !expected || typeof fromPos !== "number" || typeof toPos !== "number") return null;
-  var len = expected.length;
-  var minEnd = fromPos;
-  for (var start = fromPos; start <= toPos - 1; start++) {
-    // Check standard length first, then small delta if \r\n in JS string maps to \r in doc.Range.
-    for (var delta = 0; delta <= 4; delta++) {
-      var end = start + len - delta;
-      if (end < minEnd || end > toPos) continue;
-      try {
-        if (doc.Range(start, end).Text === expected) {
-          return { start: start, end: end };
-        }
-      } catch (_) {}
+  var expectedCr = expected.indexOf("\r\n") !== -1 ? expected.replace(/\r\n/g, "\r") : null;
+  var lengths = expectedCr && expectedCr.length !== expected.length
+    ? [expected.length, expectedCr.length]
+    : [expected.length];
+  var minLen = Math.min.apply(null, lengths);
+  var maxLen = Math.max.apply(null, lengths);
+  if (toPos - fromPos < minLen) return null;
+
+  var CHUNK = 512;
+  var overlap = maxLen + 8;
+  for (var chunkStart = fromPos; chunkStart < toPos; chunkStart += CHUNK) {
+    var chunkEnd = Math.min(toPos, chunkStart + CHUNK + overlap);
+    var chunkText = null;
+    try {
+      chunkText = doc.Range(chunkStart, chunkEnd).Text;
+    } catch (_) {}
+
+    var idx = -1;
+    if (typeof chunkText === "string") {
+      idx = chunkText.indexOf(expected);
+      if (idx === -1 && expectedCr !== null) idx = chunkText.indexOf(expectedCr);
+      if (idx === -1) {
+        if (chunkEnd >= toPos) break;
+        continue;
+      }
+      // Fast path when chunk text length matches document range span (no inline object shift inside chunk).
+      if (chunkText.length === (chunkEnd - chunkStart)) {
+        var fastStart = chunkStart + idx;
+        var fastEnd = fastStart + expected.length;
+        try {
+          var ft = doc.Range(fastStart, fastEnd).Text;
+          if (ft === expected || (expectedCr !== null && ft === expectedCr)) {
+            return { start: fastStart, end: fastEnd };
+          }
+        } catch (_) {}
+      }
     }
+
+    var scanBegin = (typeof chunkText === "string" && idx >= 0 && chunkText.length <= (chunkEnd - chunkStart))
+      ? (chunkStart + idx)
+      : chunkStart;
+    var maxDelta = (expected.indexOf("\n") !== -1 || expected.indexOf("\r") !== -1) ? 4 : 0;
+    var scanLimit = Math.min(toPos - 1, chunkStart + CHUNK + overlap - minLen);
+    for (var start = scanBegin; start <= scanLimit; start++) {
+      for (var li = 0; li < lengths.length; li++) {
+        var len = lengths[li];
+        for (var delta = 0; delta <= maxDelta; delta++) {
+          var end = start + len - delta;
+          if (end < fromPos || end > toPos) continue;
+          try {
+            var rangeText = doc.Range(start, end).Text;
+            if (rangeText === expected || (expectedCr !== null && rangeText === expectedCr)) {
+              return { start: start, end: end };
+            }
+          } catch (_) {}
+        }
+      }
+    }
+    if (chunkEnd >= toPos) break;
   }
   return null;
 }
@@ -939,8 +1095,68 @@ function findInsertedInlineShape(doc, range, insertPos) {
 
   for (var c = 0; c < collections.length; c++) {
     var shapes = collections[c];
-    if (!shapes || !shapes.Count) continue;
-    for (var index = 1; index <= shapes.Count; index++) {
+    var count = shapes && shapes.Count ? shapes.Count : 0;
+    if (!count) continue;
+    // Binary search large sorted document collections to avoid O(N^2) COM walks.
+    if (count > 16) {
+      var lo = 1;
+      var hi = count;
+      var monotonic = true;
+      var prevProbe = -1;
+      while (lo <= hi) {
+        var mid = (lo + hi) >> 1;
+        var midItem = shapes.Item(mid);
+        if (!midItem || !midItem.Range || typeof midItem.Range.Start !== "number") {
+          monotonic = false;
+          break;
+        }
+        var midStart = midItem.Range.Start;
+        if (prevProbe !== -1 && midStart < 0) monotonic = false;
+        prevProbe = midStart;
+        var midDiff = midStart - insertPos;
+        if (midDiff >= 0 && midDiff <= 5 && midDiff < bestDiff) {
+          bestDiff = midDiff;
+          best = midItem;
+          if (midDiff === 0) return best;
+        }
+        if (midStart < insertPos) {
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      if (best) {
+        var winStart = Math.max(1, lo - 3);
+        var winEnd = Math.min(count, lo + 3);
+        for (var wi = winStart; wi <= winEnd; wi++) {
+          var wCand = shapes.Item(wi);
+          if (!wCand || !wCand.Range || typeof wCand.Range.Start !== "number") continue;
+          var wDiff = wCand.Range.Start - insertPos;
+          if (wDiff >= 0 && wDiff <= 5 && wDiff < bestDiff) {
+            bestDiff = wDiff;
+            best = wCand;
+            if (wDiff === 0) return best;
+          }
+        }
+        return best;
+      }
+      if (monotonic) {
+        var nStart = Math.max(1, lo - 3);
+        var nEnd = Math.min(count, lo + 3);
+        for (var ni = nStart; ni <= nEnd; ni++) {
+          var nCand = shapes.Item(ni);
+          if (!nCand || !nCand.Range || typeof nCand.Range.Start !== "number") continue;
+          var nDiff = nCand.Range.Start - insertPos;
+          if (nDiff >= 0 && nDiff <= 5 && nDiff < bestDiff) {
+            bestDiff = nDiff;
+            best = nCand;
+            if (nDiff === 0) return best;
+          }
+        }
+        if (best) return best;
+      }
+    }
+    for (var index = 1; index <= count; index++) {
       var candidate = shapes.Item(index);
       if (!candidate || !candidate.Range || typeof candidate.Range.Start !== "number") continue;
       var diff = candidate.Range.Start - insertPos;
@@ -1143,17 +1359,20 @@ function findAllEquationTargetsInRange(range, doc) {
   function processShape(shape) {
     if (!shape || !shape.Range) return;
     try {
+      var cls = quickClassifyShape(shape);
+      if (cls < 0) return;
       var sXml = "";
       try { sXml = shape.Range.WordOpenXML || ""; } catch (_) {}
-      if (hasEquationInXml(sXml)) {
+      if (cls === 1 || hasEquationInXml(sXml)) {
         var sStart = shape.Range.Start;
         var sEnd = shape.Range.End;
         if (sEnd > sStart + 1) sEnd = sStart + 1;
         list.push({
           start: sStart,
           end: sEnd,
-          xml: sXml,
-          isDisplay: false
+          xml: compactFlatOpcXml(sXml),
+          isDisplay: false,
+          isOmml: false
         });
       }
     } catch (_) {}
@@ -1170,8 +1389,9 @@ function findAllEquationTargetsInRange(range, doc) {
         list.push({
           start: omath.Range.Start,
           end: omath.Range.End,
-          xml: oXml,
-          isDisplay: isDisp
+          xml: compactFlatOpcXml(oXml),
+          isDisplay: isDisp,
+          isOmml: true
         });
       }
     } catch (_) {}
@@ -1221,23 +1441,86 @@ function findAllEquationTargetsInRange(range, doc) {
   return uniqueList;
 }
 
+var BATCH_HTTP_CONCURRENCY = 8;
+var BATCH_DOM_CHUNK_SIZE = 10;
+
+function runBoundedQueue(items, maxConcurrent, worker, onDone) {
+  var total = items.length;
+  if (total === 0) {
+    onDone();
+    return;
+  }
+  var nextIndex = 0;
+  var finished = 0;
+  var inFlight = 0;
+  var concurrency = Math.max(1, Math.min(maxConcurrent, total));
+
+  function pump() {
+    while (inFlight < concurrency && nextIndex < total) {
+      var idx = nextIndex++;
+      inFlight++;
+      worker(items[idx], idx, function () {
+        inFlight--;
+        finished++;
+        if (finished === total) {
+          onDone();
+        } else {
+          pump();
+        }
+      });
+    }
+  }
+  pump();
+}
+
+function applyItemsInChunks(items, chunkSize, applyItem, onDone) {
+  var total = items.length;
+  var idx = 0;
+  var canYield = (typeof setTimeout === "function") && total > chunkSize;
+
+  function step() {
+    var end = Math.min(total, idx + chunkSize);
+    while (idx < end) {
+      applyItem(items[idx], idx);
+      idx++;
+    }
+    if (idx < total) {
+      if (canYield) {
+        setTimeout(step, 0);
+      } else {
+        step();
+      }
+    } else {
+      onDone();
+    }
+  }
+  step();
+}
+
 /**
  * Batch convert multiple LaTeX formulas in a highlighted range to MathType EMF pictures in-place.
  */
-function batchLatexToMathType(doc, selection, latexMatches) {
-  var baseStart = selection.Start;
-  var selEnd = typeof selection.End === "number" ? selection.End : getDocEnd(doc);
-  var docFontSize = getDocumentFontSize(selection.Range);
-  wpsLog("batchLatexToMathType: found " + latexMatches.length + " formulas in selection [start=" + baseStart + "]");
+function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
+  var baseStart = (rangeInfo && typeof rangeInfo.start === "number") ? rangeInfo.start
+    : (selection && typeof selection.Start === "number" ? selection.Start
+    : (selection && selection.Range && typeof selection.Range.Start === "number" ? selection.Range.Start : 0));
+  var selEnd = (rangeInfo && typeof rangeInfo.end === "number") ? rangeInfo.end
+    : (selection && typeof selection.End === "number" ? selection.End
+    : (selection && selection.Range && typeof selection.Range.End === "number" ? selection.Range.End : getDocEnd(doc)));
+  var docFontSize = (rangeInfo && isValidFontSizePt(rangeInfo.fontPt))
+    ? rangeInfo.fontPt
+    : getDocumentFontSize(selection && selection.Range ? selection.Range : null);
+  wpsLog("batchLatexToMathType: found " + latexMatches.length + " formulas in selection [start=" + baseStart + ", end=" + selEnd + ", font_pt=" + docFontSize + "]");
 
   var scanPos = baseStart;
+  var cumShift = 0;
   for (var idx = 0; idx < latexMatches.length; idx++) {
     var mItem = latexMatches[idx];
-    var cStart = baseStart + mItem.start;
-    var cEnd = baseStart + mItem.end;
+    var cStart = baseStart + mItem.start + cumShift;
+    var cEnd = baseStart + mItem.end + cumShift;
     var matchedFast = false;
     try {
-      if (cEnd <= selEnd && doc.Range(cStart, cEnd).Text === mItem.raw) {
+      if (cStart >= scanPos && cEnd <= selEnd && doc.Range(cStart, cEnd).Text === mItem.raw) {
         mItem.docStart = cStart;
         mItem.docEnd = cEnd;
         scanPos = cEnd;
@@ -1250,11 +1533,21 @@ function batchLatexToMathType(doc, selection, latexMatches) {
         mItem.docStart = resolved.start;
         mItem.docEnd = resolved.end;
         scanPos = resolved.end;
+        cumShift = resolved.end - (baseStart + mItem.end);
       } else {
         mItem.docStart = cStart;
         mItem.docEnd = cEnd;
       }
     }
+    var itemFont = docFontSize;
+    try {
+      var itemRange = doc.Range(mItem.docStart, mItem.docEnd);
+      if (itemRange && itemRange.Font) {
+        var candidateSize = Number(itemRange.Font.Size);
+        if (isValidFontSizePt(candidateSize)) itemFont = candidateSize;
+      }
+    } catch (_) {}
+    mItem.fontPt = isValidFontSizePt(itemFont) ? itemFont : 12.0;
   }
 
   // Collapse selection immediately so the highlight is cleared and no selection-level formatting leaks
@@ -1265,65 +1558,90 @@ function batchLatexToMathType(doc, selection, latexMatches) {
   } catch (_) {}
 
   var total = latexMatches.length;
-  var completed = 0;
+  var lastNon422Error = "";
 
-  for (var i = 0; i < total; i++) {
-    (function (m) {
+  runBoundedQueue(
+    latexMatches,
+    BATCH_HTTP_CONCURRENCY,
+    function (m, _i, done) {
       ajaxPost(
         BRIDGE_URL + "/convert/snippet",
         JSON.stringify({
           data: m.latex,
           from: "latex",
           to: "mathtype",
-          font_pt: docFontSize
+          font_pt: m.fontPt
         }),
         function (status, responseText) {
-          completed++;
           if (status === 200) {
             try {
               m.convData = JSON.parse(responseText);
             } catch (_) {}
-          } else {
-            wpsLog("batchLatexToMathType: error converting '" + m.latex + "': " + responseText);
+          } else if (status !== 422 && !lastNon422Error) {
+            var errMsg = responseText || ("HTTP " + status);
+            try {
+              var parsedErr = JSON.parse(responseText);
+              if (parsedErr && parsedErr.error) errMsg = parsedErr.error;
+            } catch (_) {}
+            lastNon422Error = errMsg;
           }
+          done();
+        }
+      );
+    },
+    function () {
+      // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
+      latexMatches.sort(function (a, b) { return b.docStart - a.docStart; });
+      var convertedCount = 0;
 
-          if (completed === total) {
-            // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
-            latexMatches.sort(function (a, b) { return b.docStart - a.docStart; });
-            var convertedCount = 0;
-
-            for (var j = 0; j < latexMatches.length; j++) {
-              var match = latexMatches[j];
-              if (match.convData && match.convData.result) {
-                var targetRange = doc.Range(match.docStart, match.docEnd);
-                var pic = insertMathTypeAtDocRange(doc, targetRange, match.convData, false);
-                if (pic) convertedCount++;
+      applyItemsInChunks(
+        latexMatches,
+        BATCH_DOM_CHUNK_SIZE,
+        function (match) {
+          if (match.convData && match.convData.result) {
+            try {
+              var targetRange = doc.Range(match.docStart, match.docEnd);
+              var pic = insertMathTypeAtDocRange(doc, targetRange, match.convData, false);
+              if (pic) convertedCount++;
+            } catch (insErr) {
+              wpsLog("batchLatexToMathType: insert failed for '" + match.latex + "': " + insErr);
+            }
+          }
+          match.convData = null;
+        },
+        function () {
+          // Collapse selection at the end so subsequent typing does not inherit baseline
+          try {
+            var app = wps.Application;
+            var curSel = app ? app.Selection : null;
+            if (curSel) {
+              if (typeof curSel.Collapse === "function") {
+                curSel.Collapse(0);
+              }
+              if (curSel.Font) {
+                curSel.Font.Position = 0;
+                curSel.Font.Subscript = false;
+                curSel.Font.Superscript = false;
               }
             }
+          } catch (_) {}
 
-            // Collapse selection at the end so subsequent typing does not inherit baseline
-            try {
-              var app = wps.Application;
-              var curSel = app ? app.Selection : null;
-              if (curSel) {
-                if (typeof curSel.Collapse === "function") {
-                  curSel.Collapse(0);
-                }
-                if (curSel.Font) {
-                  curSel.Font.Position = 0;
-                  curSel.Font.Subscript = false;
-                  curSel.Font.Superscript = false;
-                }
-              }
-            } catch (_) {}
-
-            var skippedCount = total - convertedCount;
-            wpsLog("batchLatexToMathType: converted " + convertedCount + "/" + total + " formulas" + (skippedCount > 0 ? " (" + skippedCount + " skipped)" : "") + ".");
+          var skippedCount = total - convertedCount;
+          wpsLog("batchLatexToMathType: converted " + convertedCount + "/" + total + " formulas" + (skippedCount > 0 ? " (" + skippedCount + " skipped)" : "") + ".");
+          if (convertedCount === 0 && lastNon422Error) {
+            alert("Failed to convert LaTeX to MathType:\n" + lastNon422Error);
+          } else if (total > 1) {
+            alert(
+              "Toggle LaTeX Succeeded!\n\n" +
+              "Found: " + total + "\n" +
+              "Converted: " + convertedCount + "\n" +
+              "Skipped/Errors: " + skippedCount
+            );
           }
         }
       );
-    })(latexMatches[i]);
-  }
+    }
+  );
 }
 
 /** Replace a math node in the paragraph package, not its editable contents. */
@@ -1368,25 +1686,42 @@ function ommlPackageToPlainText(xml, ordinal, latex) {
   return new XMLSerializer().serializeToString(tree);
 }
 
-function replaceEquationWithLatex(doc, start, end, latex) {
+function replaceEquationWithLatex(doc, start, end, latex, precheckedIsOmml) {
   var target = doc.Range(start, end);
   var equation = null;
-  try {
-    if (target.OMaths && target.OMaths.Count > 0) equation = target.OMaths.Item(1);
-  } catch (_) {}
-  if (!equation) {
-    // WPS sometimes exposes OMaths only through Selection or Document while
-    // the freshly created document Range reports none.
-    var owners = [wps.Application.Selection, doc];
-    for (var ownerIndex = 0; !equation && ownerIndex < owners.length; ownerIndex++) {
-      try {
-        var collection = owners[ownerIndex].OMaths;
-        if (!collection) continue;
-        for (var mathIndex = 1; mathIndex <= collection.Count; mathIndex++) {
-          var candidate = collection.Item(mathIndex);
-          if (candidate.Range.Start === start) { equation = candidate; break; }
-        }
-      } catch (_) {}
+  if (precheckedIsOmml !== false) {
+    try {
+      if (target.OMaths && target.OMaths.Count > 0) equation = target.OMaths.Item(1);
+    } catch (_) {}
+    if (!equation) {
+      // WPS sometimes exposes OMaths only through Selection or Document while
+      // the freshly created document Range reports none.
+      var owners = [wps.Application.Selection, doc];
+      for (var ownerIndex = 0; !equation && ownerIndex < owners.length; ownerIndex++) {
+        try {
+          var collection = owners[ownerIndex].OMaths;
+          if (!collection || !collection.Count) continue;
+          var oCount = collection.Count;
+          if (oCount > 16) {
+            var lo = 1, hi = oCount;
+            while (lo <= hi) {
+              var mid = (lo + hi) >> 1;
+              var midCand = collection.Item(mid);
+              if (!midCand || !midCand.Range || typeof midCand.Range.Start !== "number") break;
+              var mStart = midCand.Range.Start;
+              if (mStart === start) { equation = midCand; break; }
+              if (mStart < start) lo = mid + 1;
+              else hi = mid - 1;
+            }
+          }
+          if (!equation) {
+            for (var mathIndex = 1; mathIndex <= oCount; mathIndex++) {
+              var candidate = collection.Item(mathIndex);
+              if (candidate.Range.Start === start) { equation = candidate; break; }
+            }
+          }
+        } catch (_) {}
+      }
     }
   }
   if (equation) {
@@ -1401,12 +1736,21 @@ function replaceEquationWithLatex(doc, start, end, latex) {
     var xml = ommlPackageToPlainText(paragraph.WordOpenXML, ordinal, latex);
     // Replacing the enclosing paragraph exits WPS's equation editing context.
     // All other runs, equations, bookmarks and paragraph formatting stay in XML.
-    doc.Range(paragraph.Start, paragraph.End).InsertXML(xml);
+    var pEnd = paragraph.End;
+    while (pEnd > paragraph.Start) {
+      try {
+        if (doc.Range(pEnd - 1, pEnd).Text !== "\u0007") break;
+        pEnd--;
+      } catch (_) { break; }
+    }
+    doc.Range(paragraph.Start, pEnd).InsertXML(xml);
   } else {
-    var nativeXml = "";
-    try { nativeXml = target.WordOpenXML || ""; } catch (_) {}
-    if (/<(?:[A-Za-z_][\w.-]*:)?oMath(?:\s|>)/.test(nativeXml)) {
-      throw new Error("Cannot locate the native OMML container; document was not changed");
+    if (precheckedIsOmml !== false) {
+      var nativeXml = "";
+      try { nativeXml = target.WordOpenXML || ""; } catch (_) {}
+      if (/<(?:[A-Za-z_][\w.-]*:)?oMath(?:\s|>)/.test(nativeXml)) {
+        throw new Error("Cannot locate the native OMML container; document was not changed");
+      }
     }
     try {
       if (target.InlineShapes && target.InlineShapes.Count === 1) {
@@ -1439,19 +1783,22 @@ function batchEquationToLatex(doc, selection, eqTargets) {
   wpsLog("batchEquationToLatex: found " + eqTargets.length + " equations in selection");
 
   var total = eqTargets.length;
-  var completed = 0;
+  var lastNon422Error = "";
 
-  for (var i = 0; i < total; i++) {
-    (function (eq) {
+  runBoundedQueue(
+    eqTargets,
+    BATCH_HTTP_CONCURRENCY,
+    function (eq, _i, done) {
+      var payloadXml = eq.xml;
+      eq.xml = null;
       ajaxPost(
         BRIDGE_URL + "/convert/snippet",
         JSON.stringify({
-          data: eq.xml,
+          data: payloadXml,
           from: "auto",
           to: "latex"
         }),
         function (status, responseText) {
-          completed++;
           if (status === 200) {
             try {
               var res = JSON.parse(responseText);
@@ -1459,58 +1806,82 @@ function batchEquationToLatex(doc, selection, eqTargets) {
                 eq.latex = res.result.trim();
               }
             } catch (_) {}
-          } else {
-            wpsLog("batchEquationToLatex: conversion error: " + responseText);
+          } else if (status !== 422 && !lastNon422Error) {
+            var errMsg = responseText || ("HTTP " + status);
+            try {
+              var parsedErr = JSON.parse(responseText);
+              if (parsedErr && parsedErr.error) errMsg = parsedErr.error;
+            } catch (_) {}
+            lastNon422Error = errMsg;
           }
+          done();
+        }
+      );
+    },
+    function () {
+      // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
+      eqTargets.sort(function (a, b) { return b.start - a.start; });
+      var convertedCount = 0;
 
-          if (completed === total) {
-            // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
-            eqTargets.sort(function (a, b) { return b.start - a.start; });
-            var convertedCount = 0;
+      applyItemsInChunks(
+        eqTargets,
+        BATCH_DOM_CHUNK_SIZE,
+        function (item) {
+          if (item.latex) {
+            try {
+              var rStart = item.start;
+              var rEnd = item.end;
+              var latexStr = item.isDisplay ? ("$$" + item.latex + "$$") : ("$" + item.latex + "$");
+              replaceEquationWithLatex(doc, rStart, rEnd, latexStr, item.isOmml);
 
-            for (var j = 0; j < eqTargets.length; j++) {
-              var item = eqTargets[j];
-              if (item.latex) {
-                var rStart = item.start;
-                var rEnd = item.end;
-                var latexStr = item.isDisplay ? ("$$" + item.latex + "$$") : ("$" + item.latex + "$");
-                replaceEquationWithLatex(doc, rStart, rEnd, latexStr);
+              // Check and remove adjacent trailing ZWNJ if present
+              try {
+                var afterPos = rStart + latexStr.length;
+                var nextChar = doc.Range(afterPos, afterPos + 1);
+                if (nextChar && nextChar.Text === "‌") {
+                  nextChar.Delete();
+                }
+              } catch (_) {}
 
-                // Check and remove adjacent trailing ZWNJ if present
-                try {
-                  var afterPos = rStart + latexStr.length;
-                  var nextChar = doc.Range(afterPos, afterPos + 1);
-                  if (nextChar && nextChar.Text === "‌") {
-                    nextChar.Delete();
-                  }
-                } catch (_) {}
-
-                convertedCount++;
+              convertedCount++;
+            } catch (repErr) {
+              wpsLog("batchEquationToLatex: replace failed at " + item.start + ": " + repErr);
+            }
+          }
+        },
+        function () {
+          // Reset selection formatting
+          try {
+            var app = wps.Application;
+            var curSel = app ? app.Selection : null;
+            if (curSel) {
+              if (typeof curSel.Collapse === "function") {
+                curSel.Collapse(0);
+              }
+              if (curSel.Font) {
+                curSel.Font.Position = 0;
+                curSel.Font.Subscript = false;
+                curSel.Font.Superscript = false;
               }
             }
+          } catch (_) {}
 
-            // Reset selection formatting
-            try {
-              var app = wps.Application;
-              var curSel = app ? app.Selection : null;
-              if (curSel) {
-                if (typeof curSel.Collapse === "function") {
-                  curSel.Collapse(0);
-                }
-                if (curSel.Font) {
-                  curSel.Font.Position = 0;
-                  curSel.Font.Subscript = false;
-                  curSel.Font.Superscript = false;
-                }
-              }
-            } catch (_) {}
-
-            wpsLog("batchEquationToLatex: converted " + convertedCount + "/" + total + " equations to LaTeX.");
+          var skippedCount = total - convertedCount;
+          wpsLog("batchEquationToLatex: converted " + convertedCount + "/" + total + " equations to LaTeX.");
+          if (convertedCount === 0 && lastNon422Error) {
+            alert("Failed to convert equations to LaTeX:\n" + lastNon422Error);
+          } else if (total > 1) {
+            alert(
+              "Toggle LaTeX Succeeded!\n\n" +
+              "Found: " + total + "\n" +
+              "Converted: " + convertedCount + "\n" +
+              "Skipped/Errors: " + skippedCount
+            );
           }
         }
       );
-    })(eqTargets[i]);
-  }
+    }
+  );
 }
 
 /**
@@ -1530,36 +1901,39 @@ function ToggleLatex() {
     var doc = app.ActiveDocument;
     if (!doc) return;
 
-    var isRangeSelected = (typeof selection.Start === "number" && typeof selection.End === "number" && selection.Start !== selection.End);
+    var selStart = (typeof selection.Start === "number") ? selection.Start
+      : (selection.Range && typeof selection.Range.Start === "number" ? selection.Range.Start : null);
+    var selEnd = (typeof selection.End === "number") ? selection.End
+      : (selection.Range && typeof selection.Range.End === "number" ? selection.Range.End : null);
+    var isRangeSelected = (selStart !== null && selEnd !== null && selStart !== selEnd);
 
     // ========================================================
     // CASE 1: User highlighted / selected a range (paragraph, sentence, etc.)
     // ========================================================
     if (isRangeSelected) {
-      var selText = selection.Text || "";
+      var selText = "";
+      try { selText = selection.Text || ""; } catch (_) {}
+      if (!selText && selection.Range) {
+        try { selText = selection.Range.Text || ""; } catch (_) {}
+      }
       var latexMatches = findAllLatexMatches(selText);
 
-      // If no delimited matches found, check if the entire selected text itself is bare LaTeX (e.g. \\frac{1}{2})
-      if (latexMatches.length === 0 && isLatexText(selText)) {
-        latexMatches.push({
-          start: 0,
-          end: selText.length,
-          raw: selText,
-          latex: selText.trim(),
-          isDisplay: false
-        });
-      }
-
       if (latexMatches.length > 0) {
-        // Selection contains LaTeX formulas -> Batch convert LaTeX to MathType
+        // Selection contains delimited LaTeX formulas -> Batch convert LaTeX to MathType
+        var rangeSnapshot = {
+          start: selStart,
+          end: selEnd,
+          fontPt: getDocumentFontSize(selection.Range)
+        };
         wpsLog("ToggleLatex: range contains " + latexMatches.length + " LaTeX formulas -> converting to MathType");
         ensureBridgeRunning(function () {
-          batchLatexToMathType(doc, selection, latexMatches);
+          batchLatexToMathType(doc, selection, latexMatches, rangeSnapshot);
         });
         return;
       }
 
-      // If no LaTeX in selection text, check for equations in the selection
+      // Check for equations in the selection BEFORE bare-text LaTeX fallback so a
+      // full-document selection containing prose + equations never collapses into one equation.
       var eqTargets = findAllEquationTargetsInRange(selection.Range, doc);
       if (eqTargets.length === 0) {
         // Fallback check single equation
@@ -1583,6 +1957,27 @@ function ToggleLatex() {
         wpsLog("ToggleLatex: range contains " + eqTargets.length + " equations -> converting to LaTeX");
         ensureBridgeRunning(function () {
           batchEquationToLatex(doc, selection, eqTargets);
+        });
+        return;
+      }
+
+      // Bare-text LaTeX fallback only when there are neither delimited formulas nor equations
+      if (isLatexText(selText)) {
+        var bareSnapshot = {
+          start: selStart,
+          end: selEnd,
+          fontPt: getDocumentFontSize(selection.Range)
+        };
+        var bareMatches = [{
+          start: 0,
+          end: selText.length,
+          raw: selText,
+          latex: selText.trim(),
+          isDisplay: false
+        }];
+        wpsLog("ToggleLatex: range is bare LaTeX -> converting to MathType");
+        ensureBridgeRunning(function () {
+          batchLatexToMathType(doc, selection, bareMatches, bareSnapshot);
         });
         return;
       }
@@ -1754,6 +2149,50 @@ function ToggleLatex() {
   }
 }
 
+function isWindowsClient(filePath) {
+  try {
+    if (typeof navigator !== "undefined") {
+      if (/win/i.test(navigator.platform || "") || /windows/i.test(navigator.userAgent || "")) {
+        return true;
+      }
+    }
+  } catch (_) {}
+  if (typeof filePath === "string" && (/^[a-zA-Z]:[\\/]/.test(filePath) || /^\\\\/.test(filePath))) {
+    return true;
+  }
+  return false;
+}
+
+function isDocumentOpenInApp(app, filePath) {
+  try {
+    if (!app || !app.Documents || !filePath) return false;
+    var target = String(filePath).toLowerCase();
+    for (var i = 1; i <= app.Documents.Count; i++) {
+      var d = app.Documents.Item(i);
+      if (d && d.FullName && String(d.FullName).toLowerCase() === target) {
+        return true;
+      }
+    }
+  } catch (_) {}
+  return false;
+}
+
+function reopenDocumentInApp(app, filePath) {
+  var targetApp = app;
+  try {
+    if (!targetApp || !targetApp.Documents || typeof targetApp.Documents.Open !== "function") {
+      if (typeof wps !== "undefined" && wps) {
+        targetApp = (typeof wps.WpsApplication === "function") ? wps.WpsApplication() : wps.Application;
+      }
+    }
+  } catch (_) {}
+  var opened = targetApp.Documents.Open(filePath);
+  try {
+    if (opened && typeof opened.Activate === "function") opened.Activate();
+  } catch (_) {}
+  return opened;
+}
+
 /**
  * 4. Upgrade Legacy Equations in Document:
  * Utilizes WPS FullName direct disk conversion or in-memory scanning.
@@ -1768,28 +2207,78 @@ function UpgradeLegacyEquations() {
       var filePath = doc.FullName;
       var confirmMsg = "Document is saved at:\n" + filePath + "\n\nDo you want to run instant Rust batch conversion directly on this file?";
       if (confirm(confirmMsg)) {
-        doc.Save();
+        if (doc.ReadOnly) {
+          alert("This document is read-only. Save a writable copy before upgrading it.");
+          return;
+        }
         var upgradeTarget = confirm("Click [OK] to upgrade to Modern MathType 7 (OLE DSMT4 + EMF-MTEF).\n\nClick [Cancel] to upgrade to Modern Native OMML (<m:oMath>).") ? "upgrade_mathtype" : "upgrade_omml";
-        ajaxPost(
-          BRIDGE_URL + "/convert/document",
-          JSON.stringify({
-            input_path: filePath,
-            target: upgradeTarget
-          }),
-          function (status, responseText) {
-            if (status === 200) {
-              var res = JSON.parse(responseText);
-              alert("Instant Upgrade Succeeded!\n\nFound: " + res.found + "\nUpgraded: " + res.converted + "\nErrors: " + res.errors);
-              // Reopen to display fresh upgraded equations
-              try {
-                doc.Close(false);
-                app.Documents.Open(filePath);
-              } catch (_) {}
-            } else {
-              alert("Document conversion failed: " + responseText);
+        var needsPreClose = isWindowsClient(filePath);
+        ensureBridgeRunning(function () {
+          var tempBlankDoc = null;
+          try {
+            doc.Save();
+            if (doc.Saved === false) {
+              alert("WPS did not save the document. Upgrade cancelled.");
+              return;
             }
+            if (needsPreClose) {
+              // Keep WPS Writer alive (avoid unloading the add-in/window) when closing the only open document.
+              if (app.Documents && app.Documents.Count <= 1 && typeof app.Documents.Add === "function") {
+                try { tempBlankDoc = app.Documents.Add(); } catch (_) { tempBlankDoc = null; }
+              }
+              doc.Close(false);
+              if (isDocumentOpenInApp(app, filePath)) {
+                try { if (tempBlankDoc) tempBlankDoc.Close(false); } catch (_) {}
+                alert("WPS did not close the document. Close it manually or use the taskpane upgrader.");
+                return;
+              }
+            }
+          } catch (prepErr) {
+            try { if (tempBlankDoc) tempBlankDoc.Close(false); } catch (_) {}
+            alert("Cannot prepare document for upgrade: " + prepErr);
+            return;
           }
-        );
+
+          ajaxPost(
+            BRIDGE_URL + "/convert/document",
+            JSON.stringify({
+              input_path: filePath,
+              target: upgradeTarget
+            }),
+            function (status, responseText) {
+              if (needsPreClose) {
+                var reopenErr = null;
+                try {
+                  reopenDocumentInApp(app, filePath);
+                } catch (openErr) {
+                  reopenErr = openErr;
+                }
+                try { if (tempBlankDoc) tempBlankDoc.Close(false); } catch (_) {}
+                if (status === 200) {
+                  var res = JSON.parse(responseText);
+                  var okMsg = "Instant Upgrade Succeeded!\n\nFound: " + res.found + "\nUpgraded: " + res.converted + "\nErrors: " + res.errors;
+                  if (reopenErr) okMsg += "\n\nPlease reopen the file at: " + filePath;
+                  alert(okMsg);
+                } else {
+                  var msg = "Document conversion failed: " + responseText;
+                  if (reopenErr) msg += "\n\nOpen the saved document at: " + filePath;
+                  alert(msg);
+                }
+              } else {
+                if (status === 200) {
+                  var resLinux = JSON.parse(responseText);
+                  alert("Instant Upgrade Succeeded!\n\nFound: " + resLinux.found + "\nUpgraded: " + resLinux.converted + "\nErrors: " + resLinux.errors);
+                  try {
+                    doc.Close(false);
+                    reopenDocumentInApp(app, filePath);
+                  } catch (_) {}
+                } else {
+                  alert("Document conversion failed: " + responseText);
+                }
+              }
+            }
+          );
+        });
         return;
       }
     }
@@ -2020,8 +2509,12 @@ function ColdStartDesktopEditor() {
         // The installer/portable registration owns the executable location on
         // Windows and Linux. Prefer the registered URI.
         assistants[i].ShellExecute(uri, "");
-        if (typeof navigator !== "undefined" && /linux/i.test(navigator.platform || "")) {
-          assistants[i].ShellExecute("/usr/bin/xdg-open", uri);
+        if (typeof navigator !== "undefined") {
+          if (/linux/i.test(navigator.platform || "")) {
+            assistants[i].ShellExecute("/usr/bin/xdg-open", uri);
+          } else if (/mac/i.test(navigator.platform || "")) {
+            assistants[i].ShellExecute("/usr/bin/open", uri);
+          }
         }
         break;
       }
