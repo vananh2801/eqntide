@@ -1186,6 +1186,7 @@ name = "eqntide-editor"
 version = "0.7.0"
 dependencies = [
  "eqntide",
+ "unicode-segmentation",
 ]
 
 [[package]]

@@ -637,6 +637,7 @@ catalog! {
         ("space-2", "Spaces", "2-em space", "\\qquad"),
     ],
     commands: [
+        ("text", "Text", "\\text{#?}"),
         ("frac", "Fraction", "\\frac{#?}{#?}"),
         ("dfrac", "Display fraction", "\\dfrac{#?}{#?}"),
         ("tfrac", "Small fraction", "\\tfrac{#?}{#?}"),
@@ -782,6 +783,10 @@ pub fn symbol(name: &str) -> Option<MathNode> {
 
 /// Parse a catalog recipe, replacing only explicit insertion markers with empty slots.
 pub fn template(source: &str) -> Result<MathNode, String> {
+    // The editor fills an empty text token directly through its text caret.
+    if source == r"\text{#?}" {
+        return Ok(MathNode::new("mtext"));
+    }
     let mut source = source.to_string();
     if source.starts_with('^') || source.starts_with('_') {
         source = format!("{{#?}}{source}");

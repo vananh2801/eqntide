@@ -2627,7 +2627,14 @@ impl App {
                                         Pos2::new(x, snap(cursor.top())),
                                         Pos2::new(x, snap(cursor.bottom())),
                                     ],
-                                    Stroke::new(1.5, pal.caret),
+                                    Stroke::new(
+                                        1.5,
+                                        if self.canvas_in_text() {
+                                            pal.text_caret
+                                        } else {
+                                            pal.caret
+                                        },
+                                    ),
                                 );
                             }
                             ui.output_mut(|o| {
@@ -2789,6 +2796,14 @@ impl App {
                 region.x
                     + region.width * caret.offset as f32 / node.text.chars().count().max(1) as f32
             }
+        } else if let Some(previous_text) = caret
+            .offset
+            .checked_sub(1)
+            .and_then(|index| node.children.get(index))
+            .filter(|child| child.tag == "mtext")
+            .and_then(|child| self.region(child.id))
+        {
+            previous_text.x + previous_text.width
         } else if let Some(child) = node.children.get(caret.offset) {
             self.region(child.id).map_or(region.x, |r| r.x)
         } else if let Some(child) = node.children.last() {
@@ -3020,6 +3035,15 @@ impl App {
         } else {
             commands::exact(&input.name)
         };
+        if command.is_some_and(|command| command.name == "text")
+            || (input.text_argument().is_some() && !input.has_complete_text_argument())
+        {
+            if command.is_some() {
+                self.command_input.as_mut().unwrap().name = "text".into();
+            }
+            self.status = r"Invalid LaTeX command. Use \text{...} to insert text.".into();
+            return false;
+        }
         let result = if let Some(command) = command {
             palette::template(command.source).map(|math| (math, command.source.contains("#?")))
         } else {
@@ -3054,11 +3078,26 @@ impl App {
         }
     }
 
+    fn canvas_in_text(&self) -> bool {
+        self.editor
+            .node(self.editor.caret().node)
+            .is_some_and(|node| node.tag == "mtext")
+    }
+
     fn canvas_text(&mut self, text: &str) {
         for ch in text.chars() {
             if let Some(input) = &mut self.command_input {
+                if ch.is_whitespace() && input.is_command_prefix() {
+                    continue;
+                }
                 input.name.push(ch);
                 input.selected = 0;
+                continue;
+            }
+            if self.canvas_in_text() {
+                if !ch.is_control() {
+                    self.editor.insert_text(&ch.to_string());
+                }
                 continue;
             }
             match ch {
@@ -3080,6 +3119,7 @@ impl App {
                         self.editor.insert_template_wrapping_previous(&template);
                     }
                 }
+                ch if ch.is_whitespace() => {}
                 _ => {
                     self.expects_latex_group = false;
                     self.editor.insert_text(&ch.to_string());
@@ -3088,10 +3128,42 @@ impl App {
         }
     }
 
+    fn exit_text_run(&mut self, id: u64) -> bool {
+        if !self.editor.node(id).is_some_and(|node| node.tag == "mtext") {
+            return false;
+        }
+        let Some(mut path) = self.editor.path(id) else {
+            return false;
+        };
+        while let Some(index) = path.pop() {
+            let Some(parent_id) = self.editor.id_at_path(&path) else {
+                return false;
+            };
+            if self.editor.node(parent_id).is_some_and(|node| node.row()) {
+                self.editor.set_caret(
+                    Caret {
+                        node: parent_id,
+                        offset: index + 1,
+                    },
+                    false,
+                );
+                if self.latex_groups.last() == Some(&id) {
+                    self.latex_groups.pop();
+                }
+                self.expects_latex_group = false;
+                return true;
+            }
+        }
+        false
+    }
+
     fn close_latex_group(&mut self) {
         let Some(start) = self.latex_groups.pop() else {
             return;
         };
+        if self.exit_text_run(start) {
+            return;
+        }
         let Some(mut path) = self.editor.path(start) else {
             return;
         };
@@ -3298,7 +3370,9 @@ impl App {
                     self.command_input = None;
                     self.latex_groups.clear();
                     self.expects_latex_group = false;
-                    if text.trim_start().starts_with('<') {
+                    if self.canvas_in_text() {
+                        self.editor.insert_text(&text);
+                    } else if text.trim_start().starts_with('<') {
                         match eqntide::service::decode_input_to_mathml(&text, "auto") {
                             Ok(math) => self.editor.insert_math(&math),
                             Err(e) => self.status = e.to_string(),
@@ -3402,7 +3476,9 @@ impl App {
                                 false,
                             ),
                             Key::Enter if !modifiers.alt => {
-                                if self.editor.insert_row_or_promote_fence() {
+                                if !self.exit_text_run(self.editor.caret().node)
+                                    && self.editor.insert_row_or_promote_fence()
+                                {
                                     self.latex_groups.clear();
                                     self.expects_latex_group = false;
                                 }
@@ -4702,6 +4778,196 @@ mod tests {
             .clear();
     }
 
+    fn canvas_key(a: &mut App, key: egui::Key) {
+        egui::Context::default()
+            .run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ui| a.keyboard(ui),
+            )
+            .textures_delta
+            .clear();
+    }
+
+    #[test]
+    fn canvas_inserts_text_only_when_enter_confirms_a_complete_argument() {
+        use egui::Key;
+        let mut a = app();
+        type_canvas(&mut a, "x + 1");
+        let before = a.editor.math();
+
+        type_canvas(&mut a, r"\text ");
+        canvas_key(&mut a, Key::Enter);
+        assert!(a.status.contains("Invalid LaTeX command"));
+        assert_eq!(a.editor.math(), before);
+
+        type_canvas(&mut a, "{5 cm ");
+        assert_eq!(a.editor.math(), before);
+        type_canvas(&mut a, "} ");
+        assert_eq!(a.editor.math(), before);
+        assert!(a.command_input.is_some());
+        canvas_key(&mut a, Key::Enter);
+        assert!(a.command_input.is_none());
+        assert!(!a.canvas_in_text());
+        assert_eq!(a.editor.math().find_all("mtext")[0].text, "5 cm ");
+
+        let before = a.editor.math();
+        type_canvas(&mut a, r"\text+");
+        canvas_key(&mut a, Key::Enter);
+        assert!(a.status.contains("Invalid LaTeX command"));
+        assert_eq!(a.editor.math(), before);
+    }
+
+    #[test]
+    fn canvas_arrows_and_space_distinguish_text_and_math_at_both_edges() {
+        use egui::Key;
+        let mut a = app();
+        type_canvas(&mut a, r"\text{cm}");
+        canvas_key(&mut a, Key::Enter);
+        type_canvas(&mut a, "x");
+        canvas_key(&mut a, Key::ArrowLeft);
+        assert!(!a.canvas_in_text());
+        type_canvas(&mut a, " ");
+        assert_eq!(a.editor.math().to_latex(), r"\text{cm}x");
+        canvas_key(&mut a, Key::ArrowLeft);
+        assert!(a.canvas_in_text());
+        assert_eq!(a.editor.caret().offset, 2);
+        canvas_key(&mut a, Key::ArrowLeft);
+        assert_eq!(a.editor.caret().offset, 1);
+        canvas_key(&mut a, Key::ArrowRight);
+        assert!(a.canvas_in_text());
+        assert_eq!(a.editor.caret().offset, 2);
+        canvas_key(&mut a, Key::ArrowRight);
+        assert!(!a.canvas_in_text());
+        canvas_key(&mut a, Key::ArrowLeft);
+        type_canvas(&mut a, " ");
+        assert_eq!(a.editor.math().to_latex(), r"\text{cm }x");
+
+        canvas_key(&mut a, Key::Home);
+        assert!(!a.canvas_in_text());
+        canvas_key(&mut a, Key::ArrowRight);
+        assert!(a.canvas_in_text());
+        assert_eq!(a.editor.caret().offset, 0);
+        canvas_key(&mut a, Key::ArrowLeft);
+        assert!(!a.canvas_in_text());
+        type_canvas(&mut a, " ");
+        assert_eq!(a.editor.math().find_all("mtext")[0].text, "cm ");
+        canvas_key(&mut a, Key::ArrowRight);
+        type_canvas(&mut a, r" \/_^");
+        assert!(a.command_input.is_none());
+        assert_eq!(a.editor.math().find_all("mtext")[0].text, r" \/_^cm ");
+    }
+
+    #[test]
+    fn enter_leaves_canvas_text_and_resumes_math_input() {
+        use egui::Key;
+        let mut a = app();
+        type_canvas(&mut a, r"\text{ngày mà em đến}");
+        canvas_key(&mut a, Key::Enter);
+        canvas_key(&mut a, Key::ArrowLeft);
+        assert!(a.canvas_in_text());
+        let before = a.editor.math();
+
+        canvas_key(&mut a, Key::Enter);
+        assert_eq!(a.editor.math(), before);
+        assert!(!a.canvas_in_text());
+        type_canvas(&mut a, "x+1");
+        assert_eq!(a.editor.math().to_latex(), r"\text{ngày mà em đến}x+1");
+    }
+
+    #[test]
+    fn canvas_arrows_keep_decomposed_vietnamese_letters_together() {
+        use egui::Key;
+        let mut a = app();
+        type_canvas(&mut a, "\\text{e\u{0302}\u{0301}x}");
+        canvas_key(&mut a, Key::Enter);
+        canvas_key(&mut a, Key::ArrowLeft);
+        assert_eq!(a.editor.caret().offset, 4);
+        canvas_key(&mut a, Key::ArrowLeft);
+        assert_eq!(a.editor.caret().offset, 3);
+        canvas_key(&mut a, Key::ArrowLeft);
+        assert_eq!(a.editor.caret().offset, 0);
+        assert!(a.canvas_in_text());
+    }
+
+    #[test]
+    fn canvas_caret_switches_to_the_active_text_color_without_moving() {
+        let mut a = app();
+        a.canvas_light = CanvasPreset::WarmCream;
+        a.canvas_dark = CanvasPreset::DeepInk;
+        type_canvas(&mut a, r"\text{ngày đến}");
+        canvas_key(&mut a, egui::Key::Enter);
+        type_canvas(&mut a, "=x");
+        let text = a.editor.root().children[0].id;
+        let math_caret = Caret {
+            node: a.editor.root().id,
+            offset: 1,
+        };
+        for (theme, dark) in [(egui::Theme::Light, false), (egui::Theme::Dark, true)] {
+            let ctx = egui::Context::default();
+            ctx.set_theme(theme);
+            let pal = a.active_canvas_palette(dark);
+            let mut ends = Vec::new();
+            for (caret, ink) in [
+                (math_caret, pal.caret),
+                (
+                    Caret {
+                        node: text,
+                        offset: 8,
+                    },
+                    pal.text_caret,
+                ),
+            ] {
+                a.editor.set_caret(caret, false);
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    ui.memory_mut(|m| m.request_focus(App::editor_focus_id(StartupFocus::Canvas)));
+                    a.canvas(ui);
+                });
+                output.textures_delta.clear();
+                let caret_x = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == ink && points[0].x == points[1].x =>
+                    {
+                        Some(points[0].x)
+                    }
+                    _ => None,
+                });
+                ends.push(caret_x.expect("a visible caret with the active palette color"));
+            }
+            assert_eq!(ends[0], ends[1]);
+        }
+    }
+
+    #[test]
+    fn canvas_exit_from_text_in_fraction_stays_in_the_same_slot() {
+        let mut a = app();
+        assert!(a.load_math(
+            "<math><mfrac><mtext>cm</mtext><mn>2</mn></mfrac></math>",
+            None,
+            None
+        ));
+        let id = a.editor.root().children[0].children[0].children[0].id;
+        a.editor.set_caret(
+            Caret {
+                node: id,
+                offset: 2,
+            },
+            false,
+        );
+        canvas_key(&mut a, egui::Key::ArrowRight);
+        assert!(!a.canvas_in_text());
+        type_canvas(&mut a, "x");
+        assert_eq!(a.editor.math().to_latex(), r"\frac{\text{cm}x}{2}");
+    }
+
     #[test]
     fn typed_latex_commands_build_real_math_and_keep_source_in_sync() {
         let mut a = app();
@@ -5922,6 +6188,26 @@ mod tests {
             assert_eq!(a.editor.math(), before);
             assert!(!a.editor.math().to_xml().contains(PLACEHOLDER_ATTR));
         }
+    }
+
+    #[test]
+    fn canvas_does_not_underline_text_runs() {
+        let mut a = app();
+        let xml = r#"<math><mi>x</mi><mi mathvariant="normal">d</mi><mtext>với </mtext><mtext> </mtext><mtext/></math>"#;
+        a.load_math(xml, None, None);
+        let original = a.editor.math();
+        let ctx = egui::Context::default();
+        let mut color = Color32::TRANSPARENT;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            color = a.active_canvas_palette(ui.visuals().dark_mode).text_caret;
+            a.canvas(ui);
+        });
+        output.textures_delta.clear();
+        let underlines = output.shapes.iter().filter(|shape| {
+            matches!(&shape.shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == color)
+        });
+        assert_eq!(underlines.count(), 0);
+        assert_eq!(a.editor.math(), original);
     }
 
     #[test]

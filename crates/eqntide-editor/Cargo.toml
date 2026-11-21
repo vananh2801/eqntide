@@ -7,3 +7,4 @@ publish = false
 
 [dependencies]
 eqntide = { path = "../.." }
+unicode-segmentation = "1"

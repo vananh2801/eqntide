@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 use eqntide::MathNode;
+use unicode_segmentation::UnicodeSegmentation;
 
 pub type NodeId = u64;
 
@@ -115,7 +116,49 @@ impl Node {
         }
         if self.token() {
             let char_len = self.text.chars().count();
-            if self.is_fence_delimiter() {
+            if self.tag == "mtext" {
+                *group += 1;
+                let mut offset = 0;
+                for grapheme in self.text.graphemes(true) {
+                    out.push(StopEntry {
+                        caret: Caret {
+                            node: self.id,
+                            offset,
+                        },
+                        group: *group,
+                        depth,
+                        kind: StopKind::TokenRest,
+                    });
+                    let next = offset + grapheme.chars().count();
+                    for offset in offset + 1..next {
+                        out.push(StopEntry {
+                            caret: Caret {
+                                node: self.id,
+                                offset,
+                            },
+                            group: *group,
+                            depth,
+                            kind: StopKind::TokenStart,
+                        });
+                    }
+                    offset = next;
+                    *group += 1;
+                }
+                out.push(StopEntry {
+                    caret: Caret {
+                        node: self.id,
+                        offset,
+                    },
+                    group: *group,
+                    depth,
+                    kind: if char_len == 0 {
+                        StopKind::EmptyPlaceholder
+                    } else {
+                        StopKind::TokenRest
+                    },
+                });
+                *group += 1;
+            } else if self.is_fence_delimiter() {
                 out.push(StopEntry {
                     caret: Caret {
                         node: self.id,
@@ -185,7 +228,13 @@ impl Node {
         }
         if self.row() {
             let is_radical = self.tag == "msqrt";
-            if self.children.len() <= 1 && is_effectively_empty(self) {
+            if self.children.len() <= 1
+                && is_effectively_empty(self)
+                && self
+                    .children
+                    .first()
+                    .is_none_or(|child| child.tag != "mtext")
+            {
                 if is_radical || last_in_group_is_token_or_placeholder(out, *group) {
                     *group += 1;
                 }
@@ -214,7 +263,15 @@ impl Node {
                 },
                 group: *group,
                 depth,
-                kind: StopKind::Row,
+                kind: if self
+                    .children
+                    .first()
+                    .is_some_and(|node| node.tag == "mtext")
+                {
+                    StopKind::TextBoundary
+                } else {
+                    StopKind::Row
+                },
             });
             for (i, child) in self.children.iter().enumerate() {
                 child.collect_stops(depth + 1, group, out);
@@ -225,7 +282,16 @@ impl Node {
                     },
                     group: *group,
                     depth,
-                    kind: StopKind::Row,
+                    kind: if child.tag == "mtext"
+                        || self
+                            .children
+                            .get(i + 1)
+                            .is_some_and(|node| node.tag == "mtext")
+                    {
+                        StopKind::TextBoundary
+                    } else {
+                        StopKind::Row
+                    },
                 });
             }
             if is_radical {
@@ -260,6 +326,7 @@ impl Node {
 enum StopKind {
     FenceDelimiter,
     Row,
+    TextBoundary,
     TokenStart,
     EmptyPlaceholder,
     TokenRest,
@@ -276,6 +343,7 @@ struct StopEntry {
 impl StopEntry {
     fn preference(&self) -> (u8, isize) {
         match self.kind {
+            StopKind::TextBoundary => (5, self.depth as isize),
             StopKind::TokenRest => (4, self.depth as isize),
             StopKind::EmptyPlaceholder => (3, self.depth as isize),
             StopKind::TokenStart => (2, self.depth as isize),
@@ -426,7 +494,7 @@ impl Editor {
         let mut p = vec![];
         self.state.root.path(id, &mut p).then_some(p)
     }
-    pub fn set_caret(&mut self, caret: Caret, extend: bool) {
+    pub fn set_caret(&mut self, mut caret: Caret, extend: bool) {
         let Some(node) = self.node(caret.node) else {
             return;
         };
@@ -437,6 +505,16 @@ impl Editor {
         };
         if caret.offset > max {
             return;
+        }
+        if node.tag == "mtext" && caret.offset > 0 && caret.offset < max {
+            let mut end = 0;
+            for grapheme in node.text.graphemes(true) {
+                end += grapheme.chars().count();
+                if end >= caret.offset {
+                    caret.offset = end;
+                    break;
+                }
+            }
         }
         if extend {
             self.state.anchor.get_or_insert(self.state.caret);
@@ -554,8 +632,29 @@ impl Editor {
     }
     // Expand a cross-container selection to whole children of their common ancestor.
     pub fn selection_span(&self) -> Option<(NodeId, usize, usize)> {
-        let anchor = self.state.anchor?;
-        let head = self.caret();
+        let mut anchor = self.state.anchor?;
+        let mut head = self.caret();
+        let text_endpoint = |outside: Caret, inside: Caret| -> Option<Caret> {
+            let text = self.node(inside.node).filter(|node| node.tag == "mtext")?;
+            let row = self.node(outside.node).filter(|node| node.row())?;
+            let index = row.children.iter().position(|child| child.id == text.id)?;
+            let offset = if outside.offset == index {
+                0
+            } else if outside.offset == index + 1 {
+                text.text.chars().count()
+            } else {
+                return None;
+            };
+            Some(Caret {
+                node: text.id,
+                offset,
+            })
+        };
+        if let Some(endpoint) = text_endpoint(anchor, head) {
+            anchor = endpoint;
+        } else if let Some(endpoint) = text_endpoint(head, anchor) {
+            head = endpoint;
+        }
         if anchor == head {
             return None;
         }
@@ -1660,13 +1759,31 @@ fn char_byte(text: &str, index: usize) -> usize {
 fn import(math: &MathNode, next: &mut NodeId) -> Node {
     let id = *next;
     *next += 1;
-    Node {
+    let mut node = Node {
         id,
         tag: math.tag.clone(),
         text: math.text.clone(),
         attrs: math.attrs.clone(),
-        children: math.children.iter().map(|n| import(n, next)).collect(),
+        children: Vec::with_capacity(math.children.len()),
+    };
+    let needs_text_rows = !node.row() && !node.opaque() && !node.token();
+    for child in &math.children {
+        let child = import(child, next);
+        if needs_text_rows && child.tag == "mtext" {
+            // A row gives the text slot Math-mode insertion points on either side.
+            node.children.push(Node {
+                id: *next,
+                tag: "mrow".into(),
+                text: String::new(),
+                attrs: Vec::new(),
+                children: vec![child],
+            });
+            *next += 1;
+        } else {
+            node.children.push(child);
+        }
     }
+    node
 }
 fn fill_first(template: &mut MathNode, selected: &MathNode) -> bool {
     if matches!(template.tag.as_str(), "mrow" | "mtd")
