@@ -5,7 +5,7 @@
         <group id="GroupEquation" label="Equations">
           <button id="btnInsertEquation" label="Insert Equation" size="large" onAction="OnAction" getImage="GetImage" screentip="Insert Equation" supertip="Opens the fast popup EqnTide to insert a new equation at current cursor position."/>
           <button id="btnEditEquation" label="Edit Equation" size="large" onAction="OnAction" getImage="GetImage" screentip="Edit Equation" supertip="Reads the selected equation (OMML, Legacy MathType, or Modern MathType) and opens it in the editor."/>
-          <button id="btnToggleLatex" label="Toggle LaTeX" size="large" onAction="OnAction" getImage="GetImage" screentip="Toggle LaTeX" supertip="Converts selected $...$ or \[...\] text into a native equation, or selected equation into LaTeX text."/>
+          <button id="btnToggleLatex" getLabel="GetToggleLatexLabel" size="large" onAction="OnAction" getImage="GetImage" screentip="Toggle LaTeX" supertip="Converts selected $...$ or \[...\] text into a native equation, or selected equation into LaTeX text."/>
         </group>
         <group id="GroupConvert" label="Tools &amp; Upgrade">
           <button id="btnUpgradeLegacy" label="Upgrade MathType" size="large" onAction="OnAction" getImage="GetImage" screentip="Upgrade Legacy Equations" supertip="Opens the Upgrade Taskpane or directly upgrades all legacy MathType equations in this document."/>

@@ -13,6 +13,23 @@ function controller() {
   context.wpsLog = () => {};
   return context;
 }
+
+{
+  const c = controller();
+  const fragment = String.raw`0,25\text{\$}$`;
+  assert.equal(c.findAllLatexMatches(fragment).length, 0);
+  assert.equal(c.findEnclosingLatexInPara(fragment, fragment.length - 2), null);
+  const valid = String.raw`$0,25\text{\$}$`;
+  assert.equal(c.findAllLatexMatches(fragment + '\r' + valid)[0].raw, valid);
+  const zoom = { Percentage: 100 };
+  let repaginated = 0;
+  const doc = { Repaginate() { repaginated++; } };
+  c.wps = { Application: { ActiveDocument: doc, ActiveWindow: { ActivePane: { View: { Zoom: zoom } } } } };
+  c.refreshToggleLayout({});
+  c.refreshToggleLayout(doc);
+  assert.equal(repaginated, 1);
+  assert.equal(zoom.Percentage, 100);
+}
 // Toggle must recognize bare \\dfrac as well as delimited formulas.
 for (const source of [String.raw`\dfrac{1}{2}`, String.raw`$\dfrac{1}{2}$`, String.raw`\[\dfrac{1}{2}\]`]) {
   const c = controller();
@@ -997,13 +1014,14 @@ console.log('WPS batch font_pt clamping and Windows disk-upgrade lock-release te
 
 // 9. Large multi-page ToggleLatex batch must bound concurrent HTTP requests (<= 8, avoiding bridge 503),
 //    yield DOM replacements across chunks via setTimeout, and use cumShift so OLE offsets stay O(1).
-{
+for (const platform of ['Linux x86_64', 'Win32']) {
   const timers = [];
   const alerts = [];
   const c = vm.createContext({
     console,
     DOMParser,
     XMLSerializer,
+    navigator: { platform },
     setTimeout(fn) { timers.push(fn); return timers.length; },
     alert: msg => alerts.push(msg)
   });
@@ -1021,6 +1039,16 @@ console.log('WPS batch font_pt clamping and Windows disk-upgrade lock-release te
   }
 
   let rangeCalls = 0;
+  const imported = [];
+  const labels = [];
+  let now = 0;
+  c.batchNow = () => { now += 30; return now; };
+  c.g_ribbonUI = {
+    InvalidateControl(id) {
+      assert.equal(id, 'btnToggleLatex');
+      labels.push(c.GetToggleLatexLabel());
+    }
+  };
   function visibleSlice(s, e) {
     return docText.slice(s, e).replace(ole26, '#');
   }
@@ -1035,8 +1063,11 @@ console.log('WPS batch font_pt clamping and Windows disk-upgrade lock-release te
         get Text() { rangeCalls++; return visibleSlice(this.Start, this.End); },
         InlineShapes: { Count: 0, Item: () => null },
         Paragraphs: { Item: () => ({ Range: { Start: 0, End: docText.length } }) },
-        Delete() { docText = docText.slice(0, this.Start) + docText.slice(this.End); },
-        InsertXML() { docText = docText.slice(0, this.Start) + 'M' + docText.slice(this.End); },
+        Delete() { assert.fail('verified LaTeX should be replaced directly'); },
+        InsertXML() {
+          imported.push(this.Text);
+          docText = docText.slice(0, this.Start) + 'M' + docText.slice(this.End);
+        },
         Select() {}
       };
     }
@@ -1061,6 +1092,7 @@ console.log('WPS batch font_pt clamping and Windows disk-upgrade lock-release te
   };
 
   c.ToggleLatex();
+  c.ToggleLatex();
   assert.ok(rangeCalls < 200, `cumShift + chunked scan must avoid O(N^2) COM calls (got ${rangeCalls})`);
   assert.equal(maxInFlight, 8, 'must cap concurrent HTTP requests to 8');
   while (pending.length > 0) {
@@ -1068,15 +1100,114 @@ console.log('WPS batch font_pt clamping and Windows disk-upgrade lock-release te
     cb(200, JSON.stringify({ result: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>' }));
   }
   assert.equal(totalSent, formulaCount);
+  assert.ok(imported.length < formulaCount, 'insertion must yield during a large batch');
+  c.ToggleLatex();
+  assert.equal(totalSent, formulaCount, 'a second toggle cannot start during replacement');
   // Drain yielded DOM chunk timers.
   while (timers.length > 0) {
     timers.shift()();
   }
   assert.ok(!docText.includes('$x_'), 'all 35 formulas must be converted');
+  assert.deepEqual(imported, Array.from({ length: formulaCount }, (_, i) => `$x_${formulaCount - 1 - i}$`));
+  assert.equal(labels[0], 'Inserting MathType 0/35');
+  assert.ok(labels.some(label => /^Inserting MathType [1-9]/.test(label)));
+  assert.equal(labels.at(-1), 'Toggle LaTeX');
+  assert.equal(c.g_latexBatchActive, false);
   assert.equal(alerts.length, 1);
   assert.match(alerts[0], /Found: 35[\s\S]*Converted: 35[\s\S]*Skipped\/Errors: 0/);
 }
 console.log('WPS large-batch bounded concurrency, chunked DOM, and cumShift tests passed');
+
+// A failed direct import can be skipped only while the original range is intact or restored.
+for (const failure of ['unchanged', 'deleted', 'unrestorable', 'noop']) {
+  const c = controller();
+  const alerts = [];
+  const pending = [];
+  const imports = [];
+  const source = '$a$ $b$ $c$ $d$';
+  let text = source;
+  c.navigator = { platform: 'Linux x86_64' };
+  c.alert = msg => alerts.push(msg);
+  const doc = {
+    get Content() { return { End: text.length }; },
+    Range(start, end) {
+      return {
+        Start: start, End: end,
+        get Text() { return text.slice(start, end); },
+        set Text(value) {
+          assert.equal(failure, 'deleted');
+          assert.equal(start, end);
+          text = text.slice(0, start) + value + text.slice(end);
+        },
+        InsertXML() {
+          const target = this.Text;
+          imports.push(target);
+          if (target === '$c$') {
+            if (failure === 'noop') return;
+            if (failure !== 'unchanged') {
+              text = text.slice(0, start) + (failure === 'unrestorable' ? 'X' : '') + text.slice(end);
+            }
+            throw Error('import failed');
+          }
+          text = text.slice(0, start) + '#' + text.slice(end);
+        }
+      };
+    }
+  };
+  const selection = {
+    Start: 0, End: source.length, Text: source,
+    Range: { Font: { Size: 12 } }
+  };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = cb => cb();
+  c.ajaxPost = (_url, body, cb) => pending.push([JSON.parse(body).data, cb]);
+
+  c.ToggleLatex();
+  text = text.replace('$d$', 'new');
+  for (const [latex, cb] of pending) {
+    cb(latex === 'a' ? 422 : 200, JSON.stringify({ result: '<o:OLEObject ProgID="Equation.DSMT4"/>' }));
+  }
+  const stopped = failure === 'unrestorable';
+  assert.deepEqual(imports, stopped ? ['$c$'] : ['$c$', '$b$']);
+  assert.equal(text, stopped ? '$a$ $b$ X new' : '$a$ # $c$ new');
+  assert.match(alerts[0], stopped ? /WPS changed the document.*Converted: 0/s : /Converted: 1/);
+  assert.equal(c.GetToggleLatexLabel(), 'Toggle LaTeX');
+  assert.equal(c.g_latexBatchActive, false);
+}
+
+{
+  const c = controller();
+  const shape = { Range: { Start: 20, End: 46 } };
+  const local = { InlineShapes: { Count: 1, Item: () => shape } };
+  let docLookups = 0;
+  const doc = {
+    get InlineShapes() { docLookups++; },
+    get Content() { docLookups++; }
+  };
+  const located = c.findInsertedInlineShape(doc, local, 20);
+  assert.equal(located.shape, shape);
+  assert.equal(located.range, shape.Range);
+  assert.equal(docLookups, 0, 'matching local shape must avoid document lookup');
+}
+
+{
+  const c = controller();
+  const equation = '<w:object w:dxaOrig="224" w:dyaOrig="232">' +
+    '<v:shape id="shape1" type="#_x0000_t75" style="width:11.2pt;height:11.6pt" o:ole="">' +
+    '<v:imagedata r:id="image1"/></v:shape>' +
+    '<o:OLEObject ProgID="Equation.DSMT4" r:id="ole1"/></w:object>';
+  const xml = '<pkg:package><w:r><w:rPr><w:position w:val="-6"/></w:rPr>' + equation +
+    '</w:r><pkg:binaryData>AQID</pkg:binaryData></pkg:package>';
+  const metadata = { width_pt: 11.27, height_pt: 11.54, depth_pt: 2.89 };
+  const result = c.formatMathTypePackageForWps(xml, metadata, 12);
+  assert.match(result, /<w:position w:val="-6"\/>/);
+  assert.match(result, /w:dxaOrig="225" w:dyaOrig="231"/);
+  assert.match(result, /style="width:11\.25pt;height:11\.55pt" alt="EqnTide equation"/);
+  assert.match(result, /r:id="image1"[\s\S]*r:id="ole1"[\s\S]*<pkg:binaryData>AQID<\/pkg:binaryData>/);
+  assert.equal(c.formatMathTypePackageForWps(equation, metadata, 12), null);
+  assert.equal(c.formatMathTypePackageForWps(xml, { ...metadata, width_pt: 0 }, 12), null);
+  assert.equal(c.formatMathTypePackageForWps(xml, metadata, 9999999), null);
+}
 
 // 10. Ctrl+A across a multi-page exam containing prose with '=', '-', and equations must convert
 //     the equations to LaTeX (NOT treat the entire document as one bare LaTeX formula via isLatexText),

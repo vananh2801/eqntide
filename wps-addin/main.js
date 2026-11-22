@@ -344,6 +344,7 @@ function scheduleEquationTab(selection) {
 }
 
 function onWindowSelectionChange(Sel) {
+  if (g_latexBatchMutating) return;
   scheduleEquationTab(Sel);
   try {
     if (!Sel) {
@@ -410,6 +411,7 @@ function onWindowSelectionChange(Sel) {
 }
 
 function onDocumentChange() {
+  if (g_latexBatchMutating) return;
   try {
     var app = wps.Application;
     if (!app || !app.Selection) return;
@@ -721,7 +723,7 @@ function findEnclosingLatexInPara(text, relPos) {
     { regex: /\$\$[\s\S]*?\$\$/g, display: true },
     { regex: /\\\[[\s\S]*?\\\]/g, display: true },
     { regex: /\\\([\s\S]*?\\\)/g, display: false },
-    { regex: /\$(?:\\\$|[^\$\r\n])+\$/g, display: false }
+    { regex: /\$(?:\\[^\r\n]|[^\\$\r\n])+\$/g, display: false }
   ];
 
   for (var i = 0; i < patterns.length; i++) {
@@ -730,6 +732,10 @@ function findEnclosingLatexInPara(text, relPos) {
     p.regex.lastIndex = 0;
     while ((match = p.regex.exec(text)) !== null) {
       var start = match.index;
+      if (match[0][0] === "$" && isEscapedLatexDollar(text, start)) {
+        p.regex.lastIndex = start + 1;
+        continue;
+      }
       var end = match.index + match[0].length;
       if (relPos >= start && relPos <= end) {
         return {
@@ -744,17 +750,27 @@ function findEnclosingLatexInPara(text, relPos) {
   return null;
 }
 
+function isEscapedLatexDollar(text, index) {
+  var backslashes = 0;
+  while (index > 0 && text.charAt(--index) === "\\") backslashes++;
+  return backslashes % 2 === 1;
+}
+
 /**
  * Find all LaTeX math formulas ($...$, $$...$$, \[...\], \(...\)) within text.
  * Returns array of { start, end, raw, latex, isDisplay } sorted by start ascending.
  */
 function findAllLatexMatches(text) {
   if (!text || typeof text !== "string") return [];
-  var regex = /(\$\$[\s\S]*?\$\$)|(\\\[[\s\S]*?\\\])|(\\\([^\r\n\u0007]*?\\\))|(\$(?:\\\$|[^\$\r\n])+?\$)/g;
+  var regex = /(\$\$[\s\S]*?\$\$)|(\\\[[\s\S]*?\\\])|(\\\([^\r\n\u0007]*?\\\))|(\$(?:\\[^\r\n]|[^\\$\r\n])+?\$)/g;
   var matches = [];
   var m;
   while ((m = regex.exec(text)) !== null) {
     var raw = m[0];
+    if (raw[0] === "$" && isEscapedLatexDollar(text, m.index)) {
+      regex.lastIndex = m.index + 1;
+      continue;
+    }
     // Reject implausible spans (e.g. stray unclosed $$ / \[ matching across pages, blank lines, or table cells).
     if (raw.length > 2000 || /[\u0001\u0007]/.test(raw) || /(?:\r\n|\r|\n)\s*(?:\r\n|\r|\n)/.test(raw)) {
       continue;
@@ -932,11 +948,14 @@ function EditEquation() {
 function getDocEnd(doc) {
   if (!doc) return 0;
   try {
-    if (doc.Content && typeof doc.Content.End === "number") return doc.Content.End;
+    var content = doc.Content;
+    var end = content && content.End;
+    if (typeof end === "number") return end;
   } catch (_) {}
   try {
     var full = doc.Range();
-    if (full && typeof full.End === "number") return full.End;
+    var fullEnd = full && full.End;
+    if (typeof fullEnd === "number") return fullEnd;
   } catch (_) {}
   return 0;
 }
@@ -1086,16 +1105,17 @@ function detectEnclosingLatexAtCursor(doc, selection) {
 function findInsertedInlineShape(doc, range, insertPos) {
   var best = null;
   var bestDiff = 999999;
-  var collections = [];
-  if (range && range.InlineShapes) collections.push(range.InlineShapes);
-  if (doc && doc.InlineShapes) collections.push(doc.InlineShapes);
-  try {
-    if (doc && doc.Content && doc.Content.InlineShapes) collections.push(doc.Content.InlineShapes);
-  } catch (_) {}
-
-  for (var c = 0; c < collections.length; c++) {
-    var shapes = collections[c];
-    var count = shapes && shapes.Count ? shapes.Count : 0;
+  for (var c = 0; c < 3; c++) {
+    var owner = c === 0 ? range : doc;
+    var shapes;
+    var count;
+    try {
+      if (c === 2) owner = doc && doc.Content;
+      shapes = owner && owner.InlineShapes;
+      count = shapes && shapes.Count;
+    } catch (_) {
+      continue;
+    }
     if (!count) continue;
     // Binary search large sorted document collections to avoid O(N^2) COM walks.
     if (count > 16) {
@@ -1106,17 +1126,18 @@ function findInsertedInlineShape(doc, range, insertPos) {
       while (lo <= hi) {
         var mid = (lo + hi) >> 1;
         var midItem = shapes.Item(mid);
-        if (!midItem || !midItem.Range || typeof midItem.Range.Start !== "number") {
+        var midRange = midItem && midItem.Range;
+        var midStart = midRange && midRange.Start;
+        if (typeof midStart !== "number") {
           monotonic = false;
           break;
         }
-        var midStart = midItem.Range.Start;
         if (prevProbe !== -1 && midStart < 0) monotonic = false;
         prevProbe = midStart;
         var midDiff = midStart - insertPos;
         if (midDiff >= 0 && midDiff <= 5 && midDiff < bestDiff) {
           bestDiff = midDiff;
-          best = midItem;
+          best = { shape: midItem, range: midRange, start: midStart };
           if (midDiff === 0) return best;
         }
         if (midStart < insertPos) {
@@ -1130,11 +1151,13 @@ function findInsertedInlineShape(doc, range, insertPos) {
         var winEnd = Math.min(count, lo + 3);
         for (var wi = winStart; wi <= winEnd; wi++) {
           var wCand = shapes.Item(wi);
-          if (!wCand || !wCand.Range || typeof wCand.Range.Start !== "number") continue;
-          var wDiff = wCand.Range.Start - insertPos;
+          var wRange = wCand && wCand.Range;
+          var wStart = wRange && wRange.Start;
+          if (typeof wStart !== "number") continue;
+          var wDiff = wStart - insertPos;
           if (wDiff >= 0 && wDiff <= 5 && wDiff < bestDiff) {
             bestDiff = wDiff;
-            best = wCand;
+            best = { shape: wCand, range: wRange, start: wStart };
             if (wDiff === 0) return best;
           }
         }
@@ -1145,11 +1168,13 @@ function findInsertedInlineShape(doc, range, insertPos) {
         var nEnd = Math.min(count, lo + 3);
         for (var ni = nStart; ni <= nEnd; ni++) {
           var nCand = shapes.Item(ni);
-          if (!nCand || !nCand.Range || typeof nCand.Range.Start !== "number") continue;
-          var nDiff = nCand.Range.Start - insertPos;
+          var nRange = nCand && nCand.Range;
+          var candidateStart = nRange && nRange.Start;
+          if (typeof candidateStart !== "number") continue;
+          var nDiff = candidateStart - insertPos;
           if (nDiff >= 0 && nDiff <= 5 && nDiff < bestDiff) {
             bestDiff = nDiff;
-            best = nCand;
+            best = { shape: nCand, range: nRange, start: candidateStart };
             if (nDiff === 0) return best;
           }
         }
@@ -1158,11 +1183,13 @@ function findInsertedInlineShape(doc, range, insertPos) {
     }
     for (var index = 1; index <= count; index++) {
       var candidate = shapes.Item(index);
-      if (!candidate || !candidate.Range || typeof candidate.Range.Start !== "number") continue;
-      var diff = candidate.Range.Start - insertPos;
+      var candidateRange = candidate && candidate.Range;
+      var start = candidateRange && candidateRange.Start;
+      if (typeof start !== "number") continue;
+      var diff = start - insertPos;
       if (diff >= 0 && diff <= 5 && diff < bestDiff) {
         bestDiff = diff;
-        best = candidate;
+        best = { shape: candidate, range: candidateRange, start: start };
         if (diff === 0) return best;
       }
     }
@@ -1188,15 +1215,71 @@ function moveCursorAfterRange(doc, cursorTarget) {
   } catch (_) {}
 }
 
+function refreshToggleLayout(doc) {
+  var app;
+  try {
+    app = wps.Application;
+    var active = app.ActiveDocument;
+    if (!active || (active !== doc && (!doc.FullName || active.FullName !== doc.FullName))) return;
+  } catch (_) { return; }
+
+  try { if (typeof doc.Repaginate === "function") doc.Repaginate(); } catch (_) {}
+  try {
+    var zoom = app.ActiveWindow.ActivePane.View.Zoom;
+    var previous = zoom.Percentage;
+    if (typeof previous === "number" && previous > 0) {
+      try { zoom.Percentage = previous >= 500 ? previous - 1 : previous + 1; }
+      finally { zoom.Percentage = previous; }
+      return;
+    }
+  } catch (_) {}
+  try { if (typeof app.ScreenRefresh === "function") app.ScreenRefresh(); } catch (_) {}
+}
+
+function restoreDeletedLatex(doc, insertPos, replaced, originalEnd, suffix, source) {
+  if (typeof suffix !== "string" || source.length !== replaced || /[\r\n]/.test(source)) return;
+  try {
+    if (getDocEnd(doc) === originalEnd - replaced &&
+        (!suffix || doc.Range(insertPos, insertPos + suffix.length).Text === suffix)) {
+      doc.Range(insertPos, insertPos).Text = source;
+    }
+  } catch (_) {}
+}
+
+function formatMathTypePackageForWps(xml, data, fontPt) {
+  if (!isValidFontSizePt(fontPt) ||
+      !isFinite(data.depth_pt) || !isFinite(data.width_pt) || !isFinite(data.height_pt)) return null;
+  var width = Math.round(data.width_pt * 20);
+  var height = Math.round(data.height_pt * 20);
+  if (width <= 0 || height <= 0) return null;
+
+  // Other Flat OPC layouts use the normal WPS formatting path.
+  var run = /<w:r>(?:<w:rPr><w:position w:val="-?\d+"\s*\/><\/w:rPr>)?(?=<w:object[ >])/;
+  var object = /<w:object w:dxaOrig="\d+" w:dyaOrig="\d+">/;
+  var shape = /<v:shape (id="[^"]+" type="#_x0000_t75") style="width:[^"]+" o:ole="">/;
+  if (!run.test(xml) || !object.test(xml) || !shape.test(xml)) return null;
+
+  // WPS Font.Position accepts whole points. OOXML stores the same value in half-points.
+  var drop = Math.trunc(Number((Number(data.depth_pt) + fontPt * 0.045).toFixed(1)));
+  return xml.replace(run, '<w:r><w:rPr><w:position w:val="' + (-2 * drop) + '"/></w:rPr>')
+    .replace(object, '<w:object w:dxaOrig="' + width + '" w:dyaOrig="' + height + '">')
+    .replace(shape, '<v:shape $1 style="width:' + (width / 20) + 'pt;height:' + (height / 20) +
+      'pt" alt="EqnTide equation" o:ole="">');
+}
+
 /**
  * Insert vector EMF picture with embedded MTEF at specified doc range.
  * Applies baseline alignment (Font.Position), sanitizes paragraph mark,
  * and optionally places cursor after shape.
  */
-function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor) {
+function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor, batch) {
   var packageXml = waitData && (waitData.flat_opc || waitData.result);
   if (!doc || !targetRange || !packageXml || !/ProgID=["']Equation\./i.test(packageXml)) return null;
 
+  var timings = batch && batch.timings;
+  var replacementStarted = timings ? batchNow() : 0;
+  var formattedPackage = batch && batch.direct ? formatMathTypePackageForWps(packageXml, waitData, batch.fontPt) : null;
+  if (formattedPackage) packageXml = formattedPackage;
   var insertPos = targetRange.Start;
   var targetEnd = trimTrailingBreaks(doc, insertPos, targetRange.End);
   if (targetEnd !== targetRange.End) {
@@ -1204,14 +1287,14 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor) 
   }
 
   var replaced = targetEnd - insertPos;
-  var originalEnd = getDocEnd(doc);
+  var originalEnd = batch ? batch.documentEnd : getDocEnd(doc);
   var origLeadingBreaks = countLeadingBreaks(doc, targetEnd, originalEnd, 2);
   var suffix = targetEnd < originalEnd
     ? doc.Range(targetEnd, Math.min(targetEnd + 32, originalEnd)).Text
     : "";
 
   var insertionRange = targetRange;
-  if (replaced > 0 && typeof targetRange.Delete === "function") {
+  if (!(batch && batch.direct) && replaced > 0 && typeof targetRange.Delete === "function") {
     try {
       targetRange.Delete();
       insertionRange = doc.Range(insertPos, insertPos);
@@ -1224,13 +1307,19 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor) 
   try {
     insertionRange.InsertXML(packageXml);
   } catch (xmlErr) {
+    if (batch) restoreDeletedLatex(doc, insertPos, replaced, originalEnd, suffix, batch.source);
     wpsLog("insertMathTypeAtDocRange: InsertXML failed: " + xmlErr);
     throw xmlErr;
+  } finally {
+    if (timings) timings.replacementMs += batchNow() - replacementStarted;
   }
 
   var newEnd = getDocEnd(doc);
+  if (batch && batch.direct && newEnd === originalEnd &&
+      doc.Range(insertPos, targetEnd).Text === batch.source) return null;
   var insertedEnd = insertPos + newEnd - originalEnd + replaced;
   if (insertedEnd > newEnd) insertedEnd = newEnd;
+  var removedImportedBreak = false;
   if (insertedEnd > insertPos && insertedEnd <= newEnd &&
       typeof suffix === "string" &&
       doc.Range(insertedEnd, Math.min(insertedEnd + suffix.length, newEnd)).Text === suffix) {
@@ -1238,57 +1327,52 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor) 
       var trailing = doc.Range(insertedEnd - 1, insertedEnd);
       if (trailing.Text !== "\r" && trailing.Text !== "\n") break;
       trailing.Delete();
+      removedImportedBreak = true;
       insertedEnd--;
     }
   }
-  newEnd = getDocEnd(doc);
+  if (removedImportedBreak) newEnd = getDocEnd(doc);
   if (insertedEnd < insertPos) insertedEnd = insertPos;
   if (insertedEnd > newEnd) insertedEnd = newEnd;
 
   var range = doc.Range(insertPos, insertedEnd);
-  var pic = findInsertedInlineShape(doc, range, insertPos);
-  if (!pic) {
-    wpsLog("insertMathTypeAtDocRange: InsertXML succeeded at pos=" + insertPos +
-      " (insertedEnd=" + insertedEnd + "), but no matching InlineShape was exposed for baseline formatting");
+  var lookupStarted = timings ? batchNow() : 0;
+  var located;
+  try {
+    located = findInsertedInlineShape(doc, range, insertPos);
+  } finally {
+    if (timings) timings.lookupMs += batchNow() - lookupStarted;
+  }
+  if (!located) {
+    if (timings) {
+      timings.missingShapes++;
+    } else {
+      wpsLog("insertMathTypeAtDocRange: InsertXML succeeded at pos=" + insertPos +
+        " (insertedEnd=" + insertedEnd + "), but no matching InlineShape was exposed for baseline formatting");
+    }
     if (shouldMoveCursor) moveCursorAfterRange(doc, insertedEnd);
     return { inserted: true, shape: null };
   }
-  try { pic.AlternativeText = "EqnTide equation"; } catch (_) {}
+  var pic = located.shape;
+  var formattingStarted = timings ? batchNow() : 0;
+  if (!formattedPackage) {
+    try { pic.AlternativeText = "EqnTide equation"; } catch (_) {}
+  }
 
   try {
-    if (typeof waitData.width_pt === "number" && waitData.width_pt > 0) {
-      pic.Width = waitData.width_pt;
-    }
-    if (typeof waitData.height_pt === "number" && waitData.height_pt > 0) {
-      pic.Height = waitData.height_pt;
+    if (!formattedPackage) {
+      if (typeof waitData.width_pt === "number" && waitData.width_pt > 0) pic.Width = waitData.width_pt;
+      if (typeof waitData.height_pt === "number" && waitData.height_pt > 0) pic.Height = waitData.height_pt;
     }
 
-    var docFontSize = 12.0;
-    if (typeof waitData.font_pt === "number" && waitData.font_pt > 0) {
-      docFontSize = waitData.font_pt;
-    } else {
-      try {
-        if (targetRange && targetRange.Font && targetRange.Font.Size > 0) {
-          docFontSize = targetRange.Font.Size;
-        } else if (range && range.Font && range.Font.Size > 0) {
-          docFontSize = range.Font.Size;
-        }
-      } catch (_) {}
-    }
-
-    var depthPt = (typeof waitData.depth_pt === "number") ? waitData.depth_pt : 0;
-    var fontBaselineOffset = docFontSize * 0.045; // ~0.54 pt for 12pt font
-    var pos = -Number((depthPt + fontBaselineOffset).toFixed(1));
-
-    var actualStart = (pic.Range && typeof pic.Range.Start === "number") ? pic.Range.Start : insertPos;
-    var shapeEnd = (pic.Range && typeof pic.Range.End === "number" && pic.Range.End > actualStart)
-      ? pic.Range.End
-      : (actualStart + 1);
+    var pictureRange = located.range;
+    var pictureEnd = pictureRange.End;
+    var actualStart = located.start;
+    var shapeEnd = typeof pictureEnd === "number" && pictureEnd > actualStart ? pictureEnd : actualStart + 1;
 
     // Strip any extra paragraph break left immediately after shapeEnd by InsertXML
     // (for instance when suffix matching failed due to an adjacent OLE object).
-    var curDocEnd = getDocEnd(doc);
-    var curTrailingBreaks = countLeadingBreaks(doc, shapeEnd, curDocEnd, origLeadingBreaks + 2);
+    var curTrailingBreaks = countLeadingBreaks(doc, shapeEnd, newEnd, origLeadingBreaks + 2);
     var extraBreaks = curTrailingBreaks - origLeadingBreaks;
     for (var eb = 0; eb < extraBreaks; eb++) {
       try {
@@ -1300,15 +1384,31 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor) 
 
     // Set baseline position on the inserted shape range
     var shapeRange = doc.Range(actualStart, shapeEnd);
-    if (shapeRange && shapeRange.Font) {
-      shapeRange.Font.Position = pos;
-      wpsLog("insertMathTypeAtDocRange: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ")");
-    }
-    try {
-      if (pic && pic.Range && pic.Range.Font) {
-        pic.Range.Font.Position = pos;
+    if (!formattedPackage) {
+      var docFontSize = batch ? batch.fontPt : 12.0;
+      if (typeof waitData.font_pt === "number" && waitData.font_pt > 0) {
+        docFontSize = waitData.font_pt;
+      } else if (!batch) {
+        try {
+          if (targetRange && targetRange.Font && targetRange.Font.Size > 0) {
+            docFontSize = targetRange.Font.Size;
+          } else if (range && range.Font && range.Font.Size > 0) {
+            docFontSize = range.Font.Size;
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
+      var depthPt = (typeof waitData.depth_pt === "number") ? waitData.depth_pt : 0;
+      var pos = -Number((depthPt + docFontSize * 0.045).toFixed(1));
+      var shapeFont = shapeRange && shapeRange.Font;
+      if (shapeFont) {
+        shapeFont.Position = pos;
+        if (!timings) wpsLog("insertMathTypeAtDocRange: set baseline Font.Position=" + pos + " on shapeRange [" + actualStart + ".." + shapeEnd + "] (depthPt=" + depthPt + ")");
+      }
+      try {
+        var pictureFont = pictureRange && pictureRange.Font;
+        if (pictureFont && (!timings || pictureFont.Position !== pos)) pictureFont.Position = pos;
+      } catch (_) {}
+    }
 
     // Sanitize paragraph mark
     try {
@@ -1317,10 +1417,12 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor) 
         var pEnd = para.Range.End;
         if (pEnd > shapeEnd) {
           var pMark = doc.Range(pEnd - 1, pEnd);
-          if (pMark && (pMark.Text === "\r" || pMark.Text === "\n") && pMark.Font) {
-            pMark.Font.Position = 0;
-            pMark.Font.Subscript = false;
-            pMark.Font.Superscript = false;
+          var markText = pMark && pMark.Text;
+          var markFont = (markText === "\r" || markText === "\n") ? pMark.Font : null;
+          if (markFont) {
+            if (!timings || markFont.Position !== 0) markFont.Position = 0;
+            if (!timings || markFont.Subscript) markFont.Subscript = false;
+            if (!timings || markFont.Superscript) markFont.Superscript = false;
           }
         }
         // Fix plain text immediately following shape if it leaked negative position
@@ -1345,6 +1447,8 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor) 
   } catch (err) {
     wpsLog("insertMathTypeAtDocRange: formatting error: " + err);
     return pic;
+  } finally {
+    if (timings) timings.formattingMs += batchNow() - formattingStarted;
   }
 }
 
@@ -1443,6 +1547,14 @@ function findAllEquationTargetsInRange(range, doc) {
 
 var BATCH_HTTP_CONCURRENCY = 8;
 var BATCH_DOM_CHUNK_SIZE = 10;
+var g_latexBatchActive = false;
+var g_latexBatchMutating = false;
+var g_latexInsertionLabel = "";
+
+function batchNow() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now() : Date.now();
+}
 
 function runBoundedQueue(items, maxConcurrent, worker, onDone) {
   var total = items.length;
@@ -1453,9 +1565,12 @@ function runBoundedQueue(items, maxConcurrent, worker, onDone) {
   var nextIndex = 0;
   var finished = 0;
   var inFlight = 0;
+  var pumping = false;
   var concurrency = Math.max(1, Math.min(maxConcurrent, total));
 
   function pump() {
+    if (pumping) return;
+    pumping = true;
     while (inFlight < concurrency && nextIndex < total) {
       var idx = nextIndex++;
       inFlight++;
@@ -1469,14 +1584,15 @@ function runBoundedQueue(items, maxConcurrent, worker, onDone) {
         }
       });
     }
+    pumping = false;
   }
   pump();
 }
 
-function applyItemsInChunks(items, chunkSize, applyItem, onDone) {
+function applyItemsInChunks(items, chunkSize, applyItem, onDone, onYield) {
   var total = items.length;
   var idx = 0;
-  var canYield = (typeof setTimeout === "function") && total > chunkSize;
+  var canYield = typeof setTimeout === "function" && total > chunkSize;
 
   function step() {
     var end = Math.min(total, idx + chunkSize);
@@ -1486,6 +1602,7 @@ function applyItemsInChunks(items, chunkSize, applyItem, onDone) {
     }
     if (idx < total) {
       if (canYield) {
+        if (onYield) onYield(idx);
         setTimeout(step, 0);
       } else {
         step();
@@ -1497,10 +1614,51 @@ function applyItemsInChunks(items, chunkSize, applyItem, onDone) {
   step();
 }
 
+function startLatexInsertionProgress(total) {
+  var updated = -Infinity;
+
+  return {
+    update: function (processed) {
+      var now = batchNow();
+      if (total < 2 || now - updated < 500) return;
+      updated = now;
+      setLatexInsertionLabel("Inserting MathType " + processed + "/" + total);
+    },
+    clear: function () {
+      if (g_latexInsertionLabel) setLatexInsertionLabel("");
+    }
+  };
+}
+
+function setLatexInsertionLabel(text) {
+  g_latexInsertionLabel = text;
+  try {
+    if (g_ribbonUI) g_ribbonUI.InvalidateControl("btnToggleLatex");
+  } catch (_) {}
+}
+
+function GetToggleLatexLabel() {
+  return g_latexInsertionLabel || "Toggle LaTeX";
+}
+
 /**
  * Batch convert multiple LaTeX formulas in a highlighted range to MathType EMF pictures in-place.
  */
 function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
+  if (g_latexBatchActive) return;
+  g_latexBatchActive = true;
+  try {
+    runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo);
+  } catch (err) {
+    g_latexBatchActive = false;
+    throw err;
+  }
+}
+
+function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo) {
+  var preparationStarted = batchNow();
+  var timings = { replacementMs: 0, lookupMs: 0, formattingMs: 0, missingShapes: 0 };
+  var useDirectReplacement = typeof navigator !== "undefined" && /^(linux|win)/i.test(navigator.platform || "");
   var baseStart = (rangeInfo && typeof rangeInfo.start === "number") ? rangeInfo.start
     : (selection && typeof selection.Start === "number" ? selection.Start
     : (selection && selection.Range && typeof selection.Range.Start === "number" ? selection.Range.Start : 0));
@@ -1519,8 +1677,10 @@ function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
     var cStart = baseStart + mItem.start + cumShift;
     var cEnd = baseStart + mItem.end + cumShift;
     var matchedFast = false;
+    var itemRange = null;
     try {
-      if (cStart >= scanPos && cEnd <= selEnd && doc.Range(cStart, cEnd).Text === mItem.raw) {
+      if (cStart >= scanPos && cEnd <= selEnd) itemRange = doc.Range(cStart, cEnd);
+      if (itemRange && itemRange.Text === mItem.raw) {
         mItem.docStart = cStart;
         mItem.docEnd = cEnd;
         scanPos = cEnd;
@@ -1528,6 +1688,7 @@ function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
       }
     } catch (_) {}
     if (!matchedFast) {
+      itemRange = null;
       var resolved = findExactRangeInBounds(doc, scanPos, selEnd, mItem.raw);
       if (resolved) {
         mItem.docStart = resolved.start;
@@ -1535,15 +1696,16 @@ function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
         scanPos = resolved.end;
         cumShift = resolved.end - (baseStart + mItem.end);
       } else {
-        mItem.docStart = cStart;
-        mItem.docEnd = cEnd;
+        mItem.docStart = -1;
+        continue;
       }
     }
     var itemFont = docFontSize;
     try {
-      var itemRange = doc.Range(mItem.docStart, mItem.docEnd);
-      if (itemRange && itemRange.Font) {
-        var candidateSize = Number(itemRange.Font.Size);
+      if (!itemRange) itemRange = doc.Range(mItem.docStart, mItem.docEnd);
+      var font = itemRange && itemRange.Font;
+      if (font) {
+        var candidateSize = Number(font.Size);
         if (isValidFontSizePt(candidateSize)) itemFont = candidateSize;
       }
     } catch (_) {}
@@ -1559,61 +1721,118 @@ function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
 
   var total = latexMatches.length;
   var lastNon422Error = "";
+  var firstUnsupported = "";
+  var unsupportedCount = 0;
+  var bridgeStarted = batchNow();
+  var preparationMs = bridgeStarted - preparationStarted;
 
   runBoundedQueue(
     latexMatches,
     BATCH_HTTP_CONCURRENCY,
     function (m, _i, done) {
-      ajaxPost(
-        BRIDGE_URL + "/convert/snippet",
-        JSON.stringify({
-          data: m.latex,
-          from: "latex",
-          to: "mathtype",
-          font_pt: m.fontPt
-        }),
-        function (status, responseText) {
-          if (status === 200) {
-            try {
-              m.convData = JSON.parse(responseText);
-            } catch (_) {}
-          } else if (status !== 422 && !lastNon422Error) {
-            var errMsg = responseText || ("HTTP " + status);
-            try {
-              var parsedErr = JSON.parse(responseText);
-              if (parsedErr && parsedErr.error) errMsg = parsedErr.error;
-            } catch (_) {}
-            lastNon422Error = errMsg;
+      if (m.docStart < 0) {
+        done();
+        return;
+      }
+      try {
+        ajaxPost(
+          BRIDGE_URL + "/convert/snippet",
+          JSON.stringify({
+            data: m.latex,
+            from: "latex",
+            to: "mathtype",
+            font_pt: m.fontPt
+          }),
+          function (status, responseText) {
+            if (status === 200) {
+              try {
+                m.convData = JSON.parse(responseText);
+              } catch (_) {}
+            } else if (status === 422 || !lastNon422Error) {
+              var errMsg = responseText || ("HTTP " + status);
+              try {
+                var parsedErr = JSON.parse(responseText);
+                if (parsedErr && parsedErr.error) errMsg = parsedErr.error;
+              } catch (_) {}
+              if (status === 422) {
+                unsupportedCount++;
+                if (!firstUnsupported) firstUnsupported = errMsg;
+              } else {
+                lastNon422Error = errMsg;
+              }
+            }
+            done();
           }
-          done();
-        }
-      );
+        );
+      } catch (err) {
+        if (!lastNon422Error) lastNon422Error = "Could not submit a conversion request.";
+        done();
+      }
     },
     function () {
+      var bridgeMs = batchNow() - bridgeStarted;
       // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
       latexMatches.sort(function (a, b) { return b.docStart - a.docStart; });
       var convertedCount = 0;
+      var insertionStarted = null;
+      var insertionFinished = null;
+      var recoveryError = "";
+      var progress = startLatexInsertionProgress(total);
+      progress.update(0);
 
       applyItemsInChunks(
         latexMatches,
         BATCH_DOM_CHUNK_SIZE,
         function (match) {
-          if (match.convData && match.convData.result) {
+          if (!recoveryError && match.convData && match.convData.result) {
+            if (insertionStarted === null) insertionStarted = batchNow();
+            var targetRange;
+            var originalEnd;
             try {
-              var targetRange = doc.Range(match.docStart, match.docEnd);
-              var pic = insertMathTypeAtDocRange(doc, targetRange, match.convData, false);
-              if (pic) convertedCount++;
+              targetRange = doc.Range(match.docStart, match.docEnd);
+              var targetText = targetRange && targetRange.Text;
+              if (targetText === match.raw || targetText === match.raw.replace(/\r\n/g, "\r")) {
+                originalEnd = getDocEnd(doc);
+                g_latexBatchMutating = true;
+                var pic = insertMathTypeAtDocRange(doc, targetRange, match.convData, false, {
+                  timings: timings,
+                  documentEnd: originalEnd,
+                  direct: useDirectReplacement,
+                  fontPt: match.fontPt,
+                  source: targetText
+                });
+                if (pic) convertedCount++;
+              }
             } catch (insErr) {
-              wpsLog("batchLatexToMathType: insert failed for '" + match.latex + "': " + insErr);
+              if (typeof originalEnd === "number") {
+                var rangeIntact = false;
+                try {
+                  rangeIntact = getDocEnd(doc) === originalEnd &&
+                    doc.Range(match.docStart, match.docEnd).Text === targetText;
+                } catch (_) {}
+                if (!rangeIntact) {
+                  recoveryError = "WPS changed the document while inserting at " + match.docStart +
+                    ". Check that location before resuming conversion.";
+                }
+              }
+              wpsLog("batchLatexToMathType: insert failed at " + match.docStart);
+            } finally {
+              g_latexBatchMutating = false;
+              insertionFinished = batchNow();
             }
           }
           match.convData = null;
         },
         function () {
+          progress.clear();
+          g_latexBatchActive = false;
           // Collapse selection at the end so subsequent typing does not inherit baseline
           try {
             var app = wps.Application;
-            var curSel = app ? app.Selection : null;
+            var activeDoc = app && app.ActiveDocument;
+            var sameDocument = activeDoc && (activeDoc === doc ||
+              (doc.FullName && activeDoc.FullName === doc.FullName));
+            var curSel = sameDocument && !recoveryError ? app.Selection : null;
             if (curSel) {
               if (typeof curSel.Collapse === "function") {
                 curSel.Collapse(0);
@@ -1626,10 +1845,30 @@ function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
             }
           } catch (_) {}
 
+          if (convertedCount > 0) refreshToggleLayout(doc);
           var skippedCount = total - convertedCount;
+          wpsLog("batchLatexToMathType timing: " + JSON.stringify({
+            found: total,
+            converted: convertedCount,
+            skipped: skippedCount,
+            preparation_ms: Math.round(preparationMs),
+            bridge_ms: Math.round(bridgeMs),
+            insertion_ms: insertionStarted === null ? 0 : Math.round(insertionFinished - insertionStarted),
+            replacement_ms: Math.round(timings.replacementMs),
+            shape_lookup_ms: Math.round(timings.lookupMs),
+            formatting_ms: Math.round(timings.formattingMs),
+            missing_shapes: timings.missingShapes
+          }));
           wpsLog("batchLatexToMathType: converted " + convertedCount + "/" + total + " formulas" + (skippedCount > 0 ? " (" + skippedCount + " skipped)" : "") + ".");
-          if (convertedCount === 0 && lastNon422Error) {
+          if (recoveryError) {
+            alert(recoveryError + "\n\nFound: " + total + "\nConverted: " + convertedCount +
+              "\nSkipped/Errors: " + skippedCount);
+          } else if (convertedCount === 0 && lastNon422Error) {
             alert("Failed to convert LaTeX to MathType:\n" + lastNon422Error);
+          } else if (unsupportedCount === total) {
+            alert("No LaTeX formulas were converted.\n" +
+              "Found: " + total + "\nSkipped: " + unsupportedCount + "\n\n" + firstUnsupported +
+              "\n\nTo toggle existing equations to LaTeX in a mixed document, select a range without delimited LaTeX.");
           } else if (total > 1) {
             alert(
               "Toggle LaTeX Succeeded!\n\n" +
@@ -1638,7 +1877,8 @@ function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
               "Skipped/Errors: " + skippedCount
             );
           }
-        }
+        },
+        progress.update
       );
     }
   );
@@ -1867,6 +2107,7 @@ function batchEquationToLatex(doc, selection, eqTargets) {
           } catch (_) {}
 
           var skippedCount = total - convertedCount;
+          if (convertedCount > 0) refreshToggleLayout(doc);
           wpsLog("batchEquationToLatex: converted " + convertedCount + "/" + total + " equations to LaTeX.");
           if (convertedCount === 0 && lastNon422Error) {
             alert("Failed to convert equations to LaTeX:\n" + lastNon422Error);
@@ -1894,6 +2135,7 @@ function batchEquationToLatex(doc, selection, eqTargets) {
  */
 function ToggleLatex() {
   try {
+    if (g_latexBatchActive) return;
     wpsLog("ToggleLatex clicked");
     var app = wps.Application;
     var selection = app ? app.Selection : null;
@@ -2068,6 +2310,7 @@ function ToggleLatex() {
                     curSel.Font.Superscript = false;
                   }
                 }
+                refreshToggleLayout(doc);
                 wpsLog("ToggleLatex: converted single equation to LaTeX string successfully");
               }
             } else {
@@ -2128,7 +2371,7 @@ function ToggleLatex() {
           if (status === 200) {
             var conv = JSON.parse(responseText);
             if (conv.result) {
-              insertMathTypeAtDocRange(doc, targetLatexRange, conv, true);
+              if (insertMathTypeAtDocRange(doc, targetLatexRange, conv, true)) refreshToggleLayout(doc);
             }
             wpsLog("ToggleLatex: successfully converted single LaTeX to MathType equation");
           } else {
