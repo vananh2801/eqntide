@@ -672,6 +672,27 @@ for (const atDocEnd of [false, true]) {
   assert.ok(logs.some(m => m.includes('COM InsertXML rejected package')));
 }
 
+// A caret beside an object is not a selection, even if its XML includes that object.
+for (const markup of ['<w:drawing/>', '<o:OLEObject ProgID="Equation.DSMT4"/>']) {
+  for (const position of [4, 5]) {
+    const c = controller();
+    const range = { Start: 4, End: 5, WordOpenXML: markup };
+    const shapes = { Count: 1, Item: () => ({ Range: range }) };
+    const selection = {
+      Start: position, End: position, WordOpenXML: markup,
+      Range: { Start: position, End: position, WordOpenXML: markup },
+      Words: { Count: 1, Item: () => ({ InlineShapes: shapes }) },
+    };
+    const doc = { Content: { End: 10 }, Range: () => ({ Text: ' ', InlineShapes: shapes }) };
+    c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+    c.ensureBridgeRunning = () => assert.fail('an adjacent object must not trigger conversion');
+    const alerts = [];
+    c.alert = message => alerts.push(message);
+    c.ToggleLatex();
+    assert.match(alerts[0], /No equation or LaTeX code found at the cursor/);
+  }
+}
+
 // 5. Batch ToggleLatex must strip extra trailing breaks after shapeEnd even when an adjacent
 //    inserted OLE shape causes the 32-char suffix comparison to mismatch.
 {
@@ -1374,3 +1395,86 @@ console.log('WPS Ctrl+A full-document prose vs equation priority tests passed');
   assert.ok(shapeLookups < count * 10, `binary search must avoid O(N^2) InlineShapes scans (got ${shapeLookups})`);
 }
 console.log('WPS Flat OPC compaction & taskpane bounded-concurrency tests passed');
+
+{
+  const c = controller();
+  c.atob = value => Buffer.from(value, 'base64').toString('latin1');
+  const nsPkg = 'http://schemas.microsoft.com/office/2006/xmlPackage';
+  const nsRel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const nsPackageRel = 'http://schemas.openxmlformats.org/package/2006/relationships';
+  const wmf = Buffer.alloc(48);
+  wmf.writeUInt16LE(9, 2);
+  wmf.writeUInt32LE(15, 18);
+  wmf.writeUInt16LE(0x0626, 22);
+  wmf.writeUInt16LE(15, 24);
+  wmf.writeUInt16LE(19, 26);
+  wmf.write('AppsMFCC', 28);
+  wmf[46] = 3;
+  const emf = Buffer.alloc(120);
+  emf.writeUInt32LE(1, 0);
+  emf.writeUInt32LE(88, 4);
+  emf.write(' EMF', 40);
+  emf.writeUInt32LE(70, 88);
+  emf.writeUInt32LE(32, 92);
+  emf.writeUInt32LE(19, 96);
+  emf.write('AppsMFCC', 100);
+  emf[118] = 5;
+  const drawing = '<w:drawing><a:blip r:embed="selected"/></w:drawing>';
+  const pict = '<w:pict><v:imagedata r:id="selected"/></w:pict>';
+  const ole = '<w:object><o:OLEObject ProgID="Equation.DSMT4"/></w:object>';
+  const math = '<m:oMath/>';
+  const part = (name, value) => `<pkg:part pkg:name="/${name}">${value}</pkg:part>`;
+  const binary = bytes => `<pkg:binaryData>${bytes.toString('base64')}</pkg:binaryData>`;
+  function flatOpc(content, image = Buffer.from('ordinary image')) {
+    return `<pkg:package xmlns:pkg="${nsPkg}">
+      ${part('word/document.xml', `<pkg:xmlData><w:document xmlns:w="${nsW}" xmlns:m="${nsM}"
+        xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+        xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"
+        xmlns:r="${nsRel}"><w:body>${content}</w:body></w:document></pkg:xmlData>`)}
+      ${part('word/_rels/document.xml.rels', `<pkg:xmlData><Relationships xmlns="${nsPackageRel}">
+        <Relationship Id="selected" Type="${nsRel}/image" Target="media/selected"/>
+        <Relationship Id="unreferenced" Type="${nsRel}/image" Target="media/unreferenced"/>
+      </Relationships></pkg:xmlData>`)}
+      ${part('word/media/selected', binary(image))}
+      ${part('word/media/unreferenced', binary(emf))}
+    </pkg:package>`;
+  }
+  const shapes = [
+    flatOpc(drawing), flatOpc(pict), flatOpc(ole),
+    flatOpc(pict, wmf), flatOpc(drawing, emf),
+  ].map((WordOpenXML, Start) => ({ Type: 3, Range: { WordOpenXML, Start, End: Start + 1 } }));
+  const selection = {
+    Start: 0, End: 7, Text: 'Mixed selection with illustrations and equations.',
+    Range: {
+      InlineShapes: { Count: shapes.length, Item: i => shapes[i - 1] },
+      OMaths: { Count: 1, Item: () => ({ Range: { Start: 6, End: 7, WordOpenXML: flatOpc(math) } }) },
+    },
+  };
+  assert.equal(c.hasBatchEquationInXml(flatOpc(math)), true);
+  assert.equal(c.hasBatchEquationInXml(flatOpc(drawing)), false, 'ignore an unrelated equation preview');
+  const targets = c.findAllEquationTargetsInRange(selection.Range, {});
+  assert.deepEqual(Array.from(targets, target => target.start), [2, 3, 4, 6]);
+  assert.equal(targets[3].isOmml, true);
+
+  const doc = { Range: () => ({ Text: '' }) };
+  const alerts = [];
+  const requested = [];
+  const replaced = [];
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ensureBridgeRunning = callback => callback();
+  c.alert = message => alerts.push(message);
+  c.ajaxPost = (_url, body, done) => {
+    const xml = JSON.parse(body).data;
+    requested.push(xml);
+    if (xml.includes('ProgID="Equation.DSMT4"')) done(422, '{}');
+    else done(200, '{"result":"x"}');
+  };
+  c.replaceEquationWithLatex = (_doc, start) => replaced.push(start);
+  c.ToggleLatex();
+  assert.equal(requested.length, 4);
+  assert.deepEqual(replaced, [6, 4, 3]);
+  assert.match(alerts[0], /Found: 4\nConverted: 3\nSkipped\/Errors: 1/);
+
+  c.batchEquationToLatex(doc, selection, [targets[0]]);
+  assert.match(alerts[1], /Found: 1\nConverted: 0\nSkipped\/Errors: 1/);
+}

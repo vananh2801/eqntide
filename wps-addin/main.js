@@ -618,7 +618,7 @@ function InsertEquation() {
 /**
  * Detect equation (OMML, MathType OLE, or EMF inline shape) in selection or adjacent to cursor.
  */
-function findEquationTarget(selection, doc) {
+function findEquationTarget(selection, doc, allowAdjacent) {
   if (!selection) return null;
   var targetRange = null;
 
@@ -664,6 +664,8 @@ function findEquationTarget(selection, doc) {
       }
     } catch (_) {}
   }
+
+  if (allowAdjacent === false) return targetRange;
 
   // 6. Check adjacent word
   if (!targetRange) {
@@ -1452,6 +1454,112 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor, 
   }
 }
 
+function hasMathTypePreview(binaryData) {
+  if (!binaryData) return false;
+  var bytes;
+  try { bytes = atob(binaryData.textContent.replace(/\s/g, "")); } catch (_) { return false; }
+  // Both supported metafile formats carry MTEF in an AppsMFCC comment.
+  function uint16(offset) {
+    return bytes.charCodeAt(offset) + bytes.charCodeAt(offset + 1) * 256;
+  }
+  function uint32(offset) {
+    return uint16(offset) + uint16(offset + 2) * 65536;
+  }
+  function hasPayload(comment) {
+    var signature = comment.indexOf("AppsMFCC");
+    if (signature < 0) return false;
+    var payload = comment.slice(signature + 18);
+    var vendor = "Design Science, Inc.\x00";
+    if (payload.indexOf(vendor) === 0) payload = payload.slice(vendor.length);
+    var version = payload.charCodeAt(0);
+    return version === 3 || version === 5;
+  }
+
+  if (bytes.length >= 88 && uint32(0) === 1 && bytes.slice(40, 44) === " EMF") {
+    for (var pos = uint32(4); pos >= 88 && pos + 8 <= bytes.length;) {
+      var kind = uint32(pos);
+      var size = uint32(pos + 4);
+      if (size < 8 || size % 4 || pos + size > bytes.length || kind === 14) break;
+      if (kind === 70 && size >= 12 &&
+          hasPayload(bytes.slice(pos + 12, Math.min(pos + size, pos + 12 + uint32(pos + 8))))) return true;
+      pos += size;
+    }
+    return false;
+  }
+
+  var header = bytes.slice(0, 4) === "\xd7\xcd\xc6\x9a" ? 22 : 0;
+  if (uint16(header + 2) !== 9) return false;
+  for (var offset = header + 18; offset + 6 <= bytes.length;) {
+    var recordSize = uint32(offset) * 2;
+    if (recordSize < 6 || offset + recordSize > bytes.length) break;
+    if (uint16(offset + 4) === 0x0626 && recordSize >= 10 && uint16(offset + 6) === 15) {
+      var comment = bytes.slice(offset + 10, Math.min(offset + recordSize, offset + 10 + uint16(offset + 8)));
+      if (comment.indexOf("AppsMFCC") === 0 && hasPayload(comment)) return true;
+    }
+    offset += recordSize;
+  }
+  return false;
+}
+
+function hasBatchEquationInXml(xml) {
+  if (!xml) return false;
+  var tree;
+  try { tree = new DOMParser().parseFromString(xml, "application/xml"); } catch (_) { return false; }
+  if (!tree.documentElement || tree.getElementsByTagName("parsererror").length) return false;
+
+  var nsRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  var nsPkg = tree.documentElement.namespaceURI;
+  var parts = Object.create(null);
+  var candidate = tree.documentElement;
+  if (candidate.localName === "package") {
+    var nodes = candidate.getElementsByTagNameNS(nsPkg, "part");
+    for (var i = 0; i < nodes.length; i++) {
+      var name = nodes[i].getAttributeNS(nsPkg, "name").replace(/^\//, "");
+      parts[name] = nodes[i];
+    }
+    candidate = parts["word/document.xml"];
+    if (!candidate) return false;
+  }
+
+  var nsMath = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+  if (candidate.getElementsByTagNameNS(nsMath, "oMath").length ||
+      (candidate.localName === "oMath" && candidate.namespaceURI === nsMath)) {
+    return true;
+  }
+
+  var oleObjects = candidate.getElementsByTagNameNS("urn:schemas-microsoft-com:office:office", "OLEObject");
+  for (var j = 0; j < oleObjects.length; j++) {
+    if (/^(?:equation\.|mathtype)/i.test(oleObjects[j].getAttribute("ProgID"))) return true;
+  }
+
+  var relationshipPart = parts["word/_rels/document.xml.rels"];
+  if (!relationshipPart) return false;
+  var imageIds = Object.create(null);
+  var blips = candidate.getElementsByTagNameNS("http://schemas.openxmlformats.org/drawingml/2006/main", "blip");
+  for (var k = 0; k < blips.length; k++) imageIds[blips[k].getAttributeNS(nsRel, "embed")] = true;
+  var images = candidate.getElementsByTagNameNS("urn:schemas-microsoft-com:vml", "imagedata");
+  for (var l = 0; l < images.length; l++) imageIds[images[l].getAttributeNS(nsRel, "id")] = true;
+
+  var relationships = relationshipPart.getElementsByTagNameNS("http://schemas.openxmlformats.org/package/2006/relationships", "Relationship");
+  for (var m = 0; m < relationships.length; m++) {
+    var relationship = relationships[m];
+    var id = relationship.getAttribute("Id");
+    if (!id || !imageIds[id] || relationship.getAttribute("TargetMode") === "External" ||
+        relationship.getAttribute("Type") !== nsRel + "/image") continue;
+    var target = relationship.getAttribute("Target");
+    // OPC relationship targets are resolved relative to the source document part.
+    var segments = (target.charAt(0) === "/" ? target : "/word/" + target).split("/");
+    var path = [];
+    for (var n = 0; n < segments.length; n++) {
+      if (segments[n] === "..") path.pop();
+      else if (segments[n] && segments[n] !== ".") path.push(segments[n]);
+    }
+    var imagePart = parts[path.join("/")];
+    if (imagePart && hasMathTypePreview(imagePart.getElementsByTagNameNS(nsPkg, "binaryData")[0])) return true;
+  }
+  return false;
+}
+
 /**
  * Scan a range for all equation targets (InlineShapes with MathType/OMML XML and native OMaths).
  * Returns array of { start, end, xml, isDisplay } sorted by start ascending.
@@ -1467,7 +1575,7 @@ function findAllEquationTargetsInRange(range, doc) {
       if (cls < 0) return;
       var sXml = "";
       try { sXml = shape.Range.WordOpenXML || ""; } catch (_) {}
-      if (cls === 1 || hasEquationInXml(sXml)) {
+      if (cls === 1 || hasBatchEquationInXml(sXml)) {
         var sStart = shape.Range.Start;
         var sEnd = shape.Range.End;
         if (sEnd > sStart + 1) sEnd = sStart + 1;
@@ -1487,17 +1595,15 @@ function findAllEquationTargetsInRange(range, doc) {
     try {
       var oXml = "";
       try { oXml = omath.Range.WordOpenXML || ""; } catch (_) {}
-      if (hasEquationInXml(oXml)) {
-        var isDisp = false;
-        try { isDisp = (omath.ParentOMathPara !== null && typeof omath.ParentOMathPara !== "undefined"); } catch (_) {}
-        list.push({
-          start: omath.Range.Start,
-          end: omath.Range.End,
-          xml: compactFlatOpcXml(oXml),
-          isDisplay: isDisp,
-          isOmml: true
-        });
-      }
+      var isDisp = false;
+      try { isDisp = (omath.ParentOMathPara !== null && typeof omath.ParentOMathPara !== "undefined"); } catch (_) {}
+      list.push({
+        start: omath.Range.Start,
+        end: omath.Range.End,
+        xml: compactFlatOpcXml(oXml),
+        isDisplay: isDisp,
+        isOmml: true
+      });
     } catch (_) {}
   }
 
@@ -2109,14 +2215,14 @@ function batchEquationToLatex(doc, selection, eqTargets) {
           var skippedCount = total - convertedCount;
           if (convertedCount > 0) refreshToggleLayout(doc);
           wpsLog("batchEquationToLatex: converted " + convertedCount + "/" + total + " equations to LaTeX.");
-          if (convertedCount === 0 && lastNon422Error) {
-            alert("Failed to convert equations to LaTeX:\n" + lastNon422Error);
-          } else if (total > 1) {
+          if (total > 1 || skippedCount > 0) {
+            var title = convertedCount === 0 ? "Failed to convert equations to LaTeX." : "Toggle LaTeX Succeeded!";
+            var detail = convertedCount === 0 && lastNon422Error ? "\n\n" + lastNon422Error : "";
             alert(
-              "Toggle LaTeX Succeeded!\n\n" +
+              title + "\n\n" +
               "Found: " + total + "\n" +
               "Converted: " + convertedCount + "\n" +
-              "Skipped/Errors: " + skippedCount
+              "Skipped/Errors: " + skippedCount + detail
             );
           }
         }
@@ -2131,7 +2237,7 @@ function batchEquationToLatex(doc, selection, eqTargets) {
  * Supports:
  * - Highlighting an entire paragraph / range with multiple LaTeX formulas -> batch converts to MathType equations in-place
  * - Highlighting an entire paragraph / range with multiple equations -> batch converts to LaTeX $...$ text in-place
- * - Single click / collapsed cursor inside/adjacent to equation or LaTeX -> toggles single target
+ * - Explicitly selected equation or LaTeX at the cursor -> toggles single target
  */
 function ToggleLatex() {
   try {
@@ -2179,11 +2285,11 @@ function ToggleLatex() {
       var eqTargets = findAllEquationTargetsInRange(selection.Range, doc);
       if (eqTargets.length === 0) {
         // Fallback check single equation
-        var singleEq = findEquationTarget(selection, doc);
+        var singleEq = findEquationTarget(selection, doc, false);
         if (singleEq) {
           var sXml = "";
           try { sXml = singleEq.WordOpenXML || ""; } catch (_) {}
-          if (hasEquationInXml(sXml)) {
+          if (hasBatchEquationInXml(sXml)) {
             eqTargets.push({
               start: singleEq.Start,
               end: singleEq.End,
@@ -2235,26 +2341,14 @@ function ToggleLatex() {
     // ========================================================
     var latexAtCursor = detectEnclosingLatexAtCursor(doc, selection);
 
-    // 2.1 Check if an equation is selected or adjacent to cursor (unless cursor is strictly inside $...$)
-    var eqRange = (latexAtCursor && latexAtCursor.strictlyInside) ? null : findEquationTarget(selection, doc);
+    // WPS can expose a clicked object even when Start and End are equal.
+    var eqRange = (latexAtCursor && latexAtCursor.strictlyInside) ? null : findEquationTarget(selection, doc, false);
     var eqXml = "";
 
     if (eqRange) {
       try {
         if (eqRange.WordOpenXML && hasEquationInXml(eqRange.WordOpenXML)) {
           eqXml = eqRange.WordOpenXML;
-        }
-      } catch (_) {}
-    }
-
-    if (!eqXml && !(latexAtCursor && latexAtCursor.strictlyInside)) {
-      try {
-        if (selection.WordOpenXML && hasEquationInXml(selection.WordOpenXML)) {
-          eqXml = selection.WordOpenXML;
-          if (!eqRange) eqRange = selection.Range;
-        } else if (selection.Range && selection.Range.WordOpenXML && hasEquationInXml(selection.Range.WordOpenXML)) {
-          eqXml = selection.Range.WordOpenXML;
-          if (!eqRange) eqRange = selection.Range;
         }
       } catch (_) {}
     }
