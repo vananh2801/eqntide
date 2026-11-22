@@ -87,6 +87,9 @@ const xml = new DOMParser().parseFromString(fs.readFileSync(path.join(__dirname,
 const toggle = Array.from(xml.getElementsByTagName('toggleButton')).find(n => n.getAttribute('id') === 'btnAutoEquationTab');
 assert.equal(toggle, undefined);
 assert.equal(setup().c.OnAutoEquationTab, undefined);
+const toggleLatex = Array.from(xml.getElementsByTagName('button')).find(n => n.getAttribute('id') === 'btnToggleLatex');
+assert.equal(toggleLatex.getAttribute('label'), 'Toggle LaTeX');
+assert.equal(toggleLatex.hasAttribute('getLabel'), false);
 
 // Ribbon GetImage resolves distinct PNG assets per control ID and taskpane renders Tabler SVGs.
 {

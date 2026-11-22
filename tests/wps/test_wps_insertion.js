@@ -14,6 +14,22 @@ function controller() {
   return context;
 }
 
+function mockToggleProgress(c) {
+  const pane = { Visible: false };
+  const messages = [];
+  c.URL = URL;
+  c.location = { href: 'file:///EqnTide/index.html' };
+  c.wps.CreateTaskPane = url => {
+    assert.equal(url, 'file:///EqnTide/toggle-progress.html');
+    return pane;
+  };
+  c.wps.PluginStorage = {
+    setItem(_key, message) { messages.push(message); },
+    removeItem() { messages.push(null); }
+  };
+  return { pane, messages };
+}
+
 {
   const c = controller();
   const fragment = String.raw`0,25\text{\$}$`;
@@ -1061,15 +1077,8 @@ for (const platform of ['Linux x86_64', 'Win32']) {
 
   let rangeCalls = 0;
   const imported = [];
-  const labels = [];
   let now = 0;
   c.batchNow = () => { now += 30; return now; };
-  c.g_ribbonUI = {
-    InvalidateControl(id) {
-      assert.equal(id, 'btnToggleLatex');
-      labels.push(c.GetToggleLatexLabel());
-    }
-  };
   function visibleSlice(s, e) {
     return docText.slice(s, e).replace(ole26, '#');
   }
@@ -1101,6 +1110,7 @@ for (const platform of ['Linux x86_64', 'Win32']) {
     Collapse() {}
   };
   c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  const { pane, messages } = mockToggleProgress(c);
   c.ensureBridgeRunning = cb => cb();
 
   const pending = [];
@@ -1113,6 +1123,8 @@ for (const platform of ['Linux x86_64', 'Win32']) {
   };
 
   c.ToggleLatex();
+  assert.equal(pane.DockPosition, 3);
+  assert.equal(pane.Visible, true);
   c.ToggleLatex();
   assert.ok(rangeCalls < 200, `cumShift + chunked scan must avoid O(N^2) COM calls (got ${rangeCalls})`);
   assert.equal(maxInFlight, 8, 'must cap concurrent HTTP requests to 8');
@@ -1130,10 +1142,12 @@ for (const platform of ['Linux x86_64', 'Win32']) {
   }
   assert.ok(!docText.includes('$x_'), 'all 35 formulas must be converted');
   assert.deepEqual(imported, Array.from({ length: formulaCount }, (_, i) => `$x_${formulaCount - 1 - i}$`));
-  assert.equal(labels[0], 'Inserting MathType 0/35');
-  assert.ok(labels.some(label => /^Inserting MathType [1-9]/.test(label)));
-  assert.equal(labels.at(-1), 'Toggle LaTeX');
   assert.equal(c.g_latexBatchActive, false);
+  assert.equal(pane.Visible, false);
+  assert.equal(messages[0], 'Converting equations (0 / 35)…');
+  assert.ok(messages.some(message => /^Converting equations \([1-9]/.test(message)));
+  assert.ok(messages.includes('Inserting MathType (0 / 35)…'));
+  assert.equal(messages.at(-1), null);
   assert.equal(alerts.length, 1);
   assert.match(alerts[0], /Found: 35[\s\S]*Converted: 35[\s\S]*Skipped\/Errors: 0/);
 }
@@ -1180,6 +1194,7 @@ for (const failure of ['unchanged', 'deleted', 'unrestorable', 'noop']) {
     Range: { Font: { Size: 12 } }
   };
   c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  const { pane, messages } = mockToggleProgress(c);
   c.ensureBridgeRunning = cb => cb();
   c.ajaxPost = (_url, body, cb) => pending.push([JSON.parse(body).data, cb]);
 
@@ -1192,8 +1207,9 @@ for (const failure of ['unchanged', 'deleted', 'unrestorable', 'noop']) {
   assert.deepEqual(imports, stopped ? ['$c$'] : ['$c$', '$b$']);
   assert.equal(text, stopped ? '$a$ $b$ X new' : '$a$ # $c$ new');
   assert.match(alerts[0], stopped ? /WPS changed the document.*Converted: 0/s : /Converted: 1/);
-  assert.equal(c.GetToggleLatexLabel(), 'Toggle LaTeX');
   assert.equal(c.g_latexBatchActive, false);
+  assert.equal(pane.Visible, false);
+  assert.equal(messages.at(-1), null);
 }
 
 {
@@ -1288,7 +1304,7 @@ console.log('WPS Ctrl+A full-document prose vs equation priority tests passed');
   assert.ok(!compacted.includes('/word/styles.xml'));
   assert.ok(!compacted.includes('/word/numbering.xml'));
 
-  let docText = 'A # B';
+  let docText = 'A # # B';
   let extraWordOpenXmlReads = 0;
   const doc = {
     get Content() { return { End: docText.length }; },
@@ -1304,13 +1320,25 @@ console.log('WPS Ctrl+A full-document prose vs equation priority tests passed');
       };
     }
   };
-  const targets = [{ start: 2, end: 3, xml: '<o:OLEObject ProgID="Equation.DSMT4"/>', isDisplay: false, isOmml: false }];
+  const targets = [2, 4].map(start => ({
+    start, end: start + 1, xml: '<o:OLEObject ProgID="Equation.DSMT4"/>', isDisplay: false, isOmml: false
+  }));
   c.wps = { Application: { ActiveDocument: doc, Selection: { Collapse() {}, Font: {} } } };
-  c.ajaxPost = (_u, _b, cb) => cb(200, JSON.stringify({ result: 'x^2' }));
+  const { pane, messages } = mockToggleProgress(c);
+  const pending = [];
+  let alerts = [];
+  c.alert = message => alerts.push(message);
+  c.ajaxPost = (_u, _b, cb) => pending.push(cb);
   c.batchEquationToLatex(doc, {}, targets);
+  assert.equal(pane.Visible, true);
+  pending[0](200, JSON.stringify({ result: 'x^2' }));
+  pending[1](422, '');
   assert.equal(extraWordOpenXmlReads, 0, 'MathType OLE replacement must not re-read target.WordOpenXML');
-  assert.equal(targets[0].xml, null, 'request XML must be released once sent');
-  assert.equal(docText, 'A $x^2$ B');
+  assert.ok(targets.every(item => item.xml === null), 'request XML must be released once sent');
+  assert.equal(docText, 'A $x^2$ # B');
+  assert.equal(pane.Visible, false);
+  assert.deepEqual(messages, ['Converting equations (0 / 2)…', 'Replacing with LaTeX (0 / 2)…', null]);
+  assert.match(alerts[0], /Found: 2[\s\S]*Converted: 1[\s\S]*Skipped\/Errors: 1/);
 }
 {
   const timers = [];

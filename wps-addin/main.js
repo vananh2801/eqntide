@@ -1655,14 +1655,13 @@ var BATCH_HTTP_CONCURRENCY = 8;
 var BATCH_DOM_CHUNK_SIZE = 10;
 var g_latexBatchActive = false;
 var g_latexBatchMutating = false;
-var g_latexInsertionLabel = "";
 
 function batchNow() {
   return typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now() : Date.now();
 }
 
-function runBoundedQueue(items, maxConcurrent, worker, onDone) {
+function runBoundedQueue(items, maxConcurrent, worker, onDone, onProgress) {
   var total = items.length;
   if (total === 0) {
     onDone();
@@ -1683,6 +1682,7 @@ function runBoundedQueue(items, maxConcurrent, worker, onDone) {
       worker(items[idx], idx, function () {
         inFlight--;
         finished++;
+        onProgress(finished);
         if (finished === total) {
           onDone();
         } else {
@@ -1695,7 +1695,7 @@ function runBoundedQueue(items, maxConcurrent, worker, onDone) {
   pump();
 }
 
-function applyItemsInChunks(items, chunkSize, applyItem, onDone, onYield) {
+function applyItemsInChunks(items, chunkSize, applyItem, onDone, onProgress) {
   var total = items.length;
   var idx = 0;
   var canYield = typeof setTimeout === "function" && total > chunkSize;
@@ -1706,9 +1706,9 @@ function applyItemsInChunks(items, chunkSize, applyItem, onDone, onYield) {
       applyItem(items[idx], idx);
       idx++;
     }
+    onProgress(idx);
     if (idx < total) {
       if (canYield) {
-        if (onYield) onYield(idx);
         setTimeout(step, 0);
       } else {
         step();
@@ -1720,48 +1720,71 @@ function applyItemsInChunks(items, chunkSize, applyItem, onDone, onYield) {
   step();
 }
 
-function startLatexInsertionProgress(total) {
-  var updated = -Infinity;
+var TOGGLE_PROGRESS_KEY = "eqntide.toggleProgress";
+var g_toggleProgressPane = null;
 
+function createToggleProgress(total) {
+  var pane = null;
+  var lastPhase = "";
+  var lastUpdate = -Infinity;
   return {
-    update: function (processed) {
+    update: function (phase, count) {
+      if (total < 2) return;
       var now = batchNow();
-      if (total < 2 || now - updated < 500) return;
-      updated = now;
-      setLatexInsertionLabel("Inserting MathType " + processed + "/" + total);
+      if (phase === lastPhase && now - lastUpdate < 500) return;
+      lastPhase = phase;
+      lastUpdate = now;
+      try {
+        wps.PluginStorage.setItem(TOGGLE_PROGRESS_KEY, phase + " (" + count + " / " + total + ")…");
+        if (!pane && count === 0 && phase === "Converting equations") {
+          if (!g_toggleProgressPane) {
+            g_toggleProgressPane = wps.CreateTaskPane(new URL("toggle-progress.html", location.href).href, "EqnTide");
+          }
+          pane = g_toggleProgressPane;
+          if (pane) {
+            pane.DockPosition = 3; // msoCTPDockPositionBottom
+            if (pane.DockPosition === 3) {
+              pane.Visible = true;
+              pane.Height = 48;
+            }
+          }
+        }
+      } catch (_) {}
     },
     clear: function () {
-      if (g_latexInsertionLabel) setLatexInsertionLabel("");
+      if (total < 2) return;
+      try { if (pane) pane.Visible = false; } catch (_) { g_toggleProgressPane = null; }
+      try { wps.PluginStorage.removeItem(TOGGLE_PROGRESS_KEY); } catch (_) {}
     }
   };
 }
 
-function setLatexInsertionLabel(text) {
-  g_latexInsertionLabel = text;
-  try {
-    if (g_ribbonUI) g_ribbonUI.InvalidateControl("btnToggleLatex");
-  } catch (_) {}
-}
-
-function GetToggleLatexLabel() {
-  return g_latexInsertionLabel || "Toggle LaTeX";
-}
-
-/**
- * Batch convert multiple LaTeX formulas in a highlighted range to MathType EMF pictures in-place.
- */
-function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
+function runToggleBatch(total, runBatch) {
   if (g_latexBatchActive) return;
   g_latexBatchActive = true;
-  try {
-    runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo);
-  } catch (err) {
+  var progress = createToggleProgress(total);
+  function finish() {
+    progress.clear();
     g_latexBatchActive = false;
+  }
+  try {
+    runBatch(progress.update, finish);
+  } catch (err) {
+    finish();
     throw err;
   }
 }
 
-function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo) {
+/**
+ * Batch convert multiple LaTeX formulas in a highlighted range to MathType in-place.
+ */
+function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
+  runToggleBatch(latexMatches.length, function (report, finish) {
+    runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report, finish);
+  });
+}
+
+function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report, finish) {
   var preparationStarted = batchNow();
   var timings = { replacementMs: 0, lookupMs: 0, formattingMs: 0, missingShapes: 0 };
   var useDirectReplacement = typeof navigator !== "undefined" && /^(linux|win)/i.test(navigator.platform || "");
@@ -1832,6 +1855,9 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo) {
   var bridgeStarted = batchNow();
   var preparationMs = bridgeStarted - preparationStarted;
 
+  function bridgeProgress(count) { report("Converting equations", count); }
+  function insertionProgress(count) { report("Inserting MathType", count); }
+  bridgeProgress(0);
   runBoundedQueue(
     latexMatches,
     BATCH_HTTP_CONCURRENCY,
@@ -1883,8 +1909,7 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo) {
       var insertionStarted = null;
       var insertionFinished = null;
       var recoveryError = "";
-      var progress = startLatexInsertionProgress(total);
-      progress.update(0);
+      insertionProgress(0);
 
       applyItemsInChunks(
         latexMatches,
@@ -1930,8 +1955,7 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo) {
           match.convData = null;
         },
         function () {
-          progress.clear();
-          g_latexBatchActive = false;
+          finish();
           // Collapse selection at the end so subsequent typing does not inherit baseline
           try {
             var app = wps.Application;
@@ -1984,9 +2008,10 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo) {
             );
           }
         },
-        progress.update
+        insertionProgress
       );
-    }
+    },
+    bridgeProgress
   );
 }
 
@@ -2126,48 +2151,63 @@ function replaceEquationWithLatex(doc, start, end, latex, precheckedIsOmml) {
  * Batch convert multiple equations in a highlighted range to LaTeX $...$ strings in-place.
  */
 function batchEquationToLatex(doc, selection, eqTargets) {
+  runToggleBatch(eqTargets.length, function (report, finish) {
+    runEquationToLatexBatch(doc, selection, eqTargets, report, finish);
+  });
+}
+
+function runEquationToLatexBatch(doc, selection, eqTargets, report, finish) {
   wpsLog("batchEquationToLatex: found " + eqTargets.length + " equations in selection");
 
   var total = eqTargets.length;
   var lastNon422Error = "";
 
+  function bridgeProgress(count) { report("Converting equations", count); }
+  function insertionProgress(count) { report("Replacing with LaTeX", count); }
+  bridgeProgress(0);
   runBoundedQueue(
     eqTargets,
     BATCH_HTTP_CONCURRENCY,
     function (eq, _i, done) {
       var payloadXml = eq.xml;
       eq.xml = null;
-      ajaxPost(
-        BRIDGE_URL + "/convert/snippet",
-        JSON.stringify({
-          data: payloadXml,
-          from: "auto",
-          to: "latex"
-        }),
-        function (status, responseText) {
-          if (status === 200) {
-            try {
-              var res = JSON.parse(responseText);
-              if (res && res.result) {
-                eq.latex = res.result.trim();
-              }
-            } catch (_) {}
-          } else if (status !== 422 && !lastNon422Error) {
-            var errMsg = responseText || ("HTTP " + status);
-            try {
-              var parsedErr = JSON.parse(responseText);
-              if (parsedErr && parsedErr.error) errMsg = parsedErr.error;
-            } catch (_) {}
-            lastNon422Error = errMsg;
+      try {
+        ajaxPost(
+          BRIDGE_URL + "/convert/snippet",
+          JSON.stringify({
+            data: payloadXml,
+            from: "auto",
+            to: "latex"
+          }),
+          function (status, responseText) {
+            if (status === 200) {
+              try {
+                var res = JSON.parse(responseText);
+                if (res && res.result) {
+                  eq.latex = res.result.trim();
+                }
+              } catch (_) {}
+            } else if (status !== 422 && !lastNon422Error) {
+              var errMsg = responseText || ("HTTP " + status);
+              try {
+                var parsedErr = JSON.parse(responseText);
+                if (parsedErr && parsedErr.error) errMsg = parsedErr.error;
+              } catch (_) {}
+              lastNon422Error = errMsg;
+            }
+            done();
           }
-          done();
-        }
-      );
+        );
+      } catch (_) {
+        if (!lastNon422Error) lastNon422Error = "Could not submit a conversion request.";
+        done();
+      }
     },
     function () {
       // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
       eqTargets.sort(function (a, b) { return b.start - a.start; });
       var convertedCount = 0;
+      insertionProgress(0);
 
       applyItemsInChunks(
         eqTargets,
@@ -2196,6 +2236,7 @@ function batchEquationToLatex(doc, selection, eqTargets) {
           }
         },
         function () {
+          finish();
           // Reset selection formatting
           try {
             var app = wps.Application;
@@ -2225,9 +2266,11 @@ function batchEquationToLatex(doc, selection, eqTargets) {
               "Skipped/Errors: " + skippedCount + detail
             );
           }
-        }
+        },
+        insertionProgress
       );
-    }
+    },
+    bridgeProgress
   );
 }
 
