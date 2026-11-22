@@ -101,7 +101,7 @@ Public Sub ToggleLatexMacro()
     reg.Pattern = "(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([^\r\n\x07]+?\\\)|\$(?!\$)(?:\\.|[^$\\\r\n])+\$)"
 
     Dim matches As Object
-    Set matches = reg.Execute(txt)
+    Set matches = reg.Execute(MaskEscapedLatexDollars(txt))
 
     Dim i As Long, handled As Boolean, stepCount As Long
     Dim batchFound As Long, batchConverted As Long
@@ -116,9 +116,11 @@ Public Sub ToggleLatexMacro()
         ReDim matchFirstIdx(0 To matches.Count - 1)
         ReDim matchLengths(0 To matches.Count - 1)
         validCount = 0
+        Dim rawMatch As String
         For Each m In matches
-            If IsValidLatexMatch(m.Value) Then
-                matchValues(validCount) = m.Value
+            rawMatch = Mid$(txt, m.FirstIndex + 1, m.Length)
+            If IsValidLatexMatch(rawMatch) Then
+                matchValues(validCount) = rawMatch
                 matchFirstIdx(validCount) = m.FirstIndex
                 matchLengths(validCount) = m.Length
                 validCount = validCount + 1
@@ -584,6 +586,26 @@ Private Sub TrimTrailingRangeBreaks(ByVal target As Object)
         target.End = target.End - 1
     Loop
 End Sub
+
+Private Function MaskEscapedLatexDollars(ByVal text As String) As String
+    ' Keep offsets intact and read the actual formula from the original text.
+    Dim maskedText As String
+    maskedText = text
+    Dim escapePos As Long, backslashStart As Long
+    escapePos = InStr(1, text, "\$", vbBinaryCompare)
+    Do While escapePos > 0
+        backslashStart = escapePos
+        Do While backslashStart > 1
+            If Mid$(text, backslashStart - 1, 1) <> "\" Then Exit Do
+            backslashStart = backslashStart - 1
+        Loop
+        If (escapePos - backslashStart) Mod 2 = 0 Then
+            Mid$(maskedText, escapePos + 1, 1) = "x"
+        End If
+        escapePos = InStr(escapePos + 2, text, "\$", vbBinaryCompare)
+    Loop
+    MaskEscapedLatexDollars = maskedText
+End Function
 
 Private Function IsValidLatexMatch(ByVal rawMatch As String) As Boolean
     If Len(rawMatch) = 0 Or Len(rawMatch) > 2000 Then Exit Function
