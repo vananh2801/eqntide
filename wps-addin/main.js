@@ -412,6 +412,10 @@ function onWindowSelectionChange(Sel) {
 
 function onDocumentChange() {
   if (g_latexBatchMutating) return;
+  if (g_latexBatchActive) {
+    g_toggleDocumentChanged = true;
+    return;
+  }
   try {
     var app = wps.Application;
     if (!app || !app.Selection) return;
@@ -1207,7 +1211,6 @@ function moveCursorAfterRange(doc, cursorTarget) {
     endRange.Select();
     var curSel = app ? app.Selection : null;
     if (curSel) {
-      if (typeof curSel.Collapse === "function") curSel.Collapse(0);
       if (curSel.Font) {
         curSel.Font.Position = 0;
         curSel.Font.Subscript = false;
@@ -1217,25 +1220,31 @@ function moveCursorAfterRange(doc, cursorTarget) {
   } catch (_) {}
 }
 
-function refreshToggleLayout(doc) {
-  var app;
-  try {
-    app = wps.Application;
-    var active = app.ActiveDocument;
-    if (!active || (active !== doc && (!doc.FullName || active.FullName !== doc.FullName))) return;
-  } catch (_) { return; }
+function refreshToggleScreen(doc) {
+  function redraw() {
+    try {
+      if (!toggleDocumentIsCurrent(doc)) return;
+      var app = wps.Application;
+      if (typeof app.ScreenRefresh === "function") app.ScreenRefresh();
+    } catch (_) {}
+  }
 
-  try { if (typeof doc.Repaginate === "function") doc.Repaginate(); } catch (_) {}
+  // Let Writer finish the import and dismiss the progress UI before painting.
+  if (typeof setTimeout === "function") setTimeout(redraw, 0);
+  else redraw();
+}
+
+function resetToggleCaretFormatting(doc) {
   try {
-    var zoom = app.ActiveWindow.ActivePane.View.Zoom;
-    var previous = zoom.Percentage;
-    if (typeof previous === "number" && previous > 0) {
-      try { zoom.Percentage = previous >= 500 ? previous - 1 : previous + 1; }
-      finally { zoom.Percentage = previous; }
-      return;
+    if (!toggleDocumentIsCurrent(doc)) return;
+    var selection = wps.Application.Selection;
+    if (!selection || typeof selection.Start !== "number" || selection.Start !== selection.End) return;
+    if (selection.Font) {
+      selection.Font.Position = 0;
+      selection.Font.Subscript = false;
+      selection.Font.Superscript = false;
     }
   } catch (_) {}
-  try { if (typeof app.ScreenRefresh === "function") app.ScreenRefresh(); } catch (_) {}
 }
 
 function restoreDeletedLatex(doc, insertPos, replaced, originalEnd, suffix, source) {
@@ -1296,7 +1305,14 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor, 
     : "";
 
   var insertionRange = targetRange;
-  if (!(batch && batch.direct) && replaced > 0 && typeof targetRange.Delete === "function") {
+  if (batch && batch.collapsedImport) {
+    // On Linux keep a partial selection's XML import at a single insertion point.
+    targetRange.Delete();
+    if (getDocEnd(doc) !== originalEnd - replaced) {
+      throw new Error("WPS could not remove the selected LaTeX before insertion.");
+    }
+    insertionRange = doc.Range(insertPos, insertPos);
+  } else if (!(batch && batch.direct) && replaced > 0 && typeof targetRange.Delete === "function") {
     try {
       targetRange.Delete();
       insertionRange = doc.Range(insertPos, insertPos);
@@ -1317,6 +1333,10 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor, 
   }
 
   var newEnd = getDocEnd(doc);
+  if (batch && batch.collapsedImport && newEnd === originalEnd - replaced) {
+    restoreDeletedLatex(doc, insertPos, replaced, originalEnd, suffix, batch.source);
+    throw new Error("WPS did not insert the MathType object.");
+  }
   if (batch && batch.direct && newEnd === originalEnd &&
       doc.Range(insertPos, targetEnd).Text === batch.source) return null;
   var insertedEnd = insertPos + newEnd - originalEnd + replaced;
@@ -1562,7 +1582,7 @@ function hasBatchEquationInXml(xml) {
 
 /**
  * Scan a range for all equation targets (InlineShapes with MathType/OMML XML and native OMaths).
- * Returns array of { start, end, xml, isDisplay } sorted by start ascending.
+ * Returns lightweight target metadata sorted by start ascending.
  */
 function findAllEquationTargetsInRange(range, doc) {
   var list = [];
@@ -1574,15 +1594,18 @@ function findAllEquationTargetsInRange(range, doc) {
       var cls = quickClassifyShape(shape);
       if (cls < 0) return;
       var sXml = "";
-      try { sXml = shape.Range.WordOpenXML || ""; } catch (_) {}
+      if (cls === 0) {
+        try { sXml = shape.Range.WordOpenXML || ""; } catch (_) {}
+      }
       if (cls === 1 || hasBatchEquationInXml(sXml)) {
-        var sStart = shape.Range.Start;
-        var sEnd = shape.Range.End;
-        if (sEnd > sStart + 1) sEnd = sStart + 1;
+        var sourceRange = shape.Range;
+        var sStart = sourceRange.Start;
+        var sEnd = sourceRange.End;
         list.push({
           start: sStart,
-          end: sEnd,
-          xml: compactFlatOpcXml(sXml),
+          end: Math.min(sEnd, sStart + 1),
+          sourceEnd: sEnd,
+          sourceObject: shape,
           isDisplay: false,
           isOmml: false
         });
@@ -1593,14 +1616,12 @@ function findAllEquationTargetsInRange(range, doc) {
   function processOMath(omath) {
     if (!omath || !omath.Range) return;
     try {
-      var oXml = "";
-      try { oXml = omath.Range.WordOpenXML || ""; } catch (_) {}
       var isDisp = false;
       try { isDisp = (omath.ParentOMathPara !== null && typeof omath.ParentOMathPara !== "undefined"); } catch (_) {}
       list.push({
         start: omath.Range.Start,
         end: omath.Range.End,
-        xml: compactFlatOpcXml(oXml),
+        sourceObject: omath,
         isDisplay: isDisp,
         isOmml: true
       });
@@ -1655,69 +1676,131 @@ var BATCH_HTTP_CONCURRENCY = 8;
 var BATCH_DOM_CHUNK_SIZE = 10;
 var g_latexBatchActive = false;
 var g_latexBatchMutating = false;
+var g_toggleDocumentChanged = false;
 
 function batchNow() {
   return typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now() : Date.now();
 }
 
-function runBoundedQueue(items, maxConcurrent, worker, onDone, onProgress) {
-  var total = items.length;
-  if (total === 0) {
-    onDone();
-    return;
-  }
-  var nextIndex = 0;
-  var finished = 0;
-  var inFlight = 0;
-  var pumping = false;
-  var concurrency = Math.max(1, Math.min(maxConcurrent, total));
+function runToggleWindow(items, worker, applyItem, onDone, onProgress) {
+  var next = 0;
+  var retired = 0;
+  var slots = Object.create(null);
+  var running = false;
+  var scheduled = false;
+  var finished = false;
+  var peakSlots = 0;
 
-  function pump() {
-    if (pumping) return;
-    pumping = true;
-    while (inFlight < concurrency && nextIndex < total) {
-      var idx = nextIndex++;
-      inFlight++;
-      worker(items[idx], idx, function () {
-        inFlight--;
-        finished++;
-        onProgress(finished);
-        if (finished === total) {
-          onDone();
-        } else {
-          pump();
-        }
-      });
-    }
-    pumping = false;
+  function finish(error) {
+    finished = true;
+    Object.keys(slots).forEach(function (index) {
+      var slot = slots[index];
+      slot.result = null;
+      if (slot.request && typeof slot.request.abort === "function") {
+        try { slot.request.abort(); } catch (_) {}
+      }
+      delete slots[index];
+    });
+    onDone(error, peakSlots);
   }
-  pump();
+
+  function dispatch(index) {
+    var slot = slots[index] = { ready: false, result: null, request: null };
+    var request = worker(items[index], function (result) {
+      if (finished || slot.ready) return;
+      slot.ready = true;
+      slot.result = result;
+      slot.request = null;
+      if (!running && !scheduled) scheduleDrain();
+    });
+    if (!slot.ready) slot.request = request;
+  }
+
+  function refill() {
+    while (next < items.length && next - retired < BATCH_HTTP_CONCURRENCY) {
+      dispatch(next++);
+      peakSlots = Math.max(peakSlots, next - retired);
+    }
+  }
+
+  function scheduleDrain() {
+    if (typeof setTimeout === "function") {
+      scheduled = true;
+      setTimeout(drain, 0);
+    } else {
+      drain();
+    }
+  }
+
+  function drain() {
+    running = true;
+    scheduled = false;
+    try {
+      refill();
+      var end = Math.min(items.length, retired + BATCH_DOM_CHUNK_SIZE);
+      while (retired < end && slots[retired].ready) {
+        var error = applyItem(items[retired], slots[retired].result);
+        if (error) {
+          finish(error);
+          return;
+        }
+        delete slots[retired++];
+        refill();
+      }
+      if (retired === items.length) {
+        finish();
+      } else {
+        onProgress(retired);
+        if (slots[retired].ready) scheduleDrain();
+      }
+    } catch (error) {
+      if (!finished) finish(String(error));
+      else throw error;
+    } finally {
+      running = false;
+    }
+  }
+
+  drain();
 }
 
-function applyItemsInChunks(items, chunkSize, applyItem, onDone, onProgress) {
-  var total = items.length;
-  var idx = 0;
-  var canYield = typeof setTimeout === "function" && total > chunkSize;
-
-  function step() {
-    var end = Math.min(total, idx + chunkSize);
-    while (idx < end) {
-      applyItem(items[idx], idx);
-      idx++;
-    }
-    onProgress(idx);
-    if (idx < total) {
-      if (canYield) {
-        setTimeout(step, 0);
-      } else {
-        step();
-      }
-    } else {
-      onDone();
-    }
+// WPS can reassign part and relationship IDs when a neighboring range is
+// replaced. Compare the equation data instead of the serialized package.
+function toggleSourceSignature(xml, isOmml) {
+  var parts = /<pkg:part\b([^>]*)>\s*<pkg:binaryData\b[^>]*>([\s\S]*?)<\/pkg:binaryData>/gi;
+  var embedded = [];
+  var media = [];
+  var part;
+  while ((part = parts.exec(xml))) {
+    var name = /\bpkg:name=["']\/?word\/(embeddings|media)\//i.exec(part[1]);
+    if (!name) continue;
+    var signatures = name[1].toLowerCase() === "embeddings" ? embedded : media;
+    signatures.push(hashToggleSource(part[2].replace(/\s/g, "")));
   }
-  step();
+  if (embedded.length && !isOmml) return "ole:" + embedded.sort().join(",");
+  var math = xml.match(/<(?:[\w.-]+:)?oMath(?=[\s/>])(?:[^>]*\/>|[\s\S]*?<\/(?:[\w.-]+:)?oMath\s*>)/g);
+  if (math) {
+    return "omml:" + hashToggleSource(math.join("").replace(/\s+(?:xmlns(?::[\w.-]+)?|[\w.-]+:rsid[\w.-]*)=["'][^"']*["']/g, ""));
+  }
+  if (!isOmml && media.length) return "media:" + media.sort().join(",");
+  return "xml:" + hashToggleSource(xml);
+}
+
+function hashToggleSource(text) {
+  var first = 2166136261;
+  var second = 0;
+  for (var i = 0; i < text.length; i++) {
+    var code = text.charCodeAt(i);
+    first = Math.imul(first ^ code, 16777619);
+    second = Math.imul(second, 31) + code | 0;
+  }
+  return text.length + ":" + first + ":" + second;
+}
+
+function toggleDocumentIsCurrent(doc) {
+  var active = wps.Application.ActiveDocument;
+  return !!active && (active === doc || (doc.FullName && active.FullName === doc.FullName));
 }
 
 var TOGGLE_PROGRESS_KEY = "eqntide.toggleProgress";
@@ -1731,12 +1814,12 @@ function createToggleProgress(total) {
     update: function (phase, count) {
       if (total < 2) return;
       var now = batchNow();
-      if (phase === lastPhase && now - lastUpdate < 500) return;
+      if (lastPhase && now - lastUpdate < 500) return;
       lastPhase = phase;
       lastUpdate = now;
       try {
         wps.PluginStorage.setItem(TOGGLE_PROGRESS_KEY, phase + " (" + count + " / " + total + ")…");
-        if (!pane && count === 0 && phase === "Converting equations") {
+        if (!pane && count === 0) {
           if (!g_toggleProgressPane) {
             g_toggleProgressPane = wps.CreateTaskPane(new URL("toggle-progress.html", location.href).href, "EqnTide");
           }
@@ -1762,6 +1845,7 @@ function createToggleProgress(total) {
 function runToggleBatch(total, runBatch) {
   if (g_latexBatchActive) return;
   g_latexBatchActive = true;
+  g_toggleDocumentChanged = false;
   var progress = createToggleProgress(total);
   function finish() {
     progress.clear();
@@ -1779,6 +1863,7 @@ function runToggleBatch(total, runBatch) {
  * Batch convert multiple LaTeX formulas in a highlighted range to MathType in-place.
  */
 function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
+  if (!toggleDocumentIsCurrent(doc)) return;
   runToggleBatch(latexMatches.length, function (report, finish) {
     runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report, finish);
   });
@@ -1787,7 +1872,8 @@ function batchLatexToMathType(doc, selection, latexMatches, rangeInfo) {
 function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report, finish) {
   var preparationStarted = batchNow();
   var timings = { replacementMs: 0, lookupMs: 0, formattingMs: 0, missingShapes: 0 };
-  var useDirectReplacement = typeof navigator !== "undefined" && /^(linux|win)/i.test(navigator.platform || "");
+  var platform = typeof navigator !== "undefined" ? navigator.platform || "" : "";
+  var useDirectReplacement = /^(linux|win)/i.test(platform);
   var baseStart = (rangeInfo && typeof rangeInfo.start === "number") ? rangeInfo.start
     : (selection && typeof selection.Start === "number" ? selection.Start
     : (selection && selection.Range && typeof selection.Range.Start === "number" ? selection.Range.Start : 0));
@@ -1841,13 +1927,6 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report
     mItem.fontPt = isValidFontSizePt(itemFont) ? itemFont : 12.0;
   }
 
-  // Collapse selection immediately so the highlight is cleared and no selection-level formatting leaks
-  try {
-    if (selection && typeof selection.Collapse === "function") {
-      selection.Collapse(0);
-    }
-  } catch (_) {}
-
   var total = latexMatches.length;
   var lastNon422Error = "";
   var firstUnsupported = "";
@@ -1855,19 +1934,26 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report
   var bridgeStarted = batchNow();
   var preparationMs = bridgeStarted - preparationStarted;
 
-  function bridgeProgress(count) { report("Converting equations", count); }
-  function insertionProgress(count) { report("Inserting MathType", count); }
-  bridgeProgress(0);
-  runBoundedQueue(
+  var lastResponse = bridgeStarted;
+  var expectedEnd = getDocEnd(doc);
+  // A full-document selection can end before the final paragraph mark.
+  var partialLinuxSelection = /^linux/i.test(platform) && (baseStart > 0 || selEnd < expectedEnd - 1);
+  var convertedCount = 0;
+  var insertionStarted = null;
+  var insertionFinished = null;
+  var recoveryError = "";
+
+  report("Inserting", 0);
+  latexMatches.sort(function (a, b) { return b.docStart - a.docStart; });
+  runToggleWindow(
     latexMatches,
-    BATCH_HTTP_CONCURRENCY,
-    function (m, _i, done) {
+    function (m, done) {
       if (m.docStart < 0) {
         done();
         return;
       }
       try {
-        ajaxPost(
+        return ajaxPost(
           BRIDGE_URL + "/convert/snippet",
           JSON.stringify({
             data: m.latex,
@@ -1876,9 +1962,11 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report
             font_pt: m.fontPt
           }),
           function (status, responseText) {
+            lastResponse = batchNow();
+            var data = null;
             if (status === 200) {
               try {
-                m.convData = JSON.parse(responseText);
+                data = JSON.parse(responseText);
               } catch (_) {}
             } else if (status === 422 || !lastNon422Error) {
               var errMsg = responseText || ("HTTP " + status);
@@ -1893,125 +1981,109 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report
                 lastNon422Error = errMsg;
               }
             }
-            done();
-          }
+            done(data);
+          },
+          25000
         );
       } catch (err) {
         if (!lastNon422Error) lastNon422Error = "Could not submit a conversion request.";
         done();
       }
     },
-    function () {
-      var bridgeMs = batchNow() - bridgeStarted;
-      // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
-      latexMatches.sort(function (a, b) { return b.docStart - a.docStart; });
-      var convertedCount = 0;
-      var insertionStarted = null;
-      var insertionFinished = null;
-      var recoveryError = "";
-      insertionProgress(0);
-
-      applyItemsInChunks(
-        latexMatches,
-        BATCH_DOM_CHUNK_SIZE,
-        function (match) {
-          if (!recoveryError && match.convData && match.convData.result) {
-            if (insertionStarted === null) insertionStarted = batchNow();
-            var targetRange;
-            var originalEnd;
+    function (match, data) {
+      if (g_toggleDocumentChanged || !toggleDocumentIsCurrent(doc) || getDocEnd(doc) !== expectedEnd) {
+        return "The document changed during Toggle LaTeX.";
+      }
+      if (data && data.result) {
+        if (insertionStarted === null) insertionStarted = batchNow();
+        var targetRange;
+        var originalEnd;
+        try {
+          targetRange = doc.Range(match.docStart, match.docEnd);
+          var targetText = targetRange && targetRange.Text;
+          if (targetText === match.raw || targetText === match.raw.replace(/\r\n/g, "\r")) {
+            originalEnd = getDocEnd(doc);
+            var collapsedImport = partialLinuxSelection &&
+              !/[\r\n]/.test(targetText) && targetText.length === targetRange.End - targetRange.Start;
+            g_latexBatchMutating = true;
+            var pic = insertMathTypeAtDocRange(doc, targetRange, data, false, {
+              timings: timings,
+              documentEnd: originalEnd,
+              direct: useDirectReplacement && !collapsedImport,
+              collapsedImport: collapsedImport,
+              fontPt: match.fontPt,
+              source: targetText
+            });
+            expectedEnd = getDocEnd(doc);
+            if (pic) convertedCount++;
+          } else {
+            return "The formula changed during Toggle LaTeX at " + match.docStart + ".";
+          }
+        } catch (insErr) {
+          if (typeof originalEnd === "number") {
+            var rangeIntact = false;
             try {
-              targetRange = doc.Range(match.docStart, match.docEnd);
-              var targetText = targetRange && targetRange.Text;
-              if (targetText === match.raw || targetText === match.raw.replace(/\r\n/g, "\r")) {
-                originalEnd = getDocEnd(doc);
-                g_latexBatchMutating = true;
-                var pic = insertMathTypeAtDocRange(doc, targetRange, match.convData, false, {
-                  timings: timings,
-                  documentEnd: originalEnd,
-                  direct: useDirectReplacement,
-                  fontPt: match.fontPt,
-                  source: targetText
-                });
-                if (pic) convertedCount++;
-              }
-            } catch (insErr) {
-              if (typeof originalEnd === "number") {
-                var rangeIntact = false;
-                try {
-                  rangeIntact = getDocEnd(doc) === originalEnd &&
-                    doc.Range(match.docStart, match.docEnd).Text === targetText;
-                } catch (_) {}
-                if (!rangeIntact) {
-                  recoveryError = "WPS changed the document while inserting at " + match.docStart +
-                    ". Check that location before resuming conversion.";
-                }
-              }
-              wpsLog("batchLatexToMathType: insert failed at " + match.docStart);
-            } finally {
-              g_latexBatchMutating = false;
-              insertionFinished = batchNow();
+              rangeIntact = getDocEnd(doc) === originalEnd &&
+                doc.Range(match.docStart, match.docEnd).Text === targetText;
+            } catch (_) {}
+            if (!rangeIntact) {
+              recoveryError = "WPS changed the document while inserting at " + match.docStart +
+                ". Check that location before resuming conversion.";
             }
           }
-          match.convData = null;
-        },
-        function () {
-          finish();
-          // Collapse selection at the end so subsequent typing does not inherit baseline
-          try {
-            var app = wps.Application;
-            var activeDoc = app && app.ActiveDocument;
-            var sameDocument = activeDoc && (activeDoc === doc ||
-              (doc.FullName && activeDoc.FullName === doc.FullName));
-            var curSel = sameDocument && !recoveryError ? app.Selection : null;
-            if (curSel) {
-              if (typeof curSel.Collapse === "function") {
-                curSel.Collapse(0);
-              }
-              if (curSel.Font) {
-                curSel.Font.Position = 0;
-                curSel.Font.Subscript = false;
-                curSel.Font.Superscript = false;
-              }
-            }
-          } catch (_) {}
-
-          if (convertedCount > 0) refreshToggleLayout(doc);
-          var skippedCount = total - convertedCount;
-          wpsLog("batchLatexToMathType timing: " + JSON.stringify({
-            found: total,
-            converted: convertedCount,
-            skipped: skippedCount,
-            preparation_ms: Math.round(preparationMs),
-            bridge_ms: Math.round(bridgeMs),
-            insertion_ms: insertionStarted === null ? 0 : Math.round(insertionFinished - insertionStarted),
-            replacement_ms: Math.round(timings.replacementMs),
-            shape_lookup_ms: Math.round(timings.lookupMs),
-            formatting_ms: Math.round(timings.formattingMs),
-            missing_shapes: timings.missingShapes
-          }));
-          wpsLog("batchLatexToMathType: converted " + convertedCount + "/" + total + " formulas" + (skippedCount > 0 ? " (" + skippedCount + " skipped)" : "") + ".");
-          if (recoveryError) {
-            alert(recoveryError + "\n\nFound: " + total + "\nConverted: " + convertedCount +
-              "\nSkipped/Errors: " + skippedCount);
-          } else if (convertedCount === 0 && lastNon422Error) {
-            alert("Failed to convert LaTeX to MathType:\n" + lastNon422Error);
-          } else if (unsupportedCount === total) {
-            alert("No LaTeX formulas were converted.\n" +
-              "Found: " + total + "\nSkipped: " + unsupportedCount + "\n\n" + firstUnsupported +
-              "\n\nTo toggle existing equations to LaTeX in a mixed document, select a range without delimited LaTeX.");
-          } else if (total > 1) {
-            alert(
-              "Toggle LaTeX Succeeded!\n\n" +
-              "Found: " + total + "\n" +
-              "Converted: " + convertedCount + "\n" +
-              "Skipped/Errors: " + skippedCount
-            );
-          }
-        },
-        insertionProgress
-      );
+          wpsLog("batchLatexToMathType: insert failed at " + match.docStart);
+        } finally {
+          g_latexBatchMutating = false;
+          insertionFinished = batchNow();
+        }
+      }
+      return recoveryError;
     },
-    bridgeProgress
+    function (error, peakSlots) {
+      recoveryError = error || recoveryError;
+      finish();
+      if (convertedCount > 0) {
+        if (!recoveryError) resetToggleCaretFormatting(doc);
+        refreshToggleScreen(doc);
+      }
+      var skippedCount = total - convertedCount;
+      wpsLog("batchLatexToMathType timing: " + JSON.stringify({
+        found: total,
+        converted: convertedCount,
+        skipped: skippedCount,
+        preparation_ms: Math.round(preparationMs),
+        bridge_ms: Math.round(lastResponse - bridgeStarted),
+        first_insertion_ms: insertionStarted === null ? null : Math.round(insertionStarted - bridgeStarted),
+        total_ms: Math.round(batchNow() - preparationStarted),
+        peak_slots: peakSlots,
+        insertion_ms: insertionStarted === null ? 0 : Math.round(insertionFinished - insertionStarted),
+        replacement_ms: Math.round(timings.replacementMs),
+        shape_lookup_ms: Math.round(timings.lookupMs),
+        formatting_ms: Math.round(timings.formattingMs),
+        missing_shapes: timings.missingShapes
+      }));
+      wpsLog("batchLatexToMathType: converted " + convertedCount + "/" + total + " formulas" + (skippedCount > 0 ? " (" + skippedCount + " skipped)" : "") + ".");
+      if (recoveryError) {
+        alert(recoveryError + "\n\nFound: " + total + "\nConverted: " + convertedCount +
+          "\nSkipped/Errors: " + skippedCount);
+      } else if (convertedCount === 0 && lastNon422Error) {
+        alert("Failed to convert LaTeX to MathType:\n" + lastNon422Error);
+      } else if (unsupportedCount === total) {
+        alert("No LaTeX formulas were converted.\n" +
+          "Found: " + total + "\nSkipped: " + unsupportedCount + "\n\n" + firstUnsupported +
+          "\n\nTo toggle existing equations to LaTeX in a mixed document, select a range without delimited LaTeX.");
+      } else if (total > 1) {
+        alert(
+          "Toggle LaTeX Succeeded!\n\n" +
+          "Found: " + total + "\n" +
+          "Converted: " + convertedCount + "\n" +
+          "Skipped/Errors: " + skippedCount
+        );
+      }
+    },
+    function (written) {
+      report("Inserting", written);
+    }
   );
 }
 
@@ -2057,44 +2129,41 @@ function ommlPackageToPlainText(xml, ordinal, latex) {
   return new XMLSerializer().serializeToString(tree);
 }
 
+function findToggleObjectAt(collection, start) {
+  if (!collection || !collection.Count) return null;
+  var lo = 1, hi = collection.Count;
+  while (lo <= hi) {
+    var mid = (lo + hi) >> 1;
+    var candidate = collection.Item(mid);
+    if (!candidate || !candidate.Range) return null;
+    var position = candidate.Range.Start;
+    if (position === start) return candidate;
+    if (position < start) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  for (var index = 1; index <= collection.Count; index++) {
+    var item = collection.Item(index);
+    if (item && item.Range && item.Range.Start === start) return item;
+  }
+  return null;
+}
+
+function findToggleEquationAt(doc, target, start, collectionName) {
+  // Selection and Document can expose objects that a freshly created Range
+  // does not. Use the document before the fallbacks that depend on selection.
+  var owners = [target, doc, wps.Application.Selection];
+  for (var i = 0; i < owners.length; i++) {
+    try {
+      var candidate = findToggleObjectAt(owners[i][collectionName], start);
+      if (candidate) return candidate;
+    } catch (_) {}
+  }
+  return null;
+}
+
 function replaceEquationWithLatex(doc, start, end, latex, precheckedIsOmml) {
   var target = doc.Range(start, end);
-  var equation = null;
-  if (precheckedIsOmml !== false) {
-    try {
-      if (target.OMaths && target.OMaths.Count > 0) equation = target.OMaths.Item(1);
-    } catch (_) {}
-    if (!equation) {
-      // WPS sometimes exposes OMaths only through Selection or Document while
-      // the freshly created document Range reports none.
-      var owners = [wps.Application.Selection, doc];
-      for (var ownerIndex = 0; !equation && ownerIndex < owners.length; ownerIndex++) {
-        try {
-          var collection = owners[ownerIndex].OMaths;
-          if (!collection || !collection.Count) continue;
-          var oCount = collection.Count;
-          if (oCount > 16) {
-            var lo = 1, hi = oCount;
-            while (lo <= hi) {
-              var mid = (lo + hi) >> 1;
-              var midCand = collection.Item(mid);
-              if (!midCand || !midCand.Range || typeof midCand.Range.Start !== "number") break;
-              var mStart = midCand.Range.Start;
-              if (mStart === start) { equation = midCand; break; }
-              if (mStart < start) lo = mid + 1;
-              else hi = mid - 1;
-            }
-          }
-          if (!equation) {
-            for (var mathIndex = 1; mathIndex <= oCount; mathIndex++) {
-              var candidate = collection.Item(mathIndex);
-              if (candidate.Range.Start === start) { equation = candidate; break; }
-            }
-          }
-        } catch (_) {}
-      }
-    }
-  }
+  var equation = precheckedIsOmml === false ? null : findToggleEquationAt(doc, target, start, "OMaths");
   if (equation) {
     start = equation.Range.Start;
     var paragraph = target.Paragraphs.Item(1).Range;
@@ -2116,6 +2185,9 @@ function replaceEquationWithLatex(doc, start, end, latex, precheckedIsOmml) {
     }
     doc.Range(paragraph.Start, pEnd).InsertXML(xml);
   } else {
+    if (precheckedIsOmml === true) {
+      throw new Error("Cannot locate the native OMML container; document was not changed");
+    }
     if (precheckedIsOmml !== false) {
       var nativeXml = "";
       try { nativeXml = target.WordOpenXML || ""; } catch (_) {}
@@ -2129,7 +2201,7 @@ function replaceEquationWithLatex(doc, start, end, latex, precheckedIsOmml) {
         if (shpRange && typeof shpRange.Start === "number" && typeof shpRange.End === "number") {
           var shpStart = shpRange.Start;
           var shpEnd = trimTrailingBreaks(doc, shpStart, shpRange.End);
-          if (shpEnd > shpStart) {
+          if (shpStart === start && shpEnd > shpStart) {
             start = shpStart;
             target = doc.Range(shpStart, shpEnd);
           }
@@ -2151,9 +2223,34 @@ function replaceEquationWithLatex(doc, start, end, latex, precheckedIsOmml) {
  * Batch convert multiple equations in a highlighted range to LaTeX $...$ strings in-place.
  */
 function batchEquationToLatex(doc, selection, eqTargets) {
+  if (!toggleDocumentIsCurrent(doc)) return;
   runToggleBatch(eqTargets.length, function (report, finish) {
     runEquationToLatexBatch(doc, selection, eqTargets, report, finish);
   });
+}
+
+function readToggleEquationXml(doc, item) {
+  // The marker-sized replacement range can omit the OLE embedding.
+  var sourceEnd = typeof item.sourceEnd === "number" ? item.sourceEnd : item.end;
+  var source;
+  var xml;
+  try {
+    source = item.sourceObject ? item.sourceObject.Range : item.sourceRange;
+    if (source && source.Start === item.start && source.End === sourceEnd) xml = source.WordOpenXML;
+  } catch (_) {}
+  if (!xml) {
+    source = doc.Range(item.start, sourceEnd);
+    if (item.sourceObject) {
+      var collection = item.isOmml ? "OMaths" : "InlineShapes";
+      var liveObject = findToggleEquationAt(doc, source, item.start, collection);
+      if (!liveObject) throw new Error("The equation range changed at " + item.start + ".");
+      source = liveObject.Range;
+      item.sourceObject = liveObject;
+      item.sourceEnd = source.End;
+    }
+    xml = source.WordOpenXML;
+  }
+  return compactFlatOpcXml(xml || "");
 }
 
 function runEquationToLatexBatch(doc, selection, eqTargets, report, finish) {
@@ -2161,18 +2258,29 @@ function runEquationToLatexBatch(doc, selection, eqTargets, report, finish) {
 
   var total = eqTargets.length;
   var lastNon422Error = "";
+  var firstUnsupported = "";
 
-  function bridgeProgress(count) { report("Converting equations", count); }
-  function insertionProgress(count) { report("Replacing with LaTeX", count); }
-  bridgeProgress(0);
-  runBoundedQueue(
+  var expectedEnd = getDocEnd(doc);
+  var convertedCount = 0;
+  var started = batchNow();
+  var lastResponse = started;
+  var firstWrite = null;
+  var writeMs = 0;
+
+  report("Replacing with LaTeX", 0);
+  eqTargets.sort(function (a, b) { return b.start - a.start; });
+  runToggleWindow(
     eqTargets,
-    BATCH_HTTP_CONCURRENCY,
-    function (eq, _i, done) {
-      var payloadXml = eq.xml;
-      eq.xml = null;
+    function (eq, done) {
       try {
-        ajaxPost(
+        var payloadXml = readToggleEquationXml(doc, eq);
+        if (!payloadXml) {
+          if (!lastNon422Error) lastNon422Error = "WPS returned no equation XML at " + eq.start + ".";
+          done();
+          return;
+        }
+        var signature = toggleSourceSignature(payloadXml, eq.isOmml);
+        var request = ajaxPost(
           BRIDGE_URL + "/convert/snippet",
           JSON.stringify({
             data: payloadXml,
@@ -2180,97 +2288,112 @@ function runEquationToLatexBatch(doc, selection, eqTargets, report, finish) {
             to: "latex"
           }),
           function (status, responseText) {
+            lastResponse = batchNow();
+            var result = null;
             if (status === 200) {
               try {
                 var res = JSON.parse(responseText);
                 if (res && res.result) {
-                  eq.latex = res.result.trim();
+                  result = { latex: res.result.trim(), signature: signature };
                 }
               } catch (_) {}
-            } else if (status !== 422 && !lastNon422Error) {
+              if ((!result || !result.latex) && !lastNon422Error) {
+                lastNon422Error = "The bridge returned no LaTeX for the equation at " + eq.start + ".";
+              }
+            } else if ((status === 422 && !firstUnsupported) || (status !== 422 && !lastNon422Error)) {
               var errMsg = responseText || ("HTTP " + status);
               try {
                 var parsedErr = JSON.parse(responseText);
                 if (parsedErr && parsedErr.error) errMsg = parsedErr.error;
               } catch (_) {}
-              lastNon422Error = errMsg;
+              if (status === 422) firstUnsupported = errMsg;
+              else lastNon422Error = errMsg;
             }
-            done();
-          }
+            done(result);
+          },
+          25000
         );
-      } catch (_) {
-        if (!lastNon422Error) lastNon422Error = "Could not submit a conversion request.";
+        payloadXml = null;
+        return request;
+      } catch (err) {
+        if (!lastNon422Error) lastNon422Error = "Could not read or submit equation at " + eq.start + ": " + err;
         done();
       }
     },
-    function () {
-      // Apply DOM replacements in DESCENDING ORDER (right to left) so preceding offsets remain valid
-      eqTargets.sort(function (a, b) { return b.start - a.start; });
-      var convertedCount = 0;
-      insertionProgress(0);
-
-      applyItemsInChunks(
-        eqTargets,
-        BATCH_DOM_CHUNK_SIZE,
-        function (item) {
-          if (item.latex) {
-            try {
-              var rStart = item.start;
-              var rEnd = item.end;
-              var latexStr = item.isDisplay ? ("$$" + item.latex + "$$") : ("$" + item.latex + "$");
-              replaceEquationWithLatex(doc, rStart, rEnd, latexStr, item.isOmml);
-
-              // Check and remove adjacent trailing ZWNJ if present
-              try {
-                var afterPos = rStart + latexStr.length;
-                var nextChar = doc.Range(afterPos, afterPos + 1);
-                if (nextChar && nextChar.Text === "‌") {
-                  nextChar.Delete();
-                }
-              } catch (_) {}
-
-              convertedCount++;
-            } catch (repErr) {
-              wpsLog("batchEquationToLatex: replace failed at " + item.start + ": " + repErr);
-            }
+    function (item, result) {
+      if (g_toggleDocumentChanged || !toggleDocumentIsCurrent(doc) || getDocEnd(doc) !== expectedEnd) {
+        return "The document changed during Toggle LaTeX.";
+      }
+      if (result && result.latex) {
+        var writeStarted = batchNow();
+        try {
+          var rStart = item.start;
+          var rEnd = item.end;
+          var latexStr = item.isDisplay ? ("$$" + result.latex + "$$") : ("$" + result.latex + "$");
+          if (toggleSourceSignature(readToggleEquationXml(doc, item), item.isOmml) !== result.signature) {
+            return "The equation changed during Toggle LaTeX at " + rStart + ".";
           }
-        },
-        function () {
-          finish();
-          // Reset selection formatting
+          if (firstWrite === null) firstWrite = batchNow();
+          g_latexBatchMutating = true;
+          replaceEquationWithLatex(doc, rStart, rEnd, latexStr, item.isOmml);
+
+          // Check and remove adjacent trailing ZWNJ if present
           try {
-            var app = wps.Application;
-            var curSel = app ? app.Selection : null;
-            if (curSel) {
-              if (typeof curSel.Collapse === "function") {
-                curSel.Collapse(0);
-              }
-              if (curSel.Font) {
-                curSel.Font.Position = 0;
-                curSel.Font.Subscript = false;
-                curSel.Font.Superscript = false;
-              }
+            var afterPos = rStart + latexStr.length;
+            var nextChar = doc.Range(afterPos, afterPos + 1);
+            if (nextChar && nextChar.Text === "‌") {
+              nextChar.Delete();
             }
           } catch (_) {}
 
-          var skippedCount = total - convertedCount;
-          if (convertedCount > 0) refreshToggleLayout(doc);
-          wpsLog("batchEquationToLatex: converted " + convertedCount + "/" + total + " equations to LaTeX.");
-          if (total > 1 || skippedCount > 0) {
-            var title = convertedCount === 0 ? "Failed to convert equations to LaTeX." : "Toggle LaTeX Succeeded!";
-            var detail = convertedCount === 0 && lastNon422Error ? "\n\n" + lastNon422Error : "";
-            alert(
-              title + "\n\n" +
-              "Found: " + total + "\n" +
-              "Converted: " + convertedCount + "\n" +
-              "Skipped/Errors: " + skippedCount + detail
-            );
+          expectedEnd = getDocEnd(doc);
+          convertedCount++;
+        } catch (repErr) {
+          var sourceIntact = false;
+          try {
+            sourceIntact = getDocEnd(doc) === expectedEnd &&
+              toggleSourceSignature(readToggleEquationXml(doc, item), item.isOmml) === result.signature;
+          } catch (_) {}
+          if (!sourceIntact) {
+            return "WPS changed the document while replacing at " + item.start + ". Check that location before resuming conversion.";
           }
-        },
-        insertionProgress
-      );
+          wpsLog("batchEquationToLatex: replace failed at " + item.start + ": " + repErr);
+        } finally {
+          g_latexBatchMutating = false;
+          writeMs += batchNow() - writeStarted;
+        }
+      }
     },
-    bridgeProgress
+    function (error, peakSlots) {
+      finish();
+      var skippedCount = total - convertedCount;
+      if (convertedCount > 0) {
+        if (!error) resetToggleCaretFormatting(doc);
+        refreshToggleScreen(doc);
+      }
+      wpsLog("batchEquationToLatex: converted " + convertedCount + "/" + total + " equations to LaTeX.");
+      wpsLog("batchEquationToLatex timing: " + JSON.stringify({
+        bridge_ms: Math.round(lastResponse - started),
+        first_insertion_ms: firstWrite === null ? null : Math.round(firstWrite - started),
+        replacement_ms: Math.round(writeMs),
+        total_ms: Math.round(batchNow() - started),
+        peak_slots: peakSlots
+      }));
+      if (error || total > 1 || skippedCount > 0) {
+        var title = error || (convertedCount === 0 ? "Failed to convert equations to LaTeX." : "Toggle LaTeX Succeeded!");
+        var reason = lastNon422Error || firstUnsupported;
+        var detail = convertedCount === 0 && reason ? "\n\n" + reason : "";
+        alert(
+          title + "\n\n" +
+          "Found: " + total + "\n" +
+          "Converted: " + convertedCount + "\n" +
+          "Skipped/Errors: " + skippedCount + detail
+        );
+      }
+    },
+    function (written) {
+      report("Replacing with LaTeX", written);
+    }
   );
 }
 
@@ -2336,7 +2459,7 @@ function ToggleLatex() {
             eqTargets.push({
               start: singleEq.Start,
               end: singleEq.End,
-              xml: sXml,
+              sourceRange: singleEq,
               isDisplay: false
             });
           }
@@ -2435,19 +2558,8 @@ function ToggleLatex() {
                   }
                 } catch (_) {}
 
-                // Move cursor after the inserted LaTeX text
-                var endRange = doc.Range(nextPos, nextPos);
-                endRange.Select();
-                var curSel = app.Selection;
-                if (curSel) {
-                  if (typeof curSel.Collapse === "function") curSel.Collapse(0);
-                  if (curSel.Font) {
-                    curSel.Font.Position = 0;
-                    curSel.Font.Subscript = false;
-                    curSel.Font.Superscript = false;
-                  }
-                }
-                refreshToggleLayout(doc);
+                moveCursorAfterRange(doc, nextPos);
+                refreshToggleScreen(doc);
                 wpsLog("ToggleLatex: converted single equation to LaTeX string successfully");
               }
             } else {
@@ -2508,7 +2620,7 @@ function ToggleLatex() {
           if (status === 200) {
             var conv = JSON.parse(responseText);
             if (conv.result) {
-              if (insertMathTypeAtDocRange(doc, targetLatexRange, conv, true)) refreshToggleLayout(doc);
+              if (insertMathTypeAtDocRange(doc, targetLatexRange, conv, true)) refreshToggleScreen(doc);
             }
             wpsLog("ToggleLatex: successfully converted single LaTeX to MathType equation");
           } else {
@@ -2962,14 +3074,16 @@ function ajaxGet(url, callback) {
 /**
  * Standard AJAX POST
  */
-function ajaxPost(url, payload, callback) {
+function ajaxPost(url, payload, callback, timeoutMs) {
   var xhr = new XMLHttpRequest();
   xhr.open("POST", url, true);
+  if (timeoutMs) xhr.timeout = timeoutMs;
   xhr.setRequestHeader("Content-Type", "application/json");
   var token = getBridgeToken();
   if (token) xhr.setRequestHeader(BRIDGE_TOKEN_HEADER, token);
   xhr.onreadystatechange = function () {
     if (xhr.readyState === 4) {
+      xhr.onreadystatechange = null;
       callback(xhr.status, xhr.responseText);
     }
   };

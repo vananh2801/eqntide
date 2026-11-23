@@ -37,14 +37,48 @@ function mockToggleProgress(c) {
   assert.equal(c.findEnclosingLatexInPara(fragment, fragment.length - 2), null);
   const valid = String.raw`$0,25\text{\$}$`;
   assert.equal(c.findAllLatexMatches(fragment + '\r' + valid)[0].raw, valid);
-  const zoom = { Percentage: 100 };
-  let repaginated = 0;
-  const doc = { Repaginate() { repaginated++; } };
-  c.wps = { Application: { ActiveDocument: doc, ActiveWindow: { ActivePane: { View: { Zoom: zoom } } } } };
-  c.refreshToggleLayout({});
-  c.refreshToggleLayout(doc);
-  assert.equal(repaginated, 1);
-  assert.equal(zoom.Percentage, 100);
+  let viewportPage = 9;
+  let refreshes = 0;
+  const zoom = { set Percentage(_value) { viewportPage = 1; } };
+  const doc = { Repaginate() { viewportPage = 1; } };
+  c.wps = { Application: {
+    ActiveDocument: doc,
+    ActiveWindow: { ActivePane: { View: { Zoom: zoom } } },
+    ScreenRefresh() { refreshes++; }
+  } };
+  c.refreshToggleScreen({});
+  c.refreshToggleScreen(doc);
+  assert.equal(refreshes, 1);
+  assert.equal(viewportPage, 9, 'refresh should not repaginate or reset the zoom');
+}
+// A partial toggle may repaint, but must leave document-wide screen and layout state alone.
+{
+  const c = controller();
+  const timers = [];
+  const calls = [];
+  const doc = { Repaginate() { calls.push('repaginate'); } };
+  const view = {
+    set VerticalPercentScrolled(_value) { calls.push('scroll'); },
+    ActivePane: { View: { Zoom: { set Percentage(_value) { calls.push('zoom'); } } } }
+  };
+  c.wps = { Application: {
+    ActiveDocument: doc,
+    ActiveWindow: view,
+    get ScreenUpdating() { return true; },
+    set ScreenUpdating(value) { calls.push(value); },
+    ScreenRefresh() { calls.push('refresh'); }
+  } };
+  c.setTimeout = fn => timers.push(fn);
+  c.refreshToggleScreen(doc);
+  assert.deepEqual(calls, []);
+  timers.shift()();
+  assert.deepEqual(calls, ['refresh']);
+
+  calls.length = 0;
+  c.refreshToggleScreen(doc);
+  c.wps.Application.ActiveDocument = {};
+  timers.shift()();
+  assert.deepEqual(calls, [], 'skip redraw if the user switched documents');
 }
 // Toggle must recognize bare \\dfrac as well as delimited formulas.
 for (const source of [String.raw`\dfrac{1}{2}`, String.raw`$\dfrac{1}{2}$`, String.raw`\[\dfrac{1}{2}\]`]) {
@@ -1102,12 +1136,13 @@ for (const platform of ['Linux x86_64', 'Win32']) {
       };
     }
   };
+  let collapses = 0;
   const selection = {
     Start: 0,
     End: docText.length,
     get Text() { return visibleText; },
     Range: { Start: 0, End: docText.length, Font: { Size: 12 } },
-    Collapse() {}
+    Collapse() { collapses++; }
   };
   c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
   const { pane, messages } = mockToggleProgress(c);
@@ -1128,30 +1163,215 @@ for (const platform of ['Linux x86_64', 'Win32']) {
   c.ToggleLatex();
   assert.ok(rangeCalls < 200, `cumShift + chunked scan must avoid O(N^2) COM calls (got ${rangeCalls})`);
   assert.equal(maxInFlight, 8, 'must cap concurrent HTTP requests to 8');
-  while (pending.length > 0) {
-    const cb = pending.shift();
-    cb(200, JSON.stringify({ result: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>' }));
+  const response = JSON.stringify({ result: '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>' });
+  const first = pending.shift();
+  pending.pop()(200, response);
+  timers.shift()();
+  assert.equal(imported.length, 0, 'later ready results must wait for the next target');
+  assert.equal(totalSent, 8, 'completed results still occupy a slot');
+  first(200, response);
+  assert.equal(imported.length, 0, 'HTTP callback must yield before document writes');
+  timers.shift()();
+  assert.deepEqual(imported, ['$x_34$'], 'first replacement happens while requests are pending');
+  assert.equal(totalSent, 9, 'retiring the first item refills one slot');
+  c.ToggleLatex();
+  assert.equal(totalSent, 9, 'a second toggle cannot start while the first batch is active');
+  while (pending.length || timers.length) {
+    while (pending.length) pending.shift()(200, response);
+    if (timers.length) timers.shift()();
   }
   assert.equal(totalSent, formulaCount);
-  assert.ok(imported.length < formulaCount, 'insertion must yield during a large batch');
-  c.ToggleLatex();
-  assert.equal(totalSent, formulaCount, 'a second toggle cannot start during replacement');
-  // Drain yielded DOM chunk timers.
-  while (timers.length > 0) {
-    timers.shift()();
-  }
   assert.ok(!docText.includes('$x_'), 'all 35 formulas must be converted');
   assert.deepEqual(imported, Array.from({ length: formulaCount }, (_, i) => `$x_${formulaCount - 1 - i}$`));
+  assert.equal(collapses, 0, 'LaTeX batch must leave the selection alone');
   assert.equal(c.g_latexBatchActive, false);
   assert.equal(pane.Visible, false);
-  assert.equal(messages[0], 'Converting equations (0 / 35)…');
-  assert.ok(messages.some(message => /^Converting equations \([1-9]/.test(message)));
-  assert.ok(messages.includes('Inserting MathType (0 / 35)…'));
+  assert.equal(messages[0], 'Inserting (0 / 35)…');
+  assert.ok(messages.some(message => /^Inserting \([1-9]/.test(message)));
   assert.equal(messages.at(-1), null);
   assert.equal(alerts.length, 1);
   assert.match(alerts[0], /Found: 35[\s\S]*Converted: 35[\s\S]*Skipped\/Errors: 0/);
 }
 console.log('WPS large-batch bounded concurrency, chunked DOM, and cumShift tests passed');
+
+// A WPS OLE object can export its embedding through its full shape range only.
+{
+  const c = controller();
+  const ole = '<o:OLEObject ProgID="Equation.DSMT4"/>';
+  const shape = { AlternativeText: 'EqnTide equation', Range: { Start: 4, End: 28, WordOpenXML: ole } };
+  const selection = { Range: { InlineShapes: { Count: 1, Item: () => shape } } };
+  const doc = { Range: () => ({ WordOpenXML: '', Text: '' }) };
+  const replacements = [];
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  const targets = c.findAllEquationTargetsInRange(selection.Range, doc);
+  assert.equal(targets[0].end, 5, 'replacement remains limited to the object marker');
+  c.ajaxPost = (_url, payload, done) => {
+    assert.equal(JSON.parse(payload).data, ole);
+    done(200, '{"result":"x^2"}');
+  };
+  c.replaceEquationWithLatex = (_doc, start, end, text) => replacements.push([start, end, text]);
+  c.batchEquationToLatex(doc, selection, targets);
+  assert.deepEqual(replacements, [[4, 5, '$x^2$']]);
+}
+
+// Re-export can rename parts and wrap base64 without changing an OLE equation.
+{
+  const c = controller();
+  const packageXml = (name, data) => '<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">' +
+    '<pkg:part pkg:name="/word/embeddings/' + name + '.bin"><pkg:binaryData>' + data +
+    '</pkg:binaryData></pkg:part></pkg:package>';
+  const before = packageXml('oleObject1', 'ABCDEF==');
+  assert.equal(c.toggleSourceSignature(before, false), c.toggleSourceSignature(packageXml('oleObject9', 'ABC\r\nDEF=='), false));
+  assert.notEqual(c.toggleSourceSignature(before, false), c.toggleSourceSignature(packageXml('oleObject9', 'ABCDZZ=='), false));
+}
+
+// Replacing an OMML paragraph can invalidate COM wrappers for other equations in it.
+{
+  const c = controller();
+  const oldObjects = [];
+  const responses = [];
+  const written = [];
+  const alerts = [];
+  let generation = 0;
+  const nativeXml = (start, revision) =>
+    '<w:p><m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r w:rsidR="' + revision +
+    '"><m:t>' + start + '</m:t></m:r></m:oMath></w:p>';
+  const liveObject = start => ({
+    get Range() { return { Start: start, End: start + 2, WordOpenXML: nativeXml(start, generation) }; }
+  });
+  for (const start of [2, 6]) {
+    oldObjects.push({ get Range() {
+      if (generation) throw Error('stale WPS COM wrapper');
+      return liveObject(start).Range;
+    } });
+  }
+  const doc = { Range(start, end) {
+    return { Start: start, End: end, Text: '', OMaths: { Count: 1, Item: () => liveObject(start) } };
+  } };
+  const selection = { Range: { OMaths: { Count: 2, Item: index => oldObjects[index - 1] } } };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.ajaxPost = (_url, _payload, done) => { responses.push(done); };
+  c.replaceEquationWithLatex = (_doc, start) => { written.push(start); generation++; };
+  c.alert = message => alerts.push(message);
+  c.batchEquationToLatex(doc, selection, c.findAllEquationTargetsInRange(selection.Range, doc));
+  responses[1](200, '{"result":"x"}');
+  responses[0](200, '{"result":"y"}');
+  assert.deepEqual(written, [6, 2]);
+  assert.match(alerts[0], /Found: 2[\s\S]*Converted: 2/);
+}
+
+// Equation-to-LaTeX extracts XML as the window advances and writes before the final request.
+{
+  const c = controller();
+  const pending = [];
+  const written = [];
+  const reads = [];
+  const targets = Array.from({ length: 12 }, (_, start) => ({ start, end: start + 1, isOmml: false }));
+  const doc = { Range(start) {
+    return {
+      get WordOpenXML() { reads.push(start); return '<m:oMath>' + start + '</m:oMath>'; },
+      Text: '',
+    };
+  } };
+  let collapses = 0;
+  const selection = { Start: 0, End: 12, Collapse() { collapses++; } };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.alert = () => {};
+  c.replaceEquationWithLatex = (_doc, start) => written.push(start);
+  c.ajaxPost = (_url, _payload, done) => { pending.push(done); };
+  c.batchEquationToLatex(doc, selection, targets);
+  assert.deepEqual(reads, [11, 10, 9, 8, 7, 6, 5, 4]);
+  const first = pending.shift();
+  const response = '{"result":"x"}';
+  pending.shift()(200, response);
+  assert.deepEqual(written, []);
+  assert.equal(reads.length, 8);
+  first(200, response);
+  assert.deepEqual(written, [11, 10]);
+  assert.deepEqual(reads.slice(8), [11, 3, 10, 2]);
+  while (pending.length) pending.shift()(200, response);
+  assert.deepEqual(written, Array.from({ length: 12 }, (_, index) => 11 - index));
+  assert.equal(collapses, 0, 'equation batch must leave the selection alone');
+  assert.ok(targets.every(target => !('xml' in target) && !('latex' in target)));
+}
+
+// A same-length user edit stops the active window and cancels outstanding requests.
+{
+  const c = controller();
+  const callbacks = [];
+  const alerts = [];
+  let aborted = 0;
+  let text = '$x$ $y$ $z$';
+  const doc = {
+    get Content() { return { End: text.length }; },
+    Range(start, end) {
+      return { get Text() { return text.slice(start, end); }, Font: { Size: 12 },
+        InsertXML() { assert.fail('an invalidated target must never be replaced'); } };
+    }
+  };
+  const selection = { Start: 0, End: text.length, Text: text, Range: doc.Range(0, text.length) };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  const { pane } = mockToggleProgress(c);
+  c.ensureBridgeRunning = done => done();
+  c.ajaxPost = (_url, _payload, done) => {
+    callbacks.push(done);
+    return { abort() { aborted++; done(0, ''); } };
+  };
+  c.alert = message => alerts.push(message);
+  c.ToggleLatex();
+  text = text.replace('$z$', '$w$');
+  c.onDocumentChange();
+  callbacks[0](200, '{"result":"unused"}');
+  assert.equal(aborted, 2);
+  assert.equal(pane.Visible, false);
+  assert.equal(c.g_latexBatchActive, false);
+  assert.equal(text, '$x$ $y$ $w$');
+  assert.match(alerts[0], /document changed.*Converted: 0/s);
+}
+
+// A partial Linux selection must import at a caret and preserve neighboring OLE markers.
+for (const hostBehavior of ['insert', 'no-op import', 'no-op delete']) {
+  const c = controller();
+  c.navigator = { platform: 'Linux x86_64' };
+  const original = 'OLE# $x$ and $y$ #OLE';
+  let text = original;
+  const alerts = [];
+  const imports = [];
+  const doc = {
+    get Content() { return { End: text.length }; },
+    Range(start, end) {
+      return {
+        Start: start, End: end, Font: { Size: 12 },
+        get Text() { return text.slice(start, end); },
+        set Text(value) { text = text.slice(0, start) + value + text.slice(end); },
+        Delete() {
+          if (hostBehavior !== 'no-op delete') text = text.slice(0, start) + text.slice(end);
+        },
+        InsertXML() {
+          imports.push([start, end]);
+          if (hostBehavior === 'insert') text = text.slice(0, start) + 'M' + text.slice(end);
+        }
+      };
+    }
+  };
+  const start = original.indexOf('$x$');
+  const end = original.indexOf('$y$') + 3;
+  const selection = { Start: start, End: end, Text: original.slice(start, end), Range: doc.Range(start, end) };
+  c.wps = { Application: { ActiveDocument: doc, Selection: selection } };
+  c.alert = message => alerts.push(message);
+  c.ensureBridgeRunning = ready => ready();
+  c.ajaxPost = (_url, _body, done) => done(200, JSON.stringify({ result: '<o:OLEObject ProgID="Equation.DSMT4"/>' }));
+  c.ToggleLatex();
+  if (hostBehavior === 'insert') {
+    assert.equal(text, 'OLE# M and M #OLE');
+    assert.match(alerts[0], /Converted: 2/);
+  } else {
+    assert.equal(text, original);
+    assert.match(alerts[0], /Converted: 0/);
+  }
+  assert.equal(imports.length, hostBehavior === 'no-op delete' ? 0 : 2);
+  assert.ok(imports.every(([from, to]) => from === to));
+}
 
 // A failed direct import can be skipped only while the original range is intact or restored.
 for (const failure of ['unchanged', 'deleted', 'unrestorable', 'noop']) {
@@ -1199,13 +1419,12 @@ for (const failure of ['unchanged', 'deleted', 'unrestorable', 'noop']) {
   c.ajaxPost = (_url, body, cb) => pending.push([JSON.parse(body).data, cb]);
 
   c.ToggleLatex();
-  text = text.replace('$d$', 'new');
   for (const [latex, cb] of pending) {
-    cb(latex === 'a' ? 422 : 200, JSON.stringify({ result: '<o:OLEObject ProgID="Equation.DSMT4"/>' }));
+    cb(latex === 'a' || latex === 'd' ? 422 : 200, JSON.stringify({ result: '<o:OLEObject ProgID="Equation.DSMT4"/>' }));
   }
   const stopped = failure === 'unrestorable';
   assert.deepEqual(imports, stopped ? ['$c$'] : ['$c$', '$b$']);
-  assert.equal(text, stopped ? '$a$ $b$ X new' : '$a$ # $c$ new');
+  assert.equal(text, stopped ? '$a$ $b$ X $d$' : '$a$ # $c$ $d$');
   assert.match(alerts[0], stopped ? /WPS changed the document.*Converted: 0/s : /Converted: 1/);
   assert.equal(c.g_latexBatchActive, false);
   assert.equal(pane.Visible, false);
@@ -1283,8 +1502,8 @@ for (const failure of ['unchanged', 'deleted', 'unrestorable', 'noop']) {
 }
 console.log('WPS Ctrl+A full-document prose vs equation priority tests passed');
 
-// 11. compactFlatOpcXml strips bloated styles/numbering parts and batchEquationToLatex skips
-//     redundant WordOpenXML reads for MathType InlineShapes; taskpane btn-start-upgrade
+// 11. compactFlatOpcXml strips bloated styles/numbering parts. Ribbon Toggle TeX reads
+//     source XML during dispatch and verification. Taskpane btn-start-upgrade
 //     bounds concurrent HTTP requests (<= 8) and chunks DOM updates via setTimeout.
 {
   const c = controller();
@@ -1314,14 +1533,17 @@ console.log('WPS Ctrl+A full-document prose vs equation priority tests passed');
         Start: start, End: end, Font: { Position: 0 },
         get Text() { return docText.slice(this.Start, this.End); },
         set Text(v) { docText = docText.slice(0, this.Start) + v + docText.slice(this.End); },
-        get WordOpenXML() { extraWordOpenXmlReads++; return ''; },
+        get WordOpenXML() {
+          extraWordOpenXmlReads++;
+          return this.Text === '#' ? '<o:OLEObject ProgID="Equation.DSMT4"/>' : '';
+        },
         InlineShapes: { Count: 0, Item: () => null },
         OMaths: { Count: 0, Item: () => null }
       };
     }
   };
   const targets = [2, 4].map(start => ({
-    start, end: start + 1, xml: '<o:OLEObject ProgID="Equation.DSMT4"/>', isDisplay: false, isOmml: false
+    start, end: start + 1, isDisplay: false, isOmml: false
   }));
   c.wps = { Application: { ActiveDocument: doc, Selection: { Collapse() {}, Font: {} } } };
   const { pane, messages } = mockToggleProgress(c);
@@ -1331,13 +1553,14 @@ console.log('WPS Ctrl+A full-document prose vs equation priority tests passed');
   c.ajaxPost = (_u, _b, cb) => pending.push(cb);
   c.batchEquationToLatex(doc, {}, targets);
   assert.equal(pane.Visible, true);
-  pending[0](200, JSON.stringify({ result: 'x^2' }));
-  pending[1](422, '');
-  assert.equal(extraWordOpenXmlReads, 0, 'MathType OLE replacement must not re-read target.WordOpenXML');
-  assert.ok(targets.every(item => item.xml === null), 'request XML must be released once sent');
+  pending[1](200, JSON.stringify({ result: 'x^2' }));
+  assert.equal(docText, 'A # # B', 'out-of-order results wait for their turn');
+  pending[0](422, '');
+  assert.equal(extraWordOpenXmlReads, 3, 'read XML at dispatch and verify only the successful target');
+  assert.ok(targets.every(item => !('xml' in item) && !('latex' in item)), 'target metadata retains no payload or result');
   assert.equal(docText, 'A $x^2$ # B');
   assert.equal(pane.Visible, false);
-  assert.deepEqual(messages, ['Converting equations (0 / 2)…', 'Replacing with LaTeX (0 / 2)…', null]);
+  assert.deepEqual(messages, ['Replacing with LaTeX (0 / 2)…', null]);
   assert.match(alerts[0], /Found: 2[\s\S]*Converted: 1[\s\S]*Skipped\/Errors: 1/);
 }
 {
@@ -1484,7 +1707,10 @@ console.log('WPS Flat OPC compaction & taskpane bounded-concurrency tests passed
   assert.deepEqual(Array.from(targets, target => target.start), [2, 3, 4, 6]);
   assert.equal(targets[3].isOmml, true);
 
-  const doc = { Range: () => ({ Text: '' }) };
+  const doc = { Range: start => ({
+    Text: '',
+    WordOpenXML: start === 6 ? flatOpc(math) : shapes[start]?.Range.WordOpenXML,
+  }) };
   const alerts = [];
   const requested = [];
   const replaced = [];

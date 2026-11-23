@@ -24,6 +24,17 @@ The Word VBA template and WPS Office add-in SHALL bound concurrent `/convert/sni
 - **WHEN** a batch conversion encounters formulas rejected by the bridge with HTTP `422` alongside valid formulas
 - **THEN** valid formulas still convert, the user receives a summary with `Found`, `Converted`, and `Skipped/Errors` counts, and a fatal non-422 failure when zero items convert surfaces an explicit error alert
 
+#### Scenario: WPS starts replacing before all conversions finish
+- **WHEN** a ribbon Toggle TeX batch in WPS contains more than eight formulas and bridge responses arrive in either conversion direction
+- **THEN** the add-in keeps at most eight items in flight or awaiting replacement combined, and submits further items as capacity becomes available
+- **AND** the add-in begins replacing as soon as the next item in reverse document order is ready, even while later items are still converting
+- **AND** replacements run serially, with UI yields between groups, and the add-in releases each item's payload and result as soon as they are no longer needed
+
+#### Scenario: Out-of-order results and unsupported formulas preserve document content
+- **WHEN** a later result arrives before an earlier item in replacement order, or one formula fails conversion
+- **THEN** the add-in applies each successful result at most once to its verified target in reverse document order, leaves failed conversions untouched, and proceeds with other valid targets
+- **AND** the summary counts each eligible target once
+
 ### Requirement: Safe full-document selection priority, delimiter bounds, and font-size clamping
 When a user selects a range (including `Ctrl+A` across multi-page documents), the Word and WPS add-ins SHALL prioritize delimited LaTeX formulas and existing document equations over bare-text LaTeX interpretation, SHALL reject implausible or cross-paragraph delimiter matches, and SHALL sanitize mixed-formatting `font_pt` values (`wdUndefined` / out-of-range) before calling `/convert/snippet`.
 
