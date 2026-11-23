@@ -1,5 +1,5 @@
 # cargo-deny configuration for Math Equation Editor & Converter
-# Enforces strict MIT / Apache-2.0 / BSD / OFL-1.1 license compliance
+# Enforces strict permissive / MIT-compatible license compliance across the workspace
 
 [graph]
 targets = [
@@ -15,13 +15,15 @@ confidence-threshold = 0.8
 allow = [
     "MIT",
     "Apache-2.0",
+    "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
     "OFL-1.1",
+    "Ubuntu-font-1.0",
     "CC0-1.0",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
+    "Zlib",
 ]
 
 [bans]

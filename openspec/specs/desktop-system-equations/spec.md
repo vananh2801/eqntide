@@ -56,11 +56,7 @@ In Math mode, when no LaTeX command buffer or active IME preedit is open, pressi
 - **THEN** the caret moves after that span in Math mode in the same row
 
 ### Requirement: Backspace and Delete remove an empty table row
-When the caret is inside an empty cell of a table row (`mtr`) (with no active selection, command buffer, or IME preedit):
-- If all cells in the row are empty and the enclosing table (`mtable`) has two or more rows, pressing `Backspace` or `Delete` SHALL remove that row and move the caret to an adjacent remaining row as a single undoable edit.
-- If the row has multiple cells and at least one other cell in the same row has content, pressing `Backspace` or `Delete` inside an empty cell SHALL select the entire row and place the caret at the end of that row so a subsequent `Backspace` or `Delete` removes the row.
-- If the enclosing table (`mtable`) has only one row and all its cells are empty, pressing `Backspace` or `Delete` SHALL select the entire table (or its enclosing fenced wrapper if fenced) so a subsequent `Backspace` or `Delete` deletes the table or fenced structure.
-- Erasing a selection that spans an entire table row (`mtr`) in a table with two or more rows SHALL remove that row from the table, and erasing a partial-row cell selection SHALL reset each selected cell to an empty `<mtd>` without corrupting `<mtr>` or `<mtd>` tags into `<mrow>`.
+When the caret is inside an empty table cell (`mtr`) or a selection spans table cells, `Backspace` and `Delete` SHALL remove empty rows in multi-row tables as a single undoable edit, use selection-first deletion for partially filled rows or single-row empty tables, and reset partial-row cell selections cleanly without corrupting `<mtr>`/`<mtd>` tags.
 
 #### Scenario: Backspace on an empty row removes it and moves caret to the previous row
 - **WHEN** a table has at least two rows, all cells in the caret's current row are empty (including rows that previously held characters since deleted), and the user presses `Backspace`
