@@ -1798,8 +1798,7 @@ impl App {
                             FENCES
                                 .iter()
                                 .find(|(value, _)| *value == settings.fence)
-                                .unwrap()
-                                .1,
+                                .map_or("Parentheses ( )", |&(_, label)| label),
                         )
                         .show_ui(ui, |ui| {
                             for &(value, label) in FENCES {
@@ -1896,8 +1895,8 @@ impl App {
             } else {
                 None
             };
-            if self.tab == 0 && self.latex_error.is_some() {
-                let error = format!("LaTeX error: {}", self.latex_error.as_deref().unwrap());
+            if let (0, Some(latex_error)) = (self.tab, self.latex_error.as_deref()) {
+                let error = format!("LaTeX error: {latex_error}");
                 ui.add(
                     egui::Label::new(
                         egui::RichText::new(&error).color(ui.visuals().error_fg_color),
@@ -2890,7 +2889,9 @@ impl App {
                 let Some(parent_id) = self.editor.id_at_path(&path) else {
                     break;
                 };
-                let parent = self.editor.node(parent_id).unwrap();
+                let Some(parent) = self.editor.node(parent_id) else {
+                    break;
+                };
                 let target_index = match (parent.tag.as_str(), index, down) {
                     ("mfrac", 0, true) => Some(1),
                     ("mfrac", 1, false) => Some(0),
@@ -3039,7 +3040,9 @@ impl App {
             || (input.text_argument().is_some() && !input.has_complete_text_argument())
         {
             if command.is_some() {
-                self.command_input.as_mut().unwrap().name = "text".into();
+                if let Some(cmd_input) = self.command_input.as_mut() {
+                    cmd_input.name = "text".into();
+                }
             }
             self.status = r"Invalid LaTeX command. Use \text{...} to insert text.".into();
             return false;
@@ -3171,7 +3174,9 @@ impl App {
             let Some(parent_id) = self.editor.id_at_path(&path) else {
                 return;
             };
-            let parent = self.editor.node(parent_id).unwrap();
+            let Some(parent) = self.editor.node(parent_id) else {
+                return;
+            };
             if !matches!(
                 parent.tag.as_str(),
                 "mfrac"
@@ -3187,19 +3192,23 @@ impl App {
                 continue;
             }
             if parent.tag == "mfrac" && index == 0 {
-                self.expects_latex_group = true;
-                self.editor.set_caret(
-                    Caret {
-                        node: parent.children[1].id,
-                        offset: 0,
-                    },
-                    false,
-                );
+                if let Some(denom) = parent.children.get(1) {
+                    self.expects_latex_group = true;
+                    self.editor.set_caret(
+                        Caret {
+                            node: denom.id,
+                            offset: 0,
+                        },
+                        false,
+                    );
+                }
                 return;
             }
             while let Some(index) = path.pop() {
-                let id = self.editor.id_at_path(&path).unwrap();
-                if self.editor.node(id).unwrap().row() {
+                let Some(id) = self.editor.id_at_path(&path) else {
+                    return;
+                };
+                if self.editor.node(id).is_some_and(|n| n.row()) {
                     self.editor.set_caret(
                         Caret {
                             node: id,
@@ -8425,7 +8434,7 @@ mod tests {
     fn batch_tab_discovers_nested_folder_docx_files_and_targets_output_dir() {
         use std::io::{Cursor, Write};
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         zip.start_file("[Content_Types].xml", opts).unwrap();
         zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#).unwrap();
         zip.start_file("word/document.xml", opts).unwrap();
@@ -8637,7 +8646,7 @@ mod tests {
     fn batch_subset_execution_upgrades_source_root_and_tracks_multi_folder_outputs() {
         use std::io::{Cursor, Write};
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         zip.start_file("[Content_Types].xml", opts).unwrap();
         zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#).unwrap();
         zip.start_file("word/document.xml", opts).unwrap();

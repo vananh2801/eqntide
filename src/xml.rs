@@ -261,7 +261,7 @@ impl Element {
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
-fn xml_err(e: impl std::fmt::Display, pos: usize) -> Error {
+fn xml_err(e: impl std::fmt::Display, pos: u64) -> Error {
     Error::Xml(format!("{e} (byte offset {pos})"))
 }
 
@@ -313,7 +313,7 @@ fn split_qname(q: &str) -> (Option<&str>, &str) {
 }
 
 /// Build an [`Element`] from a start tag; pushes its declarations onto `scope`.
-fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: usize) -> Result<Element> {
+fn element_from_start(e: &BytesStart<'_>, scope: &mut Vec<NsDecl>, pos: u64) -> Result<Element> {
     let qname_bytes = e.name();
     let qname = std::str::from_utf8(qname_bytes.as_ref()).map_err(|err| xml_err(err, pos))?;
 
@@ -490,6 +490,20 @@ impl<'a> XmlParser<'a> {
                     match stack.last_mut() {
                         Some(parent) => push_text(parent, txt),
                         None if txt.trim().is_empty() => {}
+                        None => return Err(xml_err("text outside the root element", pos)),
+                    }
+                }
+                Event::GeneralRef(r) => {
+                    let txt = if let Some(ch) = r.resolve_char_ref().map_err(|e| xml_err(e, pos))? {
+                        ch.to_string()
+                    } else {
+                        let name = r.decode().map_err(|e| xml_err(e, pos))?;
+                        quick_xml::escape::resolve_xml_entity(&name)
+                            .ok_or_else(|| xml_err(format!("unrecognized entity '&{name};'"), pos))?
+                            .to_owned()
+                    };
+                    match stack.last_mut() {
+                        Some(parent) => push_text(parent, txt),
                         None => return Err(xml_err("text outside the root element", pos)),
                     }
                 }
@@ -678,7 +692,7 @@ impl XmlSerializer {
                 None => self.out.push_str(" xmlns=\""),
             }
             escape_attr(u, &mut self.out);
-            self.out.push('\"');
+            self.out.push('"');
         }
     }
 
@@ -686,7 +700,7 @@ impl XmlSerializer {
         for (a, name) in attrs.iter().zip(names) {
             write!(self.out, " {name}=\"").unwrap();
             escape_attr(&a.value, &mut self.out);
-            self.out.push('\"');
+            self.out.push('"');
         }
     }
 

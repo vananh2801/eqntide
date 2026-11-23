@@ -87,10 +87,10 @@ impl Node {
             while j < raw.len() && raw[j].group == g {
                 j += 1;
             }
-            let best = raw[i..j]
-                .iter()
-                .max_by_key(|entry| entry.preference())
-                .unwrap();
+            let Some(best) = raw[i..j].iter().max_by_key(|entry| entry.preference()) else {
+                i = j;
+                continue;
+            };
             let idx = canonical.len();
             canonical.push(best.caret);
             for entry in &raw[i..j] {
@@ -943,7 +943,9 @@ impl Editor {
         });
         if let Some((parent_id, child_idx, empty_token, at_start)) = token_boundary_in_row {
             let count = nodes.len();
-            let parent = self.state.root.find_mut(parent_id).unwrap();
+            let Some(parent) = self.state.root.find_mut(parent_id) else {
+                return;
+            };
             if empty_token {
                 parent.children.splice(child_idx..=child_idx, nodes);
                 self.state.caret = Caret {
@@ -1025,7 +1027,9 @@ impl Editor {
                 if (backward && c.offset > 0) || (!backward && c.offset < count) {
                     let start = if backward { c.offset - 1 } else { c.offset };
                     let is_fence = n.is_fence_delimiter();
-                    let n = s.state.root.find_mut(c.node).unwrap();
+                    let Some(n) = s.state.root.find_mut(c.node) else {
+                        return;
+                    };
                     n.text.replace_range(
                         char_byte(&n.text, start)..char_byte(&n.text, start + 1),
                         "",
@@ -1040,30 +1044,33 @@ impl Editor {
                 if count == 0 && !n.is_fence_delimiter() {
                     if let Some(mut path) = s.path(c.node) {
                         if let Some(child_idx) = path.pop() {
-                            let parent_id = s.id_at_path(&path).unwrap();
-                            if s.node(parent_id).is_some_and(is_effectively_empty) {
-                                s.handle_empty_slot_delete(parent_id, backward);
-                                return;
-                            }
-                            if s.node(parent_id).is_some_and(Node::row) {
-                                s.state
-                                    .root
-                                    .find_mut(parent_id)
-                                    .unwrap()
-                                    .children
-                                    .remove(child_idx);
-                                s.state.caret = Caret {
-                                    node: parent_id,
-                                    offset: child_idx,
-                                };
-                                s.delete_from_row_caret(parent_id, child_idx, backward);
-                                return;
+                            if let Some(parent_id) = s.id_at_path(&path) {
+                                if s.node(parent_id).is_some_and(is_effectively_empty) {
+                                    s.handle_empty_slot_delete(parent_id, backward);
+                                    return;
+                                }
+                                if s.node(parent_id).is_some_and(Node::row) {
+                                    if let Some(parent) = s.state.root.find_mut(parent_id) {
+                                        if child_idx < parent.children.len() {
+                                            parent.children.remove(child_idx);
+                                            s.state.caret = Caret {
+                                                node: parent_id,
+                                                offset: child_idx,
+                                            };
+                                            s.delete_from_row_caret(parent_id, child_idx, backward);
+                                            return;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 if let Some((parent_id, adj_idx)) = s.adjacent_row_sibling(c.node, backward) {
-                    if !s.node(parent_id).unwrap().children[adj_idx].is_fence_delimiter() {
+                    if s.node(parent_id)
+                        .and_then(|p| p.children.get(adj_idx))
+                        .is_some_and(|child| !child.is_fence_delimiter())
+                    {
                         s.delete_adjacent_node_or_char(parent_id, adj_idx, backward);
                         return;
                     }
@@ -1104,7 +1111,11 @@ impl Editor {
         } else if let Some((outer_row_id, outer_adj_idx)) =
             self.climb_plain_row_boundary(row_id, backward)
         {
-            if !self.node(outer_row_id).unwrap().children[outer_adj_idx].is_fence_delimiter() {
+            if self
+                .node(outer_row_id)
+                .and_then(|p| p.children.get(outer_adj_idx))
+                .is_some_and(|child| !child.is_fence_delimiter())
+            {
                 self.delete_adjacent_node_or_char(outer_row_id, outer_adj_idx, backward);
             } else {
                 self.move_caret(if backward { Move::Left } else { Move::Right }, false);
@@ -1126,7 +1137,12 @@ impl Editor {
         if !self.node(parent_id).is_some_and(Node::row) {
             return;
         }
-        let parent = self.state.root.find_mut(parent_id).unwrap();
+        let Some(parent) = self.state.root.find_mut(parent_id) else {
+            return;
+        };
+        if child_idx >= parent.children.len() {
+            return;
+        }
         parent.children.remove(child_idx);
         let new_caret = if backward
             && child_idx > 0
@@ -1421,7 +1437,9 @@ impl Editor {
                     return false;
                 }
                 self.transact(|s| {
-                    let table = s.state.root.find_mut(id).unwrap();
+                    let Some(table) = s.state.root.find_mut(id) else {
+                        return;
+                    };
                     if column {
                         for row in &mut table.children {
                             if row.children.len() > 1 {
@@ -1460,7 +1478,9 @@ impl Editor {
             if n.tag == "mtable" {
                 let id = n.id;
                 self.transact(|s| {
-                    let table = s.state.root.find_mut(id).unwrap();
+                    let Some(table) = s.state.root.find_mut(id) else {
+                        return;
+                    };
                     if column {
                         for row in &mut table.children {
                             row.children
@@ -1492,9 +1512,14 @@ impl Editor {
                     (0..cols).map(|_| MathNode::new("mtd")).collect(),
                 );
                 let imported_row = import(&row, &mut s.next_id);
-                let first_cell_id = imported_row.children[0].id;
-                let table = s.state.root.find_mut(table_id).unwrap();
-                table.children.insert(row_idx + 1, imported_row);
+                let Some(first_cell_id) = imported_row.children.first().map(|c| c.id) else {
+                    return;
+                };
+                let Some(table) = s.state.root.find_mut(table_id) else {
+                    return;
+                };
+                let insert_at = (row_idx + 1).min(table.children.len());
+                table.children.insert(insert_at, imported_row);
                 s.state.caret = Caret {
                     node: first_cell_id,
                     offset: 0,
@@ -1507,7 +1532,12 @@ impl Editor {
             self.enclosing_one_sided_left_fence()
         {
             self.transact(|s| {
-                let fence_mrow = s.state.root.find_mut(fence_id).unwrap();
+                let Some(fence_mrow) = s.state.root.find_mut(fence_id) else {
+                    return;
+                };
+                if content_end < 1 || content_end > fence_mrow.children.len() {
+                    return;
+                }
                 let slot_nodes: Vec<Node> = fence_mrow.children.drain(1..content_end).collect();
                 let row1_children: Vec<MathNode> =
                     if slot_nodes.len() == 1 && slot_nodes[0].tag == "mrow" {
@@ -1528,7 +1558,9 @@ impl Editor {
                 table_math.set_attr("columnalign", "left");
                 let imported_table = import(&table_math, &mut s.next_id);
                 let row2_cell_id = imported_table.children[1].children[0].id;
-                let fence_mrow = s.state.root.find_mut(fence_id).unwrap();
+                let Some(fence_mrow) = s.state.root.find_mut(fence_id) else {
+                    return;
+                };
                 fence_mrow.children.insert(1, imported_table);
                 if !has_empty_close {
                     let mut right = MathNode::leaf("mo", "");
@@ -1563,7 +1595,12 @@ impl Editor {
         if !row.children.iter().all(is_effectively_empty) {
             return false;
         }
-        let table = self.state.root.find_mut(table_id).unwrap();
+        let Some(table) = self.state.root.find_mut(table_id) else {
+            return false;
+        };
+        if row_idx >= table.children.len() {
+            return false;
+        }
         table.children.remove(row_idx);
         if let Some(target_caret) = adjacent_table_row_caret(table, row_idx, old_len, backward) {
             self.state.caret = target_caret;
@@ -2780,5 +2817,26 @@ mod regression_tests {
         let cell0 = &partial.math().children[0].children[0].children[0];
         assert_eq!(cell0.tag, "mtd");
         assert!(cell0.children.is_empty());
+    }
+
+    #[test]
+    fn invalid_or_stale_caret_and_boundary_ops_never_panic() {
+        let mut editor = Editor::new(&MathNode::new("math"));
+        // Stale / nonexistent node IDs in caret must not panic on edits, deletes, or matrix ops.
+        editor.set_caret(
+            Caret {
+                node: 999_999,
+                offset: 42,
+            },
+            false,
+        );
+        editor.delete(true);
+        editor.delete(false);
+        editor.insert_text("x");
+        assert!(!editor.grow_matrix(false));
+        assert!(!editor.shrink_matrix(true));
+        assert!(!editor.insert_row_or_promote_fence());
+        editor.move_caret(Move::Left, false);
+        editor.move_caret(Move::Right, true);
     }
 }

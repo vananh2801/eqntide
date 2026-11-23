@@ -44,8 +44,9 @@ fn latex_aliases(input: &str) -> String {
         output.push(ch);
         if chars.peek().is_some_and(char::is_ascii_alphabetic) {
             let mut command = String::new();
-            while chars.peek().is_some_and(char::is_ascii_alphabetic) {
-                command.push(chars.next().unwrap());
+            while let Some(&c) = chars.peek().filter(|c| c.is_ascii_alphabetic()) {
+                chars.next();
+                command.push(c);
             }
             output.push_str(match command.as_str() {
                 "le" => "leq",

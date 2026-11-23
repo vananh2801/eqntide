@@ -194,7 +194,9 @@ fn parse_at(source: &str, depth: usize) -> Result<MathNode> {
                 scanner.nodes.push(MathNode::leaf("mo", "°"));
                 continue;
             }
-            let ch = scanner.next().unwrap();
+            let Some(ch) = scanner.next() else {
+                break;
+            };
             if ch == '°' {
                 output.push_str(&format!(
                     "\\text{{{marker}{}}}",
@@ -593,7 +595,9 @@ impl<'a> ScriptRewriter<'a> {
                 break;
             }
             let Some(mut atom) = self.read_atom()? else {
-                let ch = self.next().unwrap();
+                let Some(ch) = self.next() else {
+                    break;
+                };
                 out.push(ch);
                 continue;
             };
@@ -623,8 +627,8 @@ impl<'a> ScriptRewriter<'a> {
             loop {
                 let save = self.pos;
                 self.skip_ws();
-                if matches!(self.peek_char(), Some('_') | Some('^')) {
-                    let op1 = self.next().unwrap();
+                if let Some(op1) = self.peek_char().filter(|&c| c == '_' || c == '^') {
+                    self.next();
                     self.skip_ws();
                     let Some(arg1) = self.read_atom()? else {
                         self.pos = save;

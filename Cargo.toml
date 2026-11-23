@@ -24,8 +24,8 @@ name = "eqntide-cli"
 path = "src/main.rs"
 
 [dependencies]
-quick-xml = "0.31"
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
+quick-xml = "0.41"
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
 clap = { version = "4", features = ["derive"] }
 log = "0.4"
 uuid = { version = "1", features = ["v4"] }

@@ -19,7 +19,7 @@ use eqntide::{
     upgrade_legacy_mathtype_bytes_with, EmbedMode, FlatOpcMode, MathNode, Options, PreviewFormat,
     ToOmmlOptions, UpgradeOptions, UpgradeTarget,
 };
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 struct MatrixCase {
@@ -357,7 +357,7 @@ fn build_synthetic_omml_docx(equations_latex: &[&str]) -> Vec<u8> {
     let mut buf = Cursor::new(Vec::new());
     {
         let mut zip = ZipWriter::new(&mut buf);
-        let opts = FileOptions::default();
+        let opts = SimpleFileOptions::default();
         zip.start_file("[Content_Types].xml", opts).unwrap();
         zip.write_all(content_types.as_bytes()).unwrap();
         zip.start_file("_rels/.rels", opts).unwrap();
@@ -379,7 +379,8 @@ fn read_zip_entries(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
         let mut file = zip.by_index(i).unwrap();
         let mut data = Vec::new();
         file.read_to_end(&mut data).unwrap();
-        out.push((file.name().to_string(), data));
+        let name = file.name().unwrap().into_owned();
+        out.push((name, data));
     }
     out
 }

@@ -222,7 +222,9 @@ fn write_mathtype_cfb(equation_native: &[u8]) -> Result<Vec<u8>> {
     let mut big_iter = big_sizes.iter();
     for (i, (_, data)) in streams.iter().enumerate() {
         if data.len() >= MINI_CUTOFF {
-            let count = *big_iter.next().expect("one size per big stream");
+            let count = *big_iter
+                .next()
+                .ok_or_else(|| Error::InvalidOle("big stream size count mismatch".into()))?;
             chain(&mut fat, cursor, count);
             placed[i].start = cursor as u32;
             cursor += count;

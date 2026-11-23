@@ -175,9 +175,9 @@ impl Package {
         let mut total_uncompressed: u64 = 0;
         for i in 0..archive.len() {
             let f = archive.by_index(i)?;
-            let name = f.name().to_owned();
+            let name = f.name()?.into_owned();
             let is_dir = f.is_dir();
-            let modified = Some(f.last_modified());
+            let modified = f.last_modified();
             let mut data = Vec::new();
             if !is_dir {
                 if f.size() > MAX_DOCX_ENTRY_BYTES {
@@ -229,9 +229,9 @@ impl Package {
         let mut total_declared: u64 = 0;
         for i in 0..archive.len() {
             let f = archive.by_index_raw(i)?;
-            let name = f.name().to_owned();
+            let name = f.name()?.into_owned();
             let is_dir = f.is_dir();
-            let modified = Some(f.last_modified());
+            let modified = f.last_modified();
             let size = f.size();
             if !is_dir {
                 if size > MAX_DOCX_ENTRY_BYTES {
@@ -484,7 +484,7 @@ impl Package {
                         }
                         let e = &self.entries[idx];
                         if e.is_dir {
-                            let mut opts = zip::write::FileOptions::default()
+                            let mut opts = zip::write::SimpleFileOptions::default()
                                 .compression_method(zip::CompressionMethod::Deflated);
                             if let Some(m) = e.modified {
                                 opts = opts.last_modified_time(m);
@@ -562,8 +562,8 @@ fn write_entries_into_writer<W: Write + std::io::Seek>(
     w: &mut zip::ZipWriter<W>,
 ) -> Result<()> {
     for &e in entries {
-        let mut opts =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let mut opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         if let Some(m) = e.modified {
             opts = opts.last_modified_time(m);
         }
@@ -596,8 +596,8 @@ mod tests {
     #[test]
     fn oversized_compressed_docx_entry_is_rejected() {
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         w.start_file("word/document.xml", opts).unwrap();
         let chunk = vec![b'A'; 1024 * 1024];
         for _ in 0..65 {
@@ -664,7 +664,7 @@ mod tests {
         let path = dir.join("sample.docx");
         {
             let mut w = zip::ZipWriter::new(File::create(&path).unwrap());
-            let opts = zip::write::FileOptions::default()
+            let opts = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);
             w.add_directory("word/", opts).unwrap();
             w.start_file("word/document.xml", opts).unwrap();
@@ -715,7 +715,7 @@ mod tests {
         let bad_path = dir.join("oversized.docx");
         {
             let mut w = zip::ZipWriter::new(File::create(&bad_path).unwrap());
-            let opts = zip::write::FileOptions::default()
+            let opts = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);
             w.start_file("word/document.xml", opts).unwrap();
             let chunk = vec![b'B'; 1024 * 1024];
@@ -770,7 +770,7 @@ mod tests {
         let path = dir.join("inplace.docx");
         {
             let mut w = zip::ZipWriter::new(File::create(&path).unwrap());
-            let opts = zip::write::FileOptions::default();
+            let opts = zip::write::SimpleFileOptions::default();
             w.start_file("word/document.xml", opts).unwrap();
             w.write_all(b"<w:document>old</w:document>").unwrap();
             w.start_file("word/media/img.bin", opts).unwrap();

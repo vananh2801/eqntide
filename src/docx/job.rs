@@ -314,13 +314,19 @@ impl Job {
                 match (next_pre_eq, next_work_eq) {
                     (None, None) => break,
                     (Some(p), Some(w)) if p < w => {
-                        self.apply_collected_item(xml_path, pre_iter.next().unwrap());
+                        if let Some(item) = pre_iter.next() {
+                            self.apply_collected_item(xml_path, item);
+                        }
                     }
                     (Some(_), None) => {
-                        self.apply_collected_item(xml_path, pre_iter.next().unwrap());
+                        if let Some(item) = pre_iter.next() {
+                            self.apply_collected_item(xml_path, item);
+                        }
                     }
                     _ => {
-                        let ((eq_num, target_path), res) = work_iter.next().unwrap();
+                        let Some(((eq_num, target_path), res)) = work_iter.next() else {
+                            break;
+                        };
                         match res {
                             Ok(PreparedOutcome::Skipped(reason)) => {
                                 self.summary.skipped += 1;
@@ -432,17 +438,23 @@ impl Job {
             }
             None => {
                 let obj_id = format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
-                let omath = omath_fallback.expect("omath fallback provided in OmmlFallback mode");
+                let omath = omath_fallback.ok_or_else(|| {
+                    Error::Xml("missing omath fallback for equation without preview".into())
+                })?;
                 make_ole_xml(&rel_id, &shape_id, &obj_id, 914_400, 457_200, omath)
             }
         };
 
         let (&slot, holder_path) = target_path
             .split_last()
-            .expect("target path is non-empty here");
+            .ok_or_else(|| Error::Xml("equation target path is empty".into()))?;
         let holder = element_at_mut(&mut self.doc_root, holder_path)
             .ok_or_else(|| Error::Xml("equation has no parent".into()))?;
-        holder.children[slot] = Node::Element(alt);
+        let target_slot = holder
+            .children
+            .get_mut(slot)
+            .ok_or_else(|| Error::Xml("equation target slot out of bounds".into()))?;
+        *target_slot = Node::Element(alt);
 
         self.summary.converted += 1;
         log::info!("Equation {eq_num}: converted → {bin_name}");

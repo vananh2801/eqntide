@@ -2127,9 +2127,9 @@ fn convert_matrix(rows: usize, cols: usize, h_just: &str, cells: &[MtefObj]) -> 
     mtable
 }
 
-fn unwrap_single_mrow_node(node: MathNode) -> MathNode {
+fn unwrap_single_mrow_node(mut node: MathNode) -> MathNode {
     if node.tag == "mrow" && node.children.len() == 1 {
-        node.children.into_iter().next().unwrap()
+        node.children.pop().unwrap_or_else(|| MathNode::new("mrow"))
     } else {
         node
     }

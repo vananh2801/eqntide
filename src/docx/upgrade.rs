@@ -793,7 +793,7 @@ mod tests {
 </Types>"#;
 
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         w.start_file("[Content_Types].xml", opts).unwrap();
         w.write_all(ct_xml.as_bytes()).unwrap();
         w.start_file("word/document.xml", opts).unwrap();
@@ -875,7 +875,7 @@ mod tests {
         let mut buf = std::io::Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buf);
-            let opts = zip::write::FileOptions::default();
+            let opts = zip::write::SimpleFileOptions::default();
             zip.start_file("[Content_Types].xml", opts).unwrap();
             zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -937,7 +937,7 @@ mod tests {
 </Types>"#;
 
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         w.start_file("[Content_Types].xml", opts).unwrap();
         w.write_all(ct_xml.as_bytes()).unwrap();
         w.start_file("word/document.xml", opts).unwrap();
@@ -975,7 +975,7 @@ mod tests {
 </Types>"#;
 
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         w.start_file("[Content_Types].xml", opts).unwrap();
         w.write_all(ct_xml.as_bytes()).unwrap();
         w.start_file("word/document.xml", opts).unwrap();

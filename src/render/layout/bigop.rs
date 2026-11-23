@@ -43,10 +43,12 @@ impl Layout {
 
         // Integral sign: limits sit above/below the sign (see `integral.rs`).
         if base_char.is_some_and(is_integral) {
-            if n.attr("data-limloc") == Some("subSup") {
-                return self.scripts(n, em, ctx);
+            if let Some(first_node) = first {
+                if n.attr("data-limloc") == Some("subSup") {
+                    return self.scripts(n, em, ctx);
+                }
+                return self.integral_with_limits(first_node, under_n, over_n, em, ctx);
             }
-            return self.integral_with_limits(first.unwrap(), under_n, over_n, em, ctx);
         }
 
         // Labeled arrow (MathType `tmARROW`): stretchy arrow with text above / below (see `arrow.rs`).

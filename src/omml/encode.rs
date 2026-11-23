@@ -524,7 +524,9 @@ impl MathmlEncoder {
                     }
                     FenceKind::Neutral => {
                         if stack.last().is_some_and(|(open_ch, _)| open_ch == ch) {
-                            let (open_ch, inner_items) = stack.pop().unwrap();
+                            let Some((open_ch, inner_items)) = stack.pop() else {
+                                continue;
+                            };
                             let inner_els = self.encode_mixed_items(&inner_items)?;
                             let d = build_delimiter(&open_ch, ch, None, vec![inner_els]);
                             if let Some((_, parent_items)) = stack.last_mut() {

@@ -219,7 +219,7 @@ mod tests {
         let mut buf = std::io::Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buf);
-            let opts = zip::write::FileOptions::default();
+            let opts = zip::write::SimpleFileOptions::default();
 
             zip.start_file("[Content_Types].xml", opts).unwrap();
             zip.write_all(
@@ -372,7 +372,7 @@ mod tests {
 </Types>"#;
 
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         w.start_file("[Content_Types].xml", opts).unwrap();
         std::io::Write::write_all(&mut w, ct_xml.as_bytes()).unwrap();
         w.start_file("word/document.xml", opts).unwrap();
@@ -445,7 +445,7 @@ mod tests {
         let dst_omml = temp_dir.join("omml_out.docx");
         {
             let mut w = zip::ZipWriter::new(std::fs::File::create(&src_mt).unwrap());
-            let opts = zip::write::FileOptions::default();
+            let opts = zip::write::SimpleFileOptions::default();
             w.start_file("[Content_Types].xml", opts).unwrap();
             IoWrite::write_all(&mut w, br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">

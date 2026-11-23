@@ -147,7 +147,9 @@ pub(super) fn normalize_mathml(node: &MathNode) -> MathNode {
     for child in children {
         if child.tag == "msup" && child.children.len() == 2 {
             if let Some(order) = prime_order(&collect_text(&child.children[1])) {
-                let base = child.children.into_iter().next().unwrap();
+                let Some(base) = child.children.into_iter().next() else {
+                    continue;
+                };
                 if base.tag == "mrow" {
                     cleaned.extend(base.children);
                 } else if !is_empty_node(&base) {
@@ -160,8 +162,9 @@ pub(super) fn normalize_mathml(node: &MathNode) -> MathNode {
         if child.tag == "msubsup" && child.children.len() == 3 {
             if let Some(order) = prime_order(&collect_text(&child.children[2])) {
                 let mut parts = child.children.into_iter();
-                let base = parts.next().unwrap();
-                let sub = parts.next().unwrap();
+                let (Some(base), Some(sub)) = (parts.next(), parts.next()) else {
+                    continue;
+                };
                 let primed = MathNode::with_children(
                     "mrow",
                     vec![base, MathNode::leaf("mo", prime_text(order))],
@@ -193,7 +196,9 @@ pub(super) fn normalize_mathml(node: &MathNode) -> MathNode {
         ) && child.children.len() >= 2
             && child.children[1..].iter().all(is_empty_node)
         {
-            let base = child.children.into_iter().next().unwrap();
+            let Some(base) = child.children.into_iter().next() else {
+                continue;
+            };
             if !is_empty_node(&base) {
                 cleaned.push(base);
             }

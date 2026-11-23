@@ -756,7 +756,7 @@ mod tests {
     fn successful_batch_commit_preserves_input_then_can_replace_it() {
         use std::io::{Cursor, Write};
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         zip.start_file("[Content_Types].xml", opts).unwrap();
         zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#).unwrap();
         zip.start_file("word/document.xml", opts).unwrap();
@@ -785,7 +785,7 @@ mod tests {
     fn folder_batch_preserves_nested_hierarchy_in_sibling_timestamped_dir() {
         use std::io::{Cursor, Write};
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         zip.start_file("[Content_Types].xml", opts).unwrap();
         zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#).unwrap();
         zip.start_file("word/document.xml", opts).unwrap();
@@ -996,7 +996,7 @@ mod tests {
     fn run_items_converts_multiple_files_concurrently_and_honors_stop() {
         use std::io::{Cursor, Write};
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         zip.start_file("[Content_Types].xml", opts).unwrap();
         zip.write_all(br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#).unwrap();
         zip.start_file("word/document.xml", opts).unwrap();

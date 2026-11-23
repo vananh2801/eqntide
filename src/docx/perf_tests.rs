@@ -50,7 +50,7 @@ fn build_omml_docx(equation_count: usize) -> Vec<u8> {
 </Types>"#;
 
     let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let opts = zip::write::FileOptions::default();
+    let opts = zip::write::SimpleFileOptions::default();
     w.start_file("[Content_Types].xml", opts).unwrap();
     w.write_all(ct_xml.as_bytes()).unwrap();
     w.start_file("word/document.xml", opts).unwrap();
