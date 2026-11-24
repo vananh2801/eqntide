@@ -3,7 +3,12 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use ab_glyph::{Font, FontRef, GlyphId, PxScale};
+use read_fonts::tables::math::{MathKern, MathKernCorner};
+use read_fonts::TableProvider;
+use skrifa::charmap::Charmap;
+use skrifa::metrics::GlyphMetrics;
+use skrifa::prelude::{LocationRef, Size};
+use skrifa::{FontRef, GlyphId};
 
 use super::canvas::Canvas;
 
@@ -11,7 +16,7 @@ mod geometry;
 mod metadata;
 mod selection;
 
-use geometry::{outline_to_segments, segments_to_polys};
+use geometry::{outline_to_segments, rasterize_segments, segments_bounds, segments_to_polys};
 
 static FONT_REGULAR: &[u8] =
     include_bytes!("../../assets/fonts/stixfonts-2.13b171/STIXTwoText-Regular.ttf");
@@ -185,70 +190,85 @@ pub struct Fonts {
     italic: FontRef<'static>,
     bold: FontRef<'static>,
     math: FontRef<'static>,
-    math_face: ttf_parser::Face<'static>,
     constants: MathConstants,
     radical_info: RadicalInfo,
     ssty_map: HashMap<u16, (u16, u16)>,
 }
 
 fn load_bundled_font(data: &'static [u8]) -> FontRef<'static> {
-    FontRef::try_from_slice(data).expect("bundled font is valid")
-}
-
-fn parse_math_face() -> ttf_parser::Face<'static> {
-    ttf_parser::Face::parse(FONT_MATH, 0).expect("bundled STIX Two Math font is valid")
+    FontRef::new(data).expect("bundled font is valid")
 }
 
 /// Access the lazily-loaded font set.
 pub fn fonts() -> &'static Fonts {
     static F: OnceLock<Fonts> = OnceLock::new();
     F.get_or_init(|| {
-        let math_face = parse_math_face();
-        let upem = math_face.units_per_em() as f32;
-        let constants = if let Some(math) = math_face.tables().math {
-            if let Some(c) = math.constants {
+        let math_face = load_bundled_font(FONT_MATH);
+        let upem = Fonts::units_per_em(&math_face);
+        let constants = if let Ok(math) = math_face.math() {
+            if let Ok(c) = math.math_constants() {
                 MathConstants {
-                    axis_height: c.axis_height().value as f32 / upem,
-                    fraction_rule_thickness: c.fraction_rule_thickness().value as f32 / upem,
+                    axis_height: c.axis_height().value().to_i16() as f32 / upem,
+                    fraction_rule_thickness: c.fraction_rule_thickness().value().to_i16() as f32
+                        / upem,
                     fraction_num_display_style_shift_up: c
                         .fraction_numerator_display_style_shift_up()
-                        .value as f32
+                        .value()
+                        .to_i16() as f32
                         / upem,
-                    fraction_num_shift_up: c.fraction_numerator_shift_up().value as f32 / upem,
+                    fraction_num_shift_up: c.fraction_numerator_shift_up().value().to_i16() as f32
+                        / upem,
                     fraction_den_display_style_shift_down: c
                         .fraction_denominator_display_style_shift_down()
-                        .value as f32
+                        .value()
+                        .to_i16() as f32
                         / upem,
-                    fraction_den_shift_down: c.fraction_denominator_shift_down().value as f32
-                        / upem,
-                    fraction_num_display_style_gap_min: c.fraction_num_display_style_gap_min().value
+                    fraction_den_shift_down: c.fraction_denominator_shift_down().value().to_i16()
                         as f32
                         / upem,
-                    fraction_num_gap_min: c.fraction_numerator_gap_min().value as f32 / upem,
+                    fraction_num_display_style_gap_min: c
+                        .fraction_num_display_style_gap_min()
+                        .value()
+                        .to_i16() as f32
+                        / upem,
+                    fraction_num_gap_min: c.fraction_numerator_gap_min().value().to_i16() as f32
+                        / upem,
                     fraction_den_display_style_gap_min: c
                         .fraction_denom_display_style_gap_min()
-                        .value as f32
+                        .value()
+                        .to_i16() as f32
                         / upem,
-                    fraction_den_gap_min: c.fraction_denominator_gap_min().value as f32 / upem,
+                    fraction_den_gap_min: c.fraction_denominator_gap_min().value().to_i16() as f32
+                        / upem,
                     script_percent_scale_down: c.script_percent_scale_down() as f32 / 100.0,
                     script_script_percent_scale_down: c.script_script_percent_scale_down() as f32
                         / 100.0,
-                    superscript_shift_up: c.superscript_shift_up().value as f32 / upem,
-                    superscript_shift_up_cramped: c.superscript_shift_up_cramped().value as f32
-                        / upem,
-                    subscript_shift_down: c.subscript_shift_down().value as f32 / upem,
-                    sub_superscript_gap_min: c.sub_superscript_gap_min().value as f32 / upem,
-                    radical_vertical_gap: c.radical_vertical_gap().value as f32 / upem,
-                    radical_display_style_vertical_gap: c.radical_display_style_vertical_gap().value
+                    superscript_shift_up: c.superscript_shift_up().value().to_i16() as f32 / upem,
+                    superscript_shift_up_cramped: c.superscript_shift_up_cramped().value().to_i16()
                         as f32
                         / upem,
-                    radical_rule_thickness: c.radical_rule_thickness().value as f32 / upem,
-                    radical_extra_ascender: c.radical_extra_ascender().value as f32 / upem,
+                    subscript_shift_down: c.subscript_shift_down().value().to_i16() as f32 / upem,
+                    sub_superscript_gap_min: c.sub_superscript_gap_min().value().to_i16() as f32
+                        / upem,
+                    radical_vertical_gap: c.radical_vertical_gap().value().to_i16() as f32 / upem,
+                    radical_display_style_vertical_gap: c
+                        .radical_display_style_vertical_gap()
+                        .value()
+                        .to_i16() as f32
+                        / upem,
+                    radical_rule_thickness: c.radical_rule_thickness().value().to_i16() as f32
+                        / upem,
+                    radical_extra_ascender: c.radical_extra_ascender().value().to_i16() as f32
+                        / upem,
                     radical_degree_bottom_raise_percent: c.radical_degree_bottom_raise_percent()
                         as f32
                         / 100.0,
-                    radical_kern_before_degree: c.radical_kern_before_degree().value as f32 / upem,
-                    radical_kern_after_degree: c.radical_kern_after_degree().value as f32 / upem,
+                    radical_kern_before_degree: c.radical_kern_before_degree().value().to_i16()
+                        as f32
+                        / upem,
+                    radical_kern_after_degree: c.radical_kern_after_degree().value().to_i16()
+                        as f32
+                        / upem,
                 }
             } else {
                 MathConstants::default()
@@ -264,8 +284,7 @@ pub fn fonts() -> &'static Fonts {
             regular: load_bundled_font(FONT_REGULAR),
             italic: load_bundled_font(FONT_ITALIC),
             bold: load_bundled_font(FONT_BOLD),
-            math: load_bundled_font(FONT_MATH),
-            math_face,
+            math: math_face,
             constants,
             radical_info,
             ssty_map,
@@ -274,6 +293,12 @@ pub fn fonts() -> &'static Fonts {
 }
 
 impl Fonts {
+    fn units_per_em(font: &FontRef<'static>) -> f32 {
+        font.head()
+            .map(|h| h.units_per_em() as f32)
+            .unwrap_or(1000.0)
+    }
+
     /// Access OpenType `MATH` table constants from `STIXTwoMath-Regular.ttf`.
     pub fn constants(&self) -> &MathConstants {
         &self.constants
@@ -322,26 +347,23 @@ impl Fonts {
     }
 
     /// Look up glyph index in STIX Two Math font.
-    pub fn glyph_id_for_math(&self, style: MathStyle, ch: char) -> Option<ttf_parser::GlyphId> {
+    pub fn glyph_id_for_math(&self, style: MathStyle, ch: char) -> Option<u16> {
         self.glyph_id_for_math_styled(style, ch, 0)
     }
 
     /// Look up glyph index in STIX Two Math font, optionally substituting optical size variant.
-    pub fn glyph_id_for_math_styled(
-        &self,
-        style: MathStyle,
-        ch: char,
-        ssty: u8,
-    ) -> Option<ttf_parser::GlyphId> {
+    pub fn glyph_id_for_math_styled(&self, style: MathStyle, ch: char, ssty: u8) -> Option<u16> {
         let math_ch = Self::to_math_char(style, ch);
-        let base_gid = self
-            .math_face
-            .glyph_index(math_ch)
-            .or_else(|| self.math_face.glyph_index(ch))?;
+        let charmap = Charmap::new(&self.math);
+        let base_gid = charmap
+            .map(math_ch)
+            .filter(|&g| g != GlyphId::NOTDEF)
+            .or_else(|| charmap.map(ch).filter(|&g| g != GlyphId::NOTDEF))?;
+        let base_u16 = u16::try_from(base_gid.to_u32()).ok()?;
         if ssty > 0 {
-            Some(ttf_parser::GlyphId(self.ssty_glyph(base_gid.0, ssty)))
+            Some(self.ssty_glyph(base_u16, ssty))
         } else {
-            Some(base_gid)
+            Some(base_u16)
         }
     }
 
@@ -361,22 +383,23 @@ impl Fonts {
     ) -> f32 {
         let base_gid = self.glyph_id_for_math(style, ch);
         let eff_gid = if ssty > 0 {
-            base_gid.map(|g| ttf_parser::GlyphId(self.ssty_glyph(g.0, ssty)))
+            base_gid.map(|g| self.ssty_glyph(g, ssty))
         } else {
             base_gid
         };
 
-        if let Some(math) = self.math_face.tables().math {
-            if let Some(gi) = math.glyph_info {
-                if let Some(ics) = gi.italic_corrections {
+        let upem = Self::units_per_em(&self.math);
+        if let Ok(math) = self.math.math() {
+            if let Ok(gi) = math.math_glyph_info() {
+                if let Some(Ok(ics)) = gi.math_italics_correction_info() {
                     if let Some(gid) = eff_gid {
-                        if let Some(v) = ics.get(gid) {
-                            return (v.value as f32 / self.math_face.units_per_em() as f32) * em_px;
+                        if let Some(v) = ics.correction(GlyphId::from(gid)) {
+                            return (v as f32 / upem) * em_px;
                         }
                     }
                     if let Some(gid) = base_gid {
-                        if let Some(v) = ics.get(gid) {
-                            return (v.value as f32 / self.math_face.units_per_em() as f32) * em_px;
+                        if let Some(v) = ics.correction(GlyphId::from(gid)) {
+                            return (v as f32 / upem) * em_px;
                         }
                     }
                 }
@@ -388,20 +411,13 @@ impl Fonts {
     /// Retrieve the horizontal top accent attachment position (in pixels from left of glyph origin)
     /// for `ch` under `style` at `em_px`.
     pub fn top_accent_attachment(&self, style: MathStyle, ch: char, em_px: f32) -> Option<f32> {
-        if let Some(gid) = self.glyph_id_for_math(style, ch) {
-            if let Some(math) = self.math_face.tables().math {
-                if let Some(gi) = math.glyph_info {
-                    if let Some(tas) = gi.top_accent_attachments {
-                        if let Some(v) = tas.get(gid) {
-                            return Some(
-                                (v.value as f32 / self.math_face.units_per_em() as f32) * em_px,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        None
+        let gid = self.glyph_id_for_math(style, ch)?;
+        let upem = Self::units_per_em(&self.math);
+        let math = self.math.math().ok()?;
+        let gi = math.math_glyph_info().ok()?;
+        let tas = gi.math_top_accent_attachment()?.ok()?;
+        let v = tas.attachment(GlyphId::from(gid))?;
+        Some((v as f32 / upem) * em_px)
     }
 
     /// Calculate the horizontal math kerning adjustment between a base glyph and a script glyph.
@@ -443,21 +459,18 @@ impl Fonts {
         em_px: f32,
         ssty: u8,
     ) -> f32 {
-        let upem = self.math_face.units_per_em() as f32;
+        let upem = Self::units_per_em(&self.math);
         let mut total_kern_units: i32 = 0;
 
-        let eval_kern = |kern: &ttf_parser::math::Kern, height: i16| -> i16 {
-            let n = kern.count();
-            let mut idx = 0;
-            while idx < n {
-                if let Some(h) = kern.height(idx) {
-                    if height <= h.value {
-                        return kern.kern(idx).map_or(0, |k| k.value);
-                    }
+        let eval_kern = |kern: &MathKern<'_>, height: i16| -> i16 {
+            let heights = kern.correction_height();
+            let values = kern.kern_values();
+            for (idx, h) in heights.iter().enumerate() {
+                if height <= h.value().to_i16() {
+                    return values.get(idx).map_or(0, |k| k.value().to_i16());
                 }
-                idx += 1;
             }
-            kern.kern(n).map_or(0, |k| k.value)
+            values.get(heights.len()).map_or(0, |k| k.value().to_i16())
         };
 
         let b_gid_opt = self.glyph_id_for_math(base_style, base_ch);
@@ -465,31 +478,27 @@ impl Fonts {
             .glyph_id_for_math_styled(script_style, script_ch, ssty)
             .or_else(|| self.glyph_id_for_math(script_style, script_ch));
         if let (Some(b_gid), Some(s_gid)) = (b_gid_opt, s_gid_opt) {
-            if let Some(math) = self.math_face.tables().math {
-                if let Some(gi) = math.glyph_info {
-                    if let Some(kern_info) = gi.kern_infos {
+            if let Ok(math) = self.math.math() {
+                if let Ok(gi) = math.math_glyph_info() {
+                    if let Some(Ok(kern_info)) = gi.math_kern_info() {
                         let h_units = (-(script_y / em_px) * upem).round() as i16;
 
-                        if let Some(b_record) = kern_info.get(b_gid) {
-                            let b_kern = if is_sub {
-                                b_record.bottom_right.as_ref()
-                            } else {
-                                b_record.top_right.as_ref()
-                            };
-                            if let Some(k) = b_kern {
-                                total_kern_units += eval_kern(k, h_units) as i32;
-                            }
+                        let b_corner = if is_sub {
+                            MathKernCorner::BottomRight
+                        } else {
+                            MathKernCorner::TopRight
+                        };
+                        if let Some(k) = kern_info.kern(GlyphId::from(b_gid), b_corner) {
+                            total_kern_units += eval_kern(&k, h_units) as i32;
                         }
 
-                        if let Some(s_record) = kern_info.get(s_gid) {
-                            let s_kern = if is_sub {
-                                s_record.top_left.as_ref()
-                            } else {
-                                s_record.bottom_left.as_ref()
-                            };
-                            if let Some(k) = s_kern {
-                                total_kern_units += eval_kern(k, h_units) as i32;
-                            }
+                        let s_corner = if is_sub {
+                            MathKernCorner::TopLeft
+                        } else {
+                            MathKernCorner::BottomLeft
+                        };
+                        if let Some(k) = kern_info.kern(GlyphId::from(s_gid), s_corner) {
+                            total_kern_units += eval_kern(&k, h_units) as i32;
                         }
                     }
                 }
@@ -506,9 +515,9 @@ impl Fonts {
     fn pick_styled(&self, style: MathStyle, ch: char, ssty: u8) -> (&FontRef<'static>, GlyphId) {
         if ssty > 0 {
             if let Some(base_gid) = self.glyph_id_for_math(style, ch) {
-                let alt_gid = self.ssty_glyph(base_gid.0, ssty);
-                if alt_gid != base_gid.0 {
-                    return (&self.math, GlyphId(alt_gid));
+                let alt_gid = self.ssty_glyph(base_gid, ssty);
+                if alt_gid != base_gid {
+                    return (&self.math, GlyphId::from(alt_gid));
                 }
             }
         }
@@ -523,9 +532,39 @@ impl Fonts {
         )
     }
 
-    fn scale_for(font: &FontRef<'static>, em_px: f32) -> PxScale {
-        let upem = font.units_per_em().unwrap_or(1000.0);
-        PxScale::from(em_px * font.height_unscaled() / upem)
+    fn glyph_bbox(font: &FontRef<'static>, id: GlyphId) -> Option<(i16, i16, i16, i16)> {
+        if let (Ok(loca), Ok(glyf)) = (font.loca(None), font.glyf()) {
+            let glyph = loca.get_glyf(id, &glyf).ok()??;
+            let bbox = (glyph.x_min(), glyph.y_min(), glyph.x_max(), glyph.y_max());
+            return (bbox.0 < bbox.2 && bbox.1 < bbox.3).then_some(bbox);
+        }
+        let bbox = GlyphMetrics::new(font, Size::unscaled(), LocationRef::default()).bounds(id)?;
+        let res = (
+            bbox.x_min.round() as i16,
+            bbox.y_min.round() as i16,
+            bbox.x_max.round() as i16,
+            bbox.y_max.round() as i16,
+        );
+        (res.0 < res.2 && res.1 < res.3).then_some(res)
+    }
+
+    fn glyph_px_bounds(
+        font: &FontRef<'static>,
+        id: GlyphId,
+        em_px: f32,
+        x: f32,
+        y: f32,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let (x_min, y_min, x_max, y_max) = Self::glyph_bbox(font, id)?;
+        let scale = em_px / Self::units_per_em(font);
+        let (x_trunc, x_fract) = (x.trunc(), x.fract());
+        let (y_trunc, y_fract) = (y.trunc(), y.fract());
+        Some((
+            (x_min as f32 * scale + x_fract).floor() + x_trunc,
+            (y_max as f32 * -scale + y_fract).floor() + y_trunc,
+            (x_max as f32 * scale + x_fract).ceil() + x_trunc,
+            (y_min as f32 * -scale + y_fract).ceil() + y_trunc,
+        ))
     }
 
     pub fn advance(&self, style: MathStyle, ch: char, em_px: f32) -> f32 {
@@ -534,8 +573,10 @@ impl Fonts {
 
     pub fn advance_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> f32 {
         let (f, id) = self.pick_styled(style, ch, ssty);
-
-        f.h_advance_unscaled(id) * em_px / f.units_per_em().unwrap_or(1000.0)
+        let advance_unscaled = GlyphMetrics::new(f, Size::unscaled(), LocationRef::default())
+            .advance_width(id)
+            .unwrap_or(0.0);
+        advance_unscaled * em_px / Self::units_per_em(f)
     }
 
     pub fn ink(&self, style: MathStyle, ch: char, em_px: f32) -> (f32, f32) {
@@ -544,12 +585,8 @@ impl Fonts {
 
     pub fn ink_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> (f32, f32) {
         let (f, id) = self.pick_styled(style, ch, ssty);
-        let g = id.with_scale_and_position(Self::scale_for(f, em_px), ab_glyph::point(0.0, 0.0));
-        match f.outline_glyph(g) {
-            Some(o) => {
-                let b = o.px_bounds();
-                ((-b.min.y).max(0.0), b.max.y.max(0.0))
-            }
+        match Self::glyph_px_bounds(f, id, em_px, 0.0, 0.0) {
+            Some((_, min_y, _, max_y)) => ((-min_y).max(0.0), max_y.max(0.0)),
             None => (0.0, 0.0),
         }
     }
@@ -560,12 +597,8 @@ impl Fonts {
 
     pub fn ink_x_styled(&self, style: MathStyle, ch: char, em_px: f32, ssty: u8) -> (f32, f32) {
         let (f, id) = self.pick_styled(style, ch, ssty);
-        let g = id.with_scale_and_position(Self::scale_for(f, em_px), ab_glyph::point(0.0, 0.0));
-        match f.outline_glyph(g) {
-            Some(o) => {
-                let b = o.px_bounds();
-                (b.min.x, b.max.x)
-            }
+        match Self::glyph_px_bounds(f, id, em_px, 0.0, 0.0) {
+            Some((min_x, _, max_x, _)) => (min_x, max_x),
             None => (0.0, 0.0),
         }
     }
@@ -594,12 +627,25 @@ impl Fonts {
         ssty: u8,
     ) {
         let (f, id) = self.pick_styled(style, ch, ssty);
-        let g = id.with_scale_and_position(Self::scale_for(f, em_px), ab_glyph::point(x, y));
-        if let Some(o) = f.outline_glyph(g) {
-            let b = o.px_bounds();
-            let (bx, by) = (b.min.x.floor() as i64, b.min.y.floor() as i64);
-            o.draw(|gx, gy, c| canvas.add(bx + gx as i64, by + gy as i64, c));
-        }
+        let upem = Self::units_per_em(f);
+        let Some(segs) = outline_to_segments(f, id, upem, em_px, x, y) else {
+            return;
+        };
+        let bounds = Self::glyph_px_bounds(f, id, em_px, x, y).or_else(|| segments_bounds(&segs));
+        let Some((min_x, min_y, max_x, max_y)) = bounds else {
+            return;
+        };
+        let (min_x, min_y, max_x, max_y) = if let Some(seg_b) = segments_bounds(&segs) {
+            (
+                min_x.min(seg_b.0),
+                min_y.min(seg_b.1),
+                max_x.max(seg_b.2),
+                max_y.max(seg_b.3),
+            )
+        } else {
+            (min_x, min_y, max_x, max_y)
+        };
+        rasterize_segments(&segs, min_x, min_y, max_x, max_y, canvas);
     }
 
     /// The outline of `ch` as drawing commands in pixels (y pointing down), with its
@@ -626,9 +672,8 @@ impl Fonts {
         ssty: u8,
     ) -> Option<Vec<Seg>> {
         let (f, id) = self.pick_styled(style, ch, ssty);
-        let outline = f.outline(id)?;
-        let upem = f.units_per_em().unwrap_or(1000.0);
-        Some(outline_to_segments(&outline, upem, em_px, x, y))
+        let upem = Self::units_per_em(f);
+        outline_to_segments(f, id, upem, em_px, x, y)
     }
 
     /// The outline of `ch` flattened to polygons (one per contour), drawn with
@@ -673,24 +718,21 @@ impl Fonts {
         y: f32,
     ) -> Vec<Vec<(f32, f32)>> {
         let f = &self.math;
-        let id = ab_glyph::GlyphId(gid);
-        let Some(outline) = f.outline(id) else {
+        let id = GlyphId::from(gid);
+        let upem = Self::units_per_em(f);
+        let Some(segs) = outline_to_segments(f, id, upem, em_y, 0.0, 0.0) else {
             return Vec::new();
         };
-        let upem = f.units_per_em().unwrap_or(1000.0);
-        let segs = outline_to_segments(&outline, upem, em_y, 0.0, 0.0);
         segments_to_polys(&segs, em_x, em_y, x, y)
     }
 
     /// Bounding box `(x_min, y_min, x_max, y_max)` in font design units for a glyph in `STIXTwoMath`.
     pub fn math_glyph_bbox(&self, gid: u16) -> Option<(i16, i16, i16, i16)> {
-        self.math_face
-            .glyph_bounding_box(ttf_parser::GlyphId(gid))
-            .map(|r| (r.x_min, r.y_min, r.x_max, r.y_max))
+        Self::glyph_bbox(&self.math, GlyphId::from(gid))
     }
 
     pub fn has_glyph(&self, ch: char) -> bool {
-        self.pick(MathStyle::Text, ch).1 .0 != 0
+        self.pick(MathStyle::Text, ch).1 != GlyphId::NOTDEF
     }
 }
 
@@ -757,14 +799,14 @@ mod tests {
         let x_gid = f
             .glyph_id_for_math(MathStyle::Variable, 'x')
             .expect("math italic x must exist");
-        let x_ssty1 = f.ssty_glyph(x_gid.0, 1);
-        let x_ssty2 = f.ssty_glyph(x_gid.0, 2);
+        let x_ssty1 = f.ssty_glyph(x_gid, 1);
+        let x_ssty2 = f.ssty_glyph(x_gid, 2);
         assert_ne!(
-            x_ssty1, x_gid.0,
+            x_ssty1, x_gid,
             "ssty level 1 alternate should differ from base"
         );
         assert_ne!(
-            x_ssty2, x_gid.0,
+            x_ssty2, x_gid,
             "ssty level 2 alternate should differ from base"
         );
         assert_ne!(x_ssty1, x_ssty2, "ssty level 1 and 2 should differ");
@@ -792,5 +834,78 @@ mod tests {
             segs.is_some() && !segs.unwrap().is_empty(),
             "ssty glyph must produce valid outline segments"
         );
+    }
+
+    #[test]
+    fn test_glyph_bounds_outlines_polygons_and_raster() {
+        let f = fonts();
+
+        // math_glyph_bbox: visible math glyph vs space
+        let sum_gid = f
+            .glyph_id_for_math(MathStyle::ExtraMath, '∑')
+            .expect("summation glyph must exist");
+        let (xmin, ymin, xmax, ymax) = f
+            .math_glyph_bbox(sum_gid)
+            .expect("summation must have non-empty bbox");
+        assert!(xmin < xmax && ymin < ymax);
+        let space_gid = f
+            .glyph_id_for_math(MathStyle::Text, ' ')
+            .expect("space glyph must exist");
+        assert_eq!(f.math_glyph_bbox(space_gid), None);
+
+        // ink and ink_x: non-zero for 'g' (has both ascender and descender), zero for space
+        let (asc, desc) = f.ink(MathStyle::Variable, 'g', 100.0);
+        assert!(
+            asc > 20.0 && desc > 10.0,
+            "expected g ink asc/desc, got ({asc}, {desc})"
+        );
+        let (lx, rx) = f.ink_x(MathStyle::Variable, 'g', 100.0);
+        assert!(rx > lx);
+        assert_eq!(f.ink(MathStyle::Text, ' ', 100.0), (0.0, 0.0));
+        assert_eq!(f.ink_x(MathStyle::Text, ' ', 100.0), (0.0, 0.0));
+
+        // glyph_segments_styled: orientation (+y down: top of 'A' is negative relative to baseline y=0)
+        assert!(f
+            .glyph_segments(MathStyle::Text, ' ', 100.0, 0.0, 0.0)
+            .is_none());
+        let a_segs = f
+            .glyph_segments(MathStyle::Text, 'A', 100.0, 10.0, 100.0)
+            .expect("A must have outline segments");
+        assert!(matches!(a_segs.first(), Some(Seg::Move(_, _))));
+        assert!(matches!(a_segs.last(), Some(Seg::Close)));
+        assert!(a_segs
+            .iter()
+            .any(|s| matches!(s, Seg::Line(_, y) | Seg::Move(_, y) if *y < 100.0)));
+
+        // glyph_polys and math_glyph_polys with anisotropic scale
+        let polys_1x = f.glyph_polys(MathStyle::ExtraMath, '∑', 100.0, 100.0, 50.0, 100.0);
+        let polys_2x = f.glyph_polys(MathStyle::ExtraMath, '∑', 200.0, 100.0, 50.0, 100.0);
+        assert!(!polys_1x.is_empty());
+        let span = |ps: &[Vec<(f32, f32)>]| -> f32 {
+            let mut mn = f32::INFINITY;
+            let mut mx = f32::NEG_INFINITY;
+            for p in ps.iter().flatten() {
+                mn = mn.min(p.0);
+                mx = mx.max(p.0);
+            }
+            mx - mn
+        };
+        assert!((span(&polys_2x) - 2.0 * span(&polys_1x)).abs() < 0.5);
+        assert!(!f
+            .math_glyph_polys(sum_gid, 100.0, 100.0, 50.0, 100.0)
+            .is_empty());
+
+        // draw_styled produces non-zero coverage for 'x' and zero for space
+        let mut canvas = Canvas::new(120, 120);
+        f.draw_styled(MathStyle::Variable, 'x', 60.0, 20.0, 80.0, &mut canvas, 0);
+        let filled: f32 = canvas.cov.iter().sum();
+        assert!(
+            filled > 50.0,
+            "expected visible raster coverage for 'x', got {filled}"
+        );
+
+        let mut blank = Canvas::new(40, 40);
+        f.draw_styled(MathStyle::Text, ' ', 40.0, 10.0, 20.0, &mut blank, 0);
+        assert_eq!(blank.cov.iter().sum::<f32>(), 0.0);
     }
 }

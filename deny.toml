@@ -28,7 +28,8 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
-wildcards = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
 highlight = "all"
 
 [sources]
@@ -38,9 +39,13 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 [advisories]
 version = 2
-# cargo-deny now configures these checks by dependency scope rather than lint
-# level. Keep unmaintained crates non-blocking and reject unsound crates anywhere
-# in the dependency graph.
-unmaintained = "none"
+unmaintained = "all"
 unsound = "all"
 yanked = "warn"
+ignore = [
+    # Transitive Linux accessibility deps pulled by eframe -> egui-winit -> accesskit_unix -> atspi -> zbus 5.x.
+    # Merged into zbus 6.0.0 upstream; revisit once eframe/accesskit updates to zbus 6+ (note: zbus 5.19 stays transitive until then).
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6.0.0; transitive via eframe/accesskit_unix" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6.0.0; transitive via eframe/accesskit_unix" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6.0.0; transitive via eframe/accesskit_unix" },
+]

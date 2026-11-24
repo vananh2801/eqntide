@@ -29,9 +29,9 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2
 clap = { version = "4", features = ["derive"] }
 log = "0.4"
 uuid = { version = "1", features = ["v4"] }
-ab_glyph = "0.2"
 ab_glyph_rasterizer = "0.1"
-ttf-parser = "0.25"
+read-fonts = "0.47"
+skrifa = "0.50"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 crc32fast = "1"
 tiny_http = "0.12"

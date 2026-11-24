@@ -1,6 +1,7 @@
 //! Typeface selection and fallback for rendered math glyphs.
 
-use ab_glyph::{Font, FontRef, GlyphId};
+use skrifa::charmap::Charmap;
+use skrifa::{FontRef, GlyphId};
 
 use super::MathStyle;
 
@@ -21,13 +22,17 @@ pub(super) fn pick_glyph<'a>(
     };
 
     for font in fallback_chain {
-        let id = font.glyph_id(ch);
-        if id.0 != 0 {
-            return (font, id);
+        if let Some(id) = Charmap::new(font).map(ch) {
+            if id != GlyphId::NOTDEF {
+                return (font, id);
+            }
         }
     }
 
-    (primary, primary.glyph_id(ch))
+    (
+        primary,
+        Charmap::new(primary).map(ch).unwrap_or(GlyphId::NOTDEF),
+    )
 }
 
 fn normalized_character(style: MathStyle, ch: char) -> char {
