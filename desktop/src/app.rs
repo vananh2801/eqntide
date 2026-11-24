@@ -2269,28 +2269,42 @@ impl App {
             )
             .show_separator_line(false)
             .show(ui, |ui| self.status_bar(ui));
-        if self.tab == 0 {
-            egui::Panel::left("app-sidebar")
-                .exact_size(174.0)
-                .resizable(false)
-                .frame(egui::Frame::NONE.fill(tokens.panel_bg).inner_margin(
-                    egui::Margin::symmetric(theme::SPACE_LG as i8, CONTENT_PADDING),
-                ))
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(
-                        !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
-                        |ui| self.sidebar(ui),
-                    );
-                });
-        }
-        if self.tab == 0 || self.session.is_some() {
-            egui::Panel::bottom("app-footer")
-                .exact_size(56.0)
-                .frame(egui::Frame::NONE.fill(tokens.panel_bg).inner_margin(
-                    egui::Margin::symmetric(theme::SPACE_LG as i8, CONTENT_PADDING),
-                ))
-                .show(ui, |ui| self.footer(ui));
-        }
+        let sidebar_rect = if self.tab == 0 {
+            Some(
+                egui::Panel::left("app-sidebar")
+                    .exact_size(174.0)
+                    .resizable(false)
+                    .frame(egui::Frame::NONE.fill(tokens.panel_bg).inner_margin(
+                        egui::Margin::symmetric(theme::SPACE_LG as i8, CONTENT_PADDING),
+                    ))
+                    .show_separator_line(false)
+                    .show(ui, |ui| {
+                        ui.add_enabled_ui(
+                            !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
+                            |ui| self.sidebar(ui),
+                        );
+                    })
+                    .response
+                    .rect,
+            )
+        } else {
+            None
+        };
+        let footer_rect = if self.tab == 0 || self.session.is_some() {
+            Some(
+                egui::Panel::bottom("app-footer")
+                    .exact_size(56.0)
+                    .frame(egui::Frame::NONE.fill(tokens.panel_bg).inner_margin(
+                        egui::Margin::symmetric(theme::SPACE_LG as i8, CONTENT_PADDING),
+                    ))
+                    .show_separator_line(false)
+                    .show(ui, |ui| self.footer(ui))
+                    .response
+                    .rect,
+            )
+        } else {
+            None
+        };
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
@@ -2312,6 +2326,15 @@ impl App {
                     },
                 );
             });
+        let divider_stroke = Stroke::new(1.0, tokens.border);
+        if let Some(rect) = sidebar_rect {
+            ui.painter()
+                .vline(rect.max.x - 0.5, rect.y_range(), divider_stroke);
+        }
+        if let Some(rect) = footer_rect {
+            ui.painter()
+                .hline(rect.x_range(), rect.min.y + 0.5, divider_stroke);
+        }
     }
 
     fn save_available(&self) -> bool {
@@ -4690,6 +4713,12 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        ThemeTokens::for_mode(visuals.dark_mode)
+            .app_bg
+            .to_normalized_gamma_f32()
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.ui_pass(ui);
     }
@@ -9344,5 +9373,68 @@ mod tests {
         assert!(!a.batch_rows[1].flat_selected);
         assert!(!a.batch_rows[2].flat_selected);
         assert!(a.batch_rows[3].flat_selected);
+    }
+
+    #[test]
+    fn panel_dividers_draw_over_opaque_fills_and_clear_color_matches_theme() {
+        let a = app();
+        let light_tokens = ThemeTokens::for_mode(false);
+        let dark_tokens = ThemeTokens::for_mode(true);
+        assert_eq!(
+            eframe::App::clear_color(&a, &egui::Visuals::light()),
+            light_tokens.app_bg.to_normalized_gamma_f32()
+        );
+        assert_eq!(
+            eframe::App::clear_color(&a, &egui::Visuals::dark()),
+            dark_tokens.app_bg.to_normalized_gamma_f32()
+        );
+
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        a.persisted.theme = ThemeMode::Light;
+        ctx.set_theme(egui::Theme::Light);
+        let out = run_ui_pass_sized(&ctx, &mut a, Vec2::new(1100.0, 650.0));
+
+        // Both CentralPanel (app_bg) and app-footer (panel_bg) meet flush with no 1px gap.
+        let mut central_max_y = None;
+        let mut footer_min_y = None;
+        let mut central_idx = None;
+        let mut footer_divider_idx = None;
+        let mut sidebar_divider_idx = None;
+        for (idx, clipped) in out.shapes.iter().enumerate() {
+            match &clipped.shape {
+                egui::Shape::Rect(r) if r.fill == light_tokens.app_bg && r.rect.width() > 800.0 => {
+                    central_max_y = Some(r.rect.max.y);
+                    central_idx = Some(idx);
+                }
+                egui::Shape::Rect(r)
+                    if r.fill == light_tokens.panel_bg
+                        && (r.rect.height() - 56.0).abs() < 0.01 =>
+                {
+                    footer_min_y = Some(r.rect.min.y);
+                }
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == light_tokens.border && stroke.width == 1.0 =>
+                {
+                    if (points[0].y - points[1].y).abs() < 0.01
+                        && (points[1].x - points[0].x) > 800.0
+                    {
+                        footer_divider_idx = Some(idx);
+                    } else if (points[0].x - points[1].x).abs() < 0.01
+                        && (points[1].y - points[0].y) > 500.0
+                    {
+                        sidebar_divider_idx = Some(idx);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let central_max_y = central_max_y.expect("central panel fill");
+        let footer_min_y = footer_min_y.expect("footer panel fill");
+        assert!((central_max_y - footer_min_y).abs() < 0.01);
+        let central_idx = central_idx.expect("central panel index");
+        assert!(footer_divider_idx.expect("footer divider") > central_idx);
+        assert!(sidebar_divider_idx.expect("sidebar divider") > central_idx);
     }
 }
