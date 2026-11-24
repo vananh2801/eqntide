@@ -1,4 +1,4 @@
-//! Local LaTeX command completion for the structural canvas.
+//! Local LaTeX command completion and validation for the structural canvas and desktop editor.
 #[cfg(test)]
 use crate::palette;
 
@@ -121,30 +121,105 @@ impl Input {
     pub fn is_command_prefix(&self) -> bool {
         self.name.bytes().all(|b| b.is_ascii_alphabetic())
     }
+}
 
-    pub fn text_argument(&self) -> Option<&str> {
-        let argument = self.name.strip_prefix("text")?;
-        (!argument.starts_with(|ch: char| ch.is_ascii_alphabetic()))
-            .then_some(argument.trim_start())
+pub fn is_argument_requiring_command(name: &str) -> bool {
+    matches!(
+        name,
+        "text"
+            | "mathbb"
+            | "mathfrak"
+            | "mathcal"
+            | "mathscr"
+            | "mathrm"
+            | "mathbf"
+            | "mathit"
+            | "boldsymbol"
+            | "operatorname"
+            | "hspace"
+            | "textstyle"
+            | "displaystyle"
+            | "enclose"
+    )
+}
+
+pub fn bare_command_error(name: &str) -> String {
+    match name {
+        "text" => r"Invalid LaTeX command. Use \text{...} to insert text.".into(),
+        "enclose" => r"Invalid LaTeX command. Use \enclose{notation}{...} with non-empty notation and body arguments.".into(),
+        "textstyle" | "displaystyle" => format!(
+            r"Invalid LaTeX command. Use \{name}{{...}} or {{\{name} ...}} with a non-empty body."
+        ),
+        _ => format!(
+            r"Invalid LaTeX command. Use \{name}{{...}} with a non-empty braced argument."
+        ),
+    }
+}
+
+fn validate_specialized_alphabet(cmd: &str, trimmed: &str) -> Result<(), String> {
+    let valid = match cmd {
+        "mathbb" => trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch == 'k'),
+        "mathcal" => trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch == 'l'),
+        "mathscr" | "mathfrak" => trimmed.chars().all(|ch| ch.is_ascii_alphabetic()),
+        _ => true,
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(match cmd {
+        "mathbb" => r"Invalid LaTeX command: \mathbb{...} supports only uppercase A-Z and k (no digits, operators, or nested scripts; place exponents outside like \mathbb{R}^2).".into(),
+        "mathcal" => r"Invalid LaTeX command: \mathcal{...} supports only uppercase A-Z and l (no digits, operators, or nested scripts; place exponents outside like \mathcal{A}^2).".into(),
+        "mathscr" => r"Invalid LaTeX command: \mathscr{...} supports only letters A-Z and a-z (no digits, operators, or nested scripts; place exponents outside like \mathscr{A}^2).".into(),
+        "mathfrak" => r"Invalid LaTeX command: \mathfrak{...} supports only letters A-Z and a-z (no digits, operators, or nested scripts; place exponents outside like \mathfrak{g}^2).".into(),
+        _ => bare_command_error(cmd),
+    })
+}
+
+struct Scanner<'a> {
+    src: &'a str,
+    pos: usize,
+}
+
+impl<'a> Scanner<'a> {
+    fn rest(&self) -> &'a str {
+        &self.src[self.pos..]
     }
 
-    pub fn has_complete_text_argument(&self) -> bool {
-        let Some(argument) = self
-            .text_argument()
-            .and_then(|arg| arg.trim_end().strip_prefix('{'))
-        else {
-            return false;
-        };
-        let mut depth = 1;
+    fn peek_char(&self) -> Option<char> {
+        self.rest().chars().next()
+    }
+
+    fn skip_ws(&mut self) {
+        while let Some(ch) = self.peek_char() {
+            if ch.is_whitespace() {
+                self.pos += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn read_braced(&mut self) -> Option<&'a str> {
+        if !self.rest().starts_with('{') {
+            return None;
+        }
+        let start = self.pos + 1;
+        let mut depth = 1usize;
         let mut escaped = false;
-        for (offset, ch) in argument.char_indices() {
+        for (offset, ch) in self.src[start..].char_indices() {
             if !escaped {
                 match ch {
                     '{' => depth += 1,
                     '}' => {
                         depth -= 1;
                         if depth == 0 {
-                            return offset + 1 == argument.len();
+                            let end = start + offset;
+                            self.pos = end + 1;
+                            return Some(&self.src[start..end]);
                         }
                     }
                     _ => {}
@@ -152,8 +227,128 @@ impl Input {
             }
             escaped = !escaped && ch == '\\';
         }
-        false
+        None
     }
+}
+
+fn match_style_group_prefix(inner: &str) -> Option<(&'static str, &str)> {
+    let trimmed = inner.trim_start();
+    for cmd in ["textstyle", "displaystyle"] {
+        if let Some(after_cmd) = trimmed.strip_prefix('\\').and_then(|t| t.strip_prefix(cmd)) {
+            if after_cmd.is_empty() || !after_cmd.as_bytes()[0].is_ascii_alphabetic() {
+                return Some((cmd, after_cmd));
+            }
+        }
+    }
+    None
+}
+
+/// Validates desktop LaTeX input (both Equation Canvas command buffers and `LaTeX source`)
+/// for argument completeness and specialized font-alphabet constraints.
+pub fn validate_desktop_latex(source: &str) -> Result<(), String> {
+    let mut scanner = Scanner {
+        src: source,
+        pos: 0,
+    };
+    while let Some(ch) = scanner.peek_char() {
+        if ch == '{' {
+            let saved = scanner.pos;
+            if let Some(inner) = scanner.read_braced() {
+                if let Some((cmd, body)) = match_style_group_prefix(inner) {
+                    if body.trim().is_empty() {
+                        return Err(bare_command_error(cmd));
+                    }
+                    validate_desktop_latex(body)?;
+                } else {
+                    validate_desktop_latex(inner)?;
+                }
+            } else {
+                if let Some((cmd, _)) = match_style_group_prefix(&scanner.src[saved + 1..]) {
+                    return Err(bare_command_error(cmd));
+                }
+                scanner.pos = saved + 1;
+            }
+            continue;
+        }
+        if ch == '\\' {
+            scanner.pos += 1;
+            let Some(next) = scanner.peek_char() else {
+                break;
+            };
+            if !next.is_ascii_alphabetic() {
+                scanner.pos += next.len_utf8();
+                continue;
+            }
+            let cmd_start = scanner.pos;
+            while scanner.peek_char().is_some_and(|c| c.is_ascii_alphabetic()) {
+                scanner.pos += 1;
+            }
+            let cmd = &scanner.src[cmd_start..scanner.pos];
+            match cmd {
+                "text" => {
+                    scanner.skip_ws();
+                    let Some(inner) = scanner.read_braced() else {
+                        return Err(bare_command_error("text"));
+                    };
+                    if inner.is_empty() {
+                        return Err(bare_command_error("text"));
+                    }
+                }
+                "mathbb" | "mathcal" | "mathscr" | "mathfrak" => {
+                    scanner.skip_ws();
+                    let Some(inner) = scanner.read_braced() else {
+                        return Err(bare_command_error(cmd));
+                    };
+                    let trimmed = inner.trim();
+                    if trimmed.is_empty() {
+                        return Err(bare_command_error(cmd));
+                    }
+                    validate_specialized_alphabet(cmd, trimmed)?;
+                }
+                "mathrm" | "mathbf" | "mathit" | "boldsymbol" | "operatorname" | "textstyle"
+                | "displaystyle" => {
+                    scanner.skip_ws();
+                    let Some(inner) = scanner.read_braced() else {
+                        return Err(bare_command_error(cmd));
+                    };
+                    if inner.trim().is_empty() {
+                        return Err(bare_command_error(cmd));
+                    }
+                    validate_desktop_latex(inner)?;
+                }
+                "hspace" => {
+                    scanner.skip_ws();
+                    let Some(inner) = scanner.read_braced() else {
+                        return Err(bare_command_error("hspace"));
+                    };
+                    if inner.trim().is_empty() {
+                        return Err(bare_command_error("hspace"));
+                    }
+                }
+                "enclose" => {
+                    scanner.skip_ws();
+                    let Some(notation) = scanner.read_braced() else {
+                        return Err(bare_command_error("enclose"));
+                    };
+                    if notation.trim().is_empty() {
+                        return Err(bare_command_error("enclose"));
+                    }
+                    scanner.skip_ws();
+                    let Some(body) = scanner.read_braced() else {
+                        return Err(bare_command_error("enclose"));
+                    };
+                    if body.trim().is_empty() {
+                        return Err(bare_command_error("enclose"));
+                    }
+                    validate_desktop_latex(body)?;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        scanner.pos += ch.len_utf8();
+    }
+    Ok(())
 }
 
 const COMMANDS: &[(&str, &str, &str)] = eqntide::catalog::COMMANDS;
@@ -186,10 +381,26 @@ mod tests {
         for &(name, _, source) in COMMANDS {
             assert!(palette::template(source).is_ok(), "{name}");
         }
-        for prefix in ["lim", "infty", "rightarrow", "alpha", "frac", "dfrac"] {
+        for prefix in [
+            "lim",
+            "infty",
+            "rightarrow",
+            "alpha",
+            "frac",
+            "dfrac",
+            "mathscr",
+            "mathrm",
+            "mathbf",
+            "mathit",
+            "boldsymbol",
+            "operatorname",
+            "textstyle",
+            "displaystyle",
+        ] {
             assert_eq!(suggestions(prefix)[0].name, prefix);
             assert!(exact(prefix).is_some());
         }
+        assert_eq!(suggestions("math")[0].name, "mathbb");
         assert!(suggestions("nosuchcommand").is_empty());
     }
 
@@ -247,5 +458,142 @@ mod tests {
         assert_eq!(input.name, "mathbb");
         assert_eq!(input.cursor, 6);
         assert!(input.sync_cursor);
+    }
+
+    #[test]
+    fn desktop_validation_rejects_bare_incomplete_and_empty_argument_commands() {
+        for invalid in [
+            r"\text",
+            r"\text ",
+            r"\text{",
+            r"\text{}",
+            r"\text+",
+            r"\mathbb",
+            r"\mathbb{}",
+            r"\mathbb{ }",
+            r"\mathbb{R",
+            r"\mathfrak",
+            r"\mathfrak{}",
+            r"\mathfrak{ }",
+            r"\mathcal",
+            r"\mathcal{}",
+            r"\mathcal{ }",
+            r"\mathscr",
+            r"\mathscr{}",
+            r"\mathscr{ }",
+            r"\mathrm",
+            r"\mathrm{}",
+            r"\mathrm{ }",
+            r"\mathbf",
+            r"\mathbf{}",
+            r"\mathbf{ }",
+            r"\mathit",
+            r"\mathit{}",
+            r"\mathit{ }",
+            r"\boldsymbol",
+            r"\boldsymbol{}",
+            r"\boldsymbol{ }",
+            r"\operatorname",
+            r"\operatorname{}",
+            r"\operatorname{ }",
+            r"\hspace",
+            r"\hspace{}",
+            r"\hspace{ }",
+            r"\textstyle",
+            r"\textstyle{}",
+            r"\textstyle{ }",
+            r"{\textstyle}",
+            r"{\textstyle }",
+            r"{\textstyle",
+            r"\textstyle x",
+            r"\displaystyle",
+            r"\displaystyle{}",
+            r"\displaystyle{ }",
+            r"{\displaystyle}",
+            r"{\displaystyle }",
+            r"\enclose",
+            r"\enclose{}",
+            r"\enclose{box}",
+            r"\enclose{box}{",
+            r"\enclose{box}{}",
+            r"\enclose{box}{ }",
+            r"\enclose{}{x}",
+            r"\frac{\mathbb{}}{2}",
+        ] {
+            let err = validate_desktop_latex(invalid)
+                .expect_err(&format!("expected error for `{invalid}`"));
+            assert!(
+                err.contains("Invalid LaTeX command"),
+                "unexpected error for `{invalid}`: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_validation_allows_space_only_text_style_groups_and_complete_arguments() {
+        for valid in [
+            r"\text{ }",
+            r"\text{5 cm }",
+            r"\text{\alpha \{x\} }",
+            r"\mathbb{R}",
+            r"\mathbb{Z}",
+            r"\mathbb{k}",
+            r"\mathbb{R}^2",
+            r"\mathcal{A}",
+            r"\mathcal{L}",
+            r"\mathcal{l}",
+            r"\mathscr{A}",
+            r"\mathscr{a}",
+            r"\mathfrak{Ag}",
+            r"\mathrm{H_2O}",
+            r"\mathrm{m/s^2}",
+            r"\mathbf{x^2}",
+            r"\mathit{AB}",
+            r"\boldsymbol{\alpha}",
+            r"\operatorname{sgn}",
+            r"\hspace{1em}",
+            r"\textstyle{x}",
+            r"{\textstyle \frac{1}{2}}",
+            r"{\displaystyle \sum_{i=1}^n i}",
+            r"\enclose{box}{x+y}",
+            r"\frac{1}{\sqrt{2}}",
+        ] {
+            assert!(
+                validate_desktop_latex(valid).is_ok(),
+                "expected `{valid}` to be valid, got {:?}",
+                validate_desktop_latex(valid)
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_validation_checks_specialized_math_font_alphabets() {
+        for invalid in [
+            r"\mathbb{1^2}",
+            r"\mathbb{1}",
+            r"\mathbb{a}",
+            r"\mathbb{R^2}",
+            r"\mathbb{R_0}",
+            r"\mathbb{R Z}",
+            r"\mathbb{R+1}",
+            r"\mathbb{\alpha}",
+            r"\mathcal{1}",
+            r"\mathcal{a}",
+            r"\mathcal{A^2}",
+            r"\mathscr{1}",
+            r"\mathscr{A^2}",
+            r"\mathfrak{1+2}",
+            r"\mathfrak{1}",
+            r"\mathfrak{g_1}",
+            r"\frac{\mathbb{1^2}}{2}",
+            r"\mathbf{\mathbb{1^2}}",
+        ] {
+            let err = validate_desktop_latex(invalid)
+                .expect_err(&format!("expected alphabet error for `{invalid}`"));
+            assert!(
+                err.contains("Invalid LaTeX command"),
+                "unexpected message for `{invalid}`: {err}"
+            );
+        }
     }
 }

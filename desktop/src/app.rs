@@ -279,6 +279,7 @@ pub struct App {
     latex_deadline: Option<Instant>,
     latex_parsing: Option<u64>,
     latex_error: Option<String>,
+    command_error: Option<String>,
     session: Option<String>,
     loading_session: Option<String>,
     queue: VecDeque<DesktopWindowRequest>,
@@ -745,6 +746,7 @@ impl App {
             latex_deadline: None,
             latex_parsing: None,
             latex_error: None,
+            command_error: None,
             session: None,
             loading_session: None,
             queue: VecDeque::new(),
@@ -821,6 +823,7 @@ impl App {
         self.latex_generation += 1;
         self.latex_deadline = None;
         self.latex_error = None;
+        self.command_error = None;
     }
     fn source_changed(&mut self, now: Instant) {
         self.command_input = None;
@@ -839,17 +842,20 @@ impl App {
         self.latex_parsing = Some(self.latex_generation);
         Some((self.latex_generation, self.latex.clone()))
     }
+    fn parse_desktop_latex(source: &str) -> Result<MathNode, String> {
+        if source.trim().is_empty() {
+            return Ok(MathNode::new("math"));
+        }
+        commands::validate_desktop_latex(source)?;
+        let math = eqntide::service::parse_latex_to_mathml(source).map_err(|e| e.to_string())?;
+        Editor::try_new(&math).map(|_| math).map_err(str::to_owned)
+    }
     fn request_latex_parse(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
         if let Some((generation, source)) = self.take_latex_request(now) {
             let tx = self.tx.clone();
             std::thread::spawn(move || {
-                let result = if source.trim().is_empty() {
-                    Ok(MathNode::new("math"))
-                } else {
-                    eqntide::service::parse_latex_to_mathml(&source).map_err(|e| e.to_string())
-                }
-                .and_then(|math| Editor::try_new(&math).map(|_| math).map_err(str::to_owned));
+                let result = Self::parse_desktop_latex(&source);
                 let _ = tx.send(Event::Latex(generation, result));
             });
         }
@@ -1897,7 +1903,15 @@ impl App {
             } else {
                 None
             };
-            if let (0, Some(latex_error)) = (self.tab, self.latex_error.as_deref()) {
+            let active_latex_error = if self.tab == 0 {
+                self.command_error
+                    .as_deref()
+                    .filter(|_| self.command_input.is_some())
+                    .or(self.latex_error.as_deref())
+            } else {
+                None
+            };
+            if let Some(latex_error) = active_latex_error {
                 let error = format!("LaTeX error: {latex_error}");
                 ui.add(
                     egui::Label::new(
@@ -3061,27 +3075,24 @@ impl App {
         } else {
             commands::exact(&input.name)
         };
-        if command.is_some_and(|command| command.name == "text")
-            || (input.text_argument().is_some() && !input.has_complete_text_argument())
-        {
-            if command.is_some() {
-                if let Some(cmd_input) = self.command_input.as_mut() {
-                    cmd_input.set_name_end("text");
-                }
+        if let Some(command) = command.filter(|c| commands::is_argument_requiring_command(c.name)) {
+            let msg = commands::bare_command_error(command.name);
+            if let Some(cmd_input) = self.command_input.as_mut() {
+                cmd_input.set_name_end(command.name);
             }
-            self.status = r"Invalid LaTeX command. Use \text{...} to insert text.".into();
+            self.command_error = Some(msg.clone());
+            self.status = msg;
             return false;
         }
         let result = if let Some(command) = command {
             palette::template(command.source).map(|math| (math, command.source.contains("#?")))
         } else {
-            eqntide::service::parse_latex_to_mathml(&format!("\\{}", input.name))
-                .map(|math| (math, false))
-                .map_err(|e| e.to_string())
+            Self::parse_desktop_latex(&format!("\\{}", input.name)).map(|math| (math, false))
         };
         match result {
             Ok((math, template)) => {
                 self.command_input = None;
+                self.command_error = None;
                 self.expects_latex_group = template;
                 if template {
                     if command.is_some_and(|c| palette::attaches_to_previous(c.source)) {
@@ -3096,11 +3107,9 @@ impl App {
                 self.status = "Inserted LaTeX command.".into();
                 true
             }
-            Err(_) => {
-                self.status = format!(
-                    "Command \\{} is incomplete or unsupported; Backspace to edit, Esc to cancel.",
-                    input.name
-                );
+            Err(msg) => {
+                self.command_error = Some(msg.clone());
+                self.status = msg;
                 false
             }
         }
@@ -3119,6 +3128,7 @@ impl App {
                     continue;
                 }
                 input.insert_char(ch);
+                self.command_error = None;
                 continue;
             }
             if self.canvas_in_text() {
@@ -3287,6 +3297,7 @@ impl App {
                         } else {
                             (input.selected + count - 1) % count
                         };
+                        self.command_error = None;
                     }
                 }
                 true
@@ -3295,6 +3306,7 @@ impl App {
                 if input.is_command_prefix() {
                     if let Some(command) = commands::suggestions(&input.name).get(input.selected) {
                         input.set_name_end(command.name);
+                        self.command_error = None;
                     }
                 }
                 true
@@ -3305,6 +3317,7 @@ impl App {
             }
             Key::Escape => {
                 self.command_input = None;
+                self.command_error = None;
                 self.status = "Canceled LaTeX command.".into();
                 true
             }
@@ -3312,10 +3325,12 @@ impl App {
                 if !input.backspace() {
                     self.command_input = None;
                 }
+                self.command_error = None;
                 true
             }
             Key::Delete => {
                 input.delete();
+                self.command_error = None;
                 true
             }
             Key::ArrowLeft => {
@@ -3354,6 +3369,7 @@ impl App {
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
             self.command_input = None;
+            self.command_error = None;
             self.status = "Canceled LaTeX command.".into();
             ui.memory_mut(|m| m.request_focus(canvas_id));
             return;
@@ -3383,6 +3399,7 @@ impl App {
                     return;
                 }
                 ui.memory_mut(|m| m.request_focus(cmd_id));
+                ui.ctx().request_repaint();
             }
             let buffer_empty = self
                 .command_input
@@ -3392,6 +3409,7 @@ impl App {
                 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
             {
                 self.command_input = None;
+                self.command_error = None;
                 ui.memory_mut(|m| m.request_focus(canvas_id));
                 return;
             }
@@ -3402,6 +3420,7 @@ impl App {
                             commands::suggestions(&input.name).get(input.selected)
                         {
                             input.set_name_end(command.name);
+                            self.command_error = None;
                         }
                     }
                 }
@@ -3412,8 +3431,7 @@ impl App {
             if has_suggestions {
                 let down =
                     ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
-                let up =
-                    ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
+                let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
                 if down || up {
                     if let Some(input) = &mut self.command_input {
                         let count = commands::suggestions(&input.name).len();
@@ -3423,6 +3441,7 @@ impl App {
                             } else {
                                 (input.selected + count - 1) % count
                             };
+                            self.command_error = None;
                         }
                     }
                 }
@@ -3447,6 +3466,7 @@ impl App {
 
         let tokens = ThemeTokens::from_ui(ui);
         let mut accept = None;
+        let mut popup_edited = false;
         egui::Area::new(egui::Id::unique("canvas-command-popup"))
             .order(egui::Order::Foreground)
             .fixed_pos(anchor)
@@ -3460,8 +3480,7 @@ impl App {
                     if input.sync_cursor {
                         let mut state =
                             egui::TextEdit::load_state(ui.ctx(), cmd_id).unwrap_or_default();
-                        let ccursor =
-                            egui::text::CCursor::new(input.cursor.min(input.char_len()));
+                        let ccursor = egui::text::CCursor::new(input.cursor.min(input.char_len()));
                         state
                             .cursor
                             .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
@@ -3521,7 +3540,8 @@ impl App {
                         text_resp.request_focus();
                         input.needs_focus = false;
                     }
-                    if text_resp.changed() {
+                    popup_edited = text_resp.changed();
+                    if popup_edited {
                         input.selected = 0;
                     }
                     if let Some(state) = egui::TextEdit::load_state(ui.ctx(), cmd_id) {
@@ -3538,7 +3558,7 @@ impl App {
                         Vec::new()
                     };
                     if is_prefix && candidates.is_empty() {
-                        ui.label("No matching command — Backspace to edit, Esc to cancel");
+                        ui.label("No matching command — Esc to cancel");
                     }
                     for (index, command) in candidates.iter().enumerate() {
                         if ui
@@ -3554,10 +3574,13 @@ impl App {
                     if is_prefix {
                         ui.weak("↑↓ select · Tab complete · Enter insert · Esc cancel");
                     } else {
-                        ui.weak("Enter insert · Backspace to edit · Esc cancel");
+                        ui.weak("Enter insert · Esc cancel");
                     }
                 });
             });
+        if popup_edited {
+            self.command_error = None;
+        }
         if let Some(index) = accept {
             if let Some(input) = &mut self.command_input {
                 input.selected = index;
@@ -3567,6 +3590,7 @@ impl App {
                 ui.ctx().request_repaint();
             } else {
                 ui.memory_mut(|m| m.request_focus(cmd_id));
+                ui.ctx().request_repaint();
             }
         }
     }
@@ -5623,7 +5647,10 @@ mod tests {
         send_events(
             &mut a,
             &ctx,
-            click_events(Pos2::new(canvas_rect.right() - 20.0, canvas_rect.bottom() - 20.0)),
+            click_events(Pos2::new(
+                canvas_rect.right() - 20.0,
+                canvas_rect.bottom() - 20.0,
+            )),
         );
         assert!(a.command_input.is_none());
         assert!(a.editor.math().children.is_empty());
@@ -5692,6 +5719,255 @@ mod tests {
     }
 
     #[test]
+    fn argument_requiring_commands_block_bare_or_empty_enter_and_show_status_error() {
+        use egui::Key;
+
+        // Prefix auto-completes on Enter without committing and shows error in the bottom status bar.
+        let mut a = app();
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let setup_focused = |a: &mut App, ctx: &egui::Context| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    a.shell(ui);
+                    ui.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
+                },
+            )
+            .textures_delta
+            .clear();
+        };
+        let send_events = |a: &mut App, ctx: &egui::Context, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| a.shell(ui),
+            );
+            out.textures_delta.clear();
+            out
+        };
+        let key_event = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let has_shape_text = |out: &egui::FullOutput, needle: &str| -> bool {
+            fn visit(shape: &egui::Shape, needle: &str) -> bool {
+                match shape {
+                    egui::Shape::Text(t) => t.galley.text().contains(needle),
+                    egui::Shape::Vec(shapes) => shapes.iter().any(|s| visit(s, needle)),
+                    _ => false,
+                }
+            }
+            out.shapes.iter().any(|s| visit(&s.shape, needle))
+        };
+
+        let popup_has_text = |a: &mut App, needle: &str| -> bool {
+            let pctx = egui::Context::default();
+            let mut found = false;
+            for _ in 0..2 {
+                let mut pout = pctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1100.0, 650.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| a.command_popup(ui, Pos2::new(100.0, 100.0)),
+                );
+                found = has_shape_text(&pout, needle);
+                pout.textures_delta.clear();
+            }
+            found
+        };
+
+        setup_focused(&mut a, &ctx);
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\math".into())]);
+        send_events(&mut a, &ctx, vec![key_event(Key::Enter)]);
+        let out = send_events(&mut a, &ctx, Vec::new());
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("mathbb")
+        );
+        assert!(a.editor.math().children.is_empty());
+        assert!(a.status.contains("Invalid LaTeX command"));
+        assert!(a.status.contains(r"\mathbb{...}"));
+        assert!(a.command_error.as_deref() == Some(a.status.as_str()));
+        assert!(has_shape_text(&out, "LaTeX error: Invalid LaTeX command"));
+        assert!(has_shape_text(&out, r"\mathbb{...}"));
+        assert!(!popup_has_text(&mut a, "Invalid LaTeX command"));
+
+        // Editing clears command_error, and valid {R} + Enter commits cleanly.
+        send_events(&mut a, &ctx, vec![egui::Event::Text("{R}".into())]);
+        assert!(a.command_error.is_none());
+        assert!(!popup_has_text(&mut a, "Invalid LaTeX command"));
+        send_events(&mut a, &ctx, vec![key_event(Key::Enter)]);
+        assert!(a.command_input.is_none());
+        assert!(a.editor.math().to_latex().contains(r"\mathbb{R}"));
+
+        // Bare and empty forms for all 14 argument-requiring commands block Enter.
+        for bare in [
+            r"\text",
+            r"\mathbb",
+            r"\mathfrak",
+            r"\mathcal",
+            r"\mathscr",
+            r"\mathrm",
+            r"\mathbf",
+            r"\mathit",
+            r"\boldsymbol",
+            r"\operatorname",
+            r"\hspace",
+            r"\textstyle",
+            r"\displaystyle",
+            r"\enclose",
+            r"\text{}",
+            r"\mathbb{}",
+            r"\mathbb{ }",
+            r"\operatorname{}",
+            r"\enclose{box}",
+            r"\enclose{box}{}",
+        ] {
+            let mut b = app();
+            type_canvas(&mut b, bare);
+            let before = b.editor.math();
+            b.command_key(Key::Enter, egui::Modifiers::NONE);
+            assert_eq!(b.editor.math(), before, "should not commit `{bare}`");
+            assert!(
+                b.command_input.is_some(),
+                "popup should stay open for `{bare}`"
+            );
+            assert!(
+                b.status.contains("Invalid LaTeX command"),
+                "unexpected status for `{bare}`: {}",
+                b.status
+            );
+        }
+
+        // \text{ } remains valid and commits a space-only mtext node.
+        let mut space_text = app();
+        type_canvas(&mut space_text, r"\text{ }");
+        assert!(space_text.command_key(Key::Enter, egui::Modifiers::NONE));
+        assert!(space_text.command_input.is_none());
+        assert_eq!(space_text.editor.math().find_all("mtext")[0].text, " ");
+
+        // Structural templates still support bare-Enter placeholder boxes.
+        for structural in [r"\frac", r"\sqrt", r"\boxed", r"\overset", r"\pmatrix"] {
+            let mut s = app();
+            type_canvas(&mut s, structural);
+            assert!(s.command_key(Key::Enter, egui::Modifiers::NONE));
+            assert!(
+                s.command_input.is_none(),
+                "structural `{structural}` should commit"
+            );
+            assert!(!s.editor.math().children.is_empty(), "{structural}");
+        }
+    }
+
+    #[test]
+    fn specialized_alphabet_validation_and_general_style_modifiers_in_command_popup() {
+        use egui::Key;
+
+        for invalid in [
+            r"\mathbb{1^2}",
+            r"\mathbb{1}",
+            r"\mathbb{a}",
+            r"\mathcal{1}",
+            r"\mathcal{a}",
+            r"\mathscr{1}",
+            r"\mathfrak{1+2}",
+        ] {
+            let mut a = app();
+            type_canvas(&mut a, invalid);
+            a.command_key(Key::Enter, egui::Modifiers::NONE);
+            assert!(a.editor.math().children.is_empty(), "{invalid}");
+            assert_eq!(
+                a.command_input.as_ref().map(|i| i.name.as_str()),
+                Some(&invalid[1..])
+            );
+            assert!(
+                a.status.contains("Invalid LaTeX command"),
+                "{invalid}: {}",
+                a.status
+            );
+            assert!(a.status.contains("^2"), "{invalid}: {}", a.status);
+            assert_eq!(a.command_error.as_deref(), Some(a.status.as_str()));
+
+            // Verify Equation Canvas renders the exact same status bar error prefix and color as LaTeX source.
+            let mut src_app = app();
+            src_app.latex = invalid.into();
+            src_app.source_changed(Instant::now() - Duration::from_secs(1));
+            src_app.request_latex_parse(&egui::Context::default());
+            let parsed_res = src_app.rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            src_app.tx.send(parsed_res).unwrap();
+            src_app.events(&egui::Context::default());
+            assert_eq!(a.command_error, src_app.latex_error, "{invalid}");
+
+            let rctx = egui::Context::default();
+            let mut canvas_out = rctx.run_ui(egui::RawInput::default(), |ui| a.status_bar(ui));
+            canvas_out.textures_delta.clear();
+            let mut source_out =
+                rctx.run_ui(egui::RawInput::default(), |ui| src_app.status_bar(ui));
+            source_out.textures_delta.clear();
+            let status_text_and_color = |out: &egui::FullOutput| {
+                out.shapes.iter().find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text().contains("LaTeX error:") => {
+                        let color = t
+                            .galley
+                            .job
+                            .sections
+                            .first()
+                            .map(|sec| sec.format.color)
+                            .unwrap_or(t.override_text_color.unwrap_or_default());
+                        Some((t.galley.text().to_owned(), color))
+                    }
+                    _ => None,
+                })
+            };
+            assert_eq!(
+                status_text_and_color(&canvas_out),
+                status_text_and_color(&source_out),
+                "status bar output must match between canvas and latex box for `{invalid}`"
+            );
+        }
+
+        // General style modifiers accept compound expressions and export to OMML and MTEF.
+        for valid in [
+            r"\mathbf{x^2}",
+            r"\mathrm{H_2O}",
+            r"\mathrm{m/s^2}",
+            r"\mathit{AB}",
+            r"\boldsymbol{\alpha}",
+        ] {
+            let mut a = app();
+            type_canvas(&mut a, valid);
+            assert!(a.command_key(Key::Enter, egui::Modifiers::NONE));
+            assert!(a.command_input.is_none(), "{valid}");
+            let math = a.editor.math();
+            assert!(!math.children.is_empty(), "{valid}");
+            assert!(
+                eqntide::mathml_to_omml_xml(&math)
+                    .unwrap()
+                    .contains("oMath"),
+                "omml failed for `{valid}`"
+            );
+            assert!(
+                !eqntide::mathml_to_mtef_bytes(&math).unwrap().is_empty(),
+                "mtef failed for `{valid}`"
+            );
+        }
+    }
+
+    #[test]
     fn standardized_latex_roundtrip_on_desktop_editor() {
         let mut a = app();
         assert!(a.load_math("<math><mi>A</mi><mo>\\</mo><mi>B</mi></math>", None, None));
@@ -5701,6 +5977,51 @@ mod tests {
         type_canvas(&mut b, r"90\degree");
         assert!(b.command_key(egui::Key::Enter, egui::Modifiers::NONE));
         assert_eq!(b.latex, r"90^\circ");
+    }
+
+    #[test]
+    fn canvas_style_and_argument_commands_serialize_without_splitting_tokens() {
+        for (typed, expected_latex) in [
+            (r"\mathbf{x^2 + 2x - 1 = 0}", r"\mathbf{x^{2}+2x-1=0}"),
+            (
+                r"\boldsymbol{x^2 + 2x - 1 = 0}",
+                r"\boldsymbol{x^{2}+2x-1=0}",
+            ),
+            (r"\mathrm{H_2O + m/s^2}", r"\mathrm{H_{2}O+m/s^{2}}"),
+            (r"\mathit{x^2 + 2x}", r"\mathit{x^{2}+2x}"),
+            (r"\mathbb{RZ}", r"\mathbb{RZ}"),
+            (r"\mathfrak{Ag}", r"\mathfrak{Ag}"),
+            (r"\mathcal{AL}", r"\mathcal{AL}"),
+            (r"\mathscr{Aa}", r"\mathscr{Aa}"),
+            (r"\text{hello world}", r"\text{hello world}"),
+            (r"\operatorname{sgn}", r"\operatorname{sgn}"),
+            (r"\textstyle{\frac{a}{b}}", r"{\textstyle \frac{a}{b}}"),
+            (
+                r"\displaystyle{\frac{a}{b}}",
+                r"{\displaystyle \frac{a}{b}}",
+            ),
+            (r"\enclose{roundedbox}{x+y}", r"\enclose{roundedbox}{x+y}"),
+            (r"\hspace{12pt}", r"\hspace{12pt}"),
+        ] {
+            let mut a = app();
+            type_canvas(&mut a, typed);
+            assert!(
+                a.command_key(egui::Key::Enter, egui::Modifiers::NONE),
+                "{typed}"
+            );
+            assert!(a.command_input.is_none(), "{typed}");
+            assert_eq!(a.latex, expected_latex, "typed `{typed}`");
+            assert!(
+                commands::validate_desktop_latex(&a.latex).is_ok(),
+                "invalid serialized latex for `{typed}`: {}",
+                a.latex
+            );
+            assert!(
+                eqntide::service::parse_latex_to_mathml(&a.latex).is_ok(),
+                "re-parse failed for `{typed}`: {}",
+                a.latex
+            );
+        }
     }
 
     #[test]
@@ -7051,6 +7372,60 @@ mod tests {
         assert!(a.editor.math().children.is_empty());
         assert!(!a.draft_dirty);
         assert!(a.latex.is_empty());
+    }
+
+    #[test]
+    fn live_latex_source_blocks_invalid_commands_and_keeps_valid_style_groups() {
+        for invalid in [r"\mathbb{1^2}", r"\text{}", r"\textstyle", r"\mathcal{1}"] {
+            let mut a = app();
+            a.load_math("<math><mi>x</mi></math>", None, None);
+            a.session = Some("sess-1".into());
+            let before = a.editor.math();
+            a.latex = invalid.into();
+            a.source_changed(Instant::now() - Duration::from_secs(1));
+            a.request_latex_parse(&egui::Context::default());
+            let result = a.rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            a.tx.send(result).unwrap();
+            a.events(&egui::Context::default());
+
+            assert_eq!(a.editor.math(), before, "{invalid}");
+            assert!(a.draft_dirty, "{invalid}");
+            assert!(
+                a.latex_error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("Invalid LaTeX command")),
+                "expected latex_error for `{invalid}`, got {:?}",
+                a.latex_error
+            );
+            a.finish(true);
+            assert!(!a.busy, "saving must stay blocked for `{invalid}`");
+            assert!(a.status.contains("Wait for valid LaTeX"), "{}", a.status);
+
+            let ctx = egui::Context::default();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| a.status_bar(ui));
+            out.textures_delta.clear();
+            assert!(
+                out.shapes.iter().any(|s| match &s.shape {
+                    egui::Shape::Text(t) => t.galley.text().contains("LaTeX error:"),
+                    _ => false,
+                }),
+                "status bar should show LaTeX error for `{invalid}`"
+            );
+        }
+
+        for valid in [r"\text{ }", r"{\textstyle \frac{1}{2}}", r"\mathbf{x^2}"] {
+            let mut a = app();
+            a.latex = valid.into();
+            a.source_changed(Instant::now() - Duration::from_secs(1));
+            a.request_latex_parse(&egui::Context::default());
+            let result = a.rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            a.tx.send(result).unwrap();
+            a.events(&egui::Context::default());
+
+            assert!(!a.draft_dirty, "{valid}");
+            assert!(a.latex_error.is_none(), "{valid}: {:?}", a.latex_error);
+            assert!(!a.editor.math().children.is_empty(), "{valid}");
+        }
     }
 
     #[test]
@@ -9409,8 +9784,7 @@ mod tests {
                     central_idx = Some(idx);
                 }
                 egui::Shape::Rect(r)
-                    if r.fill == light_tokens.panel_bg
-                        && (r.rect.height() - 56.0).abs() < 0.01 =>
+                    if r.fill == light_tokens.panel_bg && (r.rect.height() - 56.0).abs() < 0.01 =>
                 {
                     footer_min_y = Some(r.rect.min.y);
                 }

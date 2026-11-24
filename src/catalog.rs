@@ -653,6 +653,14 @@ catalog! {
         ("mathbb", "Blackboard bold", "\\mathbb{#?}"),
         ("mathfrak", "Fraktur", "\\mathfrak{#?}"),
         ("mathcal", "Calligraphic", "\\mathcal{#?}"),
+        ("mathscr", "Script", "\\mathscr{#?}"),
+        ("mathrm", "Roman (upright)", "\\mathrm{#?}"),
+        ("mathbf", "Bold", "\\mathbf{#?}"),
+        ("mathit", "Italic", "\\mathit{#?}"),
+        ("boldsymbol", "Bold italic", "\\boldsymbol{#?}"),
+        ("operatorname", "Named operator", "\\operatorname{sgn}"),
+        ("textstyle", "Text style", "{\\textstyle #?}"),
+        ("displaystyle", "Display style", "{\\displaystyle #?}"),
         ("hspace", "Horizontal space", "\\hspace{1em}"),
         ("overbrace", "Overbrace", "\\overbrace{#?}"),
         ("underbrace", "Underbrace", "\\underbrace{#?}"),
@@ -964,6 +972,30 @@ mod tests {
             })
             .collect();
         assert!(errors.is_empty(), "{}", errors.join("\n"));
+    }
+
+    #[test]
+    fn commands_catalog_includes_style_and_operator_commands() {
+        for expected in [
+            "mathscr",
+            "mathrm",
+            "mathbf",
+            "mathit",
+            "boldsymbol",
+            "operatorname",
+            "textstyle",
+            "displaystyle",
+        ] {
+            let entry = COMMANDS
+                .iter()
+                .find(|(name, _, _)| *name == expected)
+                .unwrap_or_else(|| panic!("missing command \\{expected} from catalog::COMMANDS"));
+            assert!(
+                template(entry.2).is_ok(),
+                "template for \\{expected} (`{}`) failed",
+                entry.2
+            );
+        }
     }
 
     #[test]
