@@ -514,7 +514,7 @@ impl App {
                 self.active_editor_focus = StartupFocus::Canvas;
             } else if has_latex {
                 self.active_editor_focus = StartupFocus::Latex;
-                self.command_input = None;
+                self.dismiss_command_input();
             } else {
                 ui.memory_mut(|m| m.request_focus(Self::editor_focus_id(target)));
                 self.active_editor_focus = target;
@@ -523,7 +523,7 @@ impl App {
             self.active_editor_focus = StartupFocus::Canvas;
         } else if has_latex {
             self.active_editor_focus = StartupFocus::Latex;
-            self.command_input = None;
+            self.dismiss_command_input();
         }
     }
 
@@ -719,7 +719,7 @@ impl App {
             || self.command_input.is_some()
     }
     pub(crate) fn has_active_animation(&self) -> bool {
-        (self.busy || self.batch_running) && self.gpu_profile != GpuProfile::Software
+        self.batch_running && self.gpu_profile != GpuProfile::Software
     }
     fn from_parts(
         instance: Option<Instance>,
@@ -771,7 +771,7 @@ impl App {
             passive_canvas_rect: None,
             last_enforced_viewport: None,
             logo_texture: None,
-            status: "Click the canvas to type. Use the palette or Ctrl+F for a fraction.".into(),
+            status: String::new(),
             texture: None,
             rendered: None,
             render_key: 1,
@@ -824,15 +824,17 @@ impl App {
         self.latex_deadline = None;
         self.latex_error = None;
         self.command_error = None;
+        self.status.clear();
     }
     fn source_changed(&mut self, now: Instant) {
-        self.command_input = None;
+        self.dismiss_command_input();
         self.latex_groups.clear();
         self.expects_latex_group = false;
         self.draft_dirty = true;
         self.latex_generation += 1;
         self.latex_deadline = Some(now + Duration::from_millis(180));
         self.latex_error = None;
+        self.status.clear();
     }
     fn take_latex_request(&mut self, now: Instant) -> Option<(u64, String)> {
         if !self.draft_dirty || self.latex_parsing.is_some() || now < self.latex_deadline? {
@@ -1127,7 +1129,7 @@ impl App {
                                 if !self.queue.is_empty() && self.pending.is_none() {
                                     self.pending = Some(Intent::Next);
                                 }
-                                self.status="Editing Office session. Save returns the equation to the add-in.".into();
+                                self.status = "Office session — Save to return".into();
                             }
                         }
                         Err(e) => {
@@ -1751,7 +1753,6 @@ impl App {
         self.expects_latex_group = false;
         self.editor.insert_template(&matrix);
         self.changed();
-        self.status = format!("Inserted {} × {} matrix.", settings.rows, settings.columns);
     }
 
     fn matrix_dialog_ui(&mut self, ctx: &egui::Context) {
@@ -1835,13 +1836,6 @@ impl App {
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if self.busy {
-                if self.gpu_profile == GpuProfile::Software {
-                    ui.weak("Working…");
-                } else {
-                    ui.spinner();
-                }
-            }
             let ready = if self.bridge_ready { "●" } else { "○" };
             ui.label(ready).on_hover_text(&self.bridge_status);
             if !self.bridge_ready && Self::compact_button(ui, "Retry").clicked() {
@@ -1930,7 +1924,7 @@ impl App {
                     .truncate(),
                 )
                 .on_hover_text(warning);
-            } else {
+            } else if !self.status.is_empty() {
                 ui.add(egui::Label::new(&self.status).truncate())
                     .on_hover_text(&self.status);
             }
@@ -2043,7 +2037,7 @@ impl App {
                                     .on_hover_text("Custom matrix")
                                     .clicked()
                             {
-                                self.command_input = None;
+                                self.dismiss_command_input();
                                 self.matrix_dialog = Some(MatrixDialog::default());
                                 ui.memory_mut(|m| {
                                     m.surrender_focus(Self::editor_focus_id(
@@ -2598,7 +2592,7 @@ impl App {
                         // Only a real pointer click may cancel command entry or reposition the caret.
                         let pointer_clicked = response.clicked_by(egui::PointerButton::Primary);
                         if pointer_clicked || response.drag_started() {
-                            self.command_input = None;
+                            self.dismiss_command_input();
                             self.latex_groups.clear();
                             self.expects_latex_group = false;
                         }
@@ -3058,12 +3052,25 @@ impl App {
             self.editor.set_caret(caret, extend);
         }
     }
+    fn clear_command_error(&mut self) {
+        if let Some(error) = self.command_error.take() {
+            if self.status == error {
+                self.status.clear();
+            }
+        }
+    }
+
+    fn dismiss_command_input(&mut self) {
+        self.command_input = None;
+        self.clear_command_error();
+    }
+
     fn commit_command(&mut self, choose_suggestion: bool) -> bool {
         let Some(input) = &self.command_input else {
             return true;
         };
         if input.name.trim().is_empty() {
-            self.command_input = None;
+            self.dismiss_command_input();
             return true;
         }
         let command = if !input.is_command_prefix() {
@@ -3104,7 +3111,6 @@ impl App {
                     self.editor.insert_math(&math);
                 }
                 self.changed();
-                self.status = "Inserted LaTeX command.".into();
                 true
             }
             Err(msg) => {
@@ -3128,7 +3134,7 @@ impl App {
                     continue;
                 }
                 input.insert_char(ch);
-                self.command_error = None;
+                self.clear_command_error();
                 continue;
             }
             if self.canvas_in_text() {
@@ -3140,6 +3146,7 @@ impl App {
             match ch {
                 '\\' => {
                     self.expects_latex_group = false;
+                    self.status.clear();
                     self.command_input = Some(commands::Input::opened());
                 }
                 '{' if self.expects_latex_group || !self.latex_groups.is_empty() => {
@@ -3260,13 +3267,14 @@ impl App {
     fn command_key(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> bool {
         use egui::Key;
         if modifiers.command {
-            if key == Key::Z && self.command_input.take().is_some() {
+            if key == Key::Z && self.command_input.is_some() {
+                self.dismiss_command_input();
                 self.latex_groups.clear();
                 self.expects_latex_group = false;
                 return true;
             }
             if !matches!(key, Key::S | Key::C) {
-                self.command_input = None;
+                self.dismiss_command_input();
                 self.latex_groups.clear();
                 self.expects_latex_group = false;
             }
@@ -3297,7 +3305,7 @@ impl App {
                         } else {
                             (input.selected + count - 1) % count
                         };
-                        self.command_error = None;
+                        self.clear_command_error();
                     }
                 }
                 true
@@ -3306,7 +3314,7 @@ impl App {
                 if input.is_command_prefix() {
                     if let Some(command) = commands::suggestions(&input.name).get(input.selected) {
                         input.set_name_end(command.name);
-                        self.command_error = None;
+                        self.clear_command_error();
                     }
                 }
                 true
@@ -3316,21 +3324,19 @@ impl App {
                 true
             }
             Key::Escape => {
-                self.command_input = None;
-                self.command_error = None;
-                self.status = "Canceled LaTeX command.".into();
+                self.dismiss_command_input();
                 true
             }
             Key::Backspace => {
                 if !input.backspace() {
                     self.command_input = None;
                 }
-                self.command_error = None;
+                self.clear_command_error();
                 true
             }
             Key::Delete => {
                 input.delete();
-                self.command_error = None;
+                self.clear_command_error();
                 true
             }
             Key::ArrowLeft => {
@@ -3368,9 +3374,7 @@ impl App {
         if (has_input_focus || escape_blurred_new_input)
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
-            self.command_input = None;
-            self.command_error = None;
-            self.status = "Canceled LaTeX command.".into();
+            self.dismiss_command_input();
             ui.memory_mut(|m| m.request_focus(canvas_id));
             return;
         }
@@ -3408,8 +3412,7 @@ impl App {
             if buffer_empty
                 && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
             {
-                self.command_input = None;
-                self.command_error = None;
+                self.dismiss_command_input();
                 ui.memory_mut(|m| m.request_focus(canvas_id));
                 return;
             }
@@ -3420,7 +3423,7 @@ impl App {
                             commands::suggestions(&input.name).get(input.selected)
                         {
                             input.set_name_end(command.name);
-                            self.command_error = None;
+                            self.clear_command_error();
                         }
                     }
                 }
@@ -3441,7 +3444,7 @@ impl App {
                             } else {
                                 (input.selected + count - 1) % count
                             };
-                            self.command_error = None;
+                            self.clear_command_error();
                         }
                     }
                 }
@@ -3579,7 +3582,7 @@ impl App {
                 });
             });
         if popup_edited {
-            self.command_error = None;
+            self.clear_command_error();
         }
         if let Some(index) = accept {
             if let Some(input) = &mut self.command_input {
@@ -9810,5 +9813,196 @@ mod tests {
         let central_idx = central_idx.expect("central panel index");
         assert!(footer_divider_idx.expect("footer divider") > central_idx);
         assert!(sidebar_divider_idx.expect("sidebar divider") > central_idx);
+    }
+
+    #[test]
+    fn status_bar_is_quiet_when_idle_or_busy_and_clears_stale_messages_on_edit() {
+        use egui::Key;
+
+        // Idle launch has empty status and only renders the bridge indicator text.
+        let mut a = app();
+        a.bridge_ready = true;
+        assert!(a.status.is_empty());
+
+        let ctx = egui::Context::default();
+        let collect_texts = |out: &egui::FullOutput| -> Vec<String> {
+            out.shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let mut idle_out = ctx.run_ui(egui::RawInput::default(), |ui| a.status_bar(ui));
+        idle_out.textures_delta.clear();
+        assert_eq!(collect_texts(&idle_out), vec!["●".to_owned()]);
+
+        // Busy state does not animate or add "Working…" / spinner shapes in status_bar.
+        for profile in [GpuProfile::Native, GpuProfile::Software] {
+            a.gpu_profile = profile;
+            a.busy = true;
+            assert!(!a.has_active_animation());
+            let mut busy_out = ctx.run_ui(egui::RawInput::default(), |ui| a.status_bar(ui));
+            busy_out.textures_delta.clear();
+            assert_eq!(collect_texts(&busy_out), vec!["●".to_owned()]);
+            assert_eq!(busy_out.shapes.len(), idle_out.shapes.len());
+        }
+        a.busy = false;
+        a.gpu_profile = GpuProfile::Native;
+
+        // Routine LaTeX command commit, Escape cancel, and custom matrix insert leave status empty.
+        type_canvas(&mut a, r"\alpha");
+        canvas_key(&mut a, Key::Enter);
+        assert!(a.status.is_empty());
+
+        type_canvas(&mut a, r"\be");
+        canvas_key(&mut a, Key::Escape);
+        assert!(a.command_input.is_none());
+        assert!(a.status.is_empty());
+
+        a.insert_custom_matrix(&MatrixDialog {
+            rows: 2,
+            columns: 2,
+            alignment: "center",
+            fence: "none",
+        });
+        assert!(a.status.is_empty());
+
+        // Subsequent edits clear stale notices like "Saved." or matrix guidance.
+        a.status = "Saved.".into();
+        type_canvas(&mut a, "x");
+        assert!(a.status.is_empty());
+
+        a.status = "Place the caret inside a matrix first.".into();
+        a.source_changed(Instant::now());
+        assert!(a.status.is_empty());
+
+        a.status = "Saved.".into();
+        type_canvas(&mut a, r"\");
+        assert!(a.command_input.is_some());
+        assert!(a.status.is_empty());
+        canvas_key(&mut a, Key::Escape);
+
+        // Office session sets the concise notice after load and clears on the next edit.
+        let mut session_app = app();
+        session_app.loading_session = Some("office-1".into());
+        session_app
+            .tx
+            .send(Event::Session(
+                "office-1".into(),
+                Ok(serde_json::json!({
+                    "state": "waiting",
+                    "mathml": "<math><mi>x</mi></math>",
+                })),
+            ))
+            .unwrap();
+        session_app.events(&egui::Context::default());
+        assert_eq!(session_app.status, "Office session — Save to return");
+        type_canvas(&mut session_app, "+1");
+        assert!(session_app.status.is_empty());
+
+        // Failed load_math retains its error message.
+        assert!(!session_app.load_math("<math><unclosed>", None, None));
+        assert!(session_app.status.contains("Could not load equation"));
+    }
+
+    #[test]
+    fn command_error_clears_when_backspacing_or_canceling_out_of_popup() {
+        use egui::Key;
+
+        // 1) Focused command popup TextEdit flow: \text + Enter -> error, then Backspace to empty -> clean.
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app();
+        a.bridge_ready = true;
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                ..Default::default()
+            },
+            |ui| {
+                a.shell(ui);
+                ui.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
+            },
+        )
+        .textures_delta
+        .clear();
+
+        let send = |a: &mut App, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| a.shell(ui),
+            );
+            out.textures_delta.clear();
+            out
+        };
+        let key_ev = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        send(&mut a, vec![egui::Event::Text(r"\text".into())]);
+        send(&mut a, Vec::new());
+        send(&mut a, vec![key_ev(Key::Enter)]);
+        assert!(a.command_input.is_some());
+        assert!(a.command_error.is_some());
+        assert!(a.status.contains("Invalid LaTeX command"));
+
+        // First Backspace inside popup clears both command_error and status immediately.
+        send(&mut a, vec![key_ev(Key::Backspace)]);
+        assert!(a.command_input.is_some());
+        assert!(a.command_error.is_none());
+        assert!(a.status.is_empty(), "status leaked: {:?}", a.status);
+
+        // Remaining Backspaces close the popup and keep status empty.
+        for _ in 0..4 {
+            send(&mut a, vec![key_ev(Key::Backspace)]);
+        }
+        assert!(a.command_input.is_none());
+        assert!(a.command_error.is_none());
+        assert!(
+            a.status.is_empty(),
+            "status leaked after close: {:?}",
+            a.status
+        );
+
+        // 2) Pressing Escape right after an invalid command error also clears status.
+        send(&mut a, vec![egui::Event::Text(r"\text".into())]);
+        send(&mut a, Vec::new());
+        send(&mut a, vec![key_ev(Key::Enter)]);
+        assert!(a.status.contains("Invalid LaTeX command"));
+        send(&mut a, vec![key_ev(Key::Escape)]);
+        assert!(a.command_input.is_none());
+        assert!(a.command_error.is_none());
+        assert!(
+            a.status.is_empty(),
+            "status leaked after Esc: {:?}",
+            a.status
+        );
+
+        // 3) Direct command_key Backspace flow also clears status.
+        let mut b = app();
+        type_canvas(&mut b, r"\text");
+        canvas_key(&mut b, Key::Enter);
+        assert!(b.status.contains("Invalid LaTeX command"));
+        for _ in 0..5 {
+            canvas_key(&mut b, Key::Backspace);
+        }
+        assert!(b.command_input.is_none());
+        assert!(b.command_error.is_none());
+        assert!(
+            b.status.is_empty(),
+            "status leaked in command_key: {:?}",
+            b.status
+        );
     }
 }
