@@ -8,27 +8,23 @@ mod instance;
 mod palette;
 mod runtime;
 mod settings;
+mod software_painter;
 mod theme;
 mod wgpu_runner;
 
 use eqntide::bridge::{DesktopWindowRequest, ServerHandle};
 use eqntide::render::InteractivePreview;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc, Arc,
-};
+use std::sync::{mpsc, Arc};
 
 pub struct EventSender<T = Event> {
     channel: mpsc::Sender<T>,
     repaint: Arc<std::sync::OnceLock<eframe::egui::Context>>,
-    urgent: Arc<AtomicBool>,
 }
 impl<T> Clone for EventSender<T> {
     fn clone(&self) -> Self {
         Self {
             channel: self.channel.clone(),
             repaint: self.repaint.clone(),
-            urgent: self.urgent.clone(),
         }
     }
 }
@@ -37,12 +33,10 @@ impl<T> EventSender<T> {
         Self {
             channel,
             repaint: Default::default(),
-            urgent: Arc::new(AtomicBool::new(false)),
         }
     }
     fn send(&self, event: T) -> Result<(), mpsc::SendError<T>> {
         self.channel.send(event)?;
-        self.urgent.store(true, Ordering::Release);
         if let Some(ctx) = self.repaint.get() {
             ctx.request_repaint();
         }
@@ -53,9 +47,6 @@ impl<T> EventSender<T> {
     }
     fn attach(&self, ctx: eframe::egui::Context) {
         let _ = self.repaint.set(ctx);
-    }
-    fn urgent_handle(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.urgent)
     }
 }
 
@@ -87,21 +78,72 @@ pub(crate) fn log_file_path(filename: &str) -> Option<std::path::PathBuf> {
     Some(log_dir.join(filename))
 }
 
-#[cfg(not(target_os = "windows"))]
-fn has_wgpu_adapter(config: eframe::egui_wgpu::WgpuConfiguration) -> bool {
-    let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = config.wgpu_setup else {
-        return true;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SelectedRenderer {
+    Wgpu,
+    Software,
+    Glow,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AdapterProbe {
+    HardwareWgpu,
+    SoftwareWgpu,
+    Unavailable,
+}
+
+fn select_renderer(
+    use_software: bool,
+    use_wgpu: bool,
+    use_glow: bool,
+    probe: impl FnOnce() -> AdapterProbe,
+) -> SelectedRenderer {
+    if use_software {
+        SelectedRenderer::Software
+    } else if use_wgpu {
+        SelectedRenderer::Wgpu
+    } else if use_glow {
+        SelectedRenderer::Glow
+    } else {
+        match probe() {
+            AdapterProbe::HardwareWgpu => SelectedRenderer::Wgpu,
+            AdapterProbe::SoftwareWgpu | AdapterProbe::Unavailable => SelectedRenderer::Software,
+        }
+    }
+}
+
+fn probe_wgpu_adapter(config: &eframe::egui_wgpu::WgpuConfiguration) -> AdapterProbe {
+    let eframe::egui_wgpu::WgpuSetup::CreateNew(ref setup) = config.wgpu_setup else {
+        return AdapterProbe::HardwareWgpu;
     };
-    let instance = eframe::egui_wgpu::wgpu::Instance::new(setup.instance_descriptor);
-    pollster::block_on(
-        instance.request_adapter(&eframe::egui_wgpu::wgpu::RequestAdapterOptions {
+    let instance =
+        eframe::egui_wgpu::wgpu::Instance::new(eframe::egui_wgpu::wgpu::InstanceDescriptor {
+            backends: setup.instance_descriptor.backends,
+            flags: setup.instance_descriptor.flags,
+            memory_budget_thresholds: setup.instance_descriptor.memory_budget_thresholds,
+            backend_options: setup.instance_descriptor.backend_options.clone(),
+            display: None,
+        });
+    match pollster::block_on(instance.request_adapter(
+        &eframe::egui_wgpu::wgpu::RequestAdapterOptions {
             power_preference: setup.power_preference,
             compatible_surface: None,
             force_fallback_adapter: false,
             apply_limit_buckets: false,
-        }),
-    )
-    .is_ok()
+        },
+    )) {
+        Ok(adapter) => {
+            let info = adapter.get_info();
+            if info.device_type == eframe::egui_wgpu::wgpu::DeviceType::Cpu
+                || app::is_software_adapter_name(&info.name)
+            {
+                AdapterProbe::SoftwareWgpu
+            } else {
+                AdapterProbe::HardwareWgpu
+            }
+        }
+        Err(_) => AdapterProbe::Unavailable,
+    }
 }
 
 fn desktop_viewport() -> eframe::egui::ViewportBuilder {
@@ -135,12 +177,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let viewport = desktop_viewport();
 
     let renderer_env = std::env::var("EQNTIDE_RENDERER").unwrap_or_default();
+    let use_software =
+        args.iter().any(|a| a == "--software") || renderer_env.eq_ignore_ascii_case("software");
     let use_wgpu = args.iter().any(|a| a == "--wgpu") || renderer_env.eq_ignore_ascii_case("wgpu");
     let use_glow = args.iter().any(|a| a == "--glow") || renderer_env.eq_ignore_ascii_case("glow");
 
     let present_env = std::env::var("EQNTIDE_PRESENT_MODE").unwrap_or_default();
-    let use_novsync =
-        args.iter().any(|a| a == "--novsync") || present_env.eq_ignore_ascii_case("novsync");
+    let use_vsync =
+        args.iter().any(|a| a == "--vsync") || present_env.eq_ignore_ascii_case("vsync");
 
     let wgpu_options = {
         let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
@@ -175,41 +219,49 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(setup),
             ..Default::default()
         };
-        config.surface.present_mode = if use_novsync {
-            eframe::egui_wgpu::wgpu::PresentMode::AutoNoVsync
-        } else {
+        config.surface.present_mode = if use_vsync {
             eframe::egui_wgpu::wgpu::PresentMode::AutoVsync
+        } else {
+            eframe::egui_wgpu::wgpu::PresentMode::AutoNoVsync
         };
-        config.surface.desired_maximum_frame_latency = Some(2);
+        config.surface.desired_maximum_frame_latency = Some(1);
         config
     };
 
-    let renderer = if use_wgpu {
-        eframe::Renderer::Wgpu
-    } else if use_glow {
-        eframe::Renderer::Glow
-    } else {
-        #[cfg(target_os = "windows")]
-        {
-            eframe::Renderer::Wgpu
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            if has_wgpu_adapter(wgpu_options.clone()) {
-                eframe::Renderer::Wgpu
-            } else {
-                eframe::Renderer::Glow
-            }
-        }
-    };
+    let selected = select_renderer(use_software, use_wgpu, use_glow, || {
+        probe_wgpu_adapter(&wgpu_options)
+    });
 
-    if renderer == eframe::Renderer::Wgpu {
-        return wgpu_runner::run(viewport, wgpu_options, instance, tx, rx, args);
+    match selected {
+        SelectedRenderer::Wgpu => {
+            return wgpu_runner::run(
+                viewport,
+                wgpu_runner::RunnerBackend::Wgpu {
+                    config: Box::new(wgpu_options),
+                    force: use_wgpu,
+                },
+                instance,
+                tx,
+                rx,
+                args,
+            );
+        }
+        SelectedRenderer::Software => {
+            return wgpu_runner::run(
+                viewport,
+                wgpu_runner::RunnerBackend::Software,
+                instance,
+                tx,
+                rx,
+                args,
+            );
+        }
+        SelectedRenderer::Glow => {}
     }
 
     let options = eframe::NativeOptions {
         viewport,
-        renderer,
+        renderer: eframe::Renderer::Glow,
         wgpu_options,
         multisampling: 0,
         depth_buffer: 0,
@@ -268,6 +320,34 @@ mod tests {
         assert_eq!(
             viewport.min_inner_size,
             Some(eframe::egui::Vec2::from(app::MIN_WINDOW_SIZE))
+        );
+    }
+
+    #[test]
+    fn renderer_selection_prefers_explicit_overrides_and_falls_back_on_cpu_adapters() {
+        assert_eq!(
+            select_renderer(true, true, true, || AdapterProbe::HardwareWgpu),
+            SelectedRenderer::Software
+        );
+        assert_eq!(
+            select_renderer(false, true, true, || AdapterProbe::SoftwareWgpu),
+            SelectedRenderer::Wgpu
+        );
+        assert_eq!(
+            select_renderer(false, false, true, || AdapterProbe::HardwareWgpu),
+            SelectedRenderer::Glow
+        );
+        assert_eq!(
+            select_renderer(false, false, false, || AdapterProbe::HardwareWgpu),
+            SelectedRenderer::Wgpu
+        );
+        assert_eq!(
+            select_renderer(false, false, false, || AdapterProbe::SoftwareWgpu),
+            SelectedRenderer::Software
+        );
+        assert_eq!(
+            select_renderer(false, false, false, || AdapterProbe::Unavailable),
+            SelectedRenderer::Software
         );
     }
 }

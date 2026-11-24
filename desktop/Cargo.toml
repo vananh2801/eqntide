@@ -13,6 +13,9 @@ eqntide = { path = ".." }
 eqntide-editor = { path = "../crates/eqntide-editor" }
 eframe = { version = "0.37", default-features = false, features = ["glow", "wgpu", "x11", "wayland", "accesskit", "default_fonts"] }
 egui-winit = { version = "0.37", default-features = false, features = ["accesskit", "wayland", "x11"] }
+hdrshot-egui-backend = "0.2"
+softbuffer = "0.4"
+bytemuck = "1"
 pollster = "1"
 winit = { version = "0.30", default-features = false }
 rfd = "0.18"

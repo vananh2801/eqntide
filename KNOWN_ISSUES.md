@@ -12,10 +12,10 @@ confirmed, and further investigation is deferred.
 
 ## Windows Virtual Machines (Software Rendering / Basic Render Driver)
 
-- **UI lag & elevated CPU usage on Windows VMs without GPU acceleration:**
-  - **Environment:** Windows guest virtual machines without GPU passthrough or hardware 3D acceleration enabled (where graphics fall back to CPU-based `Microsoft Basic Render Driver` / DirectX 12 WARP rasterizer).
-  - **Symptom:** Hovering, typing, or moving/dragging the window may experience noticeable lag and increased CPU consumption.
-  - **Status:** Bare-metal physical machines (both Linux and Windows with dedicated/integrated hardware GPUs) run smoothly with low CPU overhead. Optimization for pure software CPU rendering in virtualized environments is deferred for future investigation.
+- **Automatic CPU 2D software renderer fallback on GPU-less VMs:**
+  - **Environment:** Windows guest virtual machines (and headless/software Linux setups) without GPU passthrough or 3D acceleration, where `wgpu` resolves to a software/CPU adapter such as `Microsoft Basic Render Driver` (DirectX 12 WARP) or `llvmpipe`/`lavapipe`.
+  - **Resolution:** EqnTide probes `wgpu` adapters at startup and automatically routes software/CPU adapters to a CPU 2D rasterizer (`egui_software_backend` + `softbuffer`) instead of DX12 WARP, eliminating shader/swapchain overhead during hovering and typing without artificial input throttling. You can override backend selection with `--software` / `EQNTIDE_RENDERER=software` or `--wgpu` / `EQNTIDE_RENDERER=wgpu` (and `--vsync` / `EQNTIDE_PRESENT_MODE=vsync` when running hardware `wgpu`).
+  - **Remaining caveat:** Window dragging/compositing performance still depends on the guest OS compositor (DWM) and VM display driver bandwidth.
 
 ## XML behavior retained intentionally
 

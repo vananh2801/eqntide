@@ -163,9 +163,26 @@ fn detect_host_vm_profile() -> GpuProfile {
     GpuProfile::Native
 }
 
+pub(crate) fn is_software_adapter_name(name: &str) -> bool {
+    let name = name.to_lowercase();
+    [
+        "llvmpipe",
+        "lavapipe",
+        "swiftshader",
+        "basic render",
+        "basic display",
+        "microsoft basic",
+        "gdi generic",
+        "software",
+    ]
+    .iter()
+    .any(|k| name.contains(k))
+}
+
 fn detect_gpu_profile(
     egui_ctx: &egui::Context,
     wgpu_render_state: Option<&eframe::egui_wgpu::RenderState>,
+    is_software_backend: bool,
 ) -> GpuProfile {
     let env_profile = std::env::var("EQNTIDE_GPU_PROFILE").unwrap_or_default();
     if env_profile.eq_ignore_ascii_case("software") {
@@ -177,6 +194,17 @@ fn detect_gpu_profile(
     }
     if env_profile.eq_ignore_ascii_case("native") {
         return GpuProfile::Native;
+    }
+
+    if is_software_backend {
+        if let Some(log_path) = crate::log_file_path("desktop_gpu.log") {
+            let summary = format!(
+                "profile=Software backend=Software device_type=Cpu ppp={:.2}\n",
+                egui_ctx.pixels_per_point()
+            );
+            let _ = std::fs::write(log_path, summary);
+        }
+        return GpuProfile::Software;
     }
 
     let Some(rs) = wgpu_render_state else {
@@ -194,18 +222,7 @@ fn detect_gpu_profile(
     let name = info.name.to_lowercase();
 
     let software = info.device_type == eframe::egui_wgpu::wgpu::DeviceType::Cpu
-        || [
-            "llvmpipe",
-            "lavapipe",
-            "swiftshader",
-            "basic render",
-            "basic display",
-            "microsoft basic",
-            "gdi generic",
-            "software",
-        ]
-        .iter()
-        .any(|k| name.contains(k));
+        || is_software_adapter_name(&info.name);
     let profile = if software {
         GpuProfile::Software
     } else {
@@ -249,19 +266,6 @@ fn detect_gpu_profile(
     profile
 }
 
-fn frame_cap_for_profile(profile: GpuProfile) -> Option<Duration> {
-    if let Ok(raw) = std::env::var("EQNTIDE_SOFTWARE_FRAME_MS") {
-        if let Ok(ms) = raw.parse::<u64>() {
-            return (ms > 0).then(|| Duration::from_millis(ms));
-        }
-    }
-    match profile {
-        GpuProfile::Native => None,
-        GpuProfile::VirtualGpu => Some(Duration::from_millis(33)),
-        GpuProfile::Software => Some(Duration::from_millis(66)),
-    }
-}
-
 pub struct App {
     _instance: Option<Instance>,
     tx: Sender<Event>,
@@ -300,8 +304,6 @@ pub struct App {
     palette_ppp: f32,
     recent_palette: Vec<&'static str>,
     gpu_profile: GpuProfile,
-    software_frame_cap: Option<Duration>,
-    passive_canvas_rect: Option<Rect>,
     last_enforced_viewport: Option<(Vec2, bool)>,
     logo_texture: Option<egui::TextureHandle>,
     status: String,
@@ -353,6 +355,7 @@ impl App {
         Self::new_with_state(
             &cc.egui_ctx,
             cc.wgpu_render_state.as_ref(),
+            false,
             instance,
             tx,
             rx,
@@ -363,6 +366,7 @@ impl App {
     pub(crate) fn new_with_state(
         egui_ctx: &egui::Context,
         wgpu_render_state: Option<&eframe::egui_wgpu::RenderState>,
+        is_software_backend: bool,
         instance: Instance,
         tx: Sender<Event>,
         rx: Receiver<Event>,
@@ -410,7 +414,7 @@ impl App {
             family.push("stix-text".into());
             family.push("stix-math".into());
         }
-        let gpu_profile = detect_gpu_profile(egui_ctx, wgpu_render_state);
+        let gpu_profile = detect_gpu_profile(egui_ctx, wgpu_render_state, is_software_backend);
         if matches!(gpu_profile, GpuProfile::VirtualGpu | GpuProfile::Software) {
             for theme in [egui::Theme::Light, egui::Theme::Dark] {
                 egui_ctx.style_mut_of(theme, |style| {
@@ -444,7 +448,6 @@ impl App {
         runtime::start_bridge(tx.clone());
         let mut app = Self::from_parts(Some(instance), tx, rx, args);
         app.gpu_profile = gpu_profile;
-        app.software_frame_cap = frame_cap_for_profile(gpu_profile);
         if let Some(path) = Settings::default_path() {
             app = app.with_settings_path(path, Some(egui_ctx));
         }
@@ -706,21 +709,6 @@ impl App {
         }
     }
 
-    pub(crate) fn frame_cap(&self) -> Option<Duration> {
-        self.software_frame_cap
-    }
-    pub(crate) fn passive_hover_rect(&self) -> Option<Rect> {
-        self.passive_canvas_rect
-    }
-    pub(crate) fn has_active_overlay(&self) -> bool {
-        self.busy
-            || self.pending.is_some()
-            || self.matrix_dialog.is_some()
-            || self.command_input.is_some()
-    }
-    pub(crate) fn has_active_animation(&self) -> bool {
-        self.batch_running && self.gpu_profile != GpuProfile::Software
-    }
     fn from_parts(
         instance: Option<Instance>,
         tx: Sender<Event>,
@@ -767,8 +755,6 @@ impl App {
             palette_ppp: 0.0,
             recent_palette: Vec::new(),
             gpu_profile: GpuProfile::Native,
-            software_frame_cap: None,
-            passive_canvas_rect: None,
             last_enforced_viewport: None,
             logo_texture: None,
             status: String::new(),
@@ -2419,16 +2405,7 @@ impl App {
                             }
                         });
                     }
-                    let scroll_out = self.canvas(ui);
-                    if !self.has_active_overlay() && !self.draft_dirty {
-                        let r = Rect::from_min_max(
-                            scroll_out.inner_rect.min + Vec2::splat(2.0),
-                            scroll_out.inner_rect.max - Vec2::splat(16.0),
-                        );
-                        if r.is_positive() {
-                            self.passive_canvas_rect = Some(r);
-                        }
-                    }
+                    self.canvas(ui);
                 });
             });
         self.sync_editor_focus(ui);
@@ -4704,7 +4681,6 @@ impl App {
 
 impl App {
     pub(crate) fn ui_pass(&mut self, ui: &mut egui::Ui) {
-        self.passive_canvas_rect = None;
         let ctx = ui.ctx().clone();
         self.enforce_window_minimum_if_needed(&ctx);
         self.events(&ctx);
@@ -9843,7 +9819,6 @@ mod tests {
         for profile in [GpuProfile::Native, GpuProfile::Software] {
             a.gpu_profile = profile;
             a.busy = true;
-            assert!(!a.has_active_animation());
             let mut busy_out = ctx.run_ui(egui::RawInput::default(), |ui| a.status_bar(ui));
             busy_out.textures_delta.clear();
             assert_eq!(collect_texts(&busy_out), vec!["●".to_owned()]);
