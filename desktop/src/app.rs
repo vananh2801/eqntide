@@ -513,6 +513,7 @@ impl App {
                 self.active_editor_focus = StartupFocus::Canvas;
             } else if has_latex {
                 self.active_editor_focus = StartupFocus::Latex;
+                self.command_input = None;
             } else {
                 ui.memory_mut(|m| m.request_focus(Self::editor_focus_id(target)));
                 self.active_editor_focus = target;
@@ -521,6 +522,7 @@ impl App {
             self.active_editor_focus = StartupFocus::Canvas;
         } else if has_latex {
             self.active_editor_focus = StartupFocus::Latex;
+            self.command_input = None;
         }
     }
 
@@ -3041,7 +3043,7 @@ impl App {
         {
             if command.is_some() {
                 if let Some(cmd_input) = self.command_input.as_mut() {
-                    cmd_input.name = "text".into();
+                    cmd_input.set_name_end("text");
                 }
             }
             self.status = r"Invalid LaTeX command. Use \text{...} to insert text.".into();
@@ -3093,8 +3095,7 @@ impl App {
                 if ch.is_whitespace() && input.is_command_prefix() {
                     continue;
                 }
-                input.name.push(ch);
-                input.selected = 0;
+                input.insert_char(ch);
                 continue;
             }
             if self.canvas_in_text() {
@@ -3106,7 +3107,7 @@ impl App {
             match ch {
                 '\\' => {
                     self.expects_latex_group = false;
-                    self.command_input = Some(commands::Input::default());
+                    self.command_input = Some(commands::Input::opened());
                 }
                 '{' if self.expects_latex_group || !self.latex_groups.is_empty() => {
                     self.latex_groups.push(self.editor.caret().node);
@@ -3270,8 +3271,7 @@ impl App {
             Key::Tab => {
                 if input.is_command_prefix() {
                     if let Some(command) = commands::suggestions(&input.name).get(input.selected) {
-                        input.name = command.name.to_owned();
-                        input.selected = 0;
+                        input.set_name_end(command.name);
                     }
                 }
                 true
@@ -3286,30 +3286,143 @@ impl App {
                 true
             }
             Key::Backspace => {
-                if input.name.pop().is_none() {
+                if !input.backspace() {
                     self.command_input = None;
-                } else {
-                    input.selected = 0;
                 }
                 true
             }
-            Key::Delete | Key::ArrowLeft | Key::ArrowRight | Key::Home | Key::End => true,
+            Key::Delete => {
+                input.delete();
+                true
+            }
+            Key::ArrowLeft => {
+                input.move_left();
+                true
+            }
+            Key::ArrowRight => {
+                input.move_right();
+                true
+            }
+            Key::Home => {
+                input.move_home();
+                true
+            }
+            Key::End => {
+                input.move_end();
+                true
+            }
             _ => false,
         }
     }
 
     fn command_popup(&mut self, ui: &mut egui::Ui, anchor: Pos2) {
-        let Some(input) = &self.command_input else {
+        if self.command_input.is_none() {
             return;
-        };
-        let name = input.name.clone();
-        let selected = input.selected;
-        let is_prefix = input.is_command_prefix();
-        let candidates = if is_prefix {
-            commands::suggestions(&name)
-        } else {
-            Vec::new()
-        };
+        }
+        let cmd_id = egui::Id::unique("canvas-command-input");
+        let canvas_id = egui::Id::unique("equation-canvas");
+        let has_input_focus = ui.memory(|m| m.has_focus(cmd_id));
+        let escape_blurred_new_input = ui.memory(|m| m.focused().is_none())
+            && self
+                .command_input
+                .as_ref()
+                .is_some_and(|input| !input.needs_focus);
+        if (has_input_focus || escape_blurred_new_input)
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.command_input = None;
+            self.status = "Canceled LaTeX command.".into();
+            ui.memory_mut(|m| m.request_focus(canvas_id));
+            return;
+        }
+        if has_input_focus {
+            ui.memory_mut(|m| {
+                m.set_focus_lock_filter(
+                    cmd_id,
+                    egui::EventFilter {
+                        tab: true,
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape: true,
+                    },
+                );
+                // Clear any focus_direction queued by begin_pass before frame-1 filter took effect.
+                m.move_focus(egui::FocusDirection::None);
+            });
+            let enter_pressed = ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                    || i.consume_key(egui::Modifiers::SHIFT, egui::Key::Enter)
+            });
+            if enter_pressed {
+                if self.commit_command(true) {
+                    ui.memory_mut(|m| m.request_focus(canvas_id));
+                    ui.ctx().request_repaint();
+                    return;
+                }
+                ui.memory_mut(|m| m.request_focus(cmd_id));
+            }
+            let buffer_empty = self
+                .command_input
+                .as_ref()
+                .is_some_and(|input| input.name.is_empty());
+            if buffer_empty
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
+            {
+                self.command_input = None;
+                ui.memory_mut(|m| m.request_focus(canvas_id));
+                return;
+            }
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
+                if let Some(input) = &mut self.command_input {
+                    if input.is_command_prefix() {
+                        if let Some(command) =
+                            commands::suggestions(&input.name).get(input.selected)
+                        {
+                            input.set_name_end(command.name);
+                        }
+                    }
+                }
+            }
+            let has_suggestions = self.command_input.as_ref().is_some_and(|input| {
+                input.is_command_prefix() && !commands::suggestions(&input.name).is_empty()
+            });
+            if has_suggestions {
+                let down =
+                    ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
+                let up =
+                    ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
+                if down || up {
+                    if let Some(input) = &mut self.command_input {
+                        let count = commands::suggestions(&input.name).len();
+                        if count > 0 {
+                            input.selected = if down {
+                                (input.selected + 1) % count
+                            } else {
+                                (input.selected + count - 1) % count
+                            };
+                        }
+                    }
+                }
+            }
+            if self
+                .command_input
+                .as_ref()
+                .is_some_and(|input| input.is_command_prefix())
+            {
+                ui.input_mut(|i| {
+                    i.events.retain(|event| match event {
+                        egui::Event::Text(text) => !text.chars().all(char::is_whitespace),
+                        egui::Event::Key {
+                            key: egui::Key::Space,
+                            ..
+                        } => false,
+                        _ => true,
+                    });
+                });
+            }
+        }
+
+        let tokens = ThemeTokens::from_ui(ui);
         let mut accept = None;
         egui::Area::new(egui::Id::unique("canvas-command-popup"))
             .order(egui::Order::Foreground)
@@ -3318,7 +3431,89 @@ impl App {
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_min_width(240.0);
-                    ui.monospace(format!("\\{name}"));
+                    let Some(input) = &mut self.command_input else {
+                        return;
+                    };
+                    if input.sync_cursor {
+                        let mut state =
+                            egui::TextEdit::load_state(ui.ctx(), cmd_id).unwrap_or_default();
+                        let ccursor =
+                            egui::text::CCursor::new(input.cursor.min(input.char_len()));
+                        state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
+                        state.store(ui.ctx(), cmd_id);
+                        input.sync_cursor = false;
+                    }
+                    let box_focused = has_input_focus || input.needs_focus;
+                    let box_resp = egui::Frame::new()
+                        .fill(Color32::TRANSPARENT)
+                        .corner_radius(theme::CONTROL_CORNER_RADIUS)
+                        .stroke(Stroke::new(
+                            1.0,
+                            if box_focused {
+                                tokens.accent
+                            } else {
+                                tokens.border
+                            },
+                        ))
+                        .inner_margin(egui::Margin::symmetric(8, 5))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                let prefix_resp = ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new("\\")
+                                            .monospace()
+                                            .color(tokens.text_muted),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                );
+                                let text_resp = ui.add(
+                                    egui::TextEdit::singleline(&mut input.name)
+                                        .id(cmd_id)
+                                        .frame(egui::Frame::NONE)
+                                        .background_color(Color32::TRANSPARENT)
+                                        .font(egui::TextStyle::Monospace)
+                                        .text_color(tokens.text_primary)
+                                        .desired_width(f32::INFINITY)
+                                        .lock_focus(true),
+                                );
+                                if prefix_resp.clicked() {
+                                    let mut state = egui::TextEdit::load_state(ui.ctx(), cmd_id)
+                                        .unwrap_or_default();
+                                    state.cursor.set_char_range(Some(
+                                        egui::text::CCursorRange::one(egui::text::CCursor::new(0)),
+                                    ));
+                                    state.store(ui.ctx(), cmd_id);
+                                    input.cursor = 0;
+                                    text_resp.request_focus();
+                                }
+                                text_resp
+                            })
+                            .inner
+                        });
+                    let text_resp = box_resp.inner;
+                    if input.needs_focus {
+                        text_resp.request_focus();
+                        input.needs_focus = false;
+                    }
+                    if text_resp.changed() {
+                        input.selected = 0;
+                    }
+                    if let Some(state) = egui::TextEdit::load_state(ui.ctx(), cmd_id) {
+                        if let Some(range) = state.cursor.char_range() {
+                            input.cursor = usize::from(range.primary.index).min(input.char_len());
+                        }
+                    }
+
+                    let selected = input.selected;
+                    let is_prefix = input.is_command_prefix();
+                    let candidates = if is_prefix {
+                        commands::suggestions(&input.name)
+                    } else {
+                        Vec::new()
+                    };
                     if is_prefix && candidates.is_empty() {
                         ui.label("No matching command — Backspace to edit, Esc to cancel");
                     }
@@ -3344,8 +3539,12 @@ impl App {
             if let Some(input) = &mut self.command_input {
                 input.selected = index;
             }
-            self.commit_command(true);
-            ui.memory_mut(|m| m.request_focus(egui::Id::unique("equation-canvas")));
+            if self.commit_command(true) {
+                ui.memory_mut(|m| m.request_focus(canvas_id));
+                ui.ctx().request_repaint();
+            } else {
+                ui.memory_mut(|m| m.request_focus(cmd_id));
+            }
         }
     }
 
@@ -5114,10 +5313,11 @@ mod tests {
         setup_focused(&mut a, &ctx);
         send_events(&mut a, &ctx, vec![egui::Event::Text(r"\alp".into())]);
         assert!(a.command_input.is_some());
-        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("equation-canvas"))));
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("canvas-command-input"))));
         send_events(&mut a, &ctx, vec![key_event(egui::Key::Enter)]);
         assert!(a.editor.math().to_xml().contains('α'));
         assert!(a.command_input.is_none());
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("equation-canvas"))));
         assert_eq!(a.latex, a.editor.math().to_latex());
 
         // Tab completes command name without committing; Enter commits afterwards.
@@ -5130,7 +5330,7 @@ mod tests {
             a.command_input.as_ref().map(|i| i.name.as_str()),
             Some("mathbb")
         );
-        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("equation-canvas"))));
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("canvas-command-input"))));
         send_events(&mut a, &ctx, vec![egui::Event::Text("{R}".into())]);
         assert_eq!(
             a.command_input.as_ref().map(|i| i.name.as_str()),
@@ -5138,6 +5338,7 @@ mod tests {
         );
         send_events(&mut a, &ctx, vec![key_event(egui::Key::Enter)]);
         assert!(a.command_input.is_none());
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("equation-canvas"))));
         assert!(a.editor.math().to_latex().contains(r"\mathbb{R}"));
 
         // Space remains literal inside the command buffer until Enter commits.
@@ -5204,6 +5405,207 @@ mod tests {
         );
         a.editor.undo();
         assert!(a.editor.math().children.is_empty());
+    }
+
+    #[test]
+    fn completion_buffer_supports_cursor_navigation_and_mid_string_editing() {
+        let mut a = app();
+        type_canvas(&mut a, r"\frac{1}{2}");
+        assert!(a.command_key(egui::Key::ArrowLeft, egui::Modifiers::NONE));
+        assert!(a.command_key(egui::Key::ArrowLeft, egui::Modifiers::NONE));
+        assert!(a.command_key(egui::Key::ArrowLeft, egui::Modifiers::NONE));
+        assert!(a.command_key(egui::Key::ArrowLeft, egui::Modifiers::NONE));
+        type_canvas(&mut a, "0");
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("frac{10}{2}")
+        );
+        assert!(a.command_key(egui::Key::Backspace, egui::Modifiers::NONE));
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("frac{1}{2}")
+        );
+
+        assert!(a.command_key(egui::Key::Home, egui::Modifiers::NONE));
+        assert!(a.command_key(egui::Key::Backspace, egui::Modifiers::NONE));
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("frac{1}{2}")
+        );
+        assert!(a.command_key(egui::Key::Delete, egui::Modifiers::NONE));
+        type_canvas(&mut a, "d");
+        assert!(a.command_key(egui::Key::ArrowRight, egui::Modifiers::NONE));
+        assert!(a.command_key(egui::Key::End, egui::Modifiers::NONE));
+        type_canvas(&mut a, "+x");
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("drac{1}{2}+x")
+        );
+        assert!(a.command_key(egui::Key::Home, egui::Modifiers::NONE));
+        assert!(a.command_key(egui::Key::Delete, egui::Modifiers::NONE));
+        type_canvas(&mut a, "f");
+        assert!(a.command_key(egui::Key::Enter, egui::Modifiers::NONE));
+        assert!(a.command_input.is_none());
+        assert_eq!(a.editor.math().to_latex(), r"\frac{1}{2}+x");
+    }
+
+    #[test]
+    fn completion_popup_textbox_supports_arrow_navigation_and_editing() {
+        let send_events = |a: &mut App, ctx: &egui::Context, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| a.shell(ui),
+            );
+            out.textures_delta.clear();
+            out
+        };
+        let key_event = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let canvas_id = egui::Id::unique("equation-canvas");
+        let cmd_id = egui::Id::unique("canvas-command-input");
+
+        let mut a = app();
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        send_events(&mut a, &ctx, vec![]);
+        assert!(ctx.memory(|m| m.has_focus(canvas_id)));
+
+        // Open popup with \frac{1}{2}, move left 4 times, insert 0 -> frac{10}{2}, backspace -> frac{1}{2}.
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\frac{1}{2}".into())]);
+        assert!(ctx.memory(|m| m.has_focus(cmd_id)));
+        for _ in 0..4 {
+            send_events(&mut a, &ctx, vec![key_event(egui::Key::ArrowLeft)]);
+        }
+        send_events(&mut a, &ctx, vec![egui::Event::Text("0".into())]);
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("frac{10}{2}")
+        );
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Backspace)]);
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("frac{1}{2}")
+        );
+
+        // Home, Delete, insert 'd', End, insert '+x', Home, Delete, insert 'f', Enter -> \frac{1}{2}+x.
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Home)]);
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Delete)]);
+        send_events(&mut a, &ctx, vec![egui::Event::Text("d".into())]);
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::End)]);
+        send_events(&mut a, &ctx, vec![egui::Event::Text("+x".into())]);
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("drac{1}{2}+x")
+        );
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Home)]);
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Delete)]);
+        send_events(&mut a, &ctx, vec![egui::Event::Text("f".into())]);
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Enter)]);
+        assert!(a.command_input.is_none());
+        assert_eq!(a.editor.math().to_latex(), r"\frac{1}{2}+x");
+        assert!(ctx.memory(|m| m.has_focus(canvas_id)));
+
+        // Bare command name ignores Space; Backspace on empty closes popup and restores canvas focus.
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\text".into())]);
+        send_events(
+            &mut a,
+            &ctx,
+            vec![key_event(egui::Key::Space), egui::Event::Text(" ".into())],
+        );
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("text")
+        );
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Escape)]);
+        assert!(a.command_input.is_none());
+        assert!(ctx.memory(|m| m.has_focus(canvas_id)));
+
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\".into())]);
+        assert!(a.command_input.is_some());
+        send_events(&mut a, &ctx, vec![key_event(egui::Key::Backspace)]);
+        assert!(a.command_input.is_none());
+        assert!(ctx.memory(|m| m.has_focus(canvas_id)));
+    }
+
+    #[test]
+    fn completion_popup_textbox_pointer_click_positions_cursor() {
+        let send_events = |a: &mut App, ctx: &egui::Context, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| a.shell(ui),
+            );
+            out.textures_delta.clear();
+            out
+        };
+        let canvas_id = egui::Id::unique("equation-canvas");
+        let cmd_id = egui::Id::unique("canvas-command-input");
+        let latex_id = egui::Id::unique("latex-source");
+
+        let mut a = app();
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        send_events(&mut a, &ctx, vec![]);
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\int_0^1".into())]);
+        let out = send_events(&mut a, &ctx, vec![]);
+        assert!(ctx.memory(|m| m.has_focus(cmd_id)));
+
+        fn find_galley_click(shape: &egui::Shape) -> Option<Pos2> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text() == "int_0^1" => {
+                    let cpos = t.galley.pos_from_cursor(egui::text::CCursor::new(4));
+                    Some(t.pos + Vec2::new(cpos.min.x, cpos.center().y))
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(find_galley_click),
+                _ => None,
+            }
+        }
+
+        // Find the rendered galley for "int_0^1" inside the popup textbox and click between '_' and '0'.
+        let click_pos = out
+            .shapes
+            .iter()
+            .find_map(|s| find_galley_click(&s.shape))
+            .expect("popup command textbox galley must be visible");
+
+        send_events(&mut a, &ctx, click_events(click_pos));
+        assert!(a.command_input.is_some());
+        assert!(ctx.memory(|m| m.has_focus(cmd_id)));
+        send_events(&mut a, &ctx, vec![egui::Event::Text("a".into())]);
+        assert_eq!(
+            a.command_input.as_ref().map(|i| i.name.as_str()),
+            Some("int_a0^1")
+        );
+
+        // Clicking outside onto the Equation Canvas closes the popup without committing.
+        let canvas_rect = ctx.read_response(canvas_id).unwrap().rect;
+        send_events(
+            &mut a,
+            &ctx,
+            click_events(Pos2::new(canvas_rect.right() - 20.0, canvas_rect.bottom() - 20.0)),
+        );
+        assert!(a.command_input.is_none());
+        assert!(a.editor.math().children.is_empty());
+
+        // Clicking into LaTeX source while popup is open also dismisses the popup.
+        send_events(&mut a, &ctx, vec![egui::Event::Text(r"\alp".into())]);
+        assert!(a.command_input.is_some());
+        let latex_rect = ctx.read_response(latex_id).unwrap().rect;
+        send_events(&mut a, &ctx, click_events(latex_rect.center()));
+        assert!(a.command_input.is_none());
+        assert!(ctx.memory(|m| m.has_focus(latex_id)));
     }
 
     #[test]
