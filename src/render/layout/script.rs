@@ -6,15 +6,16 @@
 use super::*;
 
 impl Layout {
-    pub(super) fn scripts(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
-        let (sub_n, sup_n) = match n.tag.as_str() {
-            "msub" | "munder" => (n.children.get(1), None),
-            "msup" | "mover" => (None, n.children.get(1)),
-            _ => (n.children.get(1), n.children.get(2)),
+    /// Lay out `msub`, `msup`, `msubsup`, or script-positioned integral/eval-bar forms.
+    pub(super) fn scripts(&mut self, node: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
+        let (sub_node, sup_node) = match node.tag.as_str() {
+            "msub" | "munder" => (node.children.get(1), None),
+            "msup" | "mover" => (None, node.children.get(1)),
+            _ => (node.children.get(1), node.children.get(2)),
         };
 
-        if let Some(base_node) = n.children.first() {
-            if n.attr("data-limloc") == Some("undOvr")
+        if let Some(base_node) = node.children.first() {
+            if node.attr("data-limloc") == Some("undOvr")
                 && base_node.tag == "mo"
                 && base_node
                     .text
@@ -23,10 +24,10 @@ impl Layout {
                     .next()
                     .is_some_and(is_integral)
             {
-                return self.integral_with_limits(base_node, sub_n, sup_n, em, ctx);
+                return self.integral_with_limits(base_node, sub_node, sup_node, em, ctx);
             }
             if delimiter::is_eval_bar_base(base_node) {
-                return self.evaluation_bar(sub_n, sup_n, 0.85 * em, 0.65 * em, em, ctx);
+                return self.evaluation_bar(sub_node, sup_node, 0.85 * em, 0.65 * em, em, ctx);
             }
             if base_node.tag == "mrow" && base_node.children.len() >= 2 {
                 let first = &base_node.children[0];
@@ -37,117 +38,132 @@ impl Layout {
                 {
                     let inner_nodes = &base_node.children[1..base_node.children.len() - 1];
                     let inner = self.row(inner_nodes, em, ctx)?;
-                    let h2 = (inner.asc - AXIS * em)
+                    let half_span = (inner.asc - AXIS * em)
                         .max(inner.desc + AXIS * em)
                         .max(0.675 * em);
-                    let bar_asc = AXIS * em + h2;
-                    let bar_desc = h2 - AXIS * em;
+                    let bar_asc = AXIS * em + half_span;
+                    let bar_desc = half_span - AXIS * em;
                     let mut eval_box =
-                        self.evaluation_bar(sub_n, sup_n, bar_asc, bar_desc, em, ctx)?;
+                        self.evaluation_bar(sub_node, sup_node, bar_asc, bar_desc, em, ctx)?;
                     eval_box.mark(last);
-                    let mut b = LBox::default();
-                    b.place(&inner, 0.0, 0.0);
+                    let mut layout_box = LBox::default();
+                    layout_box.place(&inner, 0.0, 0.0);
                     let gap = if inner.w > 0.0 { 0.06 * em } else { 0.0 };
-                    b.place(&eval_box, inner.w + gap, 0.0);
-                    b.w = inner.w + gap + eval_box.w;
-                    return Ok(b);
+                    layout_box.place(&eval_box, inner.w + gap, 0.0);
+                    layout_box.w = inner.w + gap + eval_box.w;
+                    return Ok(layout_box);
                 }
             }
         }
 
-        let base = match n.children.first() {
-            Some(c) => self.node(c, em, ctx)?,
+        let base = match node.children.first() {
+            Some(child) => self.node(child, em, ctx)?,
             None => LBox::default(),
         };
-        let c = self.f.constants();
+        let constants = self.font_set.constants();
         let sub_ctx = ctx.for_subscript();
         let sup_ctx = ctx.for_superscript();
-        let sub_em = em * ctx.rel_scale(sub_ctx, c);
-        let sup_em = em * ctx.rel_scale(sup_ctx, c);
+        let sub_em = em * ctx.rel_scale(sub_ctx, constants);
+        let sup_em = em * ctx.rel_scale(sup_ctx, constants);
 
-        let sub = match sub_n {
-            Some(c) => Some(self.node(c, sub_em, sub_ctx)?),
+        let sub = match sub_node {
+            Some(child) => Some(self.node(child, sub_em, sub_ctx)?),
             None => None,
         };
-        let sup = match sup_n {
-            Some(c) => Some(self.node(c, sup_em, sup_ctx)?),
+        let sup = match sup_node {
+            Some(child) => Some(self.node(child, sup_em, sup_ctx)?),
             None => None,
         };
         Ok(self.attach_scripts(base, sub, sup, em, sup_em, ctx))
     }
 
-    pub(super) fn prescripts(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
-        let base = match n.children.first() {
-            Some(c) => self.node(c, em, ctx)?,
+    /// Lay out `<mmultiscripts>` tensor prescripts before `base`.
+    pub(super) fn prescripts(
+        &mut self,
+        node: &MathNode,
+        em: f32,
+        ctx: MathContext,
+    ) -> Result<LBox> {
+        let base = match node.children.first() {
+            Some(child) => self.node(child, em, ctx)?,
             None => LBox::default(),
         };
-        let c = self.f.constants();
+        let constants = self.font_set.constants();
         let sub_ctx = ctx.for_subscript();
         let sup_ctx = ctx.for_superscript();
-        let sub_em = em * ctx.rel_scale(sub_ctx, c);
-        let sup_em = em * ctx.rel_scale(sup_ctx, c);
+        let sub_em = em * ctx.rel_scale(sub_ctx, constants);
+        let sup_em = em * ctx.rel_scale(sup_ctx, constants);
 
         let mut pre_sub: Option<LBox> = None;
         let mut pre_sup: Option<LBox> = None;
-        if let Some(mp_idx) = n.children.iter().position(|c| c.tag == "mprescripts") {
-            if let Some(sub_n) = n.children.get(mp_idx + 1) {
-                if sub_n.tag != "none"
-                    && (!sub_n.children.is_empty() || !sub_n.text.trim().is_empty())
+        if let Some(mp_idx) = node
+            .children
+            .iter()
+            .position(|child| child.tag == "mprescripts")
+        {
+            if let Some(sub_node) = node.children.get(mp_idx + 1) {
+                if sub_node.tag != "none"
+                    && (!sub_node.children.is_empty() || !sub_node.text.trim().is_empty())
                 {
-                    pre_sub = Some(self.node(sub_n, sub_em, sub_ctx)?);
+                    pre_sub = Some(self.node(sub_node, sub_em, sub_ctx)?);
                 }
             }
-            if let Some(sup_n) = n.children.get(mp_idx + 2) {
-                if sup_n.tag != "none"
-                    && (!sup_n.children.is_empty() || !sup_n.text.trim().is_empty())
+            if let Some(sup_node) = node.children.get(mp_idx + 2) {
+                if sup_node.tag != "none"
+                    && (!sup_node.children.is_empty() || !sup_node.text.trim().is_empty())
                 {
-                    pre_sup = Some(self.node(sup_n, sup_em, sup_ctx)?);
+                    pre_sup = Some(self.node(sup_node, sup_em, sup_ctx)?);
                 }
             }
         }
-        let sub_w = pre_sub.as_ref().map_or(0.0, |s| s.w);
-        let sup_w = pre_sup.as_ref().map_or(0.0, |s| s.w);
+        let sub_w = pre_sub.as_ref().map_or(0.0, |sub_box| sub_box.w);
+        let sup_w = pre_sup.as_ref().map_or(0.0, |sup_box| sup_box.w);
         let pre_w = sub_w.max(sup_w);
         if pre_w == 0.0 {
             return Ok(base);
         }
 
         let shift_up = if ctx.cramped {
-            c.superscript_shift_up_cramped * em
+            constants.superscript_shift_up_cramped * em
         } else {
-            c.superscript_shift_up * em
+            constants.superscript_shift_up * em
         };
-        let shift_down = c.subscript_shift_down * em;
-        let gap_min = c.sub_superscript_gap_min * em;
+        let shift_down = constants.subscript_shift_down * em;
+        let gap_min = constants.sub_superscript_gap_min * em;
 
-        let mut sub_y = pre_sub
-            .as_ref()
-            .map(|s| shift_down.max(base.desc + 0.05 * em).max(s.asc - 0.32 * em));
-        let sup_y = pre_sup.as_ref().map(|s| {
+        let mut sub_y = pre_sub.as_ref().map(|sub_box| {
+            shift_down
+                .max(base.desc + 0.05 * em)
+                .max(sub_box.asc - 0.32 * em)
+        });
+        let sup_y = pre_sup.as_ref().map(|sup_box| {
             -(shift_up
                 .max(base.asc - 0.39 * sup_em)
-                .max(s.desc + 0.11 * em))
+                .max(sup_box.desc + 0.11 * em))
         });
-        if let (Some(s1), Some(s2), Some(sy), Some(py)) = (&pre_sub, &pre_sup, sub_y, sup_y) {
-            let gap = (sy - s1.asc) - (py + s2.desc);
+        if let (Some(sub_box), Some(sup_box), Some(sub_pos), Some(sup_pos)) =
+            (&pre_sub, &pre_sup, sub_y, sup_y)
+        {
+            let gap = (sub_pos - sub_box.asc) - (sup_pos + sup_box.desc);
             if gap < gap_min {
-                sub_y = Some(sy + (gap_min - gap));
+                sub_y = Some(sub_pos + (gap_min - gap));
             }
         }
 
-        let mut b = LBox::default();
-        if let (Some(s), Some(y)) = (&pre_sub, sub_y) {
-            b.place(s, pre_w - s.w, y);
+        let mut layout_box = LBox::default();
+        if let (Some(sub_box), Some(y)) = (&pre_sub, sub_y) {
+            layout_box.place(sub_box, pre_w - sub_box.w, y);
         }
-        if let (Some(s), Some(y)) = (&pre_sup, sup_y) {
-            b.place(s, pre_w - s.w, y);
+        if let (Some(sup_box), Some(y)) = (&pre_sup, sup_y) {
+            layout_box.place(sup_box, pre_w - sup_box.w, y);
         }
         let base_x = pre_w + 0.03 * em;
-        b.place(&base, base_x, 0.0);
-        b.w = base_x + base.w;
-        Ok(b)
+        layout_box.place(&base, base_x, 0.0);
+        layout_box.w = base_x + base.w;
+        Ok(layout_box)
     }
 
+    /// Position optional `sub` and `sup` boxes relative to `base` with OpenType kerning.
     pub(super) fn attach_scripts(
         &self,
         base: LBox,
@@ -157,22 +173,23 @@ impl Layout {
         sup_em: f32,
         ctx: MathContext,
     ) -> LBox {
-        let c = self.f.constants();
+        let constants = self.font_set.constants();
         let shift_up = if ctx.cramped {
-            c.superscript_shift_up_cramped * em
+            constants.superscript_shift_up_cramped * em
         } else {
-            c.superscript_shift_up * em
+            constants.superscript_shift_up * em
         };
-        let shift_down = c.subscript_shift_down * em;
-        let gap_min = c.sub_superscript_gap_min * em;
+        let shift_down = constants.subscript_shift_down * em;
+        let gap_min = constants.sub_superscript_gap_min * em;
 
-        let mut sub_y = sub
-            .as_ref()
-            .map(|s| shift_down.max(base.desc + 0.05 * em).max(s.asc - 0.32 * em));
+        let mut sub_y = sub.as_ref().map(|sub_box| {
+            shift_down
+                .max(base.desc + 0.05 * em)
+                .max(sub_box.asc - 0.32 * em)
+        });
 
-        // Check if the superscript is a prime mark (', ′)
-        let is_prime = sup.as_ref().is_some_and(|s| {
-            s.items.first().is_some_and(|it| match it {
+        let is_prime = sup.as_ref().is_some_and(|sup_box| {
+            sup_box.items.first().is_some_and(|item| match item {
                 Item::Glyph { ch, .. } => {
                     matches!(*ch, '\'' | '\u{2032}' | '\u{2033}' | '\u{2034}')
                 }
@@ -180,44 +197,51 @@ impl Layout {
             })
         });
 
-        let sup_y = sup.as_ref().map(|s| {
+        let sup_y = sup.as_ref().map(|sup_box| {
             let y = -(shift_up
                 .max(base.asc - 0.39 * sup_em)
-                .max(s.desc + 0.11 * em));
+                .max(sup_box.desc + 0.11 * em));
             if is_prime {
-                // Lower the prime mark moderately to align with letter tops,
-                // without colliding into outward-slanted strokes.
+                // Lower primes moderately to align with letter tops without colliding.
                 y + 0.04 * em
             } else {
                 y
             }
         });
 
-        if let (Some(s1), Some(s2), Some(sy), Some(py)) = (&sub, &sup, sub_y, sup_y) {
-            let gap = (sy - s1.asc) - (py + s2.desc);
+        if let (Some(sub_box), Some(sup_box), Some(sub_pos), Some(sup_pos)) =
+            (&sub, &sup, sub_y, sup_y)
+        {
+            let gap = (sub_pos - sub_box.asc) - (sup_pos + sup_box.desc);
             if gap < gap_min {
-                sub_y = Some(sy + (gap_min - gap));
+                sub_y = Some(sub_pos + (gap_min - gap));
             }
         }
 
         let ic = self.italic_correction_of_box(&base);
         let base_glyph = self.last_glyph_of_box(&base);
-        let sub_glyph = sub.as_ref().and_then(|s| self.first_glyph_of_box(s));
-        let sup_glyph = sup.as_ref().and_then(|s| self.first_glyph_of_box(s));
+        let sub_glyph = sub
+            .as_ref()
+            .and_then(|sub_box| self.first_glyph_of_box(sub_box));
+        let sup_glyph = sup
+            .as_ref()
+            .and_then(|sup_box| self.first_glyph_of_box(sup_box));
 
-        let overhang = base_glyph.map_or(0.0, |(face, ch, gem)| {
-            let (_, x_max) = self.f.ink_x(face, ch, gem);
-            let adv = self.f.advance(face, ch, gem);
+        let overhang = base_glyph.map_or(0.0, |(face, ch, glyph_em)| {
+            let (_, x_max) = self.font_set.ink_x(face, ch, glyph_em);
+            let adv = self.font_set.advance(face, ch, glyph_em);
             (x_max - adv).max(0.0)
         });
         let clearance = ic.max(overhang);
 
-        // Subscript horizontal placement: tucked in under slanted letters (math_kern or TeX heuristic)
+        // Tuck subscript under slanted bases using OpenType math kerning or TeX heuristic.
         let sub_kern = match (base_glyph, sub_glyph, sub_y) {
-            (Some((b_face, b_ch, _)), Some((s_face, s_ch, _)), Some(sy)) => {
-                let k = self.f.math_kern(b_face, b_ch, s_face, s_ch, true, sy, em);
-                if k != 0.0 {
-                    k
+            (Some((b_face, b_ch, _)), Some((s_face, s_ch, _)), Some(sub_pos)) => {
+                let kern = self
+                    .font_set
+                    .math_kern(b_face, b_ch, s_face, s_ch, true, sub_pos, em);
+                if kern != 0.0 {
+                    kern
                 } else if ic > 0.0 {
                     -(0.35 * ic).min(0.04 * em)
                 } else {
@@ -234,39 +258,36 @@ impl Layout {
         };
         let sub_x = (base.w + 0.02 * em + sub_kern).max(0.0);
 
-        // Superscript horizontal placement: shifted right by italic correction/overhang and math kerning
         let sup_kern = match (base_glyph, sup_glyph, sup_y) {
-            (Some((b_face, b_ch, _)), Some((s_face, s_ch, _)), Some(py)) => {
-                self.f.math_kern(b_face, b_ch, s_face, s_ch, false, py, em)
-            }
+            (Some((b_face, b_ch, _)), Some((s_face, s_ch, _)), Some(sup_pos)) => self
+                .font_set
+                .math_kern(b_face, b_ch, s_face, s_ch, false, sup_pos, em),
             _ => 0.0,
         };
         let sup_x = if is_prime {
-            // Prime mark needs sufficient clearance from the base glyph, especially for
-            // letters like 'f' (with large top hook overhang) or 'y'/'x' (with small font ic).
             base.w + clearance.max(0.04 * em) + 0.03 * em
         } else {
             base.w + clearance + sup_kern + 0.02 * em
         };
 
-        let mut b = LBox::default();
-        b.place(&base, 0.0, 0.0);
-        let mut w = base.w;
+        let mut layout_box = LBox::default();
+        layout_box.place(&base, 0.0, 0.0);
+        let mut width = base.w;
 
-        if let (Some(s), Some(y)) = (&sub, sub_y) {
-            b.place(s, sub_x, y);
-            w = w.max(sub_x + s.w);
+        if let (Some(sub_box), Some(y)) = (&sub, sub_y) {
+            layout_box.place(sub_box, sub_x, y);
+            width = width.max(sub_x + sub_box.w);
         }
-        if let (Some(s), Some(y)) = (&sup, sup_y) {
-            b.place(s, sup_x, y);
-            w = w.max(sup_x + s.w);
+        if let (Some(sup_box), Some(y)) = (&sup, sup_y) {
+            layout_box.place(sup_box, sup_x, y);
+            width = width.max(sup_x + sup_box.w);
         }
-        b.w = if is_prime {
-            w + 0.02 * em
+        layout_box.w = if is_prime {
+            width + 0.02 * em
         } else {
-            w + 0.03 * em
+            width + 0.03 * em
         };
-        b
+        layout_box
     }
 }
 
@@ -277,7 +298,7 @@ mod tests {
     #[allow(dead_code)]
     fn layout() -> Layout {
         Layout {
-            f: fonts(),
+            font_set: fonts(),
             depth: 0,
         }
     }
@@ -294,54 +315,49 @@ mod tests {
 
     #[test]
     fn test_script_optical_size_ssty_feature() {
-        let mut l = Layout {
-            f: fonts(),
+        let mut layout = Layout {
+            font_set: fonts(),
             depth: 0,
         };
         let em = 20.0;
 
-        // In x^2: base 'x' is at level 0 (Display/Text), superscript '2' is at level 1 (Script style)
         let node_x2 = MathNode::parse("<math><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
-        let b_x2 = l
+        let box_x2 = layout
             .scripts(&node_x2.children[0], em, MathContext::DISPLAY)
             .unwrap();
 
-        let ssty_base = b_x2
+        let ssty_base = box_x2
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: 'x', ssty, .. } => Some(*ssty),
                 _ => None,
             })
             .unwrap();
         assert_eq!(ssty_base, 0, "Base 'x' should have ssty = 0");
 
-        let ssty_sup = b_x2
+        let ssty_sup = box_x2
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: '2', ssty, .. } => Some(*ssty),
                 _ => None,
             })
             .unwrap();
         assert_eq!(ssty_sup, 1, "Superscript '2' should have ssty = 1");
 
-        // In nested script x^{y^z}:
-        // 'x' has ssty = 0
-        // 'y' has ssty = 1
-        // 'z' has ssty = 2 (ScriptScript style)
         let node_nested = MathNode::parse(
             "<math><msup><mi>x</mi><msup><mi>y</mi><mi>z</mi></msup></msup></math>",
         )
         .unwrap();
-        let b_nested = l
+        let box_nested = layout
             .scripts(&node_nested.children[0], em, MathContext::DISPLAY)
             .unwrap();
 
-        let ssty_z = b_nested
+        let ssty_z = box_nested
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: 'z', ssty, .. } => Some(*ssty),
                 _ => None,
             })
@@ -354,41 +370,40 @@ mod tests {
 
     #[test]
     fn test_italic_correction_and_math_kerning_attachment() {
-        let mut l = Layout {
-            f: fonts(),
+        let mut layout = Layout {
+            font_set: fonts(),
             depth: 0,
         };
         let em = 20.0;
 
-        // Base 'V' has substantial italic correction (100 units in STIX Two Math = 0.10 * em)
-        let ic_v = l.f.italic_correction(Face::Variable, 'V', em);
+        let ic_v = layout.font_set.italic_correction(Face::Variable, 'V', em);
         assert!(
             ic_v > 0.08 * em,
             "Italic correction for 'V' should exceed 0.08 * em, got {}",
             ic_v
         );
 
-        // Base '1' (upright digit) has zero italic correction
-        let ic_1 = l.f.italic_correction(Face::Number, '1', em);
+        let ic_1 = layout.font_set.italic_correction(Face::Number, '1', em);
         assert_eq!(ic_1, 0.0, "Italic correction for '1' must be 0.0");
 
-        // When placing superscript '2' on 'V':
         let node_v2 = MathNode::parse("<math><msup><mi>V</mi><mn>2</mn></msup></math>").unwrap();
-        let b_v2 = l
+        let box_v2 = layout
             .scripts(&node_v2.children[0], em, MathContext::DISPLAY)
             .unwrap();
-        let base_v_w = b_v2
+        let base_v_w = box_v2
             .items
             .iter()
-            .find_map(|it| match it {
-                Item::Glyph { ch: 'V', .. } => Some(l.f.advance(Face::Variable, 'V', em)),
+            .find_map(|item| match item {
+                Item::Glyph { ch: 'V', .. } => {
+                    Some(layout.font_set.advance(Face::Variable, 'V', em))
+                }
                 _ => None,
             })
             .unwrap();
-        let sup_v_x = b_v2
+        let sup_v_x = box_v2
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: '2', x, .. } => Some(*x),
                 _ => None,
             })
@@ -399,29 +414,28 @@ mod tests {
             sup_v_x
         );
 
-        // Base 'P' with subscript '1': STIX Two Math has bottom-right kerning for 'P' (negative),
-        // tucking the subscript in under the overhang.
         let node_p1 = MathNode::parse("<math><msub><mi>P</mi><mn>1</mn></msub></math>").unwrap();
-        let b_p1 = l
+        let box_p1 = layout
             .scripts(&node_p1.children[0], em, MathContext::DISPLAY)
             .unwrap();
-        let base_p_w = b_p1
+        let base_p_w = box_p1
             .items
             .iter()
-            .find_map(|it| match it {
-                Item::Glyph { ch: 'P', .. } => Some(l.f.advance(Face::Variable, 'P', em)),
+            .find_map(|item| match item {
+                Item::Glyph { ch: 'P', .. } => {
+                    Some(layout.font_set.advance(Face::Variable, 'P', em))
+                }
                 _ => None,
             })
             .unwrap();
-        let sub_p_x = b_p1
+        let sub_p_x = box_p1
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: '1', x, .. } => Some(*x),
                 _ => None,
             })
             .unwrap();
-        // Since bottom-right kern is negative, sub_p_x < base_p_w + 0.02 * em
         assert!(
             sub_p_x < base_p_w + 0.02 * em,
             "Subscript under 'P' should be kerned inward, got sub_p_x = {}, base_p_w = {}",
@@ -429,24 +443,25 @@ mod tests {
             base_p_w
         );
 
-        // Base 'y' with prime '\'': prime mark has sufficient clearance to avoid colliding into y
         let node_y_prime =
             MathNode::parse("<math><msup><mi>y</mi><mo>′</mo></msup></math>").unwrap();
-        let b_y_prime = l
+        let box_y_prime = layout
             .scripts(&node_y_prime.children[0], em, MathContext::DISPLAY)
             .unwrap();
-        let base_y_w = b_y_prime
+        let base_y_w = box_y_prime
             .items
             .iter()
-            .find_map(|it| match it {
-                Item::Glyph { ch: 'y', .. } => Some(l.f.advance(Face::Variable, 'y', em)),
+            .find_map(|item| match item {
+                Item::Glyph { ch: 'y', .. } => {
+                    Some(layout.font_set.advance(Face::Variable, 'y', em))
+                }
                 _ => None,
             })
             .unwrap();
-        let sup_prime_x = b_y_prime
+        let sup_prime_x = box_y_prime
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: '′', x, .. } => Some(*x),
                 _ => None,
             })
@@ -458,22 +473,21 @@ mod tests {
             base_y_w
         );
 
-        // Base 'f' with prime: prime mark clears 'f' top hook overhang
         let node_f_prime =
             MathNode::parse("<math><msup><mi>f</mi><mo>′</mo></msup></math>").unwrap();
-        let b_f_prime = l
+        let box_f_prime = layout
             .scripts(&node_f_prime.children[0], em, MathContext::DISPLAY)
             .unwrap();
-        let (_, f_xmax) = l.f.ink_x(Face::Variable, 'f', em);
-        let f_prime_x = b_f_prime
+        let (_, f_xmax) = layout.font_set.ink_x(Face::Variable, 'f', em);
+        let f_prime_x = box_f_prime
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: '′', x, .. } => Some(*x),
                 _ => None,
             })
             .unwrap();
-        let (prime_xmin, _) = l.f.ink_x(Face::Symbol, '′', em);
+        let (prime_xmin, _) = layout.font_set.ink_x(Face::Symbol, '′', em);
         assert!(
             f_prime_x + prime_xmin > f_xmax,
             "Prime mark must clear 'f' top hook ink: f_prime_x + prime_xmin = {}, f_xmax = {}",
@@ -481,21 +495,20 @@ mod tests {
             f_xmax
         );
 
-        // Row 'f'' directly in mrow clears 'f' top hook overhang
         let node_row_f_prime =
             MathNode::parse("<math><mrow><mi>f</mi><mo>′</mo></mrow></math>").unwrap();
-        let (b_row, _) = layout_math(&node_row_f_prime, 12.0).unwrap();
-        let row_prime_x = b_row
+        let (box_row, _) = layout_math(&node_row_f_prime, 12.0).unwrap();
+        let row_prime_x = box_row
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: '′', x, .. } => Some(*x),
                 _ => None,
             })
             .unwrap();
         let em12 = 12.0 * PX_PER_PT;
-        let (_, f_xmax12) = l.f.ink_x(Face::Variable, 'f', em12);
-        let (prime_xmin12, _) = l.f.ink_x(Face::Symbol, '′', em12);
+        let (_, f_xmax12) = layout.font_set.ink_x(Face::Variable, 'f', em12);
+        let (prime_xmin12, _) = layout.font_set.ink_x(Face::Symbol, '′', em12);
         assert!(
             row_prime_x + prime_xmin12 > f_xmax12,
             "Row prime mark must clear 'f' top hook ink"
@@ -504,37 +517,40 @@ mod tests {
 
     #[test]
     fn test_cramped_superscript_shift_down() {
-        let mut l = Layout {
-            f: fonts(),
+        let mut layout = Layout {
+            font_set: fonts(),
             depth: 0,
         };
         let em = 20.0;
         let node = MathNode::parse("<math><msup><mi>x</mi><mn>2</mn></msup></math>").unwrap();
-        let b_normal = l
+        let box_normal = layout
             .scripts(&node.children[0], em, MathContext::DISPLAY)
             .unwrap();
-        let b_cramped = l
+        let box_cramped = layout
             .scripts(&node.children[0], em, MathContext::DISPLAY_CRAMPED)
             .unwrap();
 
-        let sup_y_normal = b_normal
+        let sup_y_normal = box_normal
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: '2', y, .. } => Some(*y),
                 _ => None,
             })
             .unwrap();
-        let sup_y_cramped = b_cramped
+        let sup_y_cramped = box_cramped
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: '2', y, .. } => Some(*y),
                 _ => None,
             })
             .unwrap();
 
-        assert!(sup_y_cramped > sup_y_normal, "In cramped style, superscript y-coordinate must be lower (shifted down) than in un-cramped style");
+        assert!(
+            sup_y_cramped > sup_y_normal,
+            "In cramped style, superscript y-coordinate must be lower (shifted down) than in un-cramped style"
+        );
     }
 
     #[test]
@@ -560,11 +576,10 @@ mod tests {
             min_y_tall + max_y_tall,
             min_y_short + max_y_short
         );
-        // Inner `x` must appear to the left of the bar and limits (`0`, `1`).
         let x_pos = box_short
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: 'x', x, .. } => Some(*x),
                 _ => None,
             })
@@ -572,7 +587,7 @@ mod tests {
         let lim_x = box_short
             .items
             .iter()
-            .find_map(|it| match it {
+            .find_map(|item| match item {
                 Item::Glyph { ch: '0', x, .. } => Some(*x),
                 _ => None,
             })
@@ -588,7 +603,7 @@ mod tests {
             let primes: Vec<_> = lbox
                 .items
                 .iter()
-                .filter_map(|it| match it {
+                .filter_map(|item| match item {
                     Item::Glyph { ch, y, em, .. }
                         if matches!(*ch, '\'' | '\u{2032}' | '\u{2033}' | '\u{2034}') =>
                     {

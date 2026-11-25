@@ -1,19 +1,20 @@
-//! Fence templates: parentheses, brackets, braces and bars that stretch to
-//! their content.
+//! Fence templates: parentheses, brackets, braces, and bars that stretch to their content.
 
 use super::*;
 
 impl Layout {
+    /// Pair delimiters across `atoms` and stretch them to enclose their spans or adjacent tables.
     pub(super) fn stretch_delims(&self, atoms: &mut [Atom], em: f32) {
-        // Match pairs.
         let mut stack: Vec<usize> = Vec::new();
         let mut pairs: Vec<(usize, usize)> = Vec::new();
         for i in 0..atoms.len() {
-            let Some(c) = atoms[i].delim else { continue };
+            let Some(delim_ch) = atoms[i].delim else {
+                continue;
+            };
             match atoms[i].fence_role {
                 FenceRole::Prefix => stack.push(i),
                 FenceRole::Postfix => {
-                    let want = open_for(c);
+                    let want = open_for(delim_ch);
                     if let Some(pos) = stack
                         .iter()
                         .rposition(|&j| atoms[j].delim == Some(want))
@@ -28,17 +29,17 @@ impl Layout {
                     }
                 }
                 FenceRole::Neutral => {
-                    if is_open(c) {
+                    if is_open(delim_ch) {
                         stack.push(i);
-                    } else if is_close(c) {
-                        let want = open_for(c);
+                    } else if is_close(delim_ch) {
+                        let want = open_for(delim_ch);
                         if let Some(pos) = stack.iter().rposition(|&j| atoms[j].delim == Some(want))
                         {
                             pairs.push((stack[pos], i));
                             stack.truncate(pos);
                         }
                     } else if let Some(&j) = stack.last() {
-                        if atoms[j].delim == Some(c) {
+                        if atoms[j].delim == Some(delim_ch) {
                             atoms[j].class = Class::Open;
                             atoms[i].class = Class::Close;
                             pairs.push((j, i));
@@ -56,9 +57,9 @@ impl Layout {
         if last >= 2
             && atoms[0].delim.is_some()
             && atoms[last].delim.is_some()
-            && !pairs
-                .iter()
-                .any(|&(a, b)| a == 0 || b == 0 || a == last || b == last)
+            && !pairs.iter().any(|&(open_idx, close_idx)| {
+                open_idx == 0 || close_idx == 0 || open_idx == last || close_idx == last
+            })
         {
             if atoms[0].delim.is_some_and(is_bar) {
                 atoms[0].class = Class::Open;
@@ -70,57 +71,67 @@ impl Layout {
         }
         for (j, i) in pairs.iter().copied() {
             let (mut asc, mut desc) = (0.0f32, 0.0f32);
-            for a in &atoms[j + 1..i] {
-                asc = asc.max(a.b.asc);
-                desc = desc.max(a.b.desc);
+            for atom in &atoms[j + 1..i] {
+                asc = asc.max(atom.layout_box.asc);
+                desc = desc.max(atom.layout_box.desc);
             }
             self.stretch_pair(atoms, j, asc, desc, em);
             self.stretch_pair(atoms, i, asc, desc, em);
-            for k in (j + 1)..i {
-                if atoms[k].delim.is_some_and(is_bar)
-                    && !pairs.iter().any(|&(a, b)| a == k || b == k)
+            for mid_idx in (j + 1)..i {
+                if atoms[mid_idx].delim.is_some_and(is_bar)
+                    && !pairs
+                        .iter()
+                        .any(|&(open_idx, close_idx)| open_idx == mid_idx || close_idx == mid_idx)
                 {
-                    self.stretch_pair(atoms, k, asc, desc, em);
+                    self.stretch_pair(atoms, mid_idx, asc, desc, em);
                 }
             }
         }
-        // Lone `{` before a table (systems of equations) / lone `}` after one.
+        // Lone `{` before a table (systems of equations) or lone `}` after one.
         for i in 0..atoms.len() {
-            let Some(c) = atoms[i].delim else { continue };
-            let opens_next = atoms[i].fence_role == FenceRole::Prefix || is_open(c);
-            let closes_prev = atoms[i].fence_role == FenceRole::Postfix || is_close(c);
+            let Some(delim_ch) = atoms[i].delim else {
+                continue;
+            };
+            let opens_next = atoms[i].fence_role == FenceRole::Prefix || is_open(delim_ch);
+            let closes_prev = atoms[i].fence_role == FenceRole::Postfix || is_close(delim_ch);
             if opens_next
-                && atoms.get(i + 1).is_some_and(|a| a.is_table)
-                && atoms[i].b.asc < 0.9 * em
+                && atoms.get(i + 1).is_some_and(|atom| atom.is_table)
+                && atoms[i].layout_box.asc < 0.9 * em
             {
-                let (a, d) = (atoms[i + 1].b.asc, atoms[i + 1].b.desc);
-                self.stretch_pair(atoms, i, a, d, em);
-            } else if closes_prev && i > 0 && atoms[i - 1].is_table && atoms[i].b.asc < 0.9 * em {
-                let (a, d) = (atoms[i - 1].b.asc, atoms[i - 1].b.desc);
-                self.stretch_pair(atoms, i, a, d, em);
+                let (asc, desc) = (atoms[i + 1].layout_box.asc, atoms[i + 1].layout_box.desc);
+                self.stretch_pair(atoms, i, asc, desc, em);
+            } else if closes_prev
+                && i > 0
+                && atoms[i - 1].is_table
+                && atoms[i].layout_box.asc < 0.9 * em
+            {
+                let (asc, desc) = (atoms[i - 1].layout_box.asc, atoms[i - 1].layout_box.desc);
+                self.stretch_pair(atoms, i, asc, desc, em);
             }
         }
         // Unmatched closing delimiters / bars after an expression (e.g. \left. F(x) \right|)
-        // and unmatched opening delimiters before an expression (e.g. \left( \frac{1}{2} \right.
-        // or \left\llbracket \frac{1}{2} \right.).
+        // and unmatched opening delimiters before an expression (e.g. \left( \frac{1}{2} \right.).
         for i in 0..atoms.len() {
-            let Some(c) = atoms[i].delim else { continue };
+            let Some(delim_ch) = atoms[i].delim else {
+                continue;
+            };
             if pairs
                 .iter()
                 .any(|&(open_idx, close_idx)| open_idx == i || close_idx == i)
             {
                 continue;
             }
-            let closes_prev = atoms[i].fence_role == FenceRole::Postfix || is_close(c);
-            let opens_next = atoms[i].fence_role == FenceRole::Prefix || is_open(c);
+            let closes_prev = atoms[i].fence_role == FenceRole::Postfix || is_close(delim_ch);
+            let opens_next = atoms[i].fence_role == FenceRole::Prefix || is_open(delim_ch);
             let is_closing_delim = atoms[i].fence_role == FenceRole::Postfix
-                || (atoms[i].fence_role == FenceRole::Neutral && (is_bar(c) || is_close(c)));
+                || (atoms[i].fence_role == FenceRole::Neutral
+                    && (is_bar(delim_ch) || is_close(delim_ch)));
             if is_closing_delim && i > 0 && !(closes_prev && atoms[i - 1].is_table) {
                 let mut asc = 0.0f32;
                 let mut desc = 0.0f32;
-                for a in &atoms[..i] {
-                    asc = asc.max(a.b.asc);
-                    desc = desc.max(a.b.desc);
+                for atom in &atoms[..i] {
+                    asc = asc.max(atom.layout_box.asc);
+                    desc = desc.max(atom.layout_box.desc);
                 }
                 if asc + desc > 1.25 * em {
                     self.stretch_pair(atoms, i, asc, desc, em);
@@ -129,8 +140,8 @@ impl Layout {
             }
             let is_opening_delim = atoms[i].fence_role == FenceRole::Prefix
                 || (atoms[i].fence_role == FenceRole::Neutral
-                    && (is_open(c)
-                        || (is_bar(c)
+                    && (is_open(delim_ch)
+                        || (is_bar(delim_ch)
                             && (i == 0
                                 || matches!(
                                     atoms[i - 1].class,
@@ -143,9 +154,9 @@ impl Layout {
             if is_opening_delim && i + 1 < atoms.len() && !(opens_next && atoms[i + 1].is_table) {
                 let mut asc = 0.0f32;
                 let mut desc = 0.0f32;
-                for a in &atoms[i + 1..] {
-                    asc = asc.max(a.b.asc);
-                    desc = desc.max(a.b.desc);
+                for atom in &atoms[i + 1..] {
+                    asc = asc.max(atom.layout_box.asc);
+                    desc = desc.max(atom.layout_box.desc);
                 }
                 if asc + desc > 1.25 * em {
                     self.stretch_pair(atoms, i, asc, desc, em);
@@ -154,6 +165,7 @@ impl Layout {
         }
     }
 
+    /// Replace the delimiter at `idx` with a vertically stretched box covering `(asc, desc)`.
     pub(super) fn stretch_pair(
         &self,
         atoms: &mut [Atom],
@@ -165,11 +177,14 @@ impl Layout {
         if asc + desc <= 1.25 * em {
             return;
         }
-        let Some(c) = atoms[idx].delim else { return };
-        // Symmetric about the math axis.
-        let h2 = (asc - AXIS * em).max(desc + AXIS * em);
-        let mut stretched = self.delim_box(c, AXIS * em + h2, h2 - AXIS * em, em);
-        for mut hit in std::mem::take(&mut atoms[idx].b.hits) {
+        let Some(delim_ch) = atoms[idx].delim else {
+            return;
+        };
+        // Center delimiter symmetry around the math axis.
+        let half_span = (asc - AXIS * em).max(desc + AXIS * em);
+        let mut stretched =
+            self.delim_box(delim_ch, AXIS * em + half_span, half_span - AXIS * em, em);
+        for mut hit in std::mem::take(&mut atoms[idx].layout_box.hits) {
             hit.w = stretched.w;
             hit.asc = stretched.asc;
             hit.desc = stretched.desc;
@@ -178,54 +193,66 @@ impl Layout {
             }
             stretched.hits.push(hit);
         }
-        atoms[idx].b = stretched;
+        atoms[idx].layout_box = stretched;
     }
 
-    pub(super) fn delim_box(&self, c: char, asc: f32, desc: f32, em: f32) -> LBox {
-        // Parentheses, brackets, braces, floors, ceilings, absolute value, and norm are
-        // assembled or outline-scaled from font glyphs so they follow the height of their content.
-        if let Some(b) = self.stretchy_delimiter(c, asc, desc, em) {
-            return b;
+    /// Construct a stretched delimiter box for `ch`, falling back to vector bars or angles.
+    pub(super) fn delim_box(&self, ch: char, asc: f32, desc: f32, em: f32) -> LBox {
+        if let Some(layout_box) = self.stretchy_delimiter(ch, asc, desc, em) {
+            return layout_box;
         }
-        let h = asc + desc;
-        let t = (0.05 * em).max(1.0);
+        let height = asc + desc;
+        let thick = (0.05 * em).max(1.0);
         let pad = 0.04 * em;
-        let mut b = LBox {
+        let mut layout_box = LBox {
             asc,
             desc,
             ..Default::default()
         };
         let top = -asc;
-        match c {
+        match ch {
             '|' => {
-                b.items.push(Item::Poly(rect(pad + 0.03 * em, top, t, h)));
-                b.w = 0.12 * em + 2.0 * pad;
+                layout_box
+                    .items
+                    .push(Item::Poly(rect(pad + 0.03 * em, top, thick, height)));
+                layout_box.w = 0.12 * em + 2.0 * pad;
             }
             '‖' | '∥' => {
-                b.items.push(Item::Poly(rect(pad, top, t, h)));
-                b.items.push(Item::Poly(rect(pad + 0.1 * em, top, t, h)));
-                b.w = 0.2 * em + 2.0 * pad;
+                layout_box
+                    .items
+                    .push(Item::Poly(rect(pad, top, thick, height)));
+                layout_box
+                    .items
+                    .push(Item::Poly(rect(pad + 0.1 * em, top, thick, height)));
+                layout_box.w = 0.2 * em + 2.0 * pad;
             }
             '⟨' | '⟩' => {
-                let w = 0.28 * em;
-                let pts = if c == '⟨' {
-                    [(w, top), (0.0, top + h / 2.0), (w, top + h)]
+                let width = 0.28 * em;
+                let points = if ch == '⟨' {
+                    [
+                        (width, top),
+                        (0.0, top + height / 2.0),
+                        (width, top + height),
+                    ]
                 } else {
-                    [(0.0, top), (w, top + h / 2.0), (0.0, top + h)]
+                    [(0.0, top), (width, top + height / 2.0), (0.0, top + height)]
                 };
-                for q in stroke(
-                    &pts.iter().map(|(x, y)| (x + pad, *y)).collect::<Vec<_>>(),
+                for quad in stroke(
+                    &points
+                        .iter()
+                        .map(|(x, y)| (x + pad, *y))
+                        .collect::<Vec<_>>(),
                     0.045 * em,
                 ) {
-                    b.items.push(Item::Poly(q));
+                    layout_box.items.push(Item::Poly(quad));
                 }
-                b.w = w + 2.0 * pad;
+                layout_box.w = width + 2.0 * pad;
             }
             other => {
                 return self.glyph(display_char(other), Face::Symbol, em);
             }
         }
-        b
+        layout_box
     }
 }
 
@@ -258,9 +285,9 @@ mod tests {
             let delims: Vec<_> = preview
                 .regions
                 .iter()
-                .filter(|r| {
-                    node_at(&math, &r.path).is_some_and(|n| {
-                        n.tag == "mo" && matches!(n.text.trim(), "∥" | "‖" | "|" | "[" | "]")
+                .filter(|region| {
+                    node_at(&math, &region.path).is_some_and(|node| {
+                        node.tag == "mo" && matches!(node.text.trim(), "∥" | "‖" | "|" | "[" | "]")
                     })
                 })
                 .collect();
@@ -306,10 +333,10 @@ mod tests {
             let delim = preview
                 .regions
                 .iter()
-                .find(|r| {
-                    node_at(&math, &r.path).is_some_and(|n| {
-                        n.tag == "mo"
-                            && matches!(n.text.trim(), "⟦" | "⟧" | "(" | ")" | "|" | "[" | "]")
+                .find(|region| {
+                    node_at(&math, &region.path).is_some_and(|node| {
+                        node.tag == "mo"
+                            && matches!(node.text.trim(), "⟦" | "⟧" | "(" | ")" | "|" | "[" | "]")
                     })
                 })
                 .unwrap_or_else(|| {

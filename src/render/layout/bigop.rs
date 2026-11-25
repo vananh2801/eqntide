@@ -1,20 +1,20 @@
-//! Summation, product and set-theory big operators, plus the shared
+//! Summation, product, and set-theory big operators, plus the shared
 //! `munder` / `mover` / `munderover` handler that also routes integrals,
-//! accents and under-braces to their own modules.
+//! labeled arrows, accents, and under-braces to their own modules.
 
 use super::*;
 
 impl Layout {
-    /// A big operator glyph centred on the math axis.
+    /// Lay out a big operator glyph centered on the math axis.
     pub(super) fn big_glyph(&self, ch: char, face: Face, em: f32, scale: f32) -> LBox {
         let size = em * scale;
-        let (a, d) = self.f.ink(face, ch, size);
-        let y = (a - d) / 2.0 - AXIS * em;
-        let mut b = LBox {
-            w: self.f.advance(face, ch, size),
+        let (asc, desc) = self.font_set.ink(face, ch, size);
+        let y = (asc - desc) / 2.0 - AXIS * em;
+        let mut layout_box = LBox {
+            w: self.font_set.advance(face, ch, size),
             ..Default::default()
         };
-        b.items.push(Item::Glyph {
+        layout_box.items.push(Item::Glyph {
             ch,
             face,
             em: size,
@@ -22,110 +22,148 @@ impl Layout {
             y,
             ssty: 0,
         });
-        b.asc = a - y;
-        b.desc = d + y;
-        b
+        layout_box.asc = asc - y;
+        layout_box.desc = desc + y;
+        layout_box
     }
 
-    pub(super) fn under_over(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
-        let first = n.children.first();
+    /// Lay out `munder`, `mover`, or `munderover` elements and specialized limit/accent forms.
+    pub(super) fn under_over(
+        &mut self,
+        node: &MathNode,
+        em: f32,
+        ctx: MathContext,
+    ) -> Result<LBox> {
+        let first = node.children.first();
         let base_char = first
-            .filter(|b| b.tag == "mo")
-            .and_then(|b| b.text.trim().chars().next());
-        let c = self.f.constants();
+            .filter(|base| base.tag == "mo")
+            .and_then(|base| base.text.trim().chars().next());
+        let constants = self.font_set.constants();
         let lim_ctx = ctx.for_limits();
-        let lim_em = em * lim_ctx.scale(c);
-        let (under_n, over_n) = match n.tag.as_str() {
-            "munder" => (n.children.get(1), None),
-            "mover" => (None, n.children.get(1)),
-            _ => (n.children.get(1), n.children.get(2)),
+        let lim_em = em * lim_ctx.scale(constants);
+        let (under_node, over_node) = match node.tag.as_str() {
+            "munder" => (node.children.get(1), None),
+            "mover" => (None, node.children.get(1)),
+            _ => (node.children.get(1), node.children.get(2)),
         };
 
         // Integral sign: limits sit above/below the sign (see `integral.rs`).
         if base_char.is_some_and(is_integral) {
             if let Some(first_node) = first {
-                if n.attr("data-limloc") == Some("subSup") {
-                    return self.scripts(n, em, ctx);
+                if node.attr("data-limloc") == Some("subSup") {
+                    return self.scripts(node, em, ctx);
                 }
-                return self.integral_with_limits(first_node, under_n, over_n, em, ctx);
+                return self.integral_with_limits(first_node, under_node, over_node, em, ctx);
             }
         }
 
-        // Labeled arrow (MathType `tmARROW`): stretchy arrow with text above / below (see `arrow.rs`).
-        if let Some(t) = arrow::template_of(n) {
-            return self.labeled_arrow(t.dir, t.top, t.bottom, em, ctx);
+        // Labeled arrow (MathType `tmARROW`): stretchy arrow with text above/below (see `arrow.rs`).
+        if let Some(arrow_tmpl) = arrow::template_of(node) {
+            return self.labeled_arrow(arrow_tmpl.dir, arrow_tmpl.top, arrow_tmpl.bottom, em, ctx);
         }
 
         let base = match first {
-            Some(f) => self.node(f, em, ctx)?,
+            Some(base_node) => self.node(base_node, em, ctx)?,
             None => LBox::default(),
         };
-        let big = base_char.is_some_and(is_big_op)
-            || first.is_some_and(|f| f.tag == "mi" && is_function(f.text.trim()));
-
-        // Accent over a normal base.
-        let accent = over_n
-            .filter(|o| o.tag == "mo" && !big)
-            .and_then(|o| o.text.trim().chars().next())
-            .filter(|c| is_accent(*c));
-        let under_accent = under_n
-            .filter(|u| u.tag == "mo" && !big && n.attr("accentunder") == Some("true"))
-            .and_then(|u| u.text.trim().chars().next())
-            .filter(|c| is_accent(*c));
-        let brace_under = under_n
-            .filter(|u| u.tag == "mo" && u.text.trim() == "\u{23DF}")
-            .is_some();
-        let bar_under = under_n
-            .filter(|u| u.tag == "mo" && !big)
-            .and_then(|u| u.text.trim().chars().next())
-            .is_some_and(|c| {
-                c == '_' || c == '\u{0332}' || c == '\u{005F}' || c == '\u{00AF}' || c == '\u{203E}'
+        let is_big = base_char.is_some_and(is_big_op)
+            || first.is_some_and(|base_node| {
+                base_node.tag == "mi" && is_function(base_node.text.trim())
             });
 
-        let under = match under_n {
-            Some(u) if !brace_under && !bar_under && under_accent.is_none() => {
-                Some(self.node(u, lim_em, lim_ctx)?)
+        // Accent over a normal base.
+        let accent = over_node
+            .filter(|over| over.tag == "mo" && !is_big)
+            .and_then(|over| over.text.trim().chars().next())
+            .filter(|ch| is_accent(*ch));
+        let under_accent = under_node
+            .filter(|under| {
+                under.tag == "mo" && !is_big && node.attr("accentunder") == Some("true")
+            })
+            .and_then(|under| under.text.trim().chars().next())
+            .filter(|ch| is_accent(*ch));
+        let is_brace_under = under_node
+            .filter(|under| under.tag == "mo" && under.text.trim() == "\u{23DF}")
+            .is_some();
+        let is_bar_under = under_node
+            .filter(|under| under.tag == "mo" && !is_big)
+            .and_then(|under| under.text.trim().chars().next())
+            .is_some_and(|ch| {
+                ch == '_'
+                    || ch == '\u{0332}'
+                    || ch == '\u{005F}'
+                    || ch == '\u{00AF}'
+                    || ch == '\u{203E}'
+            });
+
+        let under = match under_node {
+            Some(under_child) if !is_brace_under && !is_bar_under && under_accent.is_none() => {
+                Some(self.node(under_child, lim_em, lim_ctx)?)
             }
             _ => None,
         };
-        let over = match over_n {
-            Some(o) if accent.is_none() => Some(self.node(o, lim_em, lim_ctx)?),
+        let over = match over_node {
+            Some(over_child) if accent.is_none() => Some(self.node(over_child, lim_em, lim_ctx)?),
             _ => None,
         };
 
-        let gap = if big { 0.10 * em } else { 0.12 * em };
-        let w = [
+        let gap = if is_big { 0.10 * em } else { 0.12 * em };
+        let width = [
             Some(base.w),
-            under.as_ref().map(|u| u.w),
-            over.as_ref().map(|o| o.w),
+            under.as_ref().map(|under_box| under_box.w),
+            over.as_ref().map(|over_box| over_box.w),
         ]
         .into_iter()
         .flatten()
         .fold(0.0f32, f32::max);
-        let mut b = LBox::default();
-        b.place(&base, (w - base.w) / 2.0, 0.0);
-        if let Some(o) = &over {
-            b.place(o, (w - o.w) / 2.0, -(base.asc + gap + o.desc));
+        let mut layout_box = LBox::default();
+        layout_box.place(&base, (width - base.w) / 2.0, 0.0);
+        if let Some(over_box) = &over {
+            layout_box.place(
+                over_box,
+                (width - over_box.w) / 2.0,
+                -(base.asc + gap + over_box.desc),
+            );
         }
-        if let Some(u) = &under {
-            b.place(u, (w - u.w) / 2.0, base.desc + gap + u.asc);
+        if let Some(under_box) = &under {
+            layout_box.place(
+                under_box,
+                (width - under_box.w) / 2.0,
+                base.desc + gap + under_box.asc,
+            );
         }
-        if let Some(c) = accent {
-            self.draw_accent(&mut b, c, w, (w - base.w) / 2.0, base.asc, em);
+        if let Some(ch) = accent {
+            self.draw_accent(
+                &mut layout_box,
+                ch,
+                width,
+                (width - base.w) / 2.0,
+                base.asc,
+                em,
+            );
         }
-        if let Some(c) = under_accent {
-            self.draw_under_accent(&mut b, c, w, (w - base.w) / 2.0, base.desc, em);
-        } else if brace_under {
-            self.draw_under_brace(&mut b, w, base.desc, em);
+        if let Some(ch) = under_accent {
+            self.draw_under_accent(
+                &mut layout_box,
+                ch,
+                width,
+                (width - base.w) / 2.0,
+                base.desc,
+                em,
+            );
+        } else if is_brace_under {
+            self.draw_under_brace(&mut layout_box, width, base.desc, em);
         }
-        if bar_under && under_accent.is_none() {
-            let st = 0.045 * em;
+        if is_bar_under && under_accent.is_none() {
+            let stroke_w = 0.045 * em;
             let y = (base.desc + 0.06 * em).max(0.10 * em);
-            let x0 = (w - base.w) / 2.0;
-            b.items.push(Item::Poly(rect(x0, y, base.w, st)));
-            b.desc = b.desc.max(y + st + 0.04 * em);
+            let x0 = (width - base.w) / 2.0;
+            layout_box
+                .items
+                .push(Item::Poly(rect(x0, y, base.w, stroke_w)));
+            layout_box.desc = layout_box.desc.max(y + stroke_w + 0.04 * em);
         }
-        b.w = w;
-        Ok(b)
+        layout_box.w = width;
+        Ok(layout_box)
     }
 }

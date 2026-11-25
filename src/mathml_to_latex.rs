@@ -1,9 +1,21 @@
 //! Serializer from [`MathNode`] (MathML AST) to standard LaTeX markup.
 //!
+//! ```text
+//! &MathNode
+//!   │
+//!   ▼
+//! mathml_to_latex
+//!   ├── format_node / format_child_slice (groups uniform `mathvariant` spans & binomials)
+//!   ├── node/construct formatters        (identifiers, operators, fractions, roots, scripts, matrices)
+//!   └── clean_latex_output               (collapses math-mode whitespace, keeps `\text{...}` verbatim)
+//! ```
+//!
 //! Used by the bridge server and desktop editor to populate the LaTeX source
 //! editors when opening sessions or importing equations from OMML / MathType.
 
 use crate::mathml::MathNode;
+
+// ── Public Entry Point ───────────────────────────────────────────────────────
 
 /// Convert a [`MathNode`] tree into a LaTeX mathematical expression string.
 pub fn mathml_to_latex(node: &MathNode) -> String {
@@ -19,111 +31,7 @@ enum NodeStyle<'a> {
     Mixed,
 }
 
-fn style_command(variant: &str) -> Option<&'static str> {
-    match variant {
-        "double-struck" => Some("\\mathbb"),
-        "fraktur" => Some("\\mathfrak"),
-        "script" => Some("\\mathcal"),
-        "bold" => Some("\\mathbf"),
-        "bold-italic" => Some("\\boldsymbol"),
-        "normal" => Some("\\mathrm"),
-        "italic" => Some("\\mathit"),
-        _ => None,
-    }
-}
-
-fn contains_non_l_lowercase_script(nodes: &[&MathNode]) -> bool {
-    fn visit(node: &MathNode, saw_non_l_lower: &mut bool, saw_unsupported: &mut bool) {
-        if matches!(node.tag.as_str(), "mi" | "mn" | "mo")
-            && !is_invisible_operator(node.text.trim())
-        {
-            for ch in node.text.trim().chars() {
-                if ch.is_ascii_lowercase() && ch != 'l' {
-                    *saw_non_l_lower = true;
-                } else if !ch.is_ascii_alphabetic() {
-                    *saw_unsupported = true;
-                }
-            }
-        }
-        for child in &node.children {
-            visit(child, saw_non_l_lower, saw_unsupported);
-        }
-    }
-    let mut saw_non_l_lower = false;
-    let mut saw_unsupported = false;
-    for node in nodes {
-        visit(node, &mut saw_non_l_lower, &mut saw_unsupported);
-    }
-    saw_non_l_lower && !saw_unsupported
-}
-
-fn style_command_for_nodes(variant: &str, nodes: &[&MathNode]) -> &'static str {
-    if variant == "script" && contains_non_l_lowercase_script(nodes) {
-        "\\mathscr"
-    } else {
-        style_command(variant).unwrap_or("\\mathrm")
-    }
-}
-
-fn combine_styles<'a>(a: NodeStyle<'a>, b: NodeStyle<'a>) -> NodeStyle<'a> {
-    match (a, b) {
-        (NodeStyle::Neutral, other) | (other, NodeStyle::Neutral) => other,
-        (
-            NodeStyle::Uniform {
-                variant: va,
-                triggers: ta,
-            },
-            NodeStyle::Uniform {
-                variant: vb,
-                triggers: tb,
-            },
-        ) if va == vb => NodeStyle::Uniform {
-            variant: va,
-            triggers: ta || tb,
-        },
-        _ => NodeStyle::Mixed,
-    }
-}
-
-fn node_style(node: &MathNode) -> NodeStyle<'_> {
-    match node.tag.as_str() {
-        "mi" | "mn" | "mo" => {
-            if node.tag == "mo" && is_invisible_operator(node.text.trim()) {
-                return NodeStyle::Neutral;
-            }
-            if let Some(variant) = node.attr("mathvariant") {
-                if style_command(variant).is_some() {
-                    if variant == "normal" && node.tag == "mi" && is_named_function(&node.text) {
-                        return NodeStyle::Uniform {
-                            variant: "normal",
-                            triggers: false,
-                        };
-                    }
-                    let triggers = match variant {
-                        "normal" => node.tag == "mi",
-                        "italic" => node.tag != "mi",
-                        _ => true,
-                    };
-                    return NodeStyle::Uniform { variant, triggers };
-                }
-            }
-            NodeStyle::Mixed
-        }
-        "mprescripts" | "none" => NodeStyle::Neutral,
-        "mrow" | "mfrac" | "msqrt" | "mroot" | "msup" | "msub" | "msubsup" | "mmultiscripts"
-        | "munder" | "mover" | "munderover" | "mfenced" | "mtable" | "mtr" | "mtd" => {
-            let mut acc = NodeStyle::Neutral;
-            for child in &node.children {
-                acc = combine_styles(acc, node_style(child));
-                if acc == NodeStyle::Mixed {
-                    return NodeStyle::Mixed;
-                }
-            }
-            acc
-        }
-        _ => NodeStyle::Mixed,
-    }
-}
+// ── Core Recursive Formatting ────────────────────────────────────────────────
 
 fn format_node(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
     if active_variant.is_none() && !matches!(node.tag.as_str(), "math" | "mrow" | "mtr" | "mtd") {
@@ -214,39 +122,22 @@ fn format_node(node: &MathNode, active_variant: Option<&str>, out: &mut String) 
     }
 }
 
-fn ends_with_control_word(s: &str) -> bool {
-    let bytes = s.as_bytes();
-    let mut i = bytes.len();
-    while i > 0 && bytes[i - 1].is_ascii_alphabetic() {
-        i -= 1;
-    }
-    if i == bytes.len() || i == 0 || bytes[i - 1] != b'\\' {
-        return false;
-    }
-    let mut slashes = 0usize;
-    while i > 0 && bytes[i - 1] == b'\\' {
-        slashes += 1;
-        i -= 1;
-    }
-    slashes % 2 == 1
-}
-
 fn format_children(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
     format_child_slice(&node.children, active_variant, out);
 }
 
 fn format_child_slice(children: &[MathNode], active_variant: Option<&str>, out: &mut String) {
-    let mut i = 0;
-    while i < children.len() {
+    let mut index = 0;
+    while index < children.len() {
         let needs_space = ends_with_control_word(out);
         let mut piece = String::new();
         if active_variant.is_none() {
             if let NodeStyle::Uniform {
                 variant,
                 triggers: initial_trigger,
-            } = node_style(&children[i])
+            } = node_style(&children[index])
             {
-                let mut end = i + 1;
+                let mut end = index + 1;
                 let mut triggers = initial_trigger;
                 let mut last_non_neutral = end;
                 while end < children.len() {
@@ -258,10 +149,10 @@ fn format_child_slice(children: &[MathNode], active_variant: Option<&str>, out: 
                             end += 1;
                         }
                         NodeStyle::Uniform {
-                            variant: v,
-                            triggers: t,
-                        } if v == variant => {
-                            triggers |= t;
+                            variant: child_variant,
+                            triggers: child_triggers,
+                        } if child_variant == variant => {
+                            triggers |= child_triggers;
                             end += 1;
                             last_non_neutral = end;
                         }
@@ -270,40 +161,40 @@ fn format_child_slice(children: &[MathNode], active_variant: Option<&str>, out: 
                 }
                 end = last_non_neutral;
                 if triggers {
-                    let refs: Vec<&MathNode> = children[i..end].iter().collect();
+                    let refs: Vec<&MathNode> = children[index..end].iter().collect();
                     let command = style_command_for_nodes(variant, &refs);
                     piece.push_str(command);
                     piece.push('{');
-                    format_child_slice(&children[i..end], Some(variant), &mut piece);
+                    format_child_slice(&children[index..end], Some(variant), &mut piece);
                     piece.push('}');
-                    i = end;
+                    index = end;
                     out.push_str(&piece);
                     continue;
                 }
             }
         }
-        if children[i].tag == "mtext" {
+        if children[index].tag == "mtext" {
             // MathType decodes text as individual character nodes.
             let mut text = String::new();
-            while let Some(child) = children.get(i).filter(|child| child.tag == "mtext") {
+            while let Some(child) = children.get(index).filter(|child| child.tag == "mtext") {
                 text.push_str(&child.text);
-                i += 1;
+                index += 1;
             }
             format_text(&text, &mut piece);
-        } else if i + 2 < children.len()
-            && is_binom_triple(&children[i], &children[i + 1], &children[i + 2])
+        } else if index + 2 < children.len()
+            && is_binom_triple(&children[index], &children[index + 1], &children[index + 2])
         {
-            format_binom(&children[i + 1], active_variant, &mut piece);
-            i += 3;
+            format_binom(&children[index + 1], active_variant, &mut piece);
+            index += 3;
         } else {
-            format_node(&children[i], active_variant, &mut piece);
-            i += 1;
+            format_node(&children[index], active_variant, &mut piece);
+            index += 1;
         }
         if needs_space
             && piece
                 .chars()
                 .next()
-                .is_some_and(|c| c.is_ascii_alphabetic())
+                .is_some_and(|ch| ch.is_ascii_alphabetic())
         {
             out.push(' ');
         }
@@ -311,26 +202,7 @@ fn format_child_slice(children: &[MathNode], active_variant: Option<&str>, out: 
     }
 }
 
-fn is_binom_triple(open: &MathNode, middle: &MathNode, close: &MathNode) -> bool {
-    open.tag == "mo"
-        && open.text.trim() == "("
-        && middle.tag == "mfrac"
-        && is_binomial(middle)
-        && middle.attr("bevelled") != Some("true")
-        && close.tag == "mo"
-        && close.text.trim() == ")"
-}
-
-fn format_binom(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
-    let command = match node.attr("displaystyle") {
-        Some("true") => "\\dbinom",
-        Some("false") => "\\tbinom",
-        _ => "\\binom",
-    };
-    out.push_str(command);
-    format_braced_child(node.children.first(), active_variant, out);
-    format_braced_child(node.children.get(1), active_variant, out);
-}
+// ── Element & Structure Formatters ───────────────────────────────────────────
 
 fn format_identifier(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
     let text = node.text.trim();
@@ -338,7 +210,7 @@ fn format_identifier(node: &MathNode, active_variant: Option<&str>, out: &mut St
         out.push_str(greek);
     } else if let Some(symbol) = crate::catalog::SYMBOLS
         .iter()
-        .find(|s| s.tag == "mi" && s.glyph == text)
+        .find(|sym| sym.tag == "mi" && sym.glyph == text)
     {
         out.push('\\');
         out.push_str(symbol.name);
@@ -379,7 +251,7 @@ fn format_operator(node: &MathNode, out: &mut String) {
         out.push_str(operator);
     } else if let Some(symbol) = crate::catalog::SYMBOLS
         .iter()
-        .find(|s| s.tag == "mo" && s.glyph == text)
+        .find(|sym| sym.tag == "mo" && sym.glyph == text)
     {
         let padded = matches!(
             symbol.group,
@@ -420,6 +292,17 @@ fn format_text(text: &str, out: &mut String) {
     out.push('}');
 }
 
+fn format_binom(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
+    let command = match node.attr("displaystyle") {
+        Some("true") => "\\dbinom",
+        Some("false") => "\\tbinom",
+        _ => "\\binom",
+    };
+    out.push_str(command);
+    format_braced_child(node.children.first(), active_variant, out);
+    format_braced_child(node.children.get(1), active_variant, out);
+}
+
 fn format_fraction(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
     let command = if node.attr("bevelled") == Some("true") {
         if node.attr("displaystyle") == Some("false") {
@@ -446,10 +329,6 @@ fn format_fraction(node: &MathNode, active_variant: Option<&str>, out: &mut Stri
     format_braced_child(node.children.get(1), active_variant, out);
 }
 
-fn is_binomial(node: &MathNode) -> bool {
-    matches!(node.attr("linethickness"), Some("0" | "0pt" | "none"))
-}
-
 fn format_square_root(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
     out.push_str("\\sqrt{");
     format_children(node, active_variant, out);
@@ -462,18 +341,6 @@ fn format_indexed_root(node: &MathNode, active_variant: Option<&str>, out: &mut 
     out.push_str("]{");
     format_optional_node(node.children.first(), active_variant, out);
     out.push('}');
-}
-
-fn format_braced_child(node: Option<&MathNode>, active_variant: Option<&str>, out: &mut String) {
-    out.push('{');
-    format_optional_node(node, active_variant, out);
-    out.push('}');
-}
-
-fn format_optional_node(node: Option<&MathNode>, active_variant: Option<&str>, out: &mut String) {
-    if let Some(node) = node {
-        format_node(node, active_variant, out);
-    }
 }
 
 fn format_superscript(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
@@ -490,20 +357,6 @@ fn format_superscript(node: &MathNode, active_variant: Option<&str>, out: &mut S
     }
 
     format_script(superscript, "^{", active_variant, out);
-}
-
-fn prime_shortcut(node: Option<&MathNode>) -> Option<&str> {
-    let node = node?;
-    let text = node.text.trim();
-    if node.tag != "mo" {
-        return None;
-    }
-    match text {
-        "'" | "\u{2032}" => Some("'"),
-        "''" | "\u{2033}" => Some("''"),
-        "'''" | "\u{2034}" => Some("'''"),
-        _ => None,
-    }
 }
 
 fn format_subscript(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
@@ -530,7 +383,7 @@ fn format_multiscripts(node: &MathNode, active_variant: Option<&str>, out: &mut 
     let split = node
         .children
         .iter()
-        .position(|n| n.tag == "mprescripts")
+        .position(|child| child.tag == "mprescripts")
         .unwrap_or(node.children.len());
     let mut body = String::new();
     format_optional_wrapped_node(node.children.first(), active_variant, &mut body);
@@ -552,34 +405,12 @@ fn format_multiscripts(node: &MathNode, active_variant: Option<&str>, out: &mut 
     out.push_str(&body);
 }
 
-fn format_optional_wrapped_node(
-    node: Option<&MathNode>,
-    active_variant: Option<&str>,
-    out: &mut String,
-) {
-    if let Some(node) = node {
-        format_wrapped(node, active_variant, out);
-    }
-}
-
-fn format_script(
-    node: Option<&MathNode>,
-    prefix: &str,
-    active_variant: Option<&str>,
-    out: &mut String,
-) {
-    trim_trailing_whitespace(out);
-    out.push_str(prefix);
-    format_optional_node(node, active_variant, out);
-    out.push('}');
-}
-
 fn format_underscript(node: &MathNode, active_variant: Option<&str>, out: &mut String) {
     let base = node.children.first();
     let underscript = node.children.get(1);
     if let Some(command) = underscript
-        .filter(|n| n.tag == "mo" && !is_large_operator(base))
-        .and_then(|n| map_under_accent(&n.text))
+        .filter(|child| child.tag == "mo" && !is_large_operator(base))
+        .and_then(|child| map_under_accent(&child.text))
     {
         out.push_str(command);
         format_braced_child(base, active_variant, out);
@@ -600,8 +431,8 @@ fn format_overscript(node: &MathNode, active_variant: Option<&str>, out: &mut St
     let base = node.children.first();
     let overscript = node.children.get(1);
     if let Some(accent) = overscript
-        .filter(|n| n.tag == "mo" && !is_large_operator(base))
-        .and_then(|node| map_accent(&node.text))
+        .filter(|child| child.tag == "mo" && !is_large_operator(base))
+        .and_then(|child| map_accent(&child.text))
     {
         out.push_str(accent);
         format_braced_child(base, active_variant, out);
@@ -679,7 +510,7 @@ fn format_matrix(node: &MathNode, active_variant: Option<&str>, out: &mut String
         let cols = node
             .children
             .iter()
-            .map(|r| r.children.len())
+            .map(|row| row.children.len())
             .max()
             .unwrap_or(1);
         let values: Vec<_> = align.split_whitespace().collect();
@@ -741,9 +572,25 @@ fn format_enclosure(node: &MathNode, active_variant: Option<&str>, out: &mut Str
     out.push('}');
 }
 
-fn trim_trailing_whitespace(s: &mut String) {
-    while s.ends_with(' ') {
-        s.pop();
+fn format_braced_child(node: Option<&MathNode>, active_variant: Option<&str>, out: &mut String) {
+    out.push('{');
+    format_optional_node(node, active_variant, out);
+    out.push('}');
+}
+
+fn format_optional_node(node: Option<&MathNode>, active_variant: Option<&str>, out: &mut String) {
+    if let Some(node) = node {
+        format_node(node, active_variant, out);
+    }
+}
+
+fn format_optional_wrapped_node(
+    node: Option<&MathNode>,
+    active_variant: Option<&str>,
+    out: &mut String,
+) {
+    if let Some(node) = node {
+        format_wrapped(node, active_variant, out);
     }
 }
 
@@ -757,18 +604,154 @@ fn format_wrapped(node: &MathNode, active_variant: Option<&str>, out: &mut Strin
     }
 }
 
-fn is_invisible_operator(s: &str) -> bool {
-    matches!(s, "\u{2061}" | "\u{2062}" | "\u{2063}" | "\u{2064}")
+fn format_script(
+    node: Option<&MathNode>,
+    prefix: &str,
+    active_variant: Option<&str>,
+    out: &mut String,
+) {
+    trim_trailing_whitespace(out);
+    out.push_str(prefix);
+    format_optional_node(node, active_variant, out);
+    out.push('}');
+}
+
+// ── Style Analysis & Predicates ──────────────────────────────────────────────
+
+fn node_style(node: &MathNode) -> NodeStyle<'_> {
+    match node.tag.as_str() {
+        "mi" | "mn" | "mo" => {
+            if node.tag == "mo" && is_invisible_operator(node.text.trim()) {
+                return NodeStyle::Neutral;
+            }
+            if let Some(variant) = node.attr("mathvariant") {
+                if style_command(variant).is_some() {
+                    if variant == "normal" && node.tag == "mi" && is_named_function(&node.text) {
+                        return NodeStyle::Uniform {
+                            variant: "normal",
+                            triggers: false,
+                        };
+                    }
+                    let triggers = match variant {
+                        "normal" => node.tag == "mi",
+                        "italic" => node.tag != "mi",
+                        _ => true,
+                    };
+                    return NodeStyle::Uniform { variant, triggers };
+                }
+            }
+            NodeStyle::Mixed
+        }
+        "mprescripts" | "none" => NodeStyle::Neutral,
+        "mrow" | "mfrac" | "msqrt" | "mroot" | "msup" | "msub" | "msubsup" | "mmultiscripts"
+        | "munder" | "mover" | "munderover" | "mfenced" | "mtable" | "mtr" | "mtd" => {
+            let mut acc = NodeStyle::Neutral;
+            for child in &node.children {
+                acc = combine_styles(acc, node_style(child));
+                if acc == NodeStyle::Mixed {
+                    return NodeStyle::Mixed;
+                }
+            }
+            acc
+        }
+        _ => NodeStyle::Mixed,
+    }
+}
+
+fn combine_styles<'a>(left: NodeStyle<'a>, right: NodeStyle<'a>) -> NodeStyle<'a> {
+    match (left, right) {
+        (NodeStyle::Neutral, other) | (other, NodeStyle::Neutral) => other,
+        (
+            NodeStyle::Uniform {
+                variant: variant_left,
+                triggers: triggers_left,
+            },
+            NodeStyle::Uniform {
+                variant: variant_right,
+                triggers: triggers_right,
+            },
+        ) if variant_left == variant_right => NodeStyle::Uniform {
+            variant: variant_left,
+            triggers: triggers_left || triggers_right,
+        },
+        _ => NodeStyle::Mixed,
+    }
+}
+
+fn style_command(variant: &str) -> Option<&'static str> {
+    match variant {
+        "double-struck" => Some("\\mathbb"),
+        "fraktur" => Some("\\mathfrak"),
+        "script" => Some("\\mathcal"),
+        "bold" => Some("\\mathbf"),
+        "bold-italic" => Some("\\boldsymbol"),
+        "normal" => Some("\\mathrm"),
+        "italic" => Some("\\mathit"),
+        _ => None,
+    }
+}
+
+fn style_command_for_nodes(variant: &str, nodes: &[&MathNode]) -> &'static str {
+    if variant == "script" && contains_non_l_lowercase_script(nodes) {
+        "\\mathscr"
+    } else {
+        style_command(variant).unwrap_or("\\mathrm")
+    }
+}
+
+fn contains_non_l_lowercase_script(nodes: &[&MathNode]) -> bool {
+    fn visit(node: &MathNode, saw_non_l_lower: &mut bool, saw_unsupported: &mut bool) {
+        if matches!(node.tag.as_str(), "mi" | "mn" | "mo")
+            && !is_invisible_operator(node.text.trim())
+        {
+            for ch in node.text.trim().chars() {
+                if ch.is_ascii_lowercase() && ch != 'l' {
+                    *saw_non_l_lower = true;
+                } else if !ch.is_ascii_alphabetic() {
+                    *saw_unsupported = true;
+                }
+            }
+        }
+        for child in &node.children {
+            visit(child, saw_non_l_lower, saw_unsupported);
+        }
+    }
+    let mut saw_non_l_lower = false;
+    let mut saw_unsupported = false;
+    for node in nodes {
+        visit(node, &mut saw_non_l_lower, &mut saw_unsupported);
+    }
+    saw_non_l_lower && !saw_unsupported
+}
+
+fn is_binom_triple(open: &MathNode, middle: &MathNode, close: &MathNode) -> bool {
+    open.tag == "mo"
+        && open.text.trim() == "("
+        && middle.tag == "mfrac"
+        && is_binomial(middle)
+        && middle.attr("bevelled") != Some("true")
+        && close.tag == "mo"
+        && close.text.trim() == ")"
+}
+
+fn is_binomial(node: &MathNode) -> bool {
+    matches!(node.attr("linethickness"), Some("0" | "0pt" | "none"))
+}
+
+fn is_invisible_operator(text: &str) -> bool {
+    matches!(text, "\u{2061}" | "\u{2062}" | "\u{2063}" | "\u{2064}")
 }
 
 fn is_large_operator(node: Option<&MathNode>) -> bool {
-    let Some(mut n) = node else { return false };
-    while matches!(n.tag.as_str(), "mstyle" | "mrow") && n.children.len() == 1 {
-        n = &n.children[0];
+    let Some(mut current) = node else {
+        return false;
+    };
+    while matches!(current.tag.as_str(), "mstyle" | "mrow") && current.children.len() == 1 {
+        current = &current.children[0];
     }
-    let t = n.text.trim();
+    let text = current.text.trim();
     matches!(
-        t,
+        text,
         "\\sum"
             | "\\prod"
             | "\\coprod"
@@ -787,15 +770,49 @@ fn is_large_operator(node: Option<&MathNode>) -> bool {
             | "∏"
             | "∫"
             | "∮"
-    ) || (n.tag == "mo"
-        && t.chars()
+    ) || (current.tag == "mo"
+        && text
+            .chars()
             .next()
-            .is_some_and(|c| crate::symbols::is_big_op(c) || crate::symbols::is_integral(c)))
-        || (n.tag == "mi" && matches!(t, "lim" | "min" | "max" | "inf" | "sup"))
+            .is_some_and(|ch| crate::symbols::is_big_op(ch) || crate::symbols::is_integral(ch)))
+        || (current.tag == "mi" && matches!(text, "lim" | "min" | "max" | "inf" | "sup"))
 }
 
-fn map_accent(s: &str) -> Option<&'static str> {
-    match s.trim() {
+fn prime_shortcut(node: Option<&MathNode>) -> Option<&str> {
+    let node = node?;
+    let text = node.text.trim();
+    if node.tag != "mo" {
+        return None;
+    }
+    match text {
+        "'" | "\u{2032}" => Some("'"),
+        "''" | "\u{2033}" => Some("''"),
+        "'''" | "\u{2034}" => Some("'''"),
+        _ => None,
+    }
+}
+
+fn ends_with_control_word(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut index = bytes.len();
+    while index > 0 && bytes[index - 1].is_ascii_alphabetic() {
+        index -= 1;
+    }
+    if index == bytes.len() || index == 0 || bytes[index - 1] != b'\\' {
+        return false;
+    }
+    let mut slashes = 0usize;
+    while index > 0 && bytes[index - 1] == b'\\' {
+        slashes += 1;
+        index -= 1;
+    }
+    slashes % 2 == 1
+}
+
+// ── Symbol & Command Mapping Tables ──────────────────────────────────────────
+
+fn map_accent(text: &str) -> Option<&'static str> {
+    match text.trim() {
         "^" | "\u{02C6}" => Some("\\hat"),
         "~" | "\u{02DC}" => Some("\\tilde"),
         "¯" | "-" | "_" => Some("\\overline"),
@@ -820,8 +837,8 @@ fn map_accent(s: &str) -> Option<&'static str> {
     }
 }
 
-fn map_under_accent(s: &str) -> Option<&'static str> {
-    Some(match s.trim() {
+fn map_under_accent(text: &str) -> Option<&'static str> {
+    Some(match text.trim() {
         "¯" | "_" | "―" | "̲" => "\\underline",
         "." | "˙" => "\\underdot",
         "¨" => "\\underddot",
@@ -845,15 +862,15 @@ fn map_under_accent(s: &str) -> Option<&'static str> {
 }
 
 fn map_fence_delimiter(delim: &str, is_open: bool) -> String {
-    let d = delim.trim();
-    if d.is_empty() {
+    let trimmed = delim.trim();
+    if trimmed.is_empty() {
         return if is_open {
             "\\left.".into()
         } else {
             "\\right.".into()
         };
     }
-    let p = match d {
+    let command = match trimmed {
         "{" => "\\{",
         "}" => "\\}",
         "|" => "|",
@@ -872,12 +889,12 @@ fn map_fence_delimiter(delim: &str, is_open: bool) -> String {
         "⟧" | "〛" => "\\rrbracket",
         "⦗" => "\\lgroup",
         "⦘" => "\\rgroup",
-        _ => d,
+        _ => trimmed,
     };
     if is_open {
-        format!("\\left{p} ")
+        format!("\\left{command} ")
     } else {
-        format!(" \\right{p}")
+        format!(" \\right{command}")
     }
 }
 
@@ -947,8 +964,8 @@ fn map_operator(op: &str) -> Option<&'static str> {
     }
 }
 
-fn map_greek_or_symbol(s: &str) -> Option<&'static str> {
-    match s {
+fn map_greek_or_symbol(text: &str) -> Option<&'static str> {
+    match text {
         "α" | "alpha" => Some("\\alpha"),
         "β" | "beta" => Some("\\beta"),
         "γ" | "gamma" => Some("\\gamma"),
@@ -1011,8 +1028,8 @@ fn map_greek_or_symbol(s: &str) -> Option<&'static str> {
     }
 }
 
-fn format_named_function(s: &str) -> Option<&'static str> {
-    Some(match s {
+fn format_named_function(name: &str) -> Option<&'static str> {
+    Some(match name {
         "sin" => "\\sin ",
         "cos" => "\\cos ",
         "tan" => "\\tan ",
@@ -1049,9 +1066,9 @@ fn format_named_function(s: &str) -> Option<&'static str> {
     })
 }
 
-fn is_operatorname_function(s: &str) -> bool {
+fn is_operatorname_function(name: &str) -> bool {
     matches!(
-        s,
+        name,
         "arccot"
             | "arcsec"
             | "arccsc"
@@ -1071,50 +1088,58 @@ fn is_operatorname_function(s: &str) -> bool {
     )
 }
 
-fn is_named_function(s: &str) -> bool {
-    format_named_function(s).is_some() || is_operatorname_function(s)
+fn is_named_function(name: &str) -> bool {
+    format_named_function(name).is_some() || is_operatorname_function(name)
 }
 
-fn escape_latex_text(s: &str) -> String {
-    let mut res = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '{' => res.push_str("\\{"),
-            '}' => res.push_str("\\}"),
-            '%' => res.push_str("\\%"),
-            '&' => res.push_str("\\&"),
-            '$' => res.push_str("\\$"),
-            '#' => res.push_str("\\#"),
-            '_' => res.push_str("\\_"),
-            '\\' => res.push_str("\\textbackslash{}"),
-            '~' => res.push_str("\\textasciitilde{}"),
-            '^' => res.push_str("\\textasciicircum{}"),
-            '\u{00A0}' => res.push(' '),
-            _ => res.push(c),
+// ── Text Escaping & Whitespace Cleanup ───────────────────────────────────────
+
+fn trim_trailing_whitespace(out: &mut String) {
+    while out.ends_with(' ') {
+        out.pop();
+    }
+}
+
+fn escape_latex_text(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '{' => escaped.push_str("\\{"),
+            '}' => escaped.push_str("\\}"),
+            '%' => escaped.push_str("\\%"),
+            '&' => escaped.push_str("\\&"),
+            '$' => escaped.push_str("\\$"),
+            '#' => escaped.push_str("\\#"),
+            '_' => escaped.push_str("\\_"),
+            '\\' => escaped.push_str("\\textbackslash{}"),
+            '~' => escaped.push_str("\\textasciitilde{}"),
+            '^' => escaped.push_str("\\textasciicircum{}"),
+            '\u{00A0}' => escaped.push(' '),
+            _ => escaped.push(ch),
         }
     }
-    res
+    escaped
 }
 
-fn clean_latex_output(s: &str) -> String {
-    // Collapse math-mode whitespace while copying text arguments verbatim.
+fn clean_latex_output(raw: &str) -> String {
+    // Collapse math-mode whitespace while copying `\text{...}` arguments verbatim.
     const TEXT_START: &str = r"\text{";
-    let mut result = String::with_capacity(s.len());
+    let mut result = String::with_capacity(raw.len());
     let mut prev_space = false;
-    let mut chars = s.char_indices();
+    let mut chars = raw.char_indices();
     let mut text_depth = 0;
     let mut escaped = false;
-    while let Some((offset, c)) = chars.next() {
+    while let Some((offset, ch)) = chars.next() {
         if text_depth > 0 {
-            result.push(c);
+            result.push(ch);
             if !escaped {
-                match c {
+                match ch {
                     '{' => text_depth += 1,
                     '}' => text_depth -= 1,
                     _ => {}
                 }
             }
-        } else if !escaped && c == '\\' && s[offset..].starts_with(TEXT_START) {
+        } else if !escaped && ch == '\\' && raw[offset..].starts_with(TEXT_START) {
             result.push_str(TEXT_START);
             for _ in 1..TEXT_START.len() {
                 chars.next();
@@ -1122,16 +1147,16 @@ fn clean_latex_output(s: &str) -> String {
             text_depth = 1;
             prev_space = false;
             continue;
-        } else if c.is_whitespace() {
+        } else if ch.is_whitespace() {
             if !prev_space {
                 result.push(' ');
                 prev_space = true;
             }
         } else {
-            result.push(c);
+            result.push(ch);
             prev_space = false;
         }
-        escaped = !escaped && c == '\\';
+        escaped = !escaped && ch == '\\';
     }
     result.trim().to_string()
 }

@@ -3,14 +3,15 @@
 use super::*;
 
 impl Layout {
-    pub(super) fn table(&mut self, n: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
+    /// Lay out an `<mtable>` element with column widths, row heights, and alignment.
+    pub(super) fn table(&mut self, node: &MathNode, em: f32, ctx: MathContext) -> Result<LBox> {
         let cell_ctx = if ctx.is_script() {
             ctx
         } else {
             MathContext::TEXT
         };
         let mut rows: Vec<Vec<LBox>> = Vec::new();
-        for mtr in &n.children {
+        for mtr in &node.children {
             let mut cells = Vec::new();
             for mtd in &mtr.children {
                 let mut cell = self.row(&mtd.children, em, cell_ctx)?;
@@ -22,61 +23,69 @@ impl Layout {
         if rows.is_empty() {
             return Ok(LBox::default());
         }
-        let ncols = rows.iter().map(Vec::len).max().unwrap_or(0);
-        let mut col_w = vec![0.0f32; ncols];
-        for r in &rows {
-            for (j, c) in r.iter().enumerate() {
-                col_w[j] = col_w[j].max(c.w);
+        let col_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let mut col_widths = vec![0.0f32; col_count];
+        for row_cells in &rows {
+            for (j, cell) in row_cells.iter().enumerate() {
+                col_widths[j] = col_widths[j].max(cell.w);
             }
         }
         let col_gap = 1.0 * em;
         let row_gap = 0.35 * em;
         let heights: Vec<(f32, f32)> = rows
             .iter()
-            .map(|r| {
-                let a = r.iter().map(|c| c.asc).fold(0.0f32, f32::max).max(0.7 * em);
-                let d = r
+            .map(|row_cells| {
+                let asc = row_cells
                     .iter()
-                    .map(|c| c.desc)
+                    .map(|cell| cell.asc)
+                    .fold(0.0f32, f32::max)
+                    .max(0.7 * em);
+                let desc = row_cells
+                    .iter()
+                    .map(|cell| cell.desc)
                     .fold(0.0f32, f32::max)
                     .max(0.2 * em);
-                (a, d)
+                (asc, desc)
             })
             .collect();
-        let total: f32 =
-            heights.iter().map(|(a, d)| a + d).sum::<f32>() + row_gap * (rows.len() - 1) as f32;
-        let mut y = -AXIS * em - total / 2.0;
-        let mut b = LBox::default();
-        for ((r, (a, d)), source_row) in rows.iter().zip(&heights).zip(&n.children) {
-            y += a;
+        let total_height: f32 = heights.iter().map(|(asc, desc)| asc + desc).sum::<f32>()
+            + row_gap * (rows.len() - 1) as f32;
+        let mut y = -AXIS * em - total_height / 2.0;
+        let mut layout_box = LBox::default();
+        for ((row_cells, (row_asc, row_desc)), source_row) in
+            rows.iter().zip(&heights).zip(&node.children)
+        {
+            y += row_asc;
             let mut x = 0.0;
-            for (j, c) in r.iter().enumerate() {
+            for (j, cell) in row_cells.iter().enumerate() {
                 let align = source_row
                     .children
                     .get(j)
-                    .and_then(|cell| cell.attr("columnalign"))
+                    .and_then(|cell_node| cell_node.attr("columnalign"))
                     .or_else(|| source_row.attr("columnalign"))
-                    .or_else(|| n.attr("columnalign"));
-                let align = align.and_then(|s| {
-                    s.split_whitespace()
+                    .or_else(|| node.attr("columnalign"));
+                let align = align.and_then(|attr_val| {
+                    attr_val
+                        .split_whitespace()
                         .nth(j)
-                        .or_else(|| s.split_whitespace().last())
+                        .or_else(|| attr_val.split_whitespace().last())
                 });
                 let dx = match align {
                     Some("left") => 0.0,
-                    Some("right") => col_w[j] - c.w,
-                    Some("center") => (col_w[j] - c.w) / 2.0,
-                    _ if ncols == 1 => 0.0,
-                    _ => (col_w[j] - c.w) / 2.0,
+                    Some("right") => col_widths[j] - cell.w,
+                    Some("center") => (col_widths[j] - cell.w) / 2.0,
+                    _ if col_count == 1 => 0.0,
+                    _ => (col_widths[j] - cell.w) / 2.0,
                 };
-                b.place(c, x + dx, y);
-                x += col_w[j] + col_gap;
+                layout_box.place(cell, x + dx, y);
+                x += col_widths[j] + col_gap;
             }
-            y += d + row_gap;
+            y += row_desc + row_gap;
         }
-        b.w = col_w.iter().sum::<f32>() + col_gap * (ncols.saturating_sub(1)) as f32;
-        b.asc = b.asc.max(total / 2.0 + AXIS * em);
-        b.desc = b.desc.max(total / 2.0 - AXIS * em);
-        Ok(b)
+        layout_box.w =
+            col_widths.iter().sum::<f32>() + col_gap * (col_count.saturating_sub(1)) as f32;
+        layout_box.asc = layout_box.asc.max(total_height / 2.0 + AXIS * em);
+        layout_box.desc = layout_box.desc.max(total_height / 2.0 - AXIS * em);
+        Ok(layout_box)
     }
 }

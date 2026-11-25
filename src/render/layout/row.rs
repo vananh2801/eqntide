@@ -1,8 +1,8 @@
-//! Layout a single horizontal row (`<mrow>`) of math tokens.
+//! Lay out a single horizontal row (`<mrow>`) of math tokens.
 //!
 //! Applies TeX-like inter-element spacing based on symbol classification
-//! (Ord, Op, Bin, Rel, Open, Close, Punct) and standard math spacing
-//! constants (thin space = 3/18 em, med space = 4/18 em, thick space = 5/18 em).
+//! (`Ord`, `Op`, `Bin`, `Rel`, `Open`, `Close`, `Punct`) and standard math
+//! spacing constants (thin = 3/18 em, med = 4/18 em, thick = 5/18 em).
 
 use super::*;
 
@@ -52,15 +52,6 @@ pub(super) fn unicode_math_styled_char(ch: char, mathvariant: Option<&str>) -> O
     char::from_u32(cp)
 }
 
-fn is_wrapped_table(mut node: &MathNode) -> bool {
-    while matches!(node.tag.as_str(), "mrow" | "mstyle" | "mpadded" | "math")
-        && node.children.len() == 1
-    {
-        node = &node.children[0];
-    }
-    node.tag == "mtable"
-}
-
 impl Layout {
     /// Lay out a run of siblings on one baseline with TeX-style spacing.
     pub(super) fn row(&mut self, kids: &[MathNode], em: f32, ctx: MathContext) -> Result<LBox> {
@@ -71,7 +62,7 @@ impl Layout {
             let text_clean: String = kid
                 .text
                 .chars()
-                .filter(|c| !c.is_whitespace() && *c != '\u{00A0}' && *c != '\u{200B}')
+                .filter(|ch| !ch.is_whitespace() && *ch != '\u{00A0}' && *ch != '\u{200B}')
                 .collect();
             if (kid.tag == "mo" || kid.tag == "mtext")
                 && text_clean.is_empty()
@@ -79,7 +70,7 @@ impl Layout {
                 && !kid
                     .text
                     .chars()
-                    .any(|c| crate::symbols::misc::unicode_space_em(c).is_some())
+                    .any(|ch| crate::symbols::misc::unicode_space_em(ch).is_some())
             {
                 continue;
             }
@@ -89,7 +80,7 @@ impl Layout {
                 "mspace" => {
                     atoms.push(Atom {
                         class: Class::Ord,
-                        b: self.node(kid, em, ctx)?,
+                        layout_box: self.node(kid, em, ctx)?,
                         delim: None,
                         fence_role: FenceRole::Neutral,
                         is_table: false,
@@ -99,7 +90,7 @@ impl Layout {
                     if kid
                         .text
                         .chars()
-                        .all(|c| crate::symbols::misc::unicode_space_em(c).is_some()) =>
+                        .all(|ch| crate::symbols::misc::unicode_space_em(ch).is_some()) =>
                 {
                     let width: f32 = kid
                         .text
@@ -108,7 +99,7 @@ impl Layout {
                         .sum();
                     atoms.push(Atom {
                         class: Class::Ord,
-                        b: LBox {
+                        layout_box: LBox {
                             w: width * em,
                             ..Default::default()
                         },
@@ -129,7 +120,7 @@ impl Layout {
                         };
                         atoms.push(Atom {
                             class: Class::Ord,
-                            b: self.text_styled(&text_clean, face, em, ssty),
+                            layout_box: self.text_styled(&text_clean, face, em, ssty),
                             delim: None,
                             fence_role: FenceRole::Neutral,
                             is_table: false,
@@ -138,7 +129,7 @@ impl Layout {
                 }
                 "mtext" => {
                     let text = &kid.text;
-                    let digits = text.chars().all(|c| c.is_ascii_digit());
+                    let digits = text.chars().all(|ch| ch.is_ascii_digit());
                     if !digits && text.chars().count() == 1 && !text_clean.is_empty() {
                         self.atoms_mo(text, None, em, &mut atoms, ssty);
                     } else {
@@ -149,23 +140,23 @@ impl Layout {
                         } else {
                             Face::Text
                         };
-                        let mut b = self.text_styled(text, face, em, ssty);
+                        let mut layout_box = self.text_styled(text, face, em, ssty);
                         let mut x = 0.0;
                         let mut carets = vec![x];
                         for ch in text.chars() {
-                            x += self.f.advance_styled(face, ch, em, ssty);
+                            x += self.font_set.advance_styled(face, ch, em, ssty);
                             carets.push(x);
                         }
-                        b.mark_with_carets(kid, carets);
-                        if b.asc == 0.0 && b.desc == 0.0 {
-                            if let Some(hit) = b.hits.last_mut() {
+                        layout_box.mark_with_carets(kid, carets);
+                        if layout_box.asc == 0.0 && layout_box.desc == 0.0 {
+                            if let Some(hit) = layout_box.hits.last_mut() {
                                 hit.asc = 0.72 * em;
                                 hit.desc = 0.22 * em;
                             }
                         }
                         atoms.push(Atom {
                             class: Class::Ord,
-                            b,
+                            layout_box,
                             delim: None,
                             fence_role: FenceRole::Neutral,
                             is_table: false,
@@ -173,7 +164,7 @@ impl Layout {
                     }
                 }
                 _ => {
-                    let b = if matches!(kid.tag.as_str(), "msub" | "msup" | "msubsup")
+                    let layout_box = if matches!(kid.tag.as_str(), "msub" | "msup" | "msubsup")
                         && kid
                             .children
                             .first()
@@ -182,31 +173,37 @@ impl Layout {
                     {
                         let start_idx = atoms
                             .iter()
-                            .rposition(|a| matches!(a.class, Class::Rel | Class::Open))
+                            .rposition(|atom| matches!(atom.class, Class::Rel | Class::Open))
                             .map_or(0, |idx| idx + 1);
                         let expr_atoms = if start_idx < atoms.len() {
                             &atoms[start_idx..]
                         } else {
                             &atoms[..]
                         };
-                        let prev_asc = expr_atoms.iter().map(|a| a.b.asc).fold(0.0f32, f32::max);
-                        let prev_desc = expr_atoms.iter().map(|a| a.b.desc).fold(0.0f32, f32::max);
-                        let h2 = (prev_asc - AXIS * em).max(prev_desc + AXIS * em);
-                        let bar_asc = AXIS * em + h2;
-                        let bar_desc = h2 - AXIS * em;
-                        let (sub_n, sup_n) = match kid.tag.as_str() {
+                        let prev_asc = expr_atoms
+                            .iter()
+                            .map(|atom| atom.layout_box.asc)
+                            .fold(0.0f32, f32::max);
+                        let prev_desc = expr_atoms
+                            .iter()
+                            .map(|atom| atom.layout_box.desc)
+                            .fold(0.0f32, f32::max);
+                        let half_span = (prev_asc - AXIS * em).max(prev_desc + AXIS * em);
+                        let bar_asc = AXIS * em + half_span;
+                        let bar_desc = half_span - AXIS * em;
+                        let (sub_node, sup_node) = match kid.tag.as_str() {
                             "msub" => (kid.children.get(1), None),
                             "msup" => (None, kid.children.get(1)),
                             _ => (kid.children.get(1), kid.children.get(2)),
                         };
-                        self.evaluation_bar(sub_n, sup_n, bar_asc, bar_desc, em, ctx)?
+                        self.evaluation_bar(sub_node, sup_node, bar_asc, bar_desc, em, ctx)?
                     } else {
                         self.node(kid, em, ctx)?
                     };
                     let class = self.class_of_node(kid);
                     atoms.push(Atom {
                         class,
-                        b,
+                        layout_box,
                         delim: None,
                         fence_role: FenceRole::Neutral,
                         is_table: is_wrapped_table(kid),
@@ -215,110 +212,72 @@ impl Layout {
             }
             for atom in &mut atoms[atom_start..] {
                 if !atom
-                    .b
+                    .layout_box
                     .hits
                     .iter()
-                    .any(|h| h.key == kid as *const _ as usize)
+                    .any(|hit| hit.key == kid as *const _ as usize)
                 {
-                    atom.b.mark(kid);
+                    atom.layout_box.mark(kid);
                 }
             }
         }
         self.stretch_delims(&mut atoms, em);
 
-        // Bin → Ord where TeX demands it.
-        let n = atoms.len();
-        let mut cls: Vec<Class> = atoms.iter().map(|a| a.class).collect();
-        for i in 0..n {
-            if cls[i] == Class::Bin {
-                let prev_bad = i == 0
+        // Downgrade Bin -> Ord where TeX spacing requires it.
+        let count = atoms.len();
+        let mut classes: Vec<Class> = atoms.iter().map(|atom| atom.class).collect();
+        for i in 0..count {
+            if classes[i] == Class::Bin {
+                let prev_disallows = i == 0
                     || matches!(
-                        cls[i - 1],
+                        classes[i - 1],
                         Class::Bin | Class::Rel | Class::Open | Class::Punct | Class::Op
                     );
-                let next_bad =
-                    i + 1 == n || matches!(cls[i + 1], Class::Rel | Class::Close | Class::Punct);
-                if prev_bad || next_bad {
-                    cls[i] = Class::Ord;
+                let next_disallows = i + 1 == count
+                    || matches!(classes[i + 1], Class::Rel | Class::Close | Class::Punct);
+                if prev_disallows || next_disallows {
+                    classes[i] = Class::Ord;
                 }
             }
         }
 
         let mut out = LBox::default();
         let mut x = 0.0;
-        for i in 0..n {
+        for i in 0..count {
             if i > 0 {
-                x += self.spacing(cls[i - 1], cls[i], em);
+                x += self.spacing(classes[i - 1], classes[i], em);
 
-                // If this atom is a prime mark following a base glyph:
-                let is_prime = atoms[i].b.items.first().is_some_and(|it| match it {
-                    Item::Glyph { ch, .. } => is_prime_char(*ch),
-                    _ => false,
-                });
+                // Ensure prime marks clear slanted ascenders or italic hooks.
+                let is_prime = atoms[i]
+                    .layout_box
+                    .items
+                    .first()
+                    .is_some_and(|item| match item {
+                        Item::Glyph { ch, .. } => is_prime_char(*ch),
+                        _ => false,
+                    });
                 if is_prime {
-                    let last_g = self.last_glyph_of_box(&atoms[i - 1].b);
-                    let (overhang, ic) = last_g.map_or((0.0, 0.0), |(face, ch, gem)| {
-                        let (_, x_max) = self.f.ink_x(face, ch, gem);
-                        let adv = self.f.advance(face, ch, gem);
+                    let last_glyph = self.last_glyph_of_box(&atoms[i - 1].layout_box);
+                    let (overhang, ic) = last_glyph.map_or((0.0, 0.0), |(face, ch, glyph_em)| {
+                        let (_, x_max) = self.font_set.ink_x(face, ch, glyph_em);
+                        let adv = self.font_set.advance(face, ch, glyph_em);
                         (
                             (x_max - adv).max(0.0),
-                            self.f.italic_correction(face, ch, gem),
+                            self.font_set.italic_correction(face, ch, glyph_em),
                         )
                     });
                     let clearance = ic.max(overhang);
                     x += clearance.max(0.04 * em) + 0.03 * em;
                 }
             }
-            out.place(&atoms[i].b, x, 0.0);
-            x += atoms[i].b.w;
+            out.place(&atoms[i].layout_box, x, 0.0);
+            x += atoms[i].layout_box.w;
         }
         out.w = x;
         Ok(out)
     }
 
-    /// Classification of an element for spacing purposes.
-    fn class_of_node(&self, k: &MathNode) -> Class {
-        if k.tag == "mo" {
-            if let Some(c) = k.text.trim().chars().next() {
-                return class_of(c);
-            }
-        }
-        if matches!(
-            k.tag.as_str(),
-            "munder" | "mover" | "munderover" | "msub" | "msup" | "msubsup"
-        ) {
-            if let Some(base) = k.children.first() {
-                if base.tag == "mo" {
-                    if let Some(c) = base.text.trim().chars().next() {
-                        if is_big_op(c) || is_integral(c) {
-                            return Class::Op;
-                        }
-                        if arrow::arrow_dir(c).is_some() {
-                            return Class::Rel;
-                        }
-                    }
-                }
-            }
-        }
-        Class::Ord
-    }
-
-    /// TeX spacing table in units of `em` (The TeXbook, Ch. 18, p. 170).
-    fn spacing(&self, left: Class, right: Class, em: f32) -> f32 {
-        const THIN: f32 = 3.0 / 18.0;
-        const MED: f32 = 4.0 / 18.0;
-        const THICK: f32 = 5.0 / 18.0;
-        use Class::*;
-        let t = match (left, right) {
-            (Ord | Close, Op) | (Op, Ord | Op) => THIN,
-            (Ord | Close, Bin) | (Bin, Ord | Op | Open) => MED,
-            (Ord | Close | Op, Rel) | (Rel, Ord | Op | Open) => THICK,
-            (Punct, Ord | Op | Rel | Open | Punct) => THIN,
-            _ => 0.0,
-        };
-        t * em
-    }
-
+    /// Push laid-out operator/delimiter atoms for an `<mo>` text string.
     pub(super) fn atoms_mo(
         &self,
         text: &str,
@@ -345,7 +304,7 @@ impl Layout {
             } else {
                 (FenceRole::Neutral, class_of(ch))
             };
-            let b = if is_integral(ch) {
+            let layout_box = if is_integral(ch) {
                 self.integral_without_limits(ch, 1.45 * em, em)
                     .unwrap_or_else(|| self.glyph_styled(display_char(ch), Face::Symbol, em, ssty))
             } else if is_big_op(ch) {
@@ -355,7 +314,7 @@ impl Layout {
             };
             out.push(Atom {
                 class,
-                b,
+                layout_box,
                 delim,
                 fence_role,
                 is_table: false,
@@ -363,14 +322,15 @@ impl Layout {
         }
     }
 
+    /// Push laid-out identifier, function-name, or text atoms for an `<mi>` node.
     pub(super) fn atoms_mi(&self, kid: &MathNode, em: f32, out: &mut Vec<Atom>, ssty: u8) {
-        let t = kid.text.trim();
-        if t.is_empty() {
+        let text = kid.text.trim();
+        if text.is_empty() {
             return;
         }
         let variant = kid.attr("mathvariant");
         let bold = matches!(variant, Some("bold") | Some("bold-italic"));
-        if t.chars().count() > 1 && is_function(t) {
+        if text.chars().count() > 1 && is_function(text) {
             let face = if bold {
                 Face::VectorMatrix
             } else {
@@ -378,34 +338,32 @@ impl Layout {
             };
             out.push(Atom {
                 class: Class::Op,
-                b: self.text_styled(t, face, em, ssty),
+                layout_box: self.text_styled(text, face, em, ssty),
                 delim: None,
                 fence_role: FenceRole::Neutral,
                 is_table: false,
             });
             return;
         }
-        if has_foreign_letters(t) {
-            // A word with Vietnamese letters, not a run of variables.
+        if has_foreign_letters(text) {
             let face = if bold { Face::VectorMatrix } else { Face::Text };
             out.push(Atom {
                 class: Class::Ord,
-                b: self.text_styled(t, face, em, ssty),
+                layout_box: self.text_styled(text, face, em, ssty),
                 delim: None,
                 fence_role: FenceRole::Neutral,
                 is_table: false,
             });
             return;
         }
-        for ch in t.chars() {
-            // Skip standard whitespace, zero-width spaces, and non-breaking spaces.
+        for ch in text.chars() {
             if ch.is_whitespace() || ch == '\u{00A0}' || ch == '\u{200B}' {
                 continue;
             }
             if let Some(styled_ch) = unicode_math_styled_char(ch, variant) {
                 out.push(Atom {
                     class: Class::Ord,
-                    b: self.glyph_styled(styled_ch, Face::Symbol, em, ssty),
+                    layout_box: self.glyph_styled(styled_ch, Face::Symbol, em, ssty),
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
@@ -413,7 +371,7 @@ impl Layout {
             } else if bold {
                 out.push(Atom {
                     class: Class::Ord,
-                    b: self.glyph_styled(ch, Face::VectorMatrix, em, ssty),
+                    layout_box: self.glyph_styled(ch, Face::VectorMatrix, em, ssty),
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
@@ -422,7 +380,7 @@ impl Layout {
                 // Digits inside <mi> runs must be upright numbers, not math operators.
                 out.push(Atom {
                     class: Class::Ord,
-                    b: self.glyph_styled(ch, Face::Number, em, ssty),
+                    layout_box: self.glyph_styled(ch, Face::Number, em, ssty),
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
@@ -435,7 +393,7 @@ impl Layout {
                 };
                 out.push(Atom {
                     class: Class::Ord,
-                    b: self.glyph_styled(ch, face, em, ssty),
+                    layout_box: self.glyph_styled(ch, face, em, ssty),
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
@@ -443,7 +401,7 @@ impl Layout {
             } else if is_greek_lower(ch) {
                 out.push(Atom {
                     class: Class::Ord,
-                    b: self.glyph_styled(ch, Face::LcGreek, em, ssty),
+                    layout_box: self.glyph_styled(ch, Face::LcGreek, em, ssty),
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
@@ -451,7 +409,7 @@ impl Layout {
             } else if is_greek_upper(ch) {
                 out.push(Atom {
                     class: Class::Ord,
-                    b: self.glyph_styled(ch, Face::UcGreek, em, ssty),
+                    layout_box: self.glyph_styled(ch, Face::UcGreek, em, ssty),
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
@@ -461,6 +419,57 @@ impl Layout {
             }
         }
     }
+
+    fn class_of_node(&self, node: &MathNode) -> Class {
+        if node.tag == "mo" {
+            if let Some(ch) = node.text.trim().chars().next() {
+                return class_of(ch);
+            }
+        }
+        if matches!(
+            node.tag.as_str(),
+            "munder" | "mover" | "munderover" | "msub" | "msup" | "msubsup"
+        ) {
+            if let Some(base) = node.children.first() {
+                if base.tag == "mo" {
+                    if let Some(ch) = base.text.trim().chars().next() {
+                        if is_big_op(ch) || is_integral(ch) {
+                            return Class::Op;
+                        }
+                        if arrow::arrow_dir(ch).is_some() {
+                            return Class::Rel;
+                        }
+                    }
+                }
+            }
+        }
+        Class::Ord
+    }
+
+    /// TeX spacing table in units of `em` (The TeXbook, Ch. 18, p. 170).
+    fn spacing(&self, left: Class, right: Class, em: f32) -> f32 {
+        const THIN: f32 = 3.0 / 18.0;
+        const MED: f32 = 4.0 / 18.0;
+        const THICK: f32 = 5.0 / 18.0;
+        use Class::*;
+        let units = match (left, right) {
+            (Ord | Close, Op) | (Op, Ord | Op) => THIN,
+            (Ord | Close, Bin) | (Bin, Ord | Op | Open) => MED,
+            (Ord | Close | Op, Rel) | (Rel, Ord | Op | Open) => THICK,
+            (Punct, Ord | Op | Rel | Open | Punct) => THIN,
+            _ => 0.0,
+        };
+        units * em
+    }
+}
+
+fn is_wrapped_table(mut node: &MathNode) -> bool {
+    while matches!(node.tag.as_str(), "mrow" | "mstyle" | "mpadded" | "math")
+        && node.children.len() == 1
+    {
+        node = &node.children[0];
+    }
+    node.tag == "mtable"
 }
 
 #[cfg(test)]
@@ -477,54 +486,64 @@ mod wrapped_table_tests {
             "<math><mo>{{</mo><mrow><mrow>{table}</mrow></mrow></math>"
         ))
         .unwrap();
-        let (a, _) = layout_math(&direct, 12.0).unwrap();
-        let (b, _) = layout_math(&wrapped, 12.0).unwrap();
+        let (direct_box, _) = layout_math(&direct, 12.0).unwrap();
+        let (wrapped_box, _) = layout_math(&wrapped, 12.0).unwrap();
         assert!(
-            (a.w - b.w).abs() < 0.01,
+            (direct_box.w - wrapped_box.w).abs() < 0.01,
             "wrapper must not leave a small brace"
         );
-        assert_eq!(a.items.len(), b.items.len());
+        assert_eq!(direct_box.items.len(), wrapped_box.items.len());
     }
 
     #[test]
     fn closing_and_opening_fences_receive_tex_operator_spacing() {
-        let l = Layout {
-            f: fonts(),
+        let layout = Layout {
+            font_set: fonts(),
             depth: 0,
         };
         let em = 18.0;
         let med = 4.0 / 18.0 * em;
         let thick = 5.0 / 18.0 * em;
         let thin = 3.0 / 18.0 * em;
-        assert!((l.spacing(Class::Close, Class::Bin, em) - med).abs() < 1e-4);
-        assert!((l.spacing(Class::Bin, Class::Open, em) - med).abs() < 1e-4);
-        assert!((l.spacing(Class::Close, Class::Rel, em) - thick).abs() < 1e-4);
-        assert!((l.spacing(Class::Rel, Class::Open, em) - thick).abs() < 1e-4);
-        assert!((l.spacing(Class::Close, Class::Op, em) - thin).abs() < 1e-4);
-        assert!((l.spacing(Class::Punct, Class::Open, em) - thin).abs() < 1e-4);
+        assert!((layout.spacing(Class::Close, Class::Bin, em) - med).abs() < 1e-4);
+        assert!((layout.spacing(Class::Bin, Class::Open, em) - med).abs() < 1e-4);
+        assert!((layout.spacing(Class::Close, Class::Rel, em) - thick).abs() < 1e-4);
+        assert!((layout.spacing(Class::Rel, Class::Open, em) - thick).abs() < 1e-4);
+        assert!((layout.spacing(Class::Close, Class::Op, em) - thin).abs() < 1e-4);
+        assert!((layout.spacing(Class::Punct, Class::Open, em) - thin).abs() < 1e-4);
     }
 
     #[test]
     fn double_bar_fences_use_open_close_class_without_relation_gap() {
-        let l = Layout {
-            f: fonts(),
+        let layout = Layout {
+            font_set: fonts(),
             depth: 0,
         };
         let mut atoms = Vec::new();
-        l.atoms_mo("∥", Some("prefix"), 18.0, &mut atoms, 0);
-        l.atoms_mo("∥", Some("postfix"), 18.0, &mut atoms, 0);
+        layout.atoms_mo("∥", Some("prefix"), 18.0, &mut atoms, 0);
+        layout.atoms_mo("∥", Some("postfix"), 18.0, &mut atoms, 0);
         assert_eq!(atoms[0].fence_role, FenceRole::Prefix);
         assert_eq!(atoms[0].class, Class::Open);
         assert_eq!(atoms[1].fence_role, FenceRole::Postfix);
         assert_eq!(atoms[1].class, Class::Close);
 
-        // Comparing `\left\Vert \frac{1}{2}x \right\Vert` vs `\left| \frac{1}{2}x \right|`:
-        // neither inserts a thick (5/18 em) relation gap inside the fences.
         let norm_math = parse_latex_to_mathml(r"\left\Vert \frac{1}{2}x \right\Vert").unwrap();
         let preview = render_interactive(&norm_math, 12.0).unwrap();
-        let left = preview.regions.iter().find(|r| r.path == [0, 0]).unwrap();
-        let inner = preview.regions.iter().find(|r| r.path == [0, 1]).unwrap();
-        let right = preview.regions.iter().find(|r| r.path == [0, 2]).unwrap();
+        let left = preview
+            .regions
+            .iter()
+            .find(|region| region.path == [0, 0])
+            .unwrap();
+        let inner = preview
+            .regions
+            .iter()
+            .find(|region| region.path == [0, 1])
+            .unwrap();
+        let right = preview
+            .regions
+            .iter()
+            .find(|region| region.path == [0, 2])
+            .unwrap();
         let left_gap = inner.x - (left.x + left.width);
         let right_gap = right.x - (inner.x + inner.width);
         assert!(
