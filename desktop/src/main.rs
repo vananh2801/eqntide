@@ -64,6 +64,9 @@ pub enum Event {
     Session(String, Result<serde_json::Value, String>),
     Finished(Result<(), String>),
     Paths(Vec<std::path::PathBuf>),
+    BackgroundImage(std::path::PathBuf),
+    BackgroundImportStarted(u64),
+    BackgroundImported(u64, Result<settings::PreparedBackground, String>),
     Batch(
         usize,
         Result<eqntide::bridge::ConvertDocumentResponse, String>,

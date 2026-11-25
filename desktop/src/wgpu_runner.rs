@@ -1,4 +1,9 @@
-use crate::{app::App, instance::Instance, software_painter::SoftwarePainter, Event, EventSender};
+use crate::{
+    app::App,
+    instance::Instance,
+    software_painter::{SoftwareBackgroundLayer, SoftwarePainter},
+    Event, EventSender,
+};
 use eframe::{egui, egui_wgpu, App as _};
 use egui_winit::ActionRequested;
 use std::{
@@ -31,6 +36,12 @@ impl RunnerPainter {
         match self {
             Self::Wgpu(painter) => painter.max_texture_side(),
             Self::Software(painter) => Some(painter.max_texture_side()),
+        }
+    }
+
+    fn set_background(&mut self, bg: Option<SoftwareBackgroundLayer>) {
+        if let Self::Software(painter) = self {
+            painter.set_background(bg);
         }
     }
 
@@ -176,6 +187,10 @@ impl RunningState {
             #[cfg(not(target_os = "windows"))]
             {
                 if let Some(primitives) = self.last_primitives.as_ref() {
+                    self.painter.set_background(
+                        self.app
+                            .software_background(&self.egui_ctx.global_style().visuals),
+                    );
                     self.painter.paint_and_update_textures(
                         ppp_now,
                         clear_color_now,
@@ -335,6 +350,10 @@ impl RunningState {
                     self.window.set_visible(true);
                 }
                 let clipped_primitives = self.egui_ctx.tessellate(shapes.clone(), pixels_per_point);
+                self.painter.set_background(
+                    self.app
+                        .software_background(&self.egui_ctx.global_style().visuals),
+                );
                 self.painter.paint_and_update_textures(
                     pixels_per_point,
                     clear_color,

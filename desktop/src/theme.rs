@@ -109,6 +109,53 @@ impl ThemeTokens {
         Self::for_mode(ui.visuals().dark_mode)
     }
 
+    pub(crate) fn for_mode_with_background(
+        dark_mode: bool,
+        has_background: bool,
+        overlay_opacity: f32,
+    ) -> Self {
+        let base = Self::for_mode(dark_mode);
+        if has_background {
+            base.with_background_opacity(overlay_opacity)
+        } else {
+            base
+        }
+    }
+
+    pub(crate) fn with_background_opacity(mut self, overlay_opacity: f32) -> Self {
+        let opacity = if overlay_opacity.is_finite() {
+            overlay_opacity.clamp(0.0, 1.0)
+        } else {
+            0.70
+        };
+        let surface_alpha = ((0.38 + 0.54 * opacity) * 255.0).round() as u8;
+        self.app_bg = Color32::TRANSPARENT;
+        self.panel_bg = Color32::from_rgba_unmultiplied(
+            self.panel_bg.r(),
+            self.panel_bg.g(),
+            self.panel_bg.b(),
+            surface_alpha,
+        );
+        self.card_bg = Color32::from_rgba_unmultiplied(
+            self.card_bg.r(),
+            self.card_bg.g(),
+            self.card_bg.b(),
+            surface_alpha,
+        );
+        self
+    }
+
+    pub(crate) fn background_scrim(dark_mode: bool, overlay_opacity: f32) -> Color32 {
+        let opacity = if overlay_opacity.is_finite() {
+            overlay_opacity.clamp(0.0, 1.0)
+        } else {
+            0.70
+        };
+        let base = Self::for_mode(dark_mode).app_bg;
+        let alpha = (opacity * 0.72 * 255.0).round() as u8;
+        Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
+    }
+
     pub(crate) fn apply_style(egui_ctx: &egui::Context) {
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             let tokens = Self::for_mode(theme == egui::Theme::Dark);
@@ -395,6 +442,17 @@ mod tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
+    fn blend_over(fg: Color32, bg: Color32) -> Color32 {
+        let [r, g, b, alpha] = fg.to_srgba_unmultiplied();
+        let a = alpha as f32 / 255.0;
+        let inv = 1.0 - a;
+        Color32::from_rgb(
+            (r as f32 * a + bg.r() as f32 * inv).round() as u8,
+            (g as f32 * a + bg.g() as f32 * inv).round() as u8,
+            (b as f32 * a + bg.b() as f32 * inv).round() as u8,
+        )
+    }
+
     #[test]
     fn theme_tokens_provide_accessible_contrast_in_light_and_dark_modes() {
         for dark in [false, true] {
@@ -405,6 +463,30 @@ mod tests {
             assert!(contrast_ratio(t.selected_fg, t.selected_bg) >= 4.5);
             assert!(contrast_ratio(t.primary_fg, t.primary_bg) >= 4.5);
             assert_ne!(t.app_bg, t.panel_bg);
+        }
+    }
+
+    #[test]
+    fn translucent_background_tokens_preserve_contrast_and_opaque_fallback() {
+        for dark in [false, true] {
+            let opaque = ThemeTokens::for_mode_with_background(dark, false, 0.70);
+            assert_eq!(opaque, ThemeTokens::for_mode(dark));
+            assert_eq!(opaque.panel_bg.a(), 255);
+            assert_eq!(opaque.card_bg.a(), 255);
+
+            let translucent = ThemeTokens::for_mode_with_background(dark, true, 0.70);
+            let scrim = ThemeTokens::background_scrim(dark, 0.70);
+            assert_eq!(translucent.app_bg, Color32::TRANSPARENT);
+            assert!(translucent.panel_bg.a() < 255 && translucent.panel_bg.a() > 0);
+            assert!(translucent.card_bg.a() < 255 && translucent.card_bg.a() > 0);
+
+            for extreme_photo in [Color32::BLACK, Color32::WHITE] {
+                let after_scrim = blend_over(scrim, extreme_photo);
+                let after_panel = blend_over(translucent.panel_bg, after_scrim);
+                let after_card = blend_over(translucent.card_bg, after_scrim);
+                assert!(contrast_ratio(translucent.text_primary, after_panel) >= 7.0);
+                assert!(contrast_ratio(translucent.text_primary, after_card) >= 7.0);
+            }
         }
     }
 

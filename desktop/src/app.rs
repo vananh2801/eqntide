@@ -338,6 +338,16 @@ pub struct App {
     settings_dirty: bool,
     canvas_light: CanvasPreset,
     canvas_dark: CanvasPreset,
+    background_image: Option<String>,
+    background_opacity: f32,
+    background_texture: Option<egui::TextureHandle>,
+    background_load_pending: bool,
+    background_importing: bool,
+    background_import_seq: u64,
+    background_error: Option<String>,
+    native_software_background: bool,
+    software_bg_seq: u64,
+    software_bg: Option<Arc<crate::software_painter::SoftwareBackgroundImage>>,
     startup_focus: StartupFocus,
     active_editor_focus: StartupFocus,
     pending_focus_restore: Option<StartupFocus>,
@@ -448,6 +458,7 @@ impl App {
         runtime::start_bridge(tx.clone());
         let mut app = Self::from_parts(Some(instance), tx, rx, args);
         app.gpu_profile = gpu_profile;
+        app.native_software_background = is_software_backend;
         if let Some(path) = Settings::default_path() {
             app = app.with_settings_path(path, Some(egui_ctx));
         }
@@ -478,6 +489,12 @@ impl App {
         self.batch_overwrite = settings.batch_overwrite;
         self.canvas_light = settings.canvas_light;
         self.canvas_dark = settings.canvas_dark;
+        self.background_image = settings.background_image.clone();
+        self.background_opacity = settings.background_opacity;
+        self.background_texture = None;
+        self.software_bg = None;
+        self.background_load_pending = self.background_image.is_some();
+        self.background_error = None;
         self.startup_focus = settings.startup_focus;
         self.active_editor_focus = settings.startup_focus;
         self.pending_focus_restore = Some(settings.startup_focus);
@@ -486,6 +503,182 @@ impl App {
         }
         self.persisted = settings;
         self.settings_dirty = false;
+    }
+
+    fn theme_tokens(&self, ui: &egui::Ui) -> ThemeTokens {
+        ThemeTokens::for_mode_with_background(
+            ui.visuals().dark_mode,
+            self.background_texture.is_some(),
+            self.background_opacity,
+        )
+    }
+
+    fn upload_background_image(&mut self, ctx: &egui::Context, image: egui::ColorImage) {
+        if self.native_software_background {
+            self.software_bg_seq = self.software_bg_seq.wrapping_add(1);
+            self.software_bg = Some(Arc::new(
+                crate::software_painter::SoftwareBackgroundImage::from_color_image(
+                    self.software_bg_seq,
+                    &image,
+                ),
+            ));
+        }
+        if let Some(texture) = &mut self.background_texture {
+            texture.set(image, egui::TextureOptions::LINEAR);
+        } else {
+            self.background_texture =
+                Some(ctx.load_texture("app-background", image, egui::TextureOptions::LINEAR));
+        }
+    }
+
+    pub(crate) fn software_background(
+        &self,
+        visuals: &egui::Visuals,
+    ) -> Option<crate::software_painter::SoftwareBackgroundLayer> {
+        if !self.native_software_background {
+            return None;
+        }
+        let image = self.software_bg.as_ref()?;
+        Some(crate::software_painter::SoftwareBackgroundLayer {
+            image: Arc::clone(image),
+            scrim: ThemeTokens::background_scrim(visuals.dark_mode, self.background_opacity),
+            base_bg: ThemeTokens::for_mode(visuals.dark_mode).app_bg,
+        })
+    }
+
+    fn ensure_background_texture(&mut self, ctx: &egui::Context) {
+        if !self.background_load_pending {
+            return;
+        }
+        self.background_load_pending = false;
+        let (Some(settings_path), Some(filename)) = (
+            self.settings_path.as_deref(),
+            self.background_image.as_deref(),
+        ) else {
+            return;
+        };
+        match settings::load_managed_background(settings_path, filename) {
+            Ok(loaded) => {
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [loaded.width as usize, loaded.height as usize],
+                    &loaded.rgba,
+                );
+                self.upload_background_image(ctx, image);
+            }
+            Err(err) => {
+                eprintln!("Failed to load managed background {filename}: {err}");
+                self.background_texture = None;
+                self.software_bg = None;
+            }
+        }
+    }
+
+    fn apply_prepared_background(&mut self, bg: settings::PreparedBackground, ctx: &egui::Context) {
+        let prev = self.background_image.take();
+        self.upload_background_image(ctx, bg.image);
+        self.background_image = Some(bg.filename.clone());
+        self.persisted.background_image = Some(bg.filename.clone());
+        self.background_load_pending = false;
+        self.background_error = None;
+        self.settings_dirty = true;
+        self.flush_settings();
+        if let (Some(settings_path), Some(old_name)) =
+            (self.settings_path.as_deref(), prev.as_deref())
+        {
+            if old_name != bg.filename {
+                settings::remove_managed_background_file(settings_path, old_name);
+            }
+        }
+    }
+
+    fn finish_background_import(
+        &mut self,
+        seq: u64,
+        result: Result<settings::PreparedBackground, String>,
+        ctx: &egui::Context,
+    ) {
+        if seq != self.background_import_seq {
+            if let (Ok(bg), Some(settings_path)) = (result, self.settings_path.as_deref()) {
+                settings::remove_managed_background_file(settings_path, &bg.filename);
+            }
+            return;
+        }
+        self.background_importing = false;
+        match result {
+            Ok(bg) => self.apply_prepared_background(bg, ctx),
+            Err(err) => {
+                self.background_error = Some(err.clone());
+                self.status = err;
+            }
+        }
+    }
+
+    fn set_background_image_from_path(&mut self, source_path: &Path, ctx: &egui::Context) {
+        self.background_import_seq = self.background_import_seq.wrapping_add(1);
+        let seq = self.background_import_seq;
+        let result =
+            settings::prepare_background_import(source_path, self.settings_path.as_deref());
+        self.finish_background_import(seq, result, ctx);
+    }
+
+    fn clear_background_image(&mut self) {
+        self.background_import_seq = self.background_import_seq.wrapping_add(1);
+        self.background_importing = false;
+        if let (Some(settings_path), Some(filename)) = (
+            self.settings_path.as_deref(),
+            self.background_image.as_deref(),
+        ) {
+            settings::remove_managed_background_file(settings_path, filename);
+        }
+        self.background_image = None;
+        self.background_texture = None;
+        self.software_bg = None;
+        self.background_load_pending = false;
+        self.background_error = None;
+        self.persisted.background_image = None;
+        self.settings_dirty = true;
+        self.flush_settings();
+    }
+
+    fn background_image_layout(viewport: Rect, tex_size: Vec2) -> (Rect, Rect) {
+        let full_uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+        if viewport.width() <= 0.0
+            || viewport.height() <= 0.0
+            || tex_size.x <= 0.0
+            || tex_size.y <= 0.0
+        {
+            return (viewport, full_uv);
+        }
+        let view_aspect = viewport.width() / viewport.height();
+        let tex_aspect = tex_size.x / tex_size.y;
+        let uv = if tex_aspect > view_aspect {
+            let uv_w = (view_aspect / tex_aspect).clamp(0.0, 1.0);
+            let x0 = (1.0 - uv_w) * 0.5;
+            Rect::from_min_max(Pos2::new(x0, 0.0), Pos2::new(x0 + uv_w, 1.0))
+        } else {
+            let uv_h = (tex_aspect / view_aspect).clamp(0.0, 1.0);
+            let y0 = (1.0 - uv_h) * 0.5;
+            Rect::from_min_max(Pos2::new(0.0, y0), Pos2::new(1.0, y0 + uv_h))
+        };
+        (viewport, uv)
+    }
+
+    fn paint_app_background(&self, ui: &egui::Ui) {
+        if self.native_software_background {
+            return;
+        }
+        let Some(texture) = &self.background_texture else {
+            return;
+        };
+        let viewport = ui.max_rect();
+        let bg_painter = ui.ctx().layer_painter(egui::LayerId::background());
+        let dark_mode = ui.visuals().dark_mode;
+        let (dest, uv) = Self::background_image_layout(viewport, texture.size_vec2());
+        bg_painter.image(texture.id(), dest, uv, Color32::WHITE);
+        let scrim = ThemeTokens::background_scrim(dark_mode, self.background_opacity);
+        if scrim.a() > 0 {
+            bg_painter.rect_filled(viewport, 0.0, scrim);
+        }
     }
 
     fn active_canvas_palette(&self, dark_mode: bool) -> CanvasPalette {
@@ -789,6 +982,16 @@ impl App {
             settings_dirty: false,
             canvas_light: CanvasPreset::SoftPaper,
             canvas_dark: CanvasPreset::SoftPaper,
+            background_image: None,
+            background_opacity: settings::DEFAULT_BACKGROUND_OPACITY,
+            background_texture: None,
+            background_load_pending: false,
+            background_importing: false,
+            background_import_seq: 0,
+            background_error: None,
+            native_software_background: false,
+            software_bg_seq: 0,
+            software_bg: None,
             startup_focus: StartupFocus::Canvas,
             active_editor_focus: StartupFocus::Canvas,
             pending_focus_restore: Some(StartupFocus::Canvas),
@@ -1151,6 +1354,16 @@ impl App {
                     }
                 }
                 Event::Paths(paths) => self.add_files(paths),
+                Event::BackgroundImage(path) => self.set_background_image_from_path(&path, ctx),
+                Event::BackgroundImportStarted(seq) => {
+                    if seq == self.background_import_seq {
+                        self.background_importing = true;
+                        self.background_error = None;
+                    }
+                }
+                Event::BackgroundImported(seq, result) => {
+                    self.finish_background_import(seq, result, ctx);
+                }
                 Event::Batch(i, result) => {
                     self.batch_completed += 1;
                     self.sync_batch_row_state();
@@ -1632,7 +1845,7 @@ impl App {
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         const SIDEBAR_GAP: f32 = theme::SPACE_SM;
         const SIDEBAR_BUTTON_HEIGHT: f32 = 42.0;
-        let tokens = ThemeTokens::from_ui(ui);
+        let tokens = self.theme_tokens(ui);
         let enabled = ui.is_enabled();
         egui::Panel::bottom("sidebar-batch")
             .exact_size(120.0)
@@ -2249,7 +2462,9 @@ impl App {
             self.keyboard_handled = true;
         }
         self.sync_render(ui.ctx());
-        let tokens = ThemeTokens::from_ui(ui);
+        self.ensure_background_texture(ui.ctx());
+        self.paint_app_background(ui);
+        let tokens = self.theme_tokens(ui);
         egui::Panel::bottom("app-status")
             .exact_size(32.0)
             .frame(
@@ -3746,7 +3961,7 @@ impl App {
 
     fn batch_ui(&mut self, ui: &mut egui::Ui) {
         self.sync_batch_row_state();
-        let tokens = ThemeTokens::from_ui(ui);
+        let tokens = self.theme_tokens(ui);
         self.back_to_editor_button(ui);
         Self::full_width_card(ui, tokens, |ui| {
             ui.label(
@@ -4409,7 +4624,7 @@ impl App {
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
-        let tokens = ThemeTokens::from_ui(ui);
+        let tokens = self.theme_tokens(ui);
         self.back_to_editor_button(ui);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -4495,7 +4710,221 @@ impl App {
                             }
                         }
                     });
-                    ui.add_space(theme::SPACE_MD);
+                    ui.add_space(theme::SPACE_SM);
+                    ui.label(egui::RichText::new("App background").strong());
+                    ui.add_space(theme::SPACE_XS);
+                    let has_bg_setting =
+                        self.background_image.is_some() || self.background_texture.is_some();
+                    let has_bg_texture = self.background_texture.is_some();
+                    let thumb_size = Vec2::new(72.0, 48.0);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_size_before_wrap().x, thumb_size.y),
+                        egui::Layout::left_to_right(egui::Align::Min),
+                        |ui| {
+                            let (thumb_rect, _) =
+                                ui.allocate_exact_size(thumb_size, egui::Sense::hover());
+                            if ui.is_rect_visible(thumb_rect) {
+                                ui.painter().rect(
+                                    thumb_rect,
+                                    theme::CONTROL_CORNER_RADIUS,
+                                    tokens.control_disabled_bg,
+                                    Stroke::new(1.0, tokens.border),
+                                    egui::StrokeKind::Inside,
+                                );
+                                if let Some(tex) = &self.background_texture {
+                                    let inner = thumb_rect.shrink(1.0);
+                                    let (dest, uv) =
+                                        Self::background_image_layout(inner, tex.size_vec2());
+                                    egui::Image::from_texture((tex.id(), dest.size()))
+                                        .uv(uv)
+                                        .corner_radius(theme::CONTROL_CORNER_RADIUS)
+                                        .paint_at(ui, dest);
+                                    let scrim = ThemeTokens::background_scrim(
+                                        is_dark,
+                                        self.background_opacity,
+                                    );
+                                    if scrim.a() > 0 {
+                                        ui.painter().rect_filled(
+                                            inner,
+                                            theme::CONTROL_CORNER_RADIUS,
+                                            scrim,
+                                        );
+                                    }
+                                    ui.painter().rect_stroke(
+                                        thumb_rect,
+                                        theme::CONTROL_CORNER_RADIUS,
+                                        Stroke::new(1.0, tokens.border),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+                            }
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(ui.available_width(), thumb_size.y),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.spacing_mut().item_spacing.y = theme::SPACE_XS;
+                                    ui.allocate_ui_with_layout(
+                                        Vec2::new(ui.available_width(), theme::BUTTON_HEIGHT),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .add_enabled_ui(!self.background_importing, |ui| {
+                                                    self.icon_standard_button(
+                                                        ui,
+                                                        "folder-open",
+                                                        "Choose image…",
+                                                    )
+                                                })
+                                                .inner
+                                                .clicked()
+                                            {
+                                                self.background_import_seq =
+                                                    self.background_import_seq.wrapping_add(1);
+                                                let seq = self.background_import_seq;
+                                                let tx = self.tx.clone();
+                                                let settings_path = self.settings_path.clone();
+                                                std::thread::spawn(move || {
+                                                    if let Some(path) = rfd::FileDialog::new()
+                                                        .add_filter(
+                                                            "Images",
+                                                            &["png", "jpg", "jpeg", "webp"],
+                                                        )
+                                                        .pick_file()
+                                                    {
+                                                        let _ = tx.send(
+                                                            Event::BackgroundImportStarted(seq),
+                                                        );
+                                                        let result =
+                                                            settings::prepare_background_import(
+                                                                &path,
+                                                                settings_path.as_deref(),
+                                                            );
+                                                        let _ = tx.send(
+                                                            Event::BackgroundImported(seq, result),
+                                                        );
+                                                    }
+                                                });
+                                            }
+                                            if ui
+                                                .add_enabled(
+                                                    has_bg_setting || self.background_importing,
+                                                    egui::Button::new("Clear").min_size(Vec2::new(
+                                                        0.0,
+                                                        theme::BUTTON_HEIGHT,
+                                                    )),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.clear_background_image();
+                                            }
+                                        },
+                                    );
+                                    ui.allocate_ui_with_layout(
+                                        Vec2::new(ui.available_width(), 14.0),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            if self.background_importing {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        "Importing background image…",
+                                                    )
+                                                    .small()
+                                                    .color(tokens.text_muted),
+                                                );
+                                            } else if let Some(err) = &self.background_error {
+                                                ui.label(
+                                                    egui::RichText::new(err)
+                                                        .small()
+                                                        .color(tokens.error_fg),
+                                                );
+                                            } else if let Some(name) = &self.background_image {
+                                                if self.background_texture.is_some() {
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "Active: {name}"
+                                                        ))
+                                                        .small()
+                                                        .color(tokens.text_muted),
+                                                    );
+                                                } else {
+                                                    ui.label(
+                                                        egui::RichText::new(
+                                                            "Saved background image is missing or unreadable",
+                                                        )
+                                                        .small()
+                                                        .color(tokens.error_fg),
+                                                    );
+                                                }
+                                            } else {
+                                                ui.label(
+                                                    egui::RichText::new("Default solid theme")
+                                                        .small()
+                                                        .color(tokens.text_muted),
+                                                );
+                                            }
+                                        },
+                                    );
+                                },
+                            );
+                        },
+                    );
+                    ui.add_space(theme::SPACE_XS);
+                    ui.add_enabled_ui(has_bg_texture, |ui| {
+                        let label_width = 108.0;
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(ui.available_size_before_wrap().x, theme::BUTTON_HEIGHT),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.allocate_ui_with_layout(
+                                    Vec2::new(label_width, theme::BUTTON_HEIGHT),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new("Overlay opacity")
+                                                .color(tokens.text_muted),
+                                        );
+                                    },
+                                );
+                                let slider_changed = ui
+                                    .scope(|ui| {
+                                        ui.spacing_mut().slider_width = 220.0;
+                                        let visuals = ui.visuals_mut();
+                                        let handle_stroke = Stroke::new(1.0, tokens.accent);
+                                        visuals.widgets.inactive.bg_fill = tokens.border;
+                                        visuals.widgets.inactive.fg_stroke = handle_stroke;
+                                        visuals.widgets.hovered.fg_stroke = handle_stroke;
+                                        visuals.widgets.active.fg_stroke = handle_stroke;
+                                        visuals.selection.bg_fill = tokens.accent;
+                                        ui.add(
+                                            egui::Slider::new(
+                                                &mut self.background_opacity,
+                                                settings::BACKGROUND_OPACITY_RANGE,
+                                            )
+                                            .show_value(false)
+                                            .trailing_fill(true)
+                                            .handle_shape(egui::style::HandleShape::Rect {
+                                                aspect_ratio: 1.0,
+                                            }),
+                                        )
+                                        .changed()
+                                    })
+                                    .inner;
+                                if slider_changed {
+                                    self.persisted.background_opacity = self.background_opacity;
+                                    self.settings_dirty = true;
+                                }
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{:.0}%",
+                                        self.background_opacity * 100.0
+                                    ))
+                                    .color(tokens.text_muted),
+                                );
+                            },
+                        );
+
+                    });
+                    ui.add_space(theme::SPACE_SM);
                     ui.label(egui::RichText::new("Equation canvas").strong());
                     ui.add_space(theme::SPACE_XS);
                     if Self::canvas_preset_picker(
@@ -4508,7 +4937,7 @@ impl App {
                         self.persisted.canvas_light = self.canvas_light;
                         self.settings_dirty = true;
                     }
-                    ui.add_space(theme::SPACE_MD);
+                    ui.add_space(theme::SPACE_SM);
                     if Self::canvas_preset_picker(
                         ui,
                         "Dark mode canvas",
@@ -4551,7 +4980,7 @@ impl App {
     }
 
     fn about_ui(&mut self, ui: &mut egui::Ui) {
-        let tokens = ThemeTokens::from_ui(ui);
+        let tokens = self.theme_tokens(ui);
         self.back_to_editor_button(ui);
         let author_icon = self.ui_icon(ui.ctx(), "user", UI_ICON_SIZE, tokens.text_muted);
         let license_icon = self.ui_icon(ui.ctx(), "license", UI_ICON_SIZE, tokens.text_muted);
@@ -8302,11 +8731,12 @@ mod tests {
 
         // Open Settings and pick CoolSlate for Light mode and DimSlate for Dark mode.
         a.tab = 2;
-        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let tall = Vec2::new(MIN_WINDOW_SIZE[0], 900.0);
+        let out = run_ui_pass_sized(&ctx, &mut a, tall);
         let cool_pos = find_text_center(&out, |t| t == CanvasPreset::CoolSlate.label());
-        let out = run_ui_pass_frame(&ctx, &mut a, click_events(cool_pos));
+        let out = run_ui_pass_sized_events(&ctx, &mut a, tall, click_events(cool_pos));
         let dim_pos = find_text_center(&out, |t| t == CanvasPreset::DimSlate.label());
-        run_ui_pass_frame(&ctx, &mut a, click_events(dim_pos));
+        run_ui_pass_sized_events(&ctx, &mut a, tall, click_events(dim_pos));
 
         let on_disk = Settings::load_from_path(&path);
         assert_eq!(on_disk.canvas_light, CanvasPreset::CoolSlate);
@@ -8494,9 +8924,10 @@ mod tests {
         assert_eq!(a.startup_focus, StartupFocus::Canvas);
 
         a.tab = 2;
-        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let tall = Vec2::new(MIN_WINDOW_SIZE[0], 900.0);
+        let out = run_ui_pass_sized(&ctx, &mut a, tall);
         let latex_btn = find_text_center(&out, |t| t == "LaTeX source");
-        run_ui_pass_frame(&ctx, &mut a, click_events(latex_btn));
+        run_ui_pass_sized_events(&ctx, &mut a, tall, click_events(latex_btn));
 
         assert_eq!(a.startup_focus, StartupFocus::Latex);
         let on_disk = Settings::load_from_path(&path);
@@ -8880,9 +9311,19 @@ mod tests {
     }
 
     fn run_ui_pass_sized(ctx: &egui::Context, app: &mut App, size: Vec2) -> egui::FullOutput {
+        run_ui_pass_sized_events(ctx, app, size, vec![])
+    }
+
+    fn run_ui_pass_sized_events(
+        ctx: &egui::Context,
+        app: &mut App,
+        size: Vec2,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                events,
                 ..Default::default()
             },
             |ui| app.ui_pass(ui),
@@ -8928,7 +9369,7 @@ mod tests {
         a.tab = 2;
 
         for width in [MIN_WINDOW_SIZE[0], 1400.0] {
-            let size = Vec2::new(width, MIN_WINDOW_SIZE[1]);
+            let size = Vec2::new(width, 900.0);
             let _ = run_ui_pass_sized(&ctx, &mut a, size);
             let out = run_ui_pass_sized(&ctx, &mut a, size);
             let expected_width = width - 2.0 * theme::SPACE_LG;
@@ -9979,5 +10420,276 @@ mod tests {
             "status leaked in command_key: {:?}",
             b.status
         );
+    }
+
+    #[test]
+    fn app_background_renders_across_all_tabs_with_translucent_surfaces_and_opaque_canvas() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        let img_path = dir.path().join("wallpaper.png");
+        let img = image::RgbaImage::from_pixel(160, 90, image::Rgba([30, 110, 180, 255]));
+        image::DynamicImage::ImageRgba8(img)
+            .save_with_format(&img_path, image::ImageFormat::Png)
+            .unwrap();
+
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app().with_settings_path(settings_path.clone(), Some(&ctx));
+        a.tx.send(Event::BackgroundImage(img_path)).unwrap();
+        let _ = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert!(a.background_texture.is_some());
+        let tex_id = a.background_texture.as_ref().unwrap().id();
+        let managed_name = a.background_image.clone().expect("managed filename");
+
+        // Verify default Cover layout math crops symmetrically without distortion.
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1056.0, 560.0));
+        let (cover_dest, cover_uv) =
+            App::background_image_layout(viewport, Vec2::new(800.0, 800.0));
+        assert_eq!(cover_dest, viewport);
+        assert!(cover_uv.height() < 1.0 && (cover_uv.width() - 1.0).abs() < 1e-4);
+
+        let (wide_dest, wide_uv) = App::background_image_layout(viewport, Vec2::new(3200.0, 800.0));
+        assert_eq!(wide_dest, viewport);
+        assert!(wide_uv.width() < 1.0 && (wide_uv.height() - 1.0).abs() < 1e-4);
+
+        // Verify background texture renders across Editor, Batch DOCX, Settings, and About in both modes,
+        // chrome/cards are translucent, and Equation Canvas / LaTeX source remain opaque.
+        for dark_mode in [false, true] {
+            ctx.set_theme(if dark_mode {
+                egui::Theme::Dark
+            } else {
+                egui::Theme::Light
+            });
+            let expected_tokens =
+                ThemeTokens::for_mode_with_background(dark_mode, true, a.background_opacity);
+            let canvas_bg = a.active_canvas_palette(dark_mode).bg;
+            assert_eq!(canvas_bg.a(), 255);
+
+            for tab in [0usize, 1, 2, 3] {
+                a.tab = tab;
+                let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+                let has_bg_mesh = out.shapes.iter().any(|s| match &s.shape {
+                    egui::Shape::Mesh(m) => m.texture_id == tex_id,
+                    _ => false,
+                });
+                assert!(has_bg_mesh, "missing background mesh on tab {tab}");
+
+                let has_translucent_panel = out.shapes.iter().any(|s| match &s.shape {
+                    egui::Shape::Rect(r) => r.fill == expected_tokens.panel_bg,
+                    _ => false,
+                });
+                assert!(
+                    has_translucent_panel,
+                    "missing translucent panel on tab {tab}"
+                );
+
+                if tab != 0 {
+                    let has_translucent_card = out.shapes.iter().any(|s| match &s.shape {
+                        egui::Shape::Rect(r) => r.fill == expected_tokens.card_bg,
+                        _ => false,
+                    });
+                    assert!(
+                        has_translucent_card,
+                        "missing translucent card on tab {tab}"
+                    );
+                } else {
+                    let opaque_canvas_count = out
+                        .shapes
+                        .iter()
+                        .filter(|s| match &s.shape {
+                            egui::Shape::Rect(r) => r.fill == canvas_bg,
+                            _ => false,
+                        })
+                        .count();
+                    assert!(
+                        opaque_canvas_count >= 2,
+                        "expected opaque Equation Canvas and LaTeX source fills"
+                    );
+                }
+            }
+        }
+
+        // Reloading from disk restores the managed background image even if original is deleted.
+        std::fs::remove_file(dir.path().join("wallpaper.png")).unwrap();
+        let fresh_ctx = egui::Context::default();
+        ThemeTokens::apply_style(&fresh_ctx);
+        let mut reloaded = app().with_settings_path(settings_path, Some(&fresh_ctx));
+        let _ = run_ui_pass_frame(&fresh_ctx, &mut reloaded, vec![]);
+        assert_eq!(
+            reloaded.background_image.as_deref(),
+            Some(managed_name.as_str())
+        );
+        assert!(reloaded.background_texture.is_some());
+    }
+
+    #[test]
+    fn missing_or_corrupt_background_falls_back_gracefully_and_preserves_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        Settings {
+            zoom: 2.75,
+            background_image: Some("does-not-exist.png".into()),
+            ..Settings::default()
+        }
+        .save_to_path(&settings_path)
+        .unwrap();
+
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app().with_settings_path(settings_path.clone(), Some(&ctx));
+        ctx.set_theme(egui::Theme::Light);
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert!(a.background_texture.is_none());
+        assert_eq!(a.zoom, 2.75);
+        let opaque_tokens = ThemeTokens::for_mode(false);
+        assert!(out.shapes.iter().any(|s| match &s.shape {
+            egui::Shape::Rect(r) => r.fill == opaque_tokens.panel_bg,
+            _ => false,
+        }));
+
+        // Importing a valid image, then attempting to import a corrupt image preserves the working background.
+        let valid_png = dir.path().join("ok.png");
+        let img = image::RgbaImage::from_pixel(32, 32, image::Rgba([10, 20, 30, 255]));
+        image::DynamicImage::ImageRgba8(img)
+            .save_with_format(&valid_png, image::ImageFormat::Png)
+            .unwrap();
+        a.set_background_image_from_path(&valid_png, &ctx);
+        let active_name = a.background_image.clone().expect("active background");
+        assert!(a.background_texture.is_some());
+
+        let corrupt = dir.path().join("bad.webp");
+        std::fs::write(&corrupt, b"corrupt image bytes").unwrap();
+        a.tx.send(Event::BackgroundImage(corrupt)).unwrap();
+        let _ = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert_eq!(a.background_image.as_deref(), Some(active_name.as_str()));
+        assert!(a.background_texture.is_some());
+        assert!(a.background_error.is_some());
+    }
+
+    #[test]
+    fn settings_app_background_controls_persist_opacity_and_clear_managed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        let img_path = dir.path().join("bg.jpg");
+        let img = image::RgbaImage::from_pixel(80, 60, image::Rgba([90, 130, 170, 255]));
+        image::DynamicImage::ImageRgba8(img)
+            .to_rgb8()
+            .save_with_format(&img_path, image::ImageFormat::Jpeg)
+            .unwrap();
+
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app().with_settings_path(settings_path.clone(), Some(&ctx));
+        a.tab = 2;
+        a.set_background_image_from_path(&img_path, &ctx);
+        let managed_name = a.background_image.clone().unwrap();
+        let managed_path =
+            settings::resolve_managed_background_path(&settings_path, &managed_name).unwrap();
+        assert!(managed_path.exists());
+
+        // Adjust opacity via Settings UI / persisted state.
+        a.background_opacity = 0.45;
+        a.persisted.background_opacity = 0.45;
+        a.settings_dirty = true;
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        let on_disk = Settings::load_from_path(&settings_path);
+        assert!((on_disk.background_opacity - 0.45).abs() < 1e-6);
+        assert!(find_text_center(&out, |t| t == "App background").x > 0.0);
+        assert!(find_text_center(&out, |t| t == "Overlay opacity").x > 0.0);
+        assert!(find_text_center(&out, |t| t == "45%").x > 0.0);
+        let active_rect = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text().starts_with("Active:") => {
+                    Some(s.shape.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .expect("Active status text");
+        let choose_text_pos = find_text_center(&out, |t| t == "Choose image…");
+        let choose_btn_rect = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.rect.contains(choose_text_pos)
+                        && r.corner_radius == theme::CONTROL_CORNER_RADIUS =>
+                {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .min_by(|a, b| a.width().total_cmp(&b.width()))
+            .expect("Choose image button rect");
+        assert!(
+            (active_rect.min.x - choose_btn_rect.min.x).abs() <= 0.5,
+            "Active text left {} should align with Choose image button left {}",
+            active_rect.min.x,
+            choose_btn_rect.min.x
+        );
+
+        // Click "Clear" button in Settings.
+        let clear_pos = find_text_center(&out, |t| t == "Clear");
+        let _ = run_ui_pass_frame(&ctx, &mut a, click_events(clear_pos));
+        assert_eq!(a.background_image, None);
+        assert!(a.background_texture.is_none());
+        assert!(!managed_path.exists());
+        let after_clear = Settings::load_from_path(&settings_path);
+        assert_eq!(after_clear.background_image, None);
+    }
+
+    #[test]
+    fn async_background_import_events_apply_and_discard_stale_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        let img_path = dir.path().join("async-bg.png");
+        let img = image::RgbaImage::from_pixel(64, 48, image::Rgba([45, 95, 160, 255]));
+        image::DynamicImage::ImageRgba8(img)
+            .save_with_format(&img_path, image::ImageFormat::Png)
+            .unwrap();
+
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut a = app().with_settings_path(settings_path.clone(), Some(&ctx));
+        a.tab = 2;
+
+        // Current sequence displays importing indicator and applies result upon completion.
+        a.background_import_seq = 1;
+        a.tx.send(Event::BackgroundImportStarted(1)).unwrap();
+        let out = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert!(a.background_importing);
+        assert!(find_text_center(&out, |t| t == "Importing background image…").x > 0.0);
+
+        let prepared =
+            settings::prepare_background_import(&img_path, Some(&settings_path)).unwrap();
+        let stale_path =
+            settings::resolve_managed_background_path(&settings_path, &prepared.filename).unwrap();
+        assert!(stale_path.exists());
+
+        // Clearing while an import is in flight supersedes seq=1 so late result is discarded and cleaned up.
+        let clear_pos = find_text_center(&out, |t| t == "Clear");
+        let _ = run_ui_pass_frame(&ctx, &mut a, click_events(clear_pos));
+        assert!(!a.background_importing);
+
+        a.tx.send(Event::BackgroundImported(1, Ok(prepared)))
+            .unwrap();
+        let _ = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert_eq!(a.background_image, None);
+        assert!(a.background_texture.is_none());
+        assert!(!stale_path.exists());
+
+        // Matching sequence applies immediately.
+        let seq = a.background_import_seq + 1;
+        a.background_import_seq = seq;
+        let fresh = settings::prepare_background_import(&img_path, Some(&settings_path)).unwrap();
+        let fresh_name = fresh.filename.clone();
+        a.tx.send(Event::BackgroundImportStarted(seq)).unwrap();
+        a.tx.send(Event::BackgroundImported(seq, Ok(fresh)))
+            .unwrap();
+        let _ = run_ui_pass_frame(&ctx, &mut a, vec![]);
+        assert!(!a.background_importing);
+        assert_eq!(a.background_image.as_deref(), Some(fresh_name.as_str()));
+        assert!(a.background_texture.is_some());
     }
 }
