@@ -1,22 +1,24 @@
-//! OMML script and prescript encoders.
+//! OMML script and prescript (`<m:sSub>`, `<m:sSup>`, `<m:sSubSup>`, `<m:sPre>`) encoders.
 
 use crate::error::Result;
 use crate::mathml::MathNode;
 use crate::xml::Element;
 
-use super::{as_nary_op, is_empty_node, m_el, m_el_children, MathmlEncoder};
+use super::nary::as_nary_op;
+use super::{is_empty_node, m_el, m_el_children, MathmlEncoder};
 
 impl MathmlEncoder {
+    /// Encode `<msub>` as `<m:nary>` (when the base is a large operator) or `<m:sSub>`.
     pub(super) fn encode_msub(&mut self, node: &MathNode) -> Result<Element> {
         if let Some((chr, lim_loc, sub_opt, sup_opt)) = as_nary_op(node) {
             return self.build_nary(chr, lim_loc, sub_opt, sup_opt, Vec::new());
         }
         let base_els = match node.children.first() {
-            Some(c) => self.encode_node(c)?,
+            Some(child) => self.encode_node(child)?,
             None => Vec::new(),
         };
         let sub_els = match node.children.get(1) {
-            Some(c) => self.encode_node(c)?,
+            Some(child) => self.encode_node(child)?,
             None => Vec::new(),
         };
         let mut s_sub = m_el("sSub");
@@ -25,16 +27,17 @@ impl MathmlEncoder {
         Ok(s_sub)
     }
 
+    /// Encode `<msup>` as `<m:nary>` (when the base is a large operator) or `<m:sSup>`.
     pub(super) fn encode_msup(&mut self, node: &MathNode) -> Result<Element> {
         if let Some((chr, lim_loc, sub_opt, sup_opt)) = as_nary_op(node) {
             return self.build_nary(chr, lim_loc, sub_opt, sup_opt, Vec::new());
         }
         let base_els = match node.children.first() {
-            Some(c) => self.encode_node(c)?,
+            Some(child) => self.encode_node(child)?,
             None => Vec::new(),
         };
         let sup_els = match node.children.get(1) {
-            Some(c) => self.encode_node(c)?,
+            Some(child) => self.encode_node(child)?,
             None => Vec::new(),
         };
         let mut s_sup = m_el("sSup");
@@ -43,6 +46,7 @@ impl MathmlEncoder {
         Ok(s_sup)
     }
 
+    /// Encode `<msubsup>` as `<m:nary>` (when the base is a large operator) or `<m:sSubSup>`.
     pub(super) fn encode_msubsup(&mut self, node: &MathNode) -> Result<Element> {
         if let Some((chr, lim_loc, sub_opt, sup_opt)) = as_nary_op(node) {
             return self.build_nary(chr, lim_loc, sub_opt, sup_opt, Vec::new());
@@ -72,6 +76,8 @@ impl MathmlEncoder {
         Ok(s_subsup)
     }
 
+    /// Encode `<mmultiscripts>` by wrapping prescripts in `<m:sPre>` and postscripts
+    /// in `<m:sSub>` / `<m:sSup>` / `<m:sSubSup>`.
     pub(super) fn encode_mmultiscripts(&mut self, node: &MathNode) -> Result<Vec<Element>> {
         if node.children.is_empty() {
             return Ok(Vec::new());

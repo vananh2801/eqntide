@@ -1,9 +1,14 @@
 //! Shared MTEF template-slot emission primitives.
 //!
-//! Keeping the null-line and size-record rules here makes template constructors
+//! Keeping the null-line and size-record rules here lets template constructors
 //! describe their slot layout without duplicating record framing details.
 
 use super::super::records::{line, END, SUB};
+
+/// Concatenate a slice of byte slices into a single vector.
+pub(super) fn concat_bytes(parts: &[&[u8]]) -> Vec<u8> {
+    parts.concat()
+}
 
 /// Append a required `LINE` slot. Empty content is represented by a null line.
 pub(super) fn append_line_slot(out: &mut Vec<u8>, content: &[u8]) {
@@ -25,8 +30,8 @@ pub(super) fn append_opt_line_slot(out: &mut Vec<u8>, content: Option<&[u8]>) {
 }
 
 /// Append a fraction slot, applying sub-symbol size when requested.
-pub(super) fn append_fraction_slot(out: &mut Vec<u8>, content: &[u8], small: bool) {
-    if small {
+pub(super) fn append_fraction_slot(out: &mut Vec<u8>, content: &[u8], is_small: bool) {
+    if is_small {
         out.extend_from_slice(SUB);
     }
     append_line_slot(out, content);

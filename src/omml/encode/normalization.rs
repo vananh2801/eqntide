@@ -5,98 +5,8 @@ use crate::symbols::{is_prime_char, prime_order};
 
 use super::{is_empty_node, KNOWN_FUNCTIONS};
 
-fn is_single_ascii_letter_mi(node: &MathNode) -> Option<char> {
-    if node.tag != "mi" || node.attr("mathvariant") == Some("normal") {
-        return None;
-    }
-    let mut chars = node.text.chars();
-    let ch = chars.next()?;
-    (chars.next().is_none() && ch.is_ascii_alphabetic()).then_some(ch)
-}
-
-fn merge_function_names_in_list(children: Vec<MathNode>) -> Vec<MathNode> {
-    let mut out = Vec::with_capacity(children.len());
-    let mut i = 0;
-    while i < children.len() {
-        if is_single_ascii_letter_mi(&children[i]).is_some() {
-            let mut j = i;
-            let mut combined = String::new();
-            while j < children.len() {
-                if let Some(ch) = is_single_ascii_letter_mi(&children[j]) {
-                    combined.push(ch);
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
-            if j < children.len()
-                && matches!(
-                    children[j].tag.as_str(),
-                    "msup" | "msub" | "msubsup" | "munder" | "mover" | "munderover"
-                )
-                && !children[j].children.is_empty()
-            {
-                if let Some(base_ch) = is_single_ascii_letter_mi(&children[j].children[0]) {
-                    let mut with_base = combined.clone();
-                    with_base.push(base_ch);
-                    if KNOWN_FUNCTIONS.contains(&with_base.as_str()) {
-                        let mut script_node = children[j].clone();
-                        let mut fn_mi = MathNode::leaf("mi", &with_base);
-                        fn_mi.set_attr("mathvariant", "normal");
-                        script_node.children[0] = fn_mi;
-                        out.push(script_node);
-                        i = j + 1;
-                        continue;
-                    }
-                }
-            }
-            if combined.len() >= 2 && KNOWN_FUNCTIONS.contains(&combined.as_str()) {
-                let mut fn_mi = MathNode::leaf("mi", &combined);
-                fn_mi.set_attr("mathvariant", "normal");
-                out.push(fn_mi);
-                i = j;
-                continue;
-            }
-            if combined.len() >= 3 {
-                let prefix = &combined[..combined.len() - 1];
-                if KNOWN_FUNCTIONS.contains(&prefix) {
-                    let mut fn_mi = MathNode::leaf("mi", prefix);
-                    fn_mi.set_attr("mathvariant", "normal");
-                    out.push(fn_mi);
-                    i = j - 1;
-                    continue;
-                }
-            }
-        }
-        out.push(children[i].clone());
-        i += 1;
-    }
-    out
-}
-
-pub(super) fn collect_text(node: &MathNode) -> String {
-    let mut text = node.text.clone();
-    for child in &node.children {
-        text.push_str(&collect_text(child));
-    }
-    text
-}
-
-fn prime_text(order: u8) -> &'static str {
-    match order {
-        1 => "'",
-        2 => "''",
-        _ => "'''",
-    }
-}
-
-fn nbsp_mi() -> MathNode {
-    let mut space = MathNode::leaf("mi", "\u{00A0}");
-    space.set_attr("mathvariant", "normal");
-    space
-}
-
-/// Normalize equivalent MathML forms before structural OMML encoding.
+/// Normalize equivalent MathML forms before structural OMML encoding
+/// (backslash setminus, empty script slots, prime exponents, single-letter function runs).
 pub(super) fn normalize_mathml(node: &MathNode) -> MathNode {
     if node.tag == "mo" && node.text.trim() == "\\" {
         let mut op = node.clone();
@@ -213,4 +123,96 @@ pub(super) fn normalize_mathml(node: &MathNode) -> MathNode {
         attrs: node.attrs.clone(),
         children: merge_function_names_in_list(cleaned),
     }
+}
+
+/// Concatenate all text leaf content beneath `node`.
+pub(super) fn collect_text(node: &MathNode) -> String {
+    let mut text = node.text.clone();
+    for child in &node.children {
+        text.push_str(&collect_text(child));
+    }
+    text
+}
+
+fn merge_function_names_in_list(children: Vec<MathNode>) -> Vec<MathNode> {
+    let mut out = Vec::with_capacity(children.len());
+    let mut idx = 0;
+    while idx < children.len() {
+        if is_single_ascii_letter_mi(&children[idx]).is_some() {
+            let mut scan = idx;
+            let mut combined = String::new();
+            while scan < children.len() {
+                if let Some(ch) = is_single_ascii_letter_mi(&children[scan]) {
+                    combined.push(ch);
+                    scan += 1;
+                } else {
+                    break;
+                }
+            }
+            if scan < children.len()
+                && matches!(
+                    children[scan].tag.as_str(),
+                    "msup" | "msub" | "msubsup" | "munder" | "mover" | "munderover"
+                )
+                && !children[scan].children.is_empty()
+            {
+                if let Some(base_ch) = is_single_ascii_letter_mi(&children[scan].children[0]) {
+                    let mut with_base = combined.clone();
+                    with_base.push(base_ch);
+                    if KNOWN_FUNCTIONS.contains(&with_base.as_str()) {
+                        let mut script_node = children[scan].clone();
+                        let mut fn_mi = MathNode::leaf("mi", &with_base);
+                        fn_mi.set_attr("mathvariant", "normal");
+                        script_node.children[0] = fn_mi;
+                        out.push(script_node);
+                        idx = scan + 1;
+                        continue;
+                    }
+                }
+            }
+            if combined.len() >= 2 && KNOWN_FUNCTIONS.contains(&combined.as_str()) {
+                let mut fn_mi = MathNode::leaf("mi", &combined);
+                fn_mi.set_attr("mathvariant", "normal");
+                out.push(fn_mi);
+                idx = scan;
+                continue;
+            }
+            if combined.len() >= 3 {
+                let prefix = &combined[..combined.len() - 1];
+                if KNOWN_FUNCTIONS.contains(&prefix) {
+                    let mut fn_mi = MathNode::leaf("mi", prefix);
+                    fn_mi.set_attr("mathvariant", "normal");
+                    out.push(fn_mi);
+                    idx = scan - 1;
+                    continue;
+                }
+            }
+        }
+        out.push(children[idx].clone());
+        idx += 1;
+    }
+    out
+}
+
+fn is_single_ascii_letter_mi(node: &MathNode) -> Option<char> {
+    if node.tag != "mi" || node.attr("mathvariant") == Some("normal") {
+        return None;
+    }
+    let mut chars = node.text.chars();
+    let ch = chars.next()?;
+    (chars.next().is_none() && ch.is_ascii_alphabetic()).then_some(ch)
+}
+
+fn prime_text(order: u8) -> &'static str {
+    match order {
+        1 => "'",
+        2 => "''",
+        _ => "'''",
+    }
+}
+
+fn nbsp_mi() -> MathNode {
+    let mut space = MathNode::leaf("mi", "\u{00A0}");
+    space.set_attr("mathvariant", "normal");
+    space
 }

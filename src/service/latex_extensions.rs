@@ -1,134 +1,28 @@
-//! Balanced, bounded native extensions around latex2mathml's ordinary grammar.
-//! Native fragments are substituted as complete atoms, so nested fractions,
-//! scripts, matrices and escaped braces keep their normal TeX grouping.
+//! Balanced, bounded native extensions around `latex2mathml`'s grammar.
+//!
+//! ```text
+//! raw TeX ──▶ Scanner (extract native macros / braces / environments into nodes[])
+//!                │
+//!                ▼  placeholder tokens `\text{EQNTIDENATIVE<hex>}`
+//!         ScriptRewriter (pair adjacent `_` / `^` and primes into `<msubsup>`)
+//!                │
+//!                ▼
+//!     super::parse_standard (`latex2mathml` + XML fixups)
+//!                │
+//!                ▼
+//!         replace_markers ──▶ flatten_prime_superscripts ──▶ MathNode
+//! ```
+//!
+//! Native fragments are substituted as complete atoms so nested fractions,
+//! scripts, matrices, and escaped braces keep their normal TeX grouping.
+
 use crate::{Error, MathNode, Result};
 
 const MAX_DEPTH: usize = 64;
 
-fn error(message: impl Into<String>) -> Error {
-    Error::Xml(format!("LaTeX parsing error: {}", message.into()))
-}
-
+/// Parse a trimmed LaTeX math body (without outer delimiters) into a [`MathNode`].
 pub(super) fn parse(source: &str) -> Result<MathNode> {
     parse_at(source, 0)
-}
-
-fn replace_markers(node: &mut MathNode, marker: &str, nodes: &[MathNode]) {
-    if node.tag == "mtext" {
-        if let Some(index) = node.text.strip_prefix(marker).and_then(decode_marker_index) {
-            if let Some(native) = nodes.get(index) {
-                *node = native.clone();
-                return;
-            }
-        }
-    }
-    for child in &mut node.children {
-        replace_markers(child, marker, nodes);
-    }
-}
-
-fn parse_fragment(fragment: &str, marker: &str, nodes: &[MathNode]) -> Result<MathNode> {
-    let mut math = super::parse_standard(fragment)?;
-    replace_markers(&mut math, marker, nodes);
-    flatten_prime_superscripts(&mut math);
-    Ok(if math.children.len() == 1 {
-        math.children.remove(0)
-    } else {
-        math.tag = "mrow".into();
-        math.attrs.clear();
-        math
-    })
-}
-
-fn prime_token_count(node: &MathNode) -> Option<u8> {
-    if node.tag == "mo" && node.children.is_empty() {
-        let mut total = 0u8;
-        let t = node.text.trim();
-        if t.is_empty() {
-            return None;
-        }
-        for ch in t.chars() {
-            let add = match ch {
-                '\'' | '\u{2032}' => 1,
-                '\u{2033}' => 2,
-                '\u{2034}' => 3,
-                _ => return None,
-            };
-            total = total.saturating_add(add);
-        }
-        return (total > 0).then_some(total);
-    }
-    if node.tag == "mrow" && !node.children.is_empty() {
-        let mut total = 0u8;
-        for child in &node.children {
-            total = total.saturating_add(prime_token_count(child)?);
-        }
-        return (total > 0).then_some(total);
-    }
-    if node.tag == "msup" && node.children.len() == 2 {
-        let base_n = prime_token_count(&node.children[0])?;
-        let sup_n = prime_token_count(&node.children[1])?;
-        return base_n.checked_add(sup_n);
-    }
-    None
-}
-
-fn prime_glyph_for_count(count: u8) -> &'static str {
-    match count {
-        1 => "\u{2032}",
-        2 => "\u{2033}",
-        _ => "\u{2034}",
-    }
-}
-
-fn flatten_prime_superscripts(node: &mut MathNode) {
-    for child in &mut node.children {
-        flatten_prime_superscripts(child);
-    }
-    let mut i = 0;
-    while i + 1 < node.children.len() {
-        let can_merge = node.children[i].tag == "msup" && node.children[i].children.len() == 2;
-        if can_merge {
-            if let (Some(n), Some(m)) = (
-                prime_token_count(&node.children[i].children[1]),
-                prime_token_count(&node.children[i + 1]),
-            ) {
-                let sum = n.saturating_add(m);
-                if sum <= 3 {
-                    node.children.remove(i + 1);
-                    node.children[i].children[1] = MathNode::leaf("mo", prime_glyph_for_count(sum));
-                    continue;
-                }
-            }
-        }
-        i += 1;
-    }
-    if node.tag == "msup" && node.children.len() == 2 {
-        if let Some(outer_n) = prime_token_count(&node.children[1]) {
-            let combined = if node.children[0].tag == "msup" && node.children[0].children.len() == 2
-            {
-                if let Some(inner_n) = prime_token_count(&node.children[0].children[1]) {
-                    let sum = inner_n.saturating_add(outer_n);
-                    if sum <= 3 {
-                        let inner_base = node.children[0].children.remove(0);
-                        node.children[0] = inner_base;
-                        Some(sum)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else if outer_n <= 3 {
-                Some(outer_n)
-            } else {
-                None
-            };
-            if let Some(total) = combined {
-                node.children[1] = MathNode::leaf("mo", prime_glyph_for_count(total));
-            }
-        }
-    }
 }
 
 fn parse_at(source: &str, depth: usize) -> Result<MathNode> {
@@ -215,7 +109,7 @@ fn parse_at(source: &str, depth: usize) -> Result<MathNode> {
             if source[scanner.pos..].starts_with('\\') {
                 let delimiter_start = scanner.pos;
                 let delimiter = scanner.command();
-                // latex2mathml 0.2 accepts literal bars but lacks the common names.
+                // latex2mathml 0.2 accepts literal bars but lacks the common command names.
                 if matches!(
                     delimiter.as_str(),
                     "Vert" | "lVert" | "rVert" | "vert" | "lvert" | "rvert"
@@ -256,36 +150,7 @@ fn parse_at(source: &str, depth: usize) -> Result<MathNode> {
     Ok(math)
 }
 
-fn unescape_text(mut source: &str) -> String {
-    let mut text = String::with_capacity(source.len());
-    while let Some(ch) = source.chars().next() {
-        source = &source[ch.len_utf8()..];
-        if ch == '\\' {
-            let command = [
-                ("textbackslash", '\\'),
-                ("textasciitilde", '~'),
-                ("textasciicircum", '^'),
-            ]
-            .into_iter()
-            .find(|(name, _)| source.starts_with(name) && command_end(source, name.len()));
-            if let Some((name, value)) = command {
-                let rest = &source[name.len()..];
-                source = rest.strip_prefix("{}").unwrap_or(rest);
-                text.push(value);
-                continue;
-            }
-            if let Some(escaped @ ('{' | '}' | '_' | '&' | '%' | '$' | '#' | '\\' | ' ')) =
-                source.chars().next()
-            {
-                source = &source[escaped.len_utf8()..];
-                text.push(escaped);
-                continue;
-            }
-        }
-        text.push(if ch == '~' { '\u{00A0}' } else { ch });
-    }
-    text
-}
+// ── Script-Pair Preprocessor ────────────────────────────────────────────────
 
 fn rewrite_script_pairs(src: &str, marker: &str, nodes: &mut Vec<MathNode>) -> Result<String> {
     ScriptRewriter {
@@ -325,7 +190,7 @@ impl<'a> ScriptRewriter<'a> {
         debug_assert!(self.src[self.pos..].starts_with('\\'));
         self.next();
         let start = self.pos;
-        while self.peek_char().is_some_and(|c| c.is_ascii_alphabetic()) {
+        while self.peek_char().is_some_and(|ch| ch.is_ascii_alphabetic()) {
             self.next();
         }
         if start == self.pos {
@@ -494,7 +359,6 @@ impl<'a> ScriptRewriter<'a> {
                         let mut out = String::from(raw);
                         out.push_str(ws);
                         let body_and_end = self.read_begin_end(env)?;
-                        // read_begin_end returns `\begin{env}...\end{env}`; replace prefix with preserved ws
                         if let Some(rest) = body_and_end.strip_prefix("\\begin") {
                             out.push_str(rest);
                             Ok(Some(out))
@@ -511,12 +375,12 @@ impl<'a> ScriptRewriter<'a> {
                     self.skip_ws();
                     if self.peek_char() == Some('[') {
                         out.push_str(&self.src[ws_pos..self.pos]);
-                        self.next(); // '['
+                        self.next();
                         let deg_start = self.pos;
                         let mut brace_level = 0usize;
                         let mut found = false;
-                        while let Some(c) = self.next() {
-                            match c {
+                        while let Some(next_ch) = self.next() {
+                            match next_ch {
                                 '\\' => {
                                     self.next();
                                 }
@@ -545,15 +409,15 @@ impl<'a> ScriptRewriter<'a> {
                     Ok(Some(out))
                 }
                 "frac" | "binom" | "dbinom" | "tbinom" | "overset" | "underset" => {
-                    let a = self.read_tex_arg()?;
-                    let b = self.read_tex_arg()?;
-                    Ok(Some(format!("{raw}{a}{b}")))
+                    let first = self.read_tex_arg()?;
+                    let second = self.read_tex_arg()?;
+                    Ok(Some(format!("{raw}{first}{second}")))
                 }
                 "mathrm" | "mathit" | "mathbf" | "mathbb" | "mathfrak" | "mathscr" | "mathsf"
                 | "texttt" | "textit" | "textbf" | "bm" | "symbf" | "boldsymbol" | "underline"
                 | "overline" | "slashed" => {
-                    let a = self.read_tex_arg()?;
-                    Ok(Some(format!("{raw}{a}")))
+                    let arg = self.read_tex_arg()?;
+                    Ok(Some(format!("{raw}{arg}")))
                 }
                 "bigl" | "bigr" | "Bigl" | "Bigr" | "biggl" | "biggr" | "Biggl" | "Biggr" => {
                     let delim = self.read_delim()?;
@@ -565,10 +429,10 @@ impl<'a> ScriptRewriter<'a> {
         if ch.is_ascii_digit() {
             let start = self.pos;
             let mut has_period = false;
-            while let Some(c) = self.peek_char() {
-                if c.is_ascii_digit() {
+            while let Some(next_ch) = self.peek_char() {
+                if next_ch.is_ascii_digit() {
                     self.next();
-                } else if c == '.' && !has_period {
+                } else if next_ch == '.' && !has_period {
                     has_period = true;
                     self.next();
                 } else {
@@ -627,7 +491,7 @@ impl<'a> ScriptRewriter<'a> {
             loop {
                 let save = self.pos;
                 self.skip_ws();
-                if let Some(op1) = self.peek_char().filter(|&c| c == '_' || c == '^') {
+                if let Some(op1) = self.peek_char().filter(|&ch| ch == '_' || ch == '^') {
                     self.next();
                     self.skip_ws();
                     let Some(arg1) = self.read_atom()? else {
@@ -636,9 +500,9 @@ impl<'a> ScriptRewriter<'a> {
                     };
                     let after_arg1 = self.pos;
                     self.skip_ws();
-                    if let Some(_op2) = self
+                    if self
                         .peek_char()
-                        .filter(|&c| (op1 == '_' && c == '^') || (op1 == '^' && c == '_'))
+                        .is_some_and(|ch| (op1 == '_' && ch == '^') || (op1 == '^' && ch == '_'))
                     {
                         self.next();
                         self.skip_ws();
@@ -675,6 +539,8 @@ impl<'a> ScriptRewriter<'a> {
     }
 }
 
+// ── Native Macro Scanner ────────────────────────────────────────────────────
+
 struct Scanner<'a> {
     source: &'a str,
     pos: usize,
@@ -688,6 +554,7 @@ impl<'a> Scanner<'a> {
         self.pos += ch.len_utf8();
         Some(ch)
     }
+
     fn whitespace(&mut self) {
         while self.source[self.pos..]
             .chars()
@@ -697,6 +564,7 @@ impl<'a> Scanner<'a> {
             self.next();
         }
     }
+
     fn consume_degree_superscript(&mut self) -> bool {
         let save = self.pos;
         if self.next() != Some('^') {
@@ -725,13 +593,18 @@ impl<'a> Scanner<'a> {
         self.pos = save;
         false
     }
+
     fn try_braced_extension(&mut self) -> Result<Option<MathNode>> {
         let save = self.pos;
         let inner = self.argument()?;
         let trimmed = inner.trim_start();
         for (cmd, display) in [("\\displaystyle", "true"), ("\\textstyle", "false")] {
             if let Some(rest) = trimmed.strip_prefix(cmd) {
-                if rest.is_empty() || !rest.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                if rest.is_empty()
+                    || !rest
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_ascii_alphabetic())
                 {
                     let mut body = parse_at(rest, self.depth + 1)?;
                     let body = if body.children.len() == 1 {
@@ -741,22 +614,23 @@ impl<'a> Scanner<'a> {
                         body.attrs.clear();
                         body
                     };
-                    let mut n = MathNode::with_children("mstyle", vec![body]);
-                    n.set_attr("displaystyle", display);
-                    return Ok(Some(n));
+                    let mut style = MathNode::with_children("mstyle", vec![body]);
+                    style.set_attr("displaystyle", display);
+                    return Ok(Some(style));
                 }
             }
         }
         if let Some((num_src, den_src)) = split_top_level_atop(inner) {
             let num = parse_fragment_at(num_src, self.depth + 1)?;
             let den = parse_fragment_at(den_src, self.depth + 1)?;
-            let mut n = MathNode::with_children("mfrac", vec![num, den]);
-            n.set_attr("linethickness", "0");
-            return Ok(Some(n));
+            let mut frac = MathNode::with_children("mfrac", vec![num, den]);
+            frac.set_attr("linethickness", "0");
+            return Ok(Some(frac));
         }
         self.pos = save;
         Ok(None)
     }
+
     fn command(&mut self) -> String {
         debug_assert!(self.source[self.pos..].starts_with('\\'));
         self.next();
@@ -764,7 +638,7 @@ impl<'a> Scanner<'a> {
         while self.source[self.pos..]
             .chars()
             .next()
-            .is_some_and(|c| c.is_ascii_alphabetic())
+            .is_some_and(|ch| ch.is_ascii_alphabetic())
         {
             self.next();
         }
@@ -773,6 +647,7 @@ impl<'a> Scanner<'a> {
         }
         self.source[start..self.pos].to_string()
     }
+
     /// Return one argument without outer braces, preserving nested/escaped groups.
     fn argument(&mut self) -> Result<&'a str> {
         self.whitespace();
@@ -806,6 +681,7 @@ impl<'a> Scanner<'a> {
             Ok(&self.source[start..self.pos])
         }
     }
+
     fn math_argument(&mut self) -> Result<MathNode> {
         let arg = self.argument()?;
         let mut math = parse_at(arg, self.depth + 1)?;
@@ -817,6 +693,7 @@ impl<'a> Scanner<'a> {
             Ok(math)
         }
     }
+
     fn prescript_argument(&mut self) -> Result<MathNode> {
         let arg = self.argument()?;
         if arg.trim().is_empty() {
@@ -831,6 +708,7 @@ impl<'a> Scanner<'a> {
             Ok(math)
         }
     }
+
     fn native(&mut self, name: &str) -> Result<Option<MathNode>> {
         if let Some((glyph, tag)) = big_operator(name) {
             let mut node = MathNode::leaf(tag, glyph);
@@ -861,15 +739,15 @@ impl<'a> Scanner<'a> {
                 }
             }
             node = match (sub, sup) {
-                (Some(a), Some(b)) => MathNode::with_children(
+                (Some(lower), Some(upper)) => MathNode::with_children(
                     if side { "msubsup" } else { "munderover" },
-                    vec![node, a, b],
+                    vec![node, lower, upper],
                 ),
-                (Some(a), None) => {
-                    MathNode::with_children(if side { "msub" } else { "munder" }, vec![node, a])
+                (Some(lower), None) => {
+                    MathNode::with_children(if side { "msub" } else { "munder" }, vec![node, lower])
                 }
-                (None, Some(b)) => {
-                    MathNode::with_children(if side { "msup" } else { "mover" }, vec![node, b])
+                (None, Some(upper)) => {
+                    MathNode::with_children(if side { "msup" } else { "mover" }, vec![node, upper])
                 }
                 _ => {
                     self.pos = if side { self.pos } else { before };
@@ -884,26 +762,26 @@ impl<'a> Scanner<'a> {
         let node = match name {
             "text" => MathNode::leaf("mtext", &unescape_text(self.argument()?)),
             "frac" | "dfrac" | "tfrac" | "sfrac" | "tsfrac" | "atopfrac" => {
-                let a = self.math_argument()?;
-                let b = self.math_argument()?;
-                let mut n = MathNode::with_children("mfrac", vec![a, b]);
+                let num = self.math_argument()?;
+                let den = self.math_argument()?;
+                let mut frac = MathNode::with_children("mfrac", vec![num, den]);
                 match name {
-                    "dfrac" => n.set_attr("displaystyle", "true"),
-                    "tfrac" => n.set_attr("displaystyle", "false"),
-                    "sfrac" => n.set_attr("bevelled", "true"),
+                    "dfrac" => frac.set_attr("displaystyle", "true"),
+                    "tfrac" => frac.set_attr("displaystyle", "false"),
+                    "sfrac" => frac.set_attr("bevelled", "true"),
                     "tsfrac" => {
-                        n.set_attr("bevelled", "true");
-                        n.set_attr("displaystyle", "false");
+                        frac.set_attr("bevelled", "true");
+                        frac.set_attr("displaystyle", "false");
                     }
-                    "atopfrac" => n.set_attr("linethickness", "0"),
+                    "atopfrac" => frac.set_attr("linethickness", "0"),
                     _ => {}
                 }
-                n
+                frac
             }
             "binom" | "dbinom" | "tbinom" => {
-                let a = self.math_argument()?;
-                let b = self.math_argument()?;
-                let mut frac = MathNode::with_children("mfrac", vec![a, b]);
+                let num = self.math_argument()?;
+                let den = self.math_argument()?;
+                let mut frac = MathNode::with_children("mfrac", vec![num, den]);
                 frac.set_attr("linethickness", "0");
                 match name {
                     "dbinom" => frac.set_attr("displaystyle", "true"),
@@ -955,12 +833,12 @@ impl<'a> Scanner<'a> {
                     self.pos = self.source.len();
                     parse_fragment_at(tail, self.depth + 1)?
                 };
-                let mut n = MathNode::with_children("mstyle", vec![body]);
-                n.set_attr(
+                let mut style = MathNode::with_children("mstyle", vec![body]);
+                style.set_attr(
                     "displaystyle",
                     if name == "textstyle" { "false" } else { "true" },
                 );
-                n
+                style
             }
             "prescript" => {
                 let sup = self.prescript_argument()?;
@@ -1002,13 +880,13 @@ impl<'a> Scanner<'a> {
                     return Err(error("unsupported enclosure notation"));
                 }
                 let body = self.math_argument()?;
-                let mut n = MathNode::with_children("menclose", vec![body]);
-                n.set_attr("notation", &notation);
-                n
+                let mut enclose = MathNode::with_children("menclose", vec![body]);
+                enclose.set_attr("notation", &notation);
+                enclose
             }
             "mathbb" | "mathfrak" | "mathcal" | "mathscr" | "mathrm" | "mathbf" | "mathit"
             | "boldsymbol" => {
-                let mut n = self.math_argument()?;
+                let mut node = self.math_argument()?;
                 let style = match name {
                     "mathbb" => "double-struck",
                     "mathfrak" => "fraktur",
@@ -1018,16 +896,16 @@ impl<'a> Scanner<'a> {
                     "boldsymbol" => "bold-italic",
                     _ => "italic",
                 };
-                fn apply(n: &mut MathNode, value: &str) {
-                    if matches!(n.tag.as_str(), "mi" | "mo" | "mn") {
-                        n.set_attr("mathvariant", value);
+                fn apply(target: &mut MathNode, value: &str) {
+                    if matches!(target.tag.as_str(), "mi" | "mo" | "mn") {
+                        target.set_attr("mathvariant", value);
                     }
-                    for c in &mut n.children {
-                        apply(c, value);
+                    for child in &mut target.children {
+                        apply(child, value);
                     }
                 }
-                apply(&mut n, style);
-                n
+                apply(&mut node, style);
+                node
             }
             "overset" | "underset" => {
                 let mark = self.math_argument()?;
@@ -1064,7 +942,7 @@ impl<'a> Scanner<'a> {
                 };
                 mark.set_attr("stretchy", "true");
                 let base = self.math_argument()?;
-                let mut n = MathNode::with_children(
+                let mut scripted = MathNode::with_children(
                     if name == "overaccent" {
                         "mover"
                     } else {
@@ -1072,7 +950,7 @@ impl<'a> Scanner<'a> {
                     },
                     vec![base, mark],
                 );
-                n.set_attr(
+                scripted.set_attr(
                     if name == "overaccent" {
                         "accent"
                     } else {
@@ -1080,7 +958,7 @@ impl<'a> Scanner<'a> {
                     },
                     "true",
                 );
-                n
+                scripted
             }
             "doubleoverline" | "doubleunderline" => {
                 let body = self.math_argument()?;
@@ -1089,23 +967,22 @@ impl<'a> Scanner<'a> {
                 } else {
                     "munder"
                 };
-                let mut n = accent(tag, body, "¯");
-                n = accent(tag, n, "¯");
-                n
+                let inner = accent(tag, body, "¯");
+                accent(tag, inner, "¯")
             }
             "hspace" => {
                 let width = self.argument()?.trim();
                 let units = ["em", "ex", "mu", "pt"];
                 let number = units
                     .iter()
-                    .find_map(|u| width.strip_suffix(u))
+                    .find_map(|unit| width.strip_suffix(unit))
                     .ok_or_else(|| error("hspace requires em, ex, mu or pt units"))?;
                 if !number.trim().parse::<f32>().is_ok_and(f32::is_finite) {
                     return Err(error("invalid hspace dimension"));
                 }
-                let mut n = MathNode::new("mspace");
-                n.set_attr("width", width);
-                n
+                let mut space = MathNode::new("mspace");
+                space.set_attr("width", width);
+                space
             }
             "," | ":" | ";" | "!" | " " | "quad" | "qquad" | "enspace" | "thinspace"
             | "medspace" | "thickspace" | "negthinspace" => {
@@ -1118,9 +995,9 @@ impl<'a> Scanner<'a> {
                     "qquad" => "2em",
                     _ => "1em",
                 };
-                let mut n = MathNode::new("mspace");
-                n.set_attr("width", width);
-                n
+                let mut space = MathNode::new("mspace");
+                space.set_attr("width", width);
+                space
             }
             "begin" => {
                 let start = self.pos;
@@ -1128,13 +1005,13 @@ impl<'a> Scanner<'a> {
                 if matches!(environment, "Bmatrix" | "Vmatrix") {
                     let body = self.environment_body(environment)?;
                     let matrix = format!("\\begin{{matrix}}{body}\\end{{matrix}}");
-                    let mut n = parse_at(&matrix, self.depth + 1)?;
-                    let table = if n.children.len() == 1 {
-                        n.children.remove(0)
+                    let mut parsed = parse_at(&matrix, self.depth + 1)?;
+                    let table = if parsed.children.len() == 1 {
+                        parsed.children.remove(0)
                     } else {
-                        n.tag = "mrow".into();
-                        n.attrs.clear();
-                        n
+                        parsed.tag = "mrow".into();
+                        parsed.attrs.clear();
+                        parsed
                     };
                     let (open, close) = if environment == "Bmatrix" {
                         ("{", "}")
@@ -1151,38 +1028,39 @@ impl<'a> Scanner<'a> {
                     return Ok(None);
                 } else {
                     let columns = self.argument()?.trim();
-                    if columns.is_empty() || columns.chars().any(|c| !matches!(c, 'l' | 'c' | 'r'))
+                    if columns.is_empty()
+                        || columns.chars().any(|ch| !matches!(ch, 'l' | 'c' | 'r'))
                     {
                         return Err(error("array columns must contain l, c or r"));
                     }
                     let body = self.environment_body("array")?;
                     let matrix = format!("\\begin{{matrix}}{body}\\end{{matrix}}");
-                    let mut n = parse_at(&matrix, self.depth + 1)?;
+                    let mut parsed = parse_at(&matrix, self.depth + 1)?;
                     let aligns = columns
                         .chars()
-                        .map(|c| match c {
+                        .map(|ch| match ch {
                             'l' => "left",
                             'r' => "right",
                             _ => "center",
                         })
                         .collect::<Vec<_>>()
                         .join(" ");
-                    fn align(n: &mut MathNode, value: &str) {
-                        if n.tag == "mtable" {
-                            n.set_attr("columnalign", value);
+                    fn align(target: &mut MathNode, value: &str) {
+                        if target.tag == "mtable" {
+                            target.set_attr("columnalign", value);
                         } else {
-                            for c in &mut n.children {
-                                align(c, value);
+                            for child in &mut target.children {
+                                align(child, value);
                             }
                         }
                     }
-                    align(&mut n, &aligns);
-                    if n.children.len() == 1 {
-                        n.children.remove(0)
+                    align(&mut parsed, &aligns);
+                    if parsed.children.len() == 1 {
+                        parsed.children.remove(0)
                     } else {
-                        n.tag = "mrow".into();
-                        n.attrs.clear();
-                        n
+                        parsed.tag = "mrow".into();
+                        parsed.attrs.clear();
+                        parsed
                     }
                 }
             }
@@ -1228,6 +1106,7 @@ impl<'a> Scanner<'a> {
         };
         Ok(Some(node))
     }
+
     fn environment_body(&mut self, environment: &str) -> Result<&'a str> {
         let start = self.pos;
         let mut level = 1usize;
@@ -1256,35 +1135,258 @@ impl<'a> Scanner<'a> {
     }
 }
 
+// ── Marker Substitution & Prime Normalization ───────────────────────────────
+
+fn parse_fragment(fragment: &str, marker: &str, nodes: &[MathNode]) -> Result<MathNode> {
+    let mut math = super::parse_standard(fragment)?;
+    replace_markers(&mut math, marker, nodes);
+    flatten_prime_superscripts(&mut math);
+    Ok(if math.children.len() == 1 {
+        math.children.remove(0)
+    } else {
+        math.tag = "mrow".into();
+        math.attrs.clear();
+        math
+    })
+}
+
+fn parse_fragment_at(arg: &str, depth: usize) -> Result<MathNode> {
+    let mut math = parse_at(arg, depth)?;
+    if math.children.len() == 1 {
+        Ok(math.children.remove(0))
+    } else {
+        math.tag = "mrow".into();
+        math.attrs.clear();
+        Ok(math)
+    }
+}
+
+fn replace_markers(node: &mut MathNode, marker: &str, nodes: &[MathNode]) {
+    if node.tag == "mtext" {
+        if let Some(index) = node.text.strip_prefix(marker).and_then(decode_marker_index) {
+            if let Some(native) = nodes.get(index) {
+                *node = native.clone();
+                return;
+            }
+        }
+    }
+    for child in &mut node.children {
+        replace_markers(child, marker, nodes);
+    }
+}
+
+fn flatten_prime_superscripts(node: &mut MathNode) {
+    for child in &mut node.children {
+        flatten_prime_superscripts(child);
+    }
+    let mut idx = 0;
+    while idx + 1 < node.children.len() {
+        let can_merge = node.children[idx].tag == "msup" && node.children[idx].children.len() == 2;
+        if can_merge {
+            if let (Some(left_count), Some(right_count)) = (
+                prime_token_count(&node.children[idx].children[1]),
+                prime_token_count(&node.children[idx + 1]),
+            ) {
+                let sum = left_count.saturating_add(right_count);
+                if sum <= 3 {
+                    node.children.remove(idx + 1);
+                    node.children[idx].children[1] =
+                        MathNode::leaf("mo", prime_glyph_for_count(sum));
+                    continue;
+                }
+            }
+        }
+        idx += 1;
+    }
+    if node.tag == "msup" && node.children.len() == 2 {
+        if let Some(outer_count) = prime_token_count(&node.children[1]) {
+            let combined = if node.children[0].tag == "msup" && node.children[0].children.len() == 2
+            {
+                if let Some(inner_count) = prime_token_count(&node.children[0].children[1]) {
+                    let sum = inner_count.saturating_add(outer_count);
+                    if sum <= 3 {
+                        let inner_base = node.children[0].children.remove(0);
+                        node.children[0] = inner_base;
+                        Some(sum)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else if outer_count <= 3 {
+                Some(outer_count)
+            } else {
+                None
+            };
+            if let Some(total) = combined {
+                node.children[1] = MathNode::leaf("mo", prime_glyph_for_count(total));
+            }
+        }
+    }
+}
+
+fn prime_token_count(node: &MathNode) -> Option<u8> {
+    if node.tag == "mo" && node.children.is_empty() {
+        let mut total = 0u8;
+        let text = node.text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        for ch in text.chars() {
+            let add = match ch {
+                '\'' | '\u{2032}' => 1,
+                '\u{2033}' => 2,
+                '\u{2034}' => 3,
+                _ => return None,
+            };
+            total = total.saturating_add(add);
+        }
+        return (total > 0).then_some(total);
+    }
+    if node.tag == "mrow" && !node.children.is_empty() {
+        let mut total = 0u8;
+        for child in &node.children {
+            total = total.saturating_add(prime_token_count(child)?);
+        }
+        return (total > 0).then_some(total);
+    }
+    if node.tag == "msup" && node.children.len() == 2 {
+        let base_count = prime_token_count(&node.children[0])?;
+        let sup_count = prime_token_count(&node.children[1])?;
+        return base_count.checked_add(sup_count);
+    }
+    None
+}
+
+fn prime_glyph_for_count(count: u8) -> &'static str {
+    match count {
+        1 => "\u{2032}",
+        2 => "\u{2033}",
+        _ => "\u{2034}",
+    }
+}
+
 fn encode_marker_index(index: usize) -> String {
     format!("{index:x}")
         .bytes()
-        .map(|b| match b {
-            b'0'..=b'9' => (b'A' + (b - b'0')) as char,
-            _ => (b'A' + (b - b'a' + 10)) as char,
+        .map(|byte| match byte {
+            b'0'..=b'9' => (b'A' + (byte - b'0')) as char,
+            _ => (b'A' + (byte - b'a' + 10)) as char,
         })
         .collect()
 }
 
-fn decode_marker_index(s: &str) -> Option<usize> {
-    if s.is_empty() {
+fn decode_marker_index(encoded: &str) -> Option<usize> {
+    if encoded.is_empty() {
         return None;
     }
     let mut val = 0usize;
-    for b in s.bytes() {
-        if !(b'A'..=b'P').contains(&b) {
+    for byte in encoded.bytes() {
+        if !(b'A'..=b'P').contains(&byte) {
             return None;
         }
-        val = val.checked_mul(16)?.checked_add((b - b'A') as usize)?;
+        val = val.checked_mul(16)?.checked_add((byte - b'A') as usize)?;
     }
     Some(val)
+}
+
+// ── TeX & Catalog Helpers ───────────────────────────────────────────────────
+
+fn unescape_text(mut source: &str) -> String {
+    let mut text = String::with_capacity(source.len());
+    while let Some(ch) = source.chars().next() {
+        source = &source[ch.len_utf8()..];
+        if ch == '\\' {
+            let command = [
+                ("textbackslash", '\\'),
+                ("textasciitilde", '~'),
+                ("textasciicircum", '^'),
+            ]
+            .into_iter()
+            .find(|(name, _)| source.starts_with(name) && command_end(source, name.len()));
+            if let Some((name, value)) = command {
+                let rest = &source[name.len()..];
+                source = rest.strip_prefix("{}").unwrap_or(rest);
+                text.push(value);
+                continue;
+            }
+            if let Some(escaped @ ('{' | '}' | '_' | '&' | '%' | '$' | '#' | '\\' | ' ')) =
+                source.chars().next()
+            {
+                source = &source[escaped.len_utf8()..];
+                text.push(escaped);
+                continue;
+            }
+        }
+        text.push(if ch == '~' { '\u{00A0}' } else { ch });
+    }
+    text
 }
 
 fn command_end(source: &str, pos: usize) -> bool {
     !source[pos..]
         .chars()
         .next()
-        .is_some_and(|c| c.is_ascii_alphabetic())
+        .is_some_and(|ch| ch.is_ascii_alphabetic())
+}
+
+fn split_top_level_atop(src: &str) -> Option<(&str, &str)> {
+    let bytes = src.as_bytes();
+    let mut idx = 0usize;
+    let mut level = 0usize;
+    while idx < bytes.len() {
+        if bytes[idx] == b'\\' {
+            if level == 0 && src[idx..].starts_with("\\atop") && command_end(src, idx + 5) {
+                return Some((&src[..idx], &src[idx + 5..]));
+            }
+            idx += 1;
+            if idx < bytes.len() && bytes[idx].is_ascii_alphabetic() {
+                while idx < bytes.len() && bytes[idx].is_ascii_alphabetic() {
+                    idx += 1;
+                }
+            } else if idx < bytes.len() {
+                let ch = src[idx..].chars().next()?;
+                idx += ch.len_utf8();
+            }
+            continue;
+        }
+        match bytes[idx] {
+            b'{' => level += 1,
+            b'}' => level = level.saturating_sub(1),
+            _ => {}
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn normalize_genfrac_delim(delim: &str) -> &str {
+    match delim {
+        "" | "." => "",
+        "\\{" => "{",
+        "\\}" => "}",
+        "\\|" | "\\Vert" | "\\lVert" | "\\rVert" => "‖",
+        "\\langle" => "⟨",
+        "\\rangle" => "⟩",
+        "\\lfloor" => "⌊",
+        "\\rfloor" => "⌋",
+        "\\lceil" => "⌈",
+        "\\rceil" => "⌉",
+        "\\llbracket" => "⟦",
+        "\\rrbracket" => "⟧",
+        other => other,
+    }
+}
+
+fn wrap_fenced_frac(open_delim: &str, close_delim: &str, frac: MathNode) -> MathNode {
+    let mut open = MathNode::leaf("mo", open_delim);
+    open.set_attr("stretchy", "true");
+    open.set_attr("form", "prefix");
+    let mut close = MathNode::leaf("mo", close_delim);
+    close.set_attr("stretchy", "true");
+    close.set_attr("form", "postfix");
+    MathNode::with_children("mrow", vec![open, frac, close])
 }
 
 fn accent(tag: &str, base: MathNode, glyph: &str) -> MathNode {
@@ -1379,75 +1481,6 @@ fn big_operator(name: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-fn parse_fragment_at(arg: &str, depth: usize) -> Result<MathNode> {
-    let mut math = parse_at(arg, depth)?;
-    if math.children.len() == 1 {
-        Ok(math.children.remove(0))
-    } else {
-        math.tag = "mrow".into();
-        math.attrs.clear();
-        Ok(math)
-    }
-}
-
-fn split_top_level_atop(src: &str) -> Option<(&str, &str)> {
-    let bytes = src.as_bytes();
-    let mut i = 0usize;
-    let mut level = 0usize;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            if level == 0 && src[i..].starts_with("\\atop") && command_end(src, i + 5) {
-                return Some((&src[..i], &src[i + 5..]));
-            }
-            i += 1;
-            if i < bytes.len() && bytes[i].is_ascii_alphabetic() {
-                while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
-                    i += 1;
-                }
-            } else if i < bytes.len() {
-                let ch = src[i..].chars().next()?;
-                i += ch.len_utf8();
-            }
-            continue;
-        }
-        match bytes[i] {
-            b'{' => level += 1,
-            b'}' => level = level.saturating_sub(1),
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
-fn normalize_genfrac_delim(d: &str) -> &str {
-    match d {
-        "" | "." => "",
-        "\\{" => "{",
-        "\\}" => "}",
-        "\\|" | "\\Vert" | "\\lVert" | "\\rVert" => "‖",
-        "\\langle" => "⟨",
-        "\\rangle" => "⟩",
-        "\\lfloor" => "⌊",
-        "\\rfloor" => "⌋",
-        "\\lceil" => "⌈",
-        "\\rceil" => "⌉",
-        "\\llbracket" => "⟦",
-        "\\rrbracket" => "⟧",
-        other => other,
-    }
-}
-
-fn wrap_fenced_frac(open_delim: &str, close_delim: &str, frac: MathNode) -> MathNode {
-    let mut open = MathNode::leaf("mo", open_delim);
-    open.set_attr("stretchy", "true");
-    open.set_attr("form", "prefix");
-    let mut close = MathNode::leaf("mo", close_delim);
-    close.set_attr("stretchy", "true");
-    close.set_attr("form", "postfix");
-    MathNode::with_children("mrow", vec![open, frac, close])
-}
-
 fn symbol_or_alias(name: &str) -> Option<MathNode> {
     let (tag, glyph) = match name {
         "le" | "leq" => ("mo", "≤"),
@@ -1476,4 +1509,8 @@ fn symbol_or_alias(name: &str) -> Option<MathNode> {
         _ => return None,
     };
     Some(MathNode::leaf(tag, glyph))
+}
+
+fn error(message: impl Into<String>) -> Error {
+    Error::Xml(format!("LaTeX parsing error: {}", message.into()))
 }
