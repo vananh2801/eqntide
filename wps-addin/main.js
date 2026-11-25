@@ -1220,12 +1220,57 @@ function moveCursorAfterRange(doc, cursorTarget) {
   } catch (_) {}
 }
 
-function refreshToggleScreen(doc) {
+function refreshToggleScreen(doc, updateFields) {
   function redraw() {
     try {
       if (!toggleDocumentIsCurrent(doc)) return;
       var app = wps.Application;
-      if (typeof app.ScreenRefresh === "function") app.ScreenRefresh();
+      if (updateFields && doc.Fields && doc.Fields.Count > 1) {
+        var toggledFieldCodes = false;
+        try {
+          var win = app && app.ActiveWindow;
+          var view = win && win.View;
+          if (view && typeof view.ShowFieldCodes === "boolean") {
+            var pane = win.ActivePane;
+            var vp = pane && typeof pane.VerticalPercentScrolled === "number" ? pane.VerticalPercentScrolled : null;
+            var sel = app.Selection;
+            var selStart = sel && typeof sel.Start === "number" ? sel.Start : null;
+            var selEnd = sel && typeof sel.End === "number" ? sel.End : null;
+            var prevUpdating = app.ScreenUpdating;
+            var prevFieldCodes = view.ShowFieldCodes;
+            try {
+              app.ScreenUpdating = false;
+              view.ShowFieldCodes = !prevFieldCodes;
+              view.ShowFieldCodes = prevFieldCodes;
+              toggledFieldCodes = true;
+            } finally {
+              try {
+                if (view.ShowFieldCodes !== prevFieldCodes) view.ShowFieldCodes = prevFieldCodes;
+              } catch (_) {}
+              if (toggledFieldCodes) {
+                try {
+                  if (selStart !== null && selEnd !== null && app.Selection &&
+                      (app.Selection.Start !== selStart || app.Selection.End !== selEnd)) {
+                    doc.Range(selStart, selEnd).Select();
+                  }
+                } catch (_) {}
+                try {
+                  if (vp !== null && pane && pane.VerticalPercentScrolled !== vp) {
+                    pane.VerticalPercentScrolled = vp;
+                  }
+                } catch (_) {}
+              }
+              try {
+                if (typeof prevUpdating === "boolean") app.ScreenUpdating = prevUpdating;
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
+        if (!toggledFieldCodes && typeof doc.Fields.Update === "function") {
+          try { doc.Fields.Update(); } catch (_) {}
+        }
+      }
+      if (app && typeof app.ScreenRefresh === "function") app.ScreenRefresh();
     } catch (_) {}
   }
 
@@ -1474,10 +1519,8 @@ function insertMathTypeAtDocRange(doc, targetRange, waitData, shouldMoveCursor, 
   }
 }
 
-function hasMathTypePreview(binaryData) {
-  if (!binaryData) return false;
-  var bytes;
-  try { bytes = atob(binaryData.textContent.replace(/\s/g, "")); } catch (_) { return false; }
+function extractMetafileMtef(bytes) {
+  if (!bytes || typeof bytes !== "string") return null;
   // Both supported metafile formats carry MTEF in an AppsMFCC comment.
   function uint16(offset) {
     return bytes.charCodeAt(offset) + bytes.charCodeAt(offset + 1) * 256;
@@ -1485,14 +1528,14 @@ function hasMathTypePreview(binaryData) {
   function uint32(offset) {
     return uint16(offset) + uint16(offset + 2) * 65536;
   }
-  function hasPayload(comment) {
+  function extractPayload(comment) {
     var signature = comment.indexOf("AppsMFCC");
-    if (signature < 0) return false;
+    if (signature < 0) return null;
     var payload = comment.slice(signature + 18);
     var vendor = "Design Science, Inc.\x00";
     if (payload.indexOf(vendor) === 0) payload = payload.slice(vendor.length);
     var version = payload.charCodeAt(0);
-    return version === 3 || version === 5;
+    return (version === 3 || version === 5) ? payload : null;
   }
 
   if (bytes.length >= 88 && uint32(0) === 1 && bytes.slice(40, 44) === " EMF") {
@@ -1500,25 +1543,203 @@ function hasMathTypePreview(binaryData) {
       var kind = uint32(pos);
       var size = uint32(pos + 4);
       if (size < 8 || size % 4 || pos + size > bytes.length || kind === 14) break;
-      if (kind === 70 && size >= 12 &&
-          hasPayload(bytes.slice(pos + 12, Math.min(pos + size, pos + 12 + uint32(pos + 8))))) return true;
+      if (kind === 70 && size >= 12) {
+        var emfMtef = extractPayload(bytes.slice(pos + 12, Math.min(pos + size, pos + 12 + uint32(pos + 8))));
+        if (emfMtef) return emfMtef;
+      }
       pos += size;
     }
-    return false;
+    return null;
   }
 
   var header = bytes.slice(0, 4) === "\xd7\xcd\xc6\x9a" ? 22 : 0;
-  if (uint16(header + 2) !== 9) return false;
+  if (header + 18 > bytes.length || uint16(header + 2) !== 9) return null;
   for (var offset = header + 18; offset + 6 <= bytes.length;) {
     var recordSize = uint32(offset) * 2;
     if (recordSize < 6 || offset + recordSize > bytes.length) break;
     if (uint16(offset + 4) === 0x0626 && recordSize >= 10 && uint16(offset + 6) === 15) {
       var comment = bytes.slice(offset + 10, Math.min(offset + recordSize, offset + 10 + uint16(offset + 8)));
-      if (comment.indexOf("AppsMFCC") === 0 && hasPayload(comment)) return true;
+      if (comment.indexOf("AppsMFCC") === 0) {
+        var wmfMtef = extractPayload(comment);
+        if (wmfMtef) return wmfMtef;
+      }
     }
     offset += recordSize;
   }
-  return false;
+  return null;
+}
+
+function hasMathTypePreview(binaryData) {
+  if (!binaryData || typeof atob !== "function") return false;
+  var bytes;
+  try { bytes = atob(binaryData.textContent.replace(/\s/g, "")); } catch (_) { return false; }
+  return !!extractMetafileMtef(bytes);
+}
+
+function extractOleSignature(bytes) {
+  if (!bytes || bytes.length < 512 || bytes.slice(0, 8) !== "\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") {
+    return null;
+  }
+  function u16(buf, off) {
+    return buf.charCodeAt(off) + buf.charCodeAt(off + 1) * 256;
+  }
+  function u32(buf, off) {
+    return (buf.charCodeAt(off) + buf.charCodeAt(off + 1) * 256 +
+      buf.charCodeAt(off + 2) * 65536 + buf.charCodeAt(off + 3) * 16777216) >>> 0;
+  }
+  var sectorShift = u16(bytes, 30);
+  var miniShift = u16(bytes, 32);
+  if (sectorShift < 7 || sectorShift > 16 || miniShift < 4 || miniShift > sectorShift) return null;
+  var sectorSize = 1 << sectorShift;
+  var miniSectorSize = 1 << miniShift;
+  var firstDirSect = u32(bytes, 48);
+  var miniCutoff = u32(bytes, 56);
+  if (miniCutoff > 65536) return null;
+  var firstMiniFatSect = u32(bytes, 60);
+  var numMiniFatSects = u32(bytes, 64);
+  var firstDifatSect = u32(bytes, 68);
+  var numDifatSects = u32(bytes, 72);
+  var DIFSECT = 0xFFFFFFFC;
+  var ENDOFCHAIN = 0xFFFFFFFE;
+
+  function readSector(sect) {
+    var off = (sect + 1) * sectorSize;
+    if (off < 0 || off + sectorSize > bytes.length) return null;
+    return bytes.slice(off, off + sectorSize);
+  }
+
+  var fatSects = [];
+  for (var i = 0; i < 109; i++) {
+    var sect = u32(bytes, 76 + i * 4);
+    if (sect < DIFSECT) fatSects.push(sect);
+  }
+  var difatSect = firstDifatSect;
+  var maxDifat = Math.min(numDifatSects, Math.floor(bytes.length / sectorSize) + 1);
+  var visitedDifat = Object.create(null);
+  for (var di = 0; di < maxDifat && difatSect < DIFSECT && !visitedDifat[difatSect]; di++) {
+    visitedDifat[difatSect] = true;
+    var dSec = readSector(difatSect);
+    if (!dSec) break;
+    var dEntries = sectorSize >> 2;
+    for (var j = 0; j < dEntries - 1; j++) {
+      var fs = u32(dSec, j * 4);
+      if (fs < DIFSECT) fatSects.push(fs);
+    }
+    difatSect = u32(dSec, (dEntries - 1) * 4);
+  }
+
+  var fat = [];
+  for (var fi = 0; fi < fatSects.length; fi++) {
+    var fSec = readSector(fatSects[fi]);
+    if (!fSec) continue;
+    for (var fo = 0; fo < sectorSize; fo += 4) fat.push(u32(fSec, fo));
+  }
+  if (!fat.length) return null;
+
+  function readChain(startSect, maxBytes) {
+    var chunks = [];
+    var totalLen = 0;
+    var cur = startSect;
+    var limit = Math.min(fat.length, Math.floor(bytes.length / sectorSize) + 1);
+    var visited = Object.create(null);
+    for (var step = 0; cur < DIFSECT && step < limit && !visited[cur]; step++) {
+      visited[cur] = true;
+      var sec = readSector(cur);
+      if (!sec) break;
+      chunks.push(sec);
+      totalLen += sec.length;
+      if (maxBytes !== null && totalLen >= maxBytes) break;
+      cur = cur < fat.length ? fat[cur] : ENDOFCHAIN;
+    }
+    var joined = chunks.join("");
+    return (maxBytes !== null && joined.length > maxBytes) ? joined.slice(0, maxBytes) : joined;
+  }
+
+  var dirBytes = readChain(firstDirSect, bytes.length);
+  if (dirBytes.length < 128) return null;
+  var rootEntry = null;
+  var streams = [];
+  for (var off = 0; off + 128 <= dirBytes.length; off += 128) {
+    var nameLen = u16(dirBytes, off + 64);
+    var entryType = dirBytes.charCodeAt(off + 66);
+    if (entryType === 0 || nameLen < 2 || nameLen > 64) continue;
+    var u16Count = (nameLen >> 1) - 1;
+    var nameChars = [];
+    for (var ci = 0; ci < u16Count; ci++) {
+      var ch = u16(dirBytes, off + ci * 2);
+      if (ch === 0) break;
+      nameChars.push(String.fromCharCode(ch));
+    }
+    var item = {
+      name: nameChars.join(""),
+      entryType: entryType,
+      startSect: u32(dirBytes, off + 116),
+      size: Math.min(u32(dirBytes, off + 120), bytes.length)
+    };
+    if (entryType === 5 && !rootEntry) rootEntry = item;
+    else if (entryType === 2) streams.push(item);
+  }
+  if (!streams.length) return null;
+
+  var miniStream = null;
+  var miniFat = null;
+  function readStreamBytes(entry) {
+    if (entry.size === 0) return "";
+    if (entry.size >= miniCutoff) return readChain(entry.startSect, entry.size);
+    if (!rootEntry || firstMiniFatSect >= DIFSECT || numMiniFatSects === 0) return null;
+    if (miniStream === null) {
+      miniStream = readChain(rootEntry.startSect, rootEntry.size);
+      var mfBytes = readChain(firstMiniFatSect, numMiniFatSects * sectorSize);
+      miniFat = [];
+      for (var mo = 0; mo + 4 <= mfBytes.length; mo += 4) miniFat.push(u32(mfBytes, mo));
+    }
+    var out = [];
+    var collected = 0;
+    var cur = entry.startSect;
+    var maxSteps = Math.min(miniFat.length, Math.floor(miniStream.length / miniSectorSize) + 2);
+    var visited = Object.create(null);
+    for (var s = 0; cur < DIFSECT && s < maxSteps && collected < entry.size && !visited[cur]; s++) {
+      visited[cur] = true;
+      var mOff = cur * miniSectorSize;
+      if (mOff >= miniStream.length) break;
+      var piece = miniStream.slice(mOff, Math.min(miniStream.length, mOff + miniSectorSize));
+      out.push(piece);
+      collected += piece.length;
+      cur = cur < miniFat.length ? miniFat[cur] : ENDOFCHAIN;
+    }
+    var raw = out.join("");
+    return raw.length > entry.size ? raw.slice(0, entry.size) : raw;
+  }
+
+  var mtefNames = ["equation native", "equationnative", "equation"];
+  for (var mi = 0; mi < mtefNames.length; mi++) {
+    for (var si = 0; si < streams.length; si++) {
+      if (streams[si].name.toLowerCase() === mtefNames[mi]) {
+        var rawMtef = readStreamBytes(streams[si]);
+        if (rawMtef && rawMtef.length >= 28) {
+          var cbHdr = u16(rawMtef, 0);
+          var cbObj = u32(rawMtef, 8);
+          var payload = null;
+          if (cbHdr === 28) {
+            var avail = rawMtef.length - 28;
+            payload = (cbObj > 0 && cbObj <= avail) ? rawMtef.slice(28, 28 + cbObj) : rawMtef.slice(28);
+          } else {
+            var v0 = rawMtef.charCodeAt(0);
+            if (v0 === 3 || v0 === 5) payload = rawMtef;
+          }
+          if (payload) return { kind: "mtef", sig: "mtef:" + hashToggleSource(payload) };
+        }
+      }
+    }
+  }
+
+  var streamSigs = [];
+  for (var k = 0; k < streams.length; k++) {
+    var content = readStreamBytes(streams[k]);
+    if (content === null) return null;
+    streamSigs.push(streams[k].name.toLowerCase() + ":" + hashToggleSource(content));
+  }
+  return { kind: "cfb", sig: "cfb:" + streamSigs.sort().join(",") };
 }
 
 function hasBatchEquationInXml(xml) {
@@ -1768,23 +1989,47 @@ function runToggleWindow(items, worker, applyItem, onDone, onProgress) {
 // WPS can reassign part and relationship IDs when a neighboring range is
 // replaced. Compare the equation data instead of the serialized package.
 function toggleSourceSignature(xml, isOmml) {
-  var parts = /<pkg:part\b([^>]*)>\s*<pkg:binaryData\b[^>]*>([\s\S]*?)<\/pkg:binaryData>/gi;
+  var parts = /<(?:[\w.-]+:)?part\b([^>]*)>([\s\S]*?)<\/(?:[\w.-]+:)?part\s*>/gi;
+  var oleMtef = [];
   var embedded = [];
+  var mediaMtef = [];
   var media = [];
   var part;
   while ((part = parts.exec(xml))) {
-    var name = /\bpkg:name=["']\/?word\/(embeddings|media)\//i.exec(part[1]);
+    var name = /\b(?:[\w.-]+:)?name=["']\/?word\/(embeddings|media)\//i.exec(part[1]);
     if (!name) continue;
-    var signatures = name[1].toLowerCase() === "embeddings" ? embedded : media;
-    signatures.push(hashToggleSource(part[2].replace(/\s/g, "")));
+    var binMatch = /<(?:[\w.-]+:)?binaryData\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?binaryData\s*>/i.exec(part[2]);
+    if (!binMatch) continue;
+    var cleanB64 = binMatch[1].replace(/\s/g, "");
+    if (name[1].toLowerCase() === "embeddings") {
+      var oleInfo = null;
+      if (typeof atob === "function") {
+        try { oleInfo = extractOleSignature(atob(cleanB64)); } catch (_) {}
+      }
+      if (oleInfo && oleInfo.kind === "mtef") oleMtef.push(oleInfo.sig);
+      else embedded.push(oleInfo ? oleInfo.sig : hashToggleSource(cleanB64));
+    } else {
+      var metaMtef = null;
+      if (typeof atob === "function") {
+        try { metaMtef = extractMetafileMtef(atob(cleanB64)); } catch (_) {}
+      }
+      if (metaMtef) mediaMtef.push("mtef:" + hashToggleSource(metaMtef));
+      media.push(hashToggleSource(cleanB64));
+    }
   }
-  if (embedded.length && !isOmml) return "ole:" + embedded.sort().join(",");
+  if (!isOmml && oleMtef.length && !embedded.length) return oleMtef.sort().join(",");
+  if (!isOmml && (oleMtef.length || embedded.length)) {
+    return "ole:" + oleMtef.concat(embedded).sort().join(",");
+  }
   var math = xml.match(/<(?:[\w.-]+:)?oMath(?=[\s/>])(?:[^>]*\/>|[\s\S]*?<\/(?:[\w.-]+:)?oMath\s*>)/g);
   if (math) {
     return "omml:" + hashToggleSource(math.join("").replace(/\s+(?:xmlns(?::[\w.-]+)?|[\w.-]+:rsid[\w.-]*)=["'][^"']*["']/g, ""));
   }
+  if (!isOmml && mediaMtef.length) return mediaMtef.sort().join(",");
   if (!isOmml && media.length) return "media:" + media.sort().join(",");
-  return "xml:" + hashToggleSource(xml);
+  return "xml:" + hashToggleSource(
+    xml.replace(/\s+(?:xmlns(?::[\w.-]+)?|[\w.-]+:(?:rsid[\w.-]*|paraId|textId)|ObjectID|ShapeID|id|[\w.-]+:id|[\w.-]+:embed|[\w.-]+:name)=["'][^"']*["']/gi, "")
+  );
 }
 
 function hashToggleSource(text) {
@@ -1953,7 +2198,8 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report
         return;
       }
       try {
-        return ajaxPost(
+        var cancelled = false;
+        var request = ajaxPost(
           BRIDGE_URL + "/convert/snippet",
           JSON.stringify({
             data: m.latex,
@@ -1962,6 +2208,7 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report
             font_pt: m.fontPt
           }),
           function (status, responseText) {
+            if (cancelled) return;
             lastResponse = batchNow();
             var data = null;
             if (status === 200) {
@@ -1985,6 +2232,12 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report
           },
           25000
         );
+        return {
+          abort: function () {
+            cancelled = true;
+            if (request && typeof request.abort === "function") request.abort();
+          }
+        };
       } catch (err) {
         if (!lastNon422Error) lastNon422Error = "Could not submit a conversion request.";
         done();
@@ -2044,7 +2297,7 @@ function runLatexToMathTypeBatch(doc, selection, latexMatches, rangeInfo, report
       finish();
       if (convertedCount > 0) {
         if (!recoveryError) resetToggleCaretFormatting(doc);
-        refreshToggleScreen(doc);
+        refreshToggleScreen(doc, true);
       }
       var skippedCount = total - convertedCount;
       wpsLog("batchLatexToMathType timing: " + JSON.stringify({
@@ -2134,16 +2387,22 @@ function findToggleObjectAt(collection, start) {
   var lo = 1, hi = collection.Count;
   while (lo <= hi) {
     var mid = (lo + hi) >> 1;
-    var candidate = collection.Item(mid);
-    if (!candidate || !candidate.Range) return null;
-    var position = candidate.Range.Start;
+    var candidate = null;
+    var position = null;
+    try {
+      candidate = collection.Item(mid);
+      position = candidate && candidate.Range ? candidate.Range.Start : null;
+    } catch (_) {}
+    if (typeof position !== "number") break;
     if (position === start) return candidate;
     if (position < start) lo = mid + 1;
     else hi = mid - 1;
   }
   for (var index = 1; index <= collection.Count; index++) {
-    var item = collection.Item(index);
-    if (item && item.Range && item.Range.Start === start) return item;
+    try {
+      var item = collection.Item(index);
+      if (item && item.Range && item.Range.Start === start) return item;
+    } catch (_) {}
   }
   return null;
 }
@@ -2239,16 +2498,25 @@ function readToggleEquationXml(doc, item) {
     if (source && source.Start === item.start && source.End === sourceEnd) xml = source.WordOpenXML;
   } catch (_) {}
   if (!xml) {
-    source = doc.Range(item.start, sourceEnd);
+    var fallbackRange = doc.Range(item.start, sourceEnd);
+    source = fallbackRange;
     if (item.sourceObject) {
       var collection = item.isOmml ? "OMaths" : "InlineShapes";
-      var liveObject = findToggleEquationAt(doc, source, item.start, collection);
+      var liveObject = findToggleEquationAt(doc, fallbackRange, item.start, collection);
       if (!liveObject) throw new Error("The equation range changed at " + item.start + ".");
       source = liveObject.Range;
       item.sourceObject = liveObject;
-      item.sourceEnd = source.End;
+      if (source && typeof source.End === "number" && source.End >= sourceEnd) {
+        item.sourceEnd = source.End;
+      }
     }
-    xml = source.WordOpenXML;
+    try { xml = source && source.WordOpenXML; } catch (_) {}
+    if (!xml && fallbackRange && source !== fallbackRange) {
+      try { xml = fallbackRange.WordOpenXML; } catch (_) {}
+    }
+    if (!xml && item.sourceObject) {
+      throw new Error("WPS returned empty equation XML at " + item.start + ".");
+    }
   }
   return compactFlatOpcXml(xml || "");
 }
@@ -2280,6 +2548,7 @@ function runEquationToLatexBatch(doc, selection, eqTargets, report, finish) {
           return;
         }
         var signature = toggleSourceSignature(payloadXml, eq.isOmml);
+        var cancelled = false;
         var request = ajaxPost(
           BRIDGE_URL + "/convert/snippet",
           JSON.stringify({
@@ -2288,6 +2557,7 @@ function runEquationToLatexBatch(doc, selection, eqTargets, report, finish) {
             to: "latex"
           }),
           function (status, responseText) {
+            if (cancelled) return;
             lastResponse = batchNow();
             var result = null;
             if (status === 200) {
@@ -2314,7 +2584,12 @@ function runEquationToLatexBatch(doc, selection, eqTargets, report, finish) {
           25000
         );
         payloadXml = null;
-        return request;
+        return {
+          abort: function () {
+            cancelled = true;
+            if (request && typeof request.abort === "function") request.abort();
+          }
+        };
       } catch (err) {
         if (!lastNon422Error) lastNon422Error = "Could not read or submit equation at " + eq.start + ": " + err;
         done();
@@ -2330,7 +2605,12 @@ function runEquationToLatexBatch(doc, selection, eqTargets, report, finish) {
           var rStart = item.start;
           var rEnd = item.end;
           var latexStr = item.isDisplay ? ("$$" + result.latex + "$$") : ("$" + result.latex + "$");
-          if (toggleSourceSignature(readToggleEquationXml(doc, item), item.isOmml) !== result.signature) {
+          var currentXml = readToggleEquationXml(doc, item);
+          var currentSignature = toggleSourceSignature(currentXml, item.isOmml);
+          if (currentSignature !== result.signature) {
+            wpsLog("batchEquationToLatex: signature mismatch at " + rStart +
+              " (before=" + result.signature + ", after=" + currentSignature +
+              ", xmlLen=" + (currentXml ? currentXml.length : 0) + ")");
             return "The equation changed during Toggle LaTeX at " + rStart + ".";
           }
           if (firstWrite === null) firstWrite = batchNow();
@@ -2620,7 +2900,7 @@ function ToggleLatex() {
           if (status === 200) {
             var conv = JSON.parse(responseText);
             if (conv.result) {
-              if (insertMathTypeAtDocRange(doc, targetLatexRange, conv, true)) refreshToggleScreen(doc);
+              if (insertMathTypeAtDocRange(doc, targetLatexRange, conv, true)) refreshToggleScreen(doc, true);
             }
             wpsLog("ToggleLatex: successfully converted single LaTeX to MathType equation");
           } else {
@@ -2942,6 +3222,7 @@ function InsertMathTypeEquation(waitData) {
       g_lastInsertError = "Missing or invalid MathType OLE Flat OPC package.";
       return false;
     }
+    refreshToggleScreen(doc, true);
     return true;
   } catch (err) {
     g_lastInsertError = (err && err.message) ? err.message : String(err);
@@ -3081,11 +3362,21 @@ function ajaxPost(url, payload, callback, timeoutMs) {
   xhr.setRequestHeader("Content-Type", "application/json");
   var token = getBridgeToken();
   if (token) xhr.setRequestHeader(BRIDGE_TOKEN_HEADER, token);
+  var settled = false;
+  function finish(status, responseText) {
+    if (settled) return;
+    settled = true;
+    xhr.onreadystatechange = null;
+    xhr.ontimeout = null;
+    callback(status, responseText);
+  }
   xhr.onreadystatechange = function () {
     if (xhr.readyState === 4) {
-      xhr.onreadystatechange = null;
-      callback(xhr.status, xhr.responseText);
+      finish(xhr.status, xhr.responseText);
     }
+  };
+  xhr.ontimeout = function () {
+    finish(0, "Request timed out");
   };
   xhr.send(payload);
   return xhr;

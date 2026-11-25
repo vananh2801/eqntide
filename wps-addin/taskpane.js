@@ -903,6 +903,55 @@ btnStartUpgrade.addEventListener("click", function () {
                 curSel.Font.Superscript = false;
               }
             } catch (_) {}
+            if (upgradedCount > 0 && targetMode === "flat_opc_mathtype") {
+              try {
+                if (doc.Fields && doc.Fields.Count > 1) {
+                  var toggledFieldCodes = false;
+                  try {
+                    var win = app && app.ActiveWindow;
+                    var view = win && win.View;
+                    if (view && typeof view.ShowFieldCodes === "boolean") {
+                      var pane = win.ActivePane;
+                      var vp = pane && typeof pane.VerticalPercentScrolled === "number" ? pane.VerticalPercentScrolled : null;
+                      var sel = app.Selection;
+                      var selStart = sel && typeof sel.Start === "number" ? sel.Start : null;
+                      var selEnd = sel && typeof sel.End === "number" ? sel.End : null;
+                      var prevUpdating = app.ScreenUpdating;
+                      var prevFieldCodes = view.ShowFieldCodes;
+                      try {
+                        app.ScreenUpdating = false;
+                        view.ShowFieldCodes = !prevFieldCodes;
+                        view.ShowFieldCodes = prevFieldCodes;
+                        toggledFieldCodes = true;
+                      } finally {
+                        try {
+                          if (view.ShowFieldCodes !== prevFieldCodes) view.ShowFieldCodes = prevFieldCodes;
+                        } catch (_) {}
+                        if (toggledFieldCodes) {
+                          try {
+                            if (selStart !== null && selEnd !== null && app.Selection &&
+                                (app.Selection.Start !== selStart || app.Selection.End !== selEnd)) {
+                              doc.Range(selStart, selEnd).Select();
+                            }
+                          } catch (_) {}
+                          try {
+                            if (vp !== null && pane && pane.VerticalPercentScrolled !== vp) {
+                              pane.VerticalPercentScrolled = vp;
+                            }
+                          } catch (_) {}
+                        }
+                        try {
+                          if (typeof prevUpdating === "boolean") app.ScreenUpdating = prevUpdating;
+                        } catch (_) {}
+                      }
+                    }
+                  } catch (_) {}
+                  if (!toggledFieldCodes && typeof doc.Fields.Update === "function") {
+                    doc.Fields.Update();
+                  }
+                }
+              } catch (_) {}
+            }
 
             finishUpgrade(foundCount, upgradedCount);
           }

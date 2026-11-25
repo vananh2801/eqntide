@@ -1732,3 +1732,333 @@ console.log('WPS Flat OPC compaction & taskpane bounded-concurrency tests passed
   c.batchEquationToLatex(doc, selection, [targets[0]]);
   assert.match(alerts[1], /Found: 1\nConverted: 0\nSkipped\/Errors: 1/);
 }
+
+// 12. Post-insert refresh toggles View.ShowFieldCodes under ScreenUpdating=false (with
+//     doc.Fields.Update() fallback) once when existing equations (Count > 1) are present,
+//     preserving selection/scroll without repaginating or mutating field values.
+{
+  const c = controller();
+  const timers = [];
+  const calls = [];
+  let fieldCount = 1;
+  let showFieldCodes = false;
+  let screenUpdating = true;
+  let vp = 42;
+  let sel = { Start: 12, End: 12 };
+  const doc = {
+    Fields: {
+      get Count() { return fieldCount; },
+      Update() { calls.push('fields.update'); }
+    },
+    Range(s, e) {
+      return { Select() { sel.Start = s; sel.End = e; calls.push(['select', s, e]); } };
+    },
+    Repaginate() { calls.push('repaginate'); }
+  };
+  const view = {
+    get ShowFieldCodes() { return showFieldCodes; },
+    set ShowFieldCodes(v) {
+      showFieldCodes = v;
+      calls.push(['fieldCodes', v, screenUpdating]);
+      if (v) { sel.Start = 3; sel.End = 3; vp = 1; }
+    }
+  };
+  c.wps = {
+    Application: {
+      ActiveDocument: doc,
+      get Selection() { return sel; },
+      get ScreenUpdating() { return screenUpdating; },
+      set ScreenUpdating(v) { screenUpdating = v; calls.push(['screenUpdating', v]); },
+      ActiveWindow: {
+        View: view,
+        ActivePane: {
+          get VerticalPercentScrolled() { return vp; },
+          set VerticalPercentScrolled(v) { vp = v; calls.push(['scroll', v]); },
+          View: { Zoom: { set Percentage(_v) { calls.push('zoom'); } } }
+        }
+      },
+      ScreenRefresh() { calls.push('refresh'); }
+    }
+  };
+  c.setTimeout = fn => timers.push(fn);
+
+  // Single-equation doc (Count <= 1): skip ShowFieldCodes toggle & Fields.Update().
+  c.refreshToggleScreen(doc, true);
+  timers.shift()();
+  assert.deepEqual(calls, ['refresh']);
+
+  // Multi-equation doc (Count > 1) without updateFields flag (e.g. Equation -> LaTeX): skip.
+  calls.length = 0;
+  fieldCount = 5;
+  c.refreshToggleScreen(doc);
+  timers.shift()();
+  assert.deepEqual(calls, ['refresh']);
+
+  // Multi-equation doc (Count > 1) with updateFields=true: toggle ShowFieldCodes under ScreenUpdating=false,
+  // restore shifted selection/scroll, avoid calling slow doc.Fields.Update(), then ScreenRefresh().
+  calls.length = 0;
+  c.refreshToggleScreen(doc, true);
+  timers.shift()();
+  assert.deepEqual(calls, [
+    ['screenUpdating', false],
+    ['fieldCodes', true, false],
+    ['fieldCodes', false, false],
+    ['select', 12, 12],
+    ['scroll', 42],
+    ['screenUpdating', true],
+    'refresh'
+  ]);
+  assert.equal(showFieldCodes, false);
+  assert.equal(screenUpdating, true);
+  assert.equal(vp, 42);
+  assert.deepEqual(sel, { Start: 12, End: 12 });
+
+  // Fallback when View.ShowFieldCodes is unavailable: calls doc.Fields.Update().
+  calls.length = 0;
+  c.wps.Application.ActiveWindow.View = {};
+  c.refreshToggleScreen(doc, true);
+  timers.shift()();
+  assert.deepEqual(calls, ['fields.update', 'refresh']);
+
+  // Active document switched before deferred redraw: skip both refresh work and ScreenRefresh().
+  calls.length = 0;
+  c.refreshToggleScreen(doc, true);
+  c.wps.Application.ActiveDocument = {};
+  timers.shift()();
+  assert.deepEqual(calls, []);
+}
+{
+  // InsertMathTypeEquation & single ToggleLatex (LaTeX -> MathType) trigger deferred Fields.Update()
+  // when Count > 1; batchLatexToMathType triggers it once after all insertions.
+  const c = controller();
+  const timers = [];
+  const calls = [];
+  let text = 'Before $a=1$ middle $b=2$ after';
+  const pic = { Range: { Start: 0, End: 1, Font: { Position: 0 } } };
+  const doc = {
+    get Content() { return { End: text.length }; },
+    Fields: { Count: 10, Update() { calls.push('fields.update'); } },
+    Range(start, end) {
+      if (start === undefined) return { End: text.length };
+      return {
+        Start: start, End: end, Font: { Size: 12, Position: 0 },
+        get Text() { return text.slice(this.Start, this.End); },
+        Delete() { text = text.slice(0, this.Start) + text.slice(this.End); },
+        InsertXML() { text = text.slice(0, this.Start) + '#\r' + text.slice(this.End); },
+        InlineShapes: { Count: 1, Item: () => pic },
+        Paragraphs: { Item: () => null },
+        Select() {}
+      };
+    }
+  };
+  const selection = { Start: 0, End: 0, Font: { Size: 12 }, Range: doc.Range(0, 0) };
+  c.wps = {
+    Application: {
+      ActiveDocument: doc,
+      Selection: selection,
+      ScreenRefresh() { calls.push('refresh'); }
+    }
+  };
+  c.setTimeout = fn => timers.push(fn);
+  c.ensureBridgeRunning = cb => cb();
+  c.alert = () => {};
+  const pkg = '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>';
+  c.ajaxPost = (_u, _b, cb) => cb(200, JSON.stringify({ result: pkg, width_pt: 10, height_pt: 10, depth_pt: 0 }));
+
+  // 1. InsertMathTypeEquation
+  assert.equal(c.InsertMathTypeEquation({ flat_opc: pkg, width_pt: 10, height_pt: 10, depth_pt: 0 }), true);
+  assert.deepEqual(calls, []);
+  while (timers.length) timers.shift()();
+  assert.deepEqual(calls, ['fields.update', 'refresh']);
+
+  // 2. Batch ToggleLatex (2 formulas): Fields.Update runs once for the entire batch
+  calls.length = 0;
+  text = '$a=1$ $b=2$';
+  selection.Start = 0; selection.End = text.length; selection.Text = text;
+  selection.Range = doc.Range(0, text.length);
+  c.batchLatexToMathType(doc, selection, c.findAllLatexMatches(text), { start: 0, end: text.length, fontPt: 12 });
+  while (timers.length) timers.shift()();
+  assert.deepEqual(calls, ['fields.update', 'refresh']);
+
+  // 3. Single ToggleLatex (LaTeX -> MathType)
+  calls.length = 0;
+  text = 'x $y=1$ z';
+  selection.Start = 4; selection.End = 4; selection.Text = '';
+  selection.Range = doc.Range(4, 4);
+  selection.Paragraphs = { Item: () => ({ Range: { Start: 0, End: text.length, Text: text } }) };
+  c.ToggleLatex();
+  while (timers.length) timers.shift()();
+  assert.deepEqual(calls, ['fields.update', 'refresh']);
+}
+console.log('WPS Fields.Update post-insert refresh regression tests passed');
+
+// 13. OLE CFB/EMF MTEF signature stability, abort HTTP-0 suppression, and fallback recovery.
+{
+  const c = controller();
+  c.atob = s => Buffer.from(s, 'base64').toString('latin1');
+
+  // Build a minimal valid v3 CFB (512-byte sector) with an Equation Native mini-stream.
+  function makeCfb(mtefPayload, rootTimestampByte = 0) {
+    const sector = 512;
+    const totalSectors = 6; // header + FAT + dir + miniFAT + miniStream + slack
+    const buf = Buffer.alloc(totalSectors * sector, 0);
+    // Header
+    Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(buf, 0);
+    buf.writeUInt16LE(0x003e, 24);
+    buf.writeUInt16LE(0x0003, 26);
+    buf.writeUInt16LE(0xfffe, 28);
+    buf.writeUInt16LE(9, 30); // sector shift = 512
+    buf.writeUInt16LE(6, 32); // mini sector shift = 64
+    buf.writeUInt32LE(1, 44); // 1 FAT sector
+    buf.writeUInt32LE(1, 48); // firstDirSect = 1
+    buf.writeUInt32LE(4096, 56); // miniCutoff
+    buf.writeUInt32LE(2, 60); // firstMiniFatSect = 2
+    buf.writeUInt32LE(1, 64); // numMiniFatSects = 1
+    buf.writeUInt32LE(0xfffffffe, 68); // ENDOFCHAIN DIFAT
+    buf.writeUInt32LE(0, 76); // DIFAT[0] = FAT sector 0
+    for (let i = 1; i < 109; i++) buf.writeUInt32LE(0xffffffff, 76 + i * 4);
+
+    // Sector 0 (offset 512): FAT
+    const fatOff = 1 * sector;
+    for (let i = 0; i < 128; i++) buf.writeUInt32LE(0xffffffff, fatOff + i * 4);
+    buf.writeUInt32LE(0xfffffffd, fatOff + 0 * 4); // FATSECT
+    buf.writeUInt32LE(0xfffffffe, fatOff + 1 * 4); // dir ENDOFCHAIN
+    buf.writeUInt32LE(0xfffffffe, fatOff + 2 * 4); // miniFAT ENDOFCHAIN
+    buf.writeUInt32LE(0xfffffffe, fatOff + 3 * 4); // miniStream ENDOFCHAIN
+
+    // Sector 1 (offset 1024): Directory (Root Entry + Equation Native)
+    const dirOff = 2 * sector;
+    function writeDir(slot, name, type, startSect, size, tsByte) {
+      const off = dirOff + slot * 128;
+      const u16 = Buffer.from(name + '\0', 'utf16le');
+      u16.copy(buf, off);
+      buf.writeUInt16LE(u16.length, off + 64);
+      buf[off + 66] = type;
+      buf.writeUInt32LE(0xffffffff, off + 68);
+      buf.writeUInt32LE(0xffffffff, off + 72);
+      buf.writeUInt32LE(type === 5 ? 1 : 0xffffffff, off + 76);
+      buf.fill(tsByte, off + 100, off + 116); // Creation/Modified FILETIME
+      buf.writeUInt32LE(startSect, off + 116);
+      buf.writeUInt32LE(size, off + 120);
+    }
+    const eqnHdr = Buffer.alloc(28, 0);
+    eqnHdr.writeUInt16LE(28, 0);
+    eqnHdr.writeUInt32LE(mtefPayload.length, 8);
+    const eqnNative = Buffer.concat([eqnHdr, mtefPayload]);
+    writeDir(0, 'Root Entry', 5, 3, 64, rootTimestampByte);
+    writeDir(1, 'Equation Native', 2, 0, eqnNative.length, rootTimestampByte);
+
+    // Sector 2 (offset 1536): MiniFAT
+    const mfOff = 3 * sector;
+    for (let i = 0; i < 128; i++) buf.writeUInt32LE(0xffffffff, mfOff + i * 4);
+    buf.writeUInt32LE(0xfffffffe, mfOff);
+
+    // Sector 3 (offset 2048): MiniStream
+    eqnNative.copy(buf, 4 * sector);
+    return buf.toString('base64');
+  }
+
+  function makeEmf(mtefPayload) {
+    const comment = Buffer.concat([Buffer.from('AppsMFCC'), Buffer.alloc(10, 0), Buffer.from('Design Science, Inc.\0'), mtefPayload]);
+    const recSize = Math.ceil((12 + comment.length) / 4) * 4;
+    const buf = Buffer.alloc(88 + recSize + 8, 0);
+    buf.writeUInt32LE(1, 0);
+    buf.writeUInt32LE(88, 4);
+    Buffer.from(' EMF').copy(buf, 40);
+    buf.writeUInt32LE(70, 88); // EMR_COMMENT
+    buf.writeUInt32LE(recSize, 92);
+    buf.writeUInt32LE(comment.length, 96);
+    comment.copy(buf, 100);
+    buf.writeUInt32LE(14, 88 + recSize); // EMR_EOF
+    buf.writeUInt32LE(8, 88 + recSize + 4);
+    return buf.toString('base64');
+  }
+
+  const mtef1 = Buffer.from([5, 0, 1, 0, 1, 2, 3, 4]);
+  const mtef2 = Buffer.from([5, 0, 1, 0, 1, 2, 3, 9]);
+  const wrapOle = (b64, prefix = 'pkg:', objId = '_1') =>
+    `<${prefix}package><${prefix}part ${prefix}name="/word/embeddings/oleObject1.bin"><${prefix}binaryData>${b64}</${prefix}binaryData></${prefix}part>` +
+    `<${prefix}part ${prefix}name="/word/document.xml"><${prefix}xmlData><o:OLEObject ObjectID="${objId}" ProgID="Equation.DSMT4"/></${prefix}xmlData></${prefix}part></${prefix}package>`;
+  const wrapEmf = b64 =>
+    `<pkg:package><pkg:part pkg:name="/word/media/image1.emf"><pkg:binaryData>${b64}</pkg:binaryData></pkg:part></pkg:package>`;
+
+  const sigTs1 = c.toggleSourceSignature(wrapOle(makeCfb(mtef1, 0x11), 'pkg:', '_111'), false);
+  const sigTs2 = c.toggleSourceSignature(wrapOle(makeCfb(mtef1, 0x77), '', '_999'), false);
+  const sigEmf = c.toggleSourceSignature(wrapEmf(makeEmf(mtef1)), false);
+  const sigMutated = c.toggleSourceSignature(wrapOle(makeCfb(mtef2, 0x11)), false);
+  assert.equal(sigTs1, sigTs2, 'OLE CFB timestamps and package prefix noise must not change signature');
+  assert.equal(sigTs1, sigEmf, 'OLE MTEF and EMF AppsMFCC MTEF signatures must match');
+  assert.notEqual(sigTs1, sigMutated, 'genuine MTEF equation change must change signature');
+}
+{
+  // Aborted in-flight requests from finish(error) must NOT inject spurious "HTTP 0" into alert details.
+  const c = controller();
+  const callbacks = [];
+  const alerts = [];
+  const targets = [
+    { start: 10, end: 11, isOmml: false },
+    { start: 20, end: 21, isOmml: false }
+  ];
+  let sigCalls = 0;
+  const doc = {
+    get Content() { return { End: 100 }; },
+    Range(start) {
+      return {
+        Start: start,
+        End: start + 1,
+        Text: '',
+        get WordOpenXML() { return '<m:oMath>' + (++sigCalls) + '</m:oMath>'; }
+      };
+    }
+  };
+  c.wps = { Application: { ActiveDocument: doc, Selection: { Start: 0, End: 100 } } };
+  mockToggleProgress(c);
+  c.alert = msg => alerts.push(msg);
+  c.ajaxPost = (_url, _payload, done) => {
+    callbacks.push(done);
+    return { abort() { done(0, ''); } };
+  };
+  c.batchEquationToLatex(doc, c.wps.Application.Selection, targets);
+  // First slot returns 200 OK; second slot gets aborted with status 0 during finish(error).
+  callbacks[0](200, '{"result":"x"}');
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /The equation changed during Toggle LaTeX at 20\./);
+  assert.equal(alerts[0].includes('HTTP 0'), false, 'aborted sibling request must not append HTTP 0');
+}
+{
+  // findToggleObjectAt falls back cleanly when binary search hits a broken item;
+  // readToggleEquationXml preserves full sourceEnd across fallback recovery.
+  const c = controller();
+  const targetXml = '<pkg:package><o:OLEObject ProgID="Equation.DSMT4"/></pkg:package>';
+  const shape = { Range: { Start: 50, End: 76, WordOpenXML: targetXml } };
+  const brokenMid = { get Range() { throw Error('stale'); } };
+  const collection = {
+    Count: 3,
+    Item(i) { return i === 2 ? brokenMid : shape; }
+  };
+  assert.equal(c.findToggleObjectAt(collection, 50), shape);
+
+  const item = {
+    start: 50,
+    end: 51,
+    sourceEnd: 76,
+    isOmml: false,
+    sourceObject: { Range: { Start: 50, End: 76, WordOpenXML: '' } }
+  };
+  const liveShortShape = { Range: { Start: 50, End: 51, WordOpenXML: '' } };
+  const doc = {
+    InlineShapes: { Count: 1, Item: () => liveShortShape },
+    Range(start, end) {
+      return {
+        Start: start,
+        End: end,
+        InlineShapes: { Count: 1, Item: () => liveShortShape },
+        WordOpenXML: end === 76 ? targetXml : ''
+      };
+    }
+  };
+  c.wps = { Application: { ActiveDocument: doc, Selection: {} } };
+  assert.equal(c.readToggleEquationXml(doc, item), targetXml);
+  assert.equal(item.sourceEnd, 76, 'fallback must not shrink sourceEnd below full field range');
+}
+console.log('WPS CFB/EMF MTEF signature, HTTP-0 abort suppression, and fallback tests passed');
