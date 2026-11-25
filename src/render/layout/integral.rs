@@ -74,7 +74,7 @@ impl Layout {
         pieces.push((recipe.bot, asc_bot, desc_bot));
 
         let count = pieces.len();
-        let overlap = 1.5;
+        let overlap = 0.03 * eff_em;
 
         // 3. Compute the y offsets so the pieces join seamlessly.
         let mut rel_y = vec![0.0f32; count];

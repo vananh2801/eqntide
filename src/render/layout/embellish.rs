@@ -163,108 +163,42 @@ impl Layout {
                     layout_box.asc = layout_box.asc.max(base_asc + 0.29 * em);
                 }
             }
-            '←' | '↔' | '⇀' | '↼' | '⇌' | '⇋' | '⇒' | '⇐' | '⇔' => {
-                let natural = self
-                    .font_set
-                    .glyph_polys(Face::Symbol, ch, em, em, 0.0, 0.0);
-                let (min_x, max_x, min_y, max_y) = natural.iter().flatten().fold(
-                    (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
-                    |(x_lo, x_hi, y_lo, y_hi), point| {
-                        (
-                            x_lo.min(point.0),
-                            x_hi.max(point.0),
-                            y_lo.min(point.1),
-                            y_hi.max(point.1),
-                        )
-                    },
-                );
-                if max_x > min_x {
-                    let content_w = w - 2.0 * x0;
-                    let span = content_w.max(0.45 * em);
-                    let arrow_x0 = x0 - (span - content_w) / 2.0;
-                    let contours: Vec<Vec<(f32, f32)>> = natural
-                        .into_iter()
-                        .map(|poly| {
-                            poly.into_iter()
-                                .map(|(x, py)| {
-                                    (
-                                        arrow_x0 + (x - min_x) * span / (max_x - min_x),
-                                        py + y - max_y,
-                                    )
-                                })
-                                .collect()
-                        })
-                        .collect();
-                    layout_box.items.push(Item::Contours(contours));
-                    layout_box.asc = layout_box.asc.max(-(min_y + y - max_y) + 0.04 * em);
-                }
-            }
-            '\u{20D7}' | '\u{2192}' | '\u{27F6}' => {
-                let ic = self.italic_correction_of_box(layout_box);
-                let eff_em = 0.65 * em;
-                let unit = eff_em / 1000.0;
-                let x_left = x0 + 0.35 * ic;
-                let x_right = (w - x0 + ic).max(x_left + 0.40 * em);
-                let span = x_right - x_left;
-                let y_shaft = -(base_asc + 0.18 * em);
-                let y_glyph = y_shaft + 259.0 * unit;
-                let min_w = 805.0 * unit;
-
-                if span < min_w {
-                    // Short arrow (single letter): scale '\u{2192}' horizontally to span the letter.
-                    let em_x = eff_em * span / min_w;
-                    let origin_x = x_left - 71.0 * (em_x / 1000.0);
-                    let polys = self.font_set.glyph_polys(
-                        Face::Symbol,
-                        '\u{2192}',
-                        em_x,
-                        eff_em,
-                        origin_x,
-                        y_glyph,
+            _ if arrow::arrow_dir(ch).is_some() => {
+                if let Some(dir) = arrow::arrow_dir(ch) {
+                    let is_double_or_stacked = matches!(
+                        dir,
+                        arrow::ArrowDir::DoubleRight
+                            | arrow::ArrowDir::DoubleLeft
+                            | arrow::ArrowDir::DoubleBoth
+                            | arrow::ArrowDir::EquilibriumRightLeft
+                            | arrow::ArrowDir::EquilibriumLeftRight
+                            | arrow::ArrowDir::OpposingRightLeft
+                            | arrow::ArrowDir::OpposingLeftRight
                     );
-                    layout_box.items.push(Item::Contours(polys));
-                } else {
-                    // Delimiter-style piece assembly:
-                    // 1. Arrowhead piece at right.
-                    let arrow_x = x_right - 876.0 * unit;
-                    layout_box.items.push(Item::Glyph {
-                        ch: '\u{2192}',
-                        face: Face::Symbol,
-                        em: eff_em,
-                        x: arrow_x,
-                        y: y_glyph,
-                        ssty: 0,
-                    });
-                    // 2. Extenders tiled to the left.
-                    let from_x = x_left;
-                    let to_x = arrow_x + 150.0 * unit;
-                    let gap = to_x - from_x;
-                    if gap > 0.0 {
-                        let ext_w = 322.0 * unit;
-                        let count = (gap / ext_w).ceil().max(1.0) as usize;
-                        let step = if count > 1 {
-                            (gap - ext_w) / (count - 1) as f32
-                        } else {
-                            0.0
-                        };
-                        let first_x = if count > 1 {
-                            from_x
-                        } else {
-                            from_x + (gap - ext_w) / 2.0
-                        };
-                        for i in 0..count {
-                            layout_box.items.push(Item::Glyph {
-                                ch: '\u{23AF}',
-                                face: Face::Symbol,
-                                em: eff_em,
-                                x: first_x + i as f32 * step,
-                                y: y_glyph,
-                                ssty: 0,
-                            });
-                        }
-                    }
+                    let (eff_em, x_left, span) = if is_double_or_stacked {
+                        let content_w = w - 2.0 * x0;
+                        let target_span = content_w.max(0.45 * em);
+                        (em, x0 - (target_span - content_w) / 2.0, target_span)
+                    } else {
+                        let ic = self.italic_correction_of_box(layout_box);
+                        let left = x0 + 0.35 * ic;
+                        let right = (w - x0 + ic).max(left + 0.40 * em);
+                        (0.65 * em, left, right - left)
+                    };
+                    let unit = eff_em / 1000.0;
+                    let (y_min_font, _) = arrow::glyph_font_y_bounds(dir);
+                    let y_glyph = (-(base_asc + 0.10 * em) + y_min_font * unit)
+                        .min(-(base_asc + 0.18 * em) + 259.0 * unit);
+                    let (min_y, _) = self.assemble_horizontal_arrow(
+                        dir,
+                        x_left,
+                        span,
+                        y_glyph,
+                        eff_em,
+                        &mut layout_box.items,
+                    );
+                    layout_box.asc = layout_box.asc.max(-min_y + 0.04 * em);
                 }
-                layout_box.asc = layout_box.asc.max(-y_shaft + 200.0 * unit + 0.04 * em);
             }
             '^' | '\u{0302}' | '\u{02C6}' => {
                 // Determine content width (such as single letter 'B' vs multi-letter 'ABC').
@@ -362,10 +296,10 @@ impl Layout {
                 };
                 let points: Vec<(f32, f32)> = (0..=steps)
                     .map(|i| {
-                        let t = i as f32 / steps as f32;
+                        let ratio = i as f32 / steps as f32;
                         (
-                            center_x - span / 2.0 + span * t,
-                            y - amp * (t * std::f32::consts::TAU).sin(),
+                            center_x - span / 2.0 + span * ratio,
+                            y - amp * (ratio * std::f32::consts::TAU).sin(),
                         )
                     })
                     .collect();
@@ -389,7 +323,7 @@ impl Layout {
         layout_box.asc = layout_box.asc.max(-y + 0.09 * em);
     }
 
-    /// Reflect a vector accent below the baseline, preserving its natural width.
+    /// Reflect an accent below the baseline, preserving natural glyph proportions.
     pub(super) fn draw_under_accent(
         &self,
         layout_box: &mut LBox,
@@ -425,9 +359,13 @@ impl Layout {
                     x,
                     y,
                     ssty,
-                } if ch == '\u{2192}' || ch == '\u{23AF}' => {
-                    // Both '\u{2192}' and '\u{23AF}' are vertically symmetric around their shaft
-                    // (+259 font units above baseline), so keeping Item::Glyph avoids seam notches.
+                } if matches!(
+                    ch,
+                    '\u{2192}' | '\u{2190}' | '\u{2194}' | '⇒' | '⇐' | '⇔' | '=' | '\u{23AF}'
+                ) =>
+                {
+                    // These glyphs are vertically symmetric around +259 font units above
+                    // baseline, so keeping Item::Glyph avoids raster seam notches.
                     layout_box.items.push(Item::Glyph {
                         ch,
                         face,
@@ -464,6 +402,15 @@ impl Layout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn poly_y_span(points: &[(f32, f32)]) -> f32 {
+        let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
+        for &(_, y) in points {
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        max_y - min_y
+    }
 
     #[test]
     fn mathring_renders_hollow_ring_distinct_from_dot() {
@@ -526,5 +473,106 @@ mod tests {
             (tilde_span - hat_span).abs() < 0.25 * base_box.w,
             "widetilde span {tilde_span} should be comparable to widehat span {hat_span}"
         );
+    }
+
+    #[test]
+    fn multi_char_arrow_accents_extend_with_unscaled_glyphs() {
+        let base_math = crate::service::parse_latex_to_mathml(r"xyz").unwrap();
+        let (base_box, em) = layout_math(&base_math, 14.0).unwrap();
+        let expected_eff_em = 0.65 * em;
+
+        let cases = [
+            (r"\overleftarrow{xyz}", '\u{2190}'),
+            (r"\overleftrightarrow{xyz}", '\u{2192}'),
+            (r"\overleftharpoon{xyz}", '↼'),
+            (r"\underrightharpoon{xyz}", '⇀'),
+        ];
+
+        for (latex, expected_head) in cases {
+            let math = crate::service::parse_latex_to_mathml(latex).unwrap();
+            let (accent_box, _) = layout_math(&math, 14.0).unwrap();
+
+            let has_extender = accent_box.items.iter().any(|item| {
+                matches!(
+                    item,
+                    Item::Glyph {
+                        ch: '\u{23AF}',
+                        em: item_em,
+                        ..
+                    } if (*item_em - expected_eff_em).abs() < 1e-3
+                )
+            });
+            assert!(
+                has_extender,
+                "{latex}: must include unscaled '\\u{{23AF}}' extender at em={expected_eff_em}"
+            );
+
+            // Check that the arrowhead glyph (or reflected contour for under-harpoon)
+            // is present and spans the base width cleanly.
+            let has_head = accent_box.items.iter().any(|item| match item {
+                Item::Glyph {
+                    ch, em: item_em, ..
+                } => *ch == expected_head && (*item_em - expected_eff_em).abs() < 1e-3,
+                Item::Contours(contours) => {
+                    contours
+                        .iter()
+                        .flatten()
+                        .fold(f32::MIN, |acc, &(_, y)| acc.max(y))
+                        > base_box.desc
+                }
+                _ => false,
+            });
+            assert!(has_head, "{latex}: missing arrowhead piece");
+
+            let (min_x, max_x, _, _) = accent_box.ink_bounds(fonts());
+            assert!(
+                max_x - min_x >= 0.85 * base_box.w,
+                "{latex}: accent width {} must cover base width {}",
+                max_x - min_x,
+                base_box.w
+            );
+        }
+    }
+
+    #[test]
+    fn narrow_arrow_accents_preserve_natural_arrowhead_aspect() {
+        let font_set = fonts();
+
+        // Single narrow letter \vec{i}: arrowhead must not be compressed horizontally.
+        let vec_math = crate::service::parse_latex_to_mathml(r"\vec{i}").unwrap();
+        let (vec_box, em) = layout_math(&vec_math, 14.0).unwrap();
+        let eff_em = 0.65 * em;
+        let expected_height = (459.0 - 58.0) * (eff_em / 1000.0);
+        let arrow_poly = vec_box
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Poly(points) => Some(points),
+                _ => None,
+            })
+            .expect(r"\vec{i} should trim shaft into a clipped unscaled Poly");
+        let poly_h = poly_y_span(arrow_poly);
+        assert!(
+            (poly_h - expected_height).abs() < 0.5,
+            r"\vec{{i}} arrowhead height {poly_h} should match unscaled {expected_height}"
+        );
+
+        // Single narrow letter \overaccent{⇔}{x}: falls back to unscaled centered natural ⇔.
+        let double_math = crate::service::parse_latex_to_mathml(r"\overaccent{⇔}{x}").unwrap();
+        let (double_box, em_double) = layout_math(&double_math, 14.0).unwrap();
+        let double_glyph = double_box.items.iter().find_map(|item| match item {
+            Item::Glyph {
+                ch: '⇔',
+                em: glyph_em,
+                ..
+            } => Some(*glyph_em),
+            _ => None,
+        });
+        assert!(
+            double_glyph.is_some_and(|glyph_em| (glyph_em - em_double).abs() < 1e-3),
+            r"\overaccent{{⇔}}{{x}} must emit unscaled natural '⇔' glyph"
+        );
+        let (natural_x0, natural_x1) = font_set.ink_x(Face::Symbol, '⇔', em_double);
+        assert!(natural_x1 > natural_x0);
     }
 }

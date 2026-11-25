@@ -530,6 +530,83 @@ fn test_export_ai_visual_layout_suite() {
         edge_png.height_pt
     );
 
+    // 16: Long-argument stress cases across all stretchy arrow families & arrow accents
+    let long_arrow_cases = [
+        (
+            "single_long",
+            r"A \overset{\text{long condition } x_1 + x_2 + \cdots + x_n}{\rightarrow} B \underset{a_1 + a_2 + \cdots + a_m}{\leftarrow} C",
+        ),
+        (
+            "both_long",
+            r"X \overset{f_1(x) + f_2(x) + f_3(x)}{\underset{g_1(x) + g_2(x) + g_3(x)}{\leftrightarrow}} Y",
+        ),
+        (
+            "double_long",
+            r"P \overset{\text{sufficient condition } A + B}{\Rightarrow} Q \underset{\text{necessary condition } C + D}{\Leftarrow} R \overset{u+v+w+z}{\underset{p+q+r+s}{\Leftrightarrow}} S",
+        ),
+        (
+            "opposing_long",
+            r"\underset{dfdsfsd}{\rightleftarrows} + A \overset{\text{forward reaction } k_1}{\underset{\text{reverse reaction } k_{-1}}{\rightleftarrows}} B",
+        ),
+        (
+            "equilibrium_long",
+            r"A + B \overset{k_1 [A][B] + k_2 [C]}{\underset{k_{-1} [AB] + k_{-2} [D]}{\rightleftharpoons}} C + D \overset{\alpha + \beta + \gamma}{\underset{\delta + \varepsilon}{\leftrightharpoons}} E",
+        ),
+        (
+            "harpoon_mapsto",
+            r"A \overset{h_1 + h_2 + h_3 + h_4}{\rightharpoonup} B \underset{l_1 + l_2 + l_3 + l_4}{\leftharpoonup} C \overset{x \mapsto a_n x^n + \cdots + a_0}{\mapsto} D",
+        ),
+        (
+            "over_accents_long",
+            r"\overrightarrow{x_1 + x_2 + x_3 + \cdots + x_n} + \overleftarrow{\text{long left vector}} + \overleftrightarrow{ABCDEFGHIJKLMN}",
+        ),
+        (
+            "under_accents_long",
+            r"\underrightarrow{a + b + c + d + e + f} + \underleftarrow{\text{long under argument}} + \underleftrightarrow{P_1 Q_2 R_3 S_4}",
+        ),
+        (
+            "harpoon_accents_long",
+            r"\overrightharpoon{\text{long over harpoon arg}} + \underleftharpoon{\text{long under harpoon arg}}",
+        ),
+    ];
+    let mut long_rows = Vec::new();
+    for (label, latex) in long_arrow_cases {
+        let parsed = parse_latex_to_mathml(latex).expect(latex);
+        long_rows.push(MathNode::with_children(
+            "mtr",
+            vec![
+                node_with_attr(
+                    "mtd",
+                    "columnalign",
+                    "left",
+                    vec![MathNode::leaf("mtext", label)],
+                ),
+                node_with_attr(
+                    "mtd",
+                    "columnalign",
+                    "left",
+                    vec![node_with_attr(
+                        "mstyle",
+                        "displaystyle",
+                        "true",
+                        parsed.children,
+                    )],
+                ),
+            ],
+        ));
+    }
+    let long_math =
+        MathNode::with_children("math", vec![MathNode::with_children("mtable", long_rows)]);
+    let long_png = render_preview(&long_math, 10.0).expect("render 16_long_arrow_arguments");
+    let long_path = visual_dir.join("16_long_arrow_arguments.png");
+    fs::write(&long_path, png_to_white_bg(&long_png.png)).expect("write 16_long_arrow_arguments");
+    println!(
+        "[OK] visual/16_long_arrow_arguments.png: {} bytes ({:.1}x{:.1} pt)",
+        long_png.png.len(),
+        long_png.width_pt,
+        long_png.height_pt
+    );
+
     writeln!(index, "## Generated Visual Sheets\n").unwrap();
     writeln!(index, "| File | Size (pt) | Content |").unwrap();
     writeln!(index, "| --- | --- | --- |").unwrap();
@@ -544,6 +621,12 @@ fn test_export_ai_visual_layout_suite() {
         index,
         "| `target/test_exports/visual/15_layout_edge_cases.png` | {:.1}×{:.1} | Edge cases: stretchy fences, nested fractions, compound scripts, stacked limits, longdiv, wide accents |",
         edge_png.width_pt, edge_png.height_pt
+    )
+    .unwrap();
+    writeln!(
+        index,
+        "| `target/test_exports/visual/16_long_arrow_arguments.png` | {:.1}×{:.1} | Long-argument stress cases across labeled arrows and over/under arrow accents |",
+        long_png.width_pt, long_png.height_pt
     )
     .unwrap();
     writeln!(

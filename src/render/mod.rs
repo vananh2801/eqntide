@@ -307,7 +307,7 @@ fn render_alpha_scaled(
 
     scale_layout_box(&mut layout_box, scale);
 
-    let (w_px, h_px, alpha) = rasterize_alpha(
+    let (w_px, h_px, alpha) = rasterize_alpha_ss(
         &layout_box,
         pad,
         pad,
@@ -315,6 +315,7 @@ fn render_alpha_scaled(
         right_extra * scale,
         asc * scale,
         desc * scale,
+        4,
     )?;
     Ok(AlphaMask {
         width: w_px as u32,
@@ -393,22 +394,109 @@ fn rasterize_alpha(
     asc: f32,
     desc: f32,
 ) -> Result<(usize, usize, Vec<u8>)> {
-    let font_set = fonts();
-    let w_px = (layout_box.w + left_extra + right_extra + 2.0 * pad_x)
+    rasterize_alpha_ss(
+        layout_box,
+        pad_x,
+        pad_y,
+        left_extra,
+        right_extra,
+        asc,
+        desc,
+        2,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rasterize_alpha_ss(
+    layout_box: &LBox,
+    pad_x: f32,
+    pad_y: f32,
+    left_extra: f32,
+    right_extra: f32,
+    asc: f32,
+    desc: f32,
+    requested_ss: usize,
+) -> Result<(usize, usize, Vec<u8>)> {
+    let out_w = (layout_box.w + left_extra + right_extra + 2.0 * pad_x)
         .ceil()
         .max(1.0) as usize;
-    let h_px = (asc + desc + 2.0 * pad_y).ceil().max(1.0) as usize;
-    if w_px > MAX_WIDTH_PX || w_px * h_px > MAX_PIXELS {
+    let out_h = (asc + desc + 2.0 * pad_y).ceil().max(1.0) as usize;
+    if out_w > MAX_WIDTH_PX || out_w * out_h > MAX_PIXELS {
         return Err(Error::PreviewTooLarge {
-            width: w_px,
-            height: h_px,
+            width: out_w,
+            height: out_h,
         });
     }
 
-    let (origin_x, origin_y) = (pad_x + left_extra, pad_y + asc);
-    let mut canvas = Canvas::new(w_px, h_px);
+    let ss = [requested_ss.max(1), 2, 1]
+        .into_iter()
+        .find(|&candidate| {
+            let ss_w = out_w.saturating_mul(candidate);
+            let ss_h = out_h.saturating_mul(candidate);
+            ss_w <= MAX_WIDTH_PX && ss_w.saturating_mul(ss_h) <= MAX_PIXELS
+        })
+        .unwrap_or(1);
+
+    let ss_f = ss as f32;
+    let w_px = out_w * ss;
+    let h_px = out_h * ss;
+    let (origin_x, origin_y) = ((pad_x + left_extra) * ss_f, (pad_y + asc) * ss_f);
+    let mut canvas = if ss >= 2 {
+        Canvas::new_union(w_px, h_px)
+    } else {
+        Canvas::new(w_px, h_px)
+    };
+    draw_items_to_canvas(
+        &layout_box.items,
+        origin_x,
+        origin_y,
+        ss_f,
+        ss >= 2,
+        &mut canvas,
+    );
+
+    let alpha: Vec<u8> = if ss == 1 {
+        canvas
+            .cov
+            .iter()
+            .map(|cov| (cov * 255.0 + 0.5) as u8)
+            .collect()
+    } else {
+        let inv_area = 1.0 / (ss * ss) as f32;
+        let mut downsampled = Vec::with_capacity(out_w * out_h);
+        for out_y in 0..out_h {
+            let base_y = out_y * ss;
+            for out_x in 0..out_w {
+                let base_x = out_x * ss;
+                let mut sum = 0.0f32;
+                for sub_y in 0..ss {
+                    let row_start = (base_y + sub_y) * w_px + base_x;
+                    for sub_x in 0..ss {
+                        sum += canvas.cov[row_start + sub_x];
+                    }
+                }
+                downsampled.push((sum * inv_area * 255.0 + 0.5).min(255.0) as u8);
+            }
+        }
+        downsampled
+    };
+    Ok((out_w, out_h, alpha))
+}
+
+fn draw_items_to_canvas(
+    items: &[Item],
+    origin_x: f32,
+    origin_y: f32,
+    scale: f32,
+    isolate_polys: bool,
+    canvas: &mut Canvas,
+) {
+    let font_set = fonts();
+    let w_px = canvas.w;
+    let h_px = canvas.h;
     let mut rasterizer: Option<Rasterizer> = None;
-    for item in &layout_box.items {
+
+    for item in items {
         match item {
             Item::Glyph {
                 ch,
@@ -420,10 +508,10 @@ fn rasterize_alpha(
             } => font_set.draw_styled(
                 *face,
                 *ch,
-                *em,
-                origin_x + x,
-                origin_y + y,
-                &mut canvas,
+                *em * scale,
+                origin_x + x * scale,
+                origin_y + y * scale,
+                canvas,
                 *ssty,
             ),
             Item::Poly(points) => {
@@ -432,15 +520,19 @@ fn rasterize_alpha(
                 }
                 let mut shifted: Vec<(f32, f32)> = points
                     .iter()
-                    .map(|(x, y)| (origin_x + x, origin_y + y))
+                    .map(|(px, py)| (origin_x + px * scale, origin_y + py * scale))
                     .collect();
                 if signed_area(&shifted) < 0.0 {
                     shifted.reverse();
                 }
-                let target_ras = rasterizer.get_or_insert_with(|| Rasterizer::new(w_px, h_px));
-                for i in 0..shifted.len() {
-                    let (start, end) = (shifted[i], shifted[(i + 1) % shifted.len()]);
-                    target_ras.draw_line(point(start.0, start.1), point(end.0, end.1));
+                if isolate_polys {
+                    rasterize_contours_into_canvas(&[shifted], w_px, h_px, canvas);
+                } else {
+                    let target_ras = rasterizer.get_or_insert_with(|| Rasterizer::new(w_px, h_px));
+                    for idx in 0..shifted.len() {
+                        let (start, end) = (shifted[idx], shifted[(idx + 1) % shifted.len()]);
+                        target_ras.draw_line(point(start.0, start.1), point(end.0, end.1));
+                    }
                 }
             }
             Item::Contours(contours) => {
@@ -450,7 +542,7 @@ fn rasterize_alpha(
                     .map(|points| {
                         points
                             .iter()
-                            .map(|(x, y)| (origin_x + x, origin_y + y))
+                            .map(|(px, py)| (origin_x + px * scale, origin_y + py * scale))
                             .collect()
                     })
                     .collect();
@@ -469,63 +561,62 @@ fn rasterize_alpha(
                         poly.reverse();
                     }
                 }
-                let mut min_x = f32::INFINITY;
-                let mut max_x = f32::NEG_INFINITY;
-                let mut min_y = f32::INFINITY;
-                let mut max_y = f32::NEG_INFINITY;
-                for poly in &shifted {
-                    for &(px, py) in poly {
-                        min_x = min_x.min(px);
-                        max_x = max_x.max(px);
-                        min_y = min_y.min(py);
-                        max_y = max_y.max(py);
-                    }
-                }
-                let bx0 = (min_x.floor().max(0.0) as usize).min(w_px);
-                let by0 = (min_y.floor().max(0.0) as usize).min(h_px);
-                let bx1 = (max_x.ceil().max(0.0) as usize).min(w_px);
-                let by1 = (max_y.ceil().max(0.0) as usize).min(h_px);
-                if bx1 <= bx0 || by1 <= by0 {
-                    continue;
-                }
-                let box_w = bx1 - bx0;
-                let box_h = by1 - by0;
-                let (fx0, fy0) = (bx0 as f32, by0 as f32);
-                let mut sub_ras = Rasterizer::new(box_w, box_h);
-                for poly in &shifted {
-                    for i in 0..poly.len() {
-                        let (start, end) = (poly[i], poly[(i + 1) % poly.len()]);
-                        sub_ras.draw_line(
-                            point(start.0 - fx0, start.1 - fy0),
-                            point(end.0 - fx0, end.1 - fy0),
-                        );
-                    }
-                }
-                sub_ras.for_each_pixel(|idx, alpha_val| {
-                    let local_x = idx % box_w;
-                    let local_y = idx / box_w;
-                    let dst_idx = (by0 + local_y) * w_px + (bx0 + local_x);
-                    if let Some(cov) = canvas.cov.get_mut(dst_idx) {
-                        *cov = (*cov + alpha_val).min(1.0);
-                    }
-                });
+                rasterize_contours_into_canvas(&shifted, w_px, h_px, canvas);
             }
         }
     }
-    if let Some(rasterizer) = rasterizer {
-        rasterizer.for_each_pixel(|idx, alpha_val| {
-            if let Some(cov) = canvas.cov.get_mut(idx) {
-                *cov = (*cov + alpha_val).min(1.0);
-            }
+    if let Some(target_ras) = rasterizer {
+        target_ras.for_each_pixel(|idx, alpha_val| {
+            let px = (idx % w_px) as i64;
+            let py = (idx / w_px) as i64;
+            canvas.add(px, py, alpha_val);
         });
     }
+}
 
-    let alpha: Vec<u8> = canvas
-        .cov
-        .iter()
-        .map(|cov| (cov * 255.0 + 0.5) as u8)
-        .collect();
-    Ok((w_px, h_px, alpha))
+fn rasterize_contours_into_canvas(
+    contours: &[Vec<(f32, f32)>],
+    w_px: usize,
+    h_px: usize,
+    canvas: &mut Canvas,
+) {
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for poly in contours {
+        for &(px, py) in poly {
+            min_x = min_x.min(px);
+            max_x = max_x.max(px);
+            min_y = min_y.min(py);
+            max_y = max_y.max(py);
+        }
+    }
+    let bx0 = (min_x.floor().max(0.0) as usize).min(w_px);
+    let by0 = (min_y.floor().max(0.0) as usize).min(h_px);
+    let bx1 = (max_x.ceil().max(0.0) as usize).min(w_px);
+    let by1 = (max_y.ceil().max(0.0) as usize).min(h_px);
+    if bx1 <= bx0 || by1 <= by0 {
+        return;
+    }
+    let box_w = bx1 - bx0;
+    let box_h = by1 - by0;
+    let (fx0, fy0) = (bx0 as f32, by0 as f32);
+    let mut sub_ras = Rasterizer::new(box_w, box_h);
+    for poly in contours {
+        for idx in 0..poly.len() {
+            let (start, end) = (poly[idx], poly[(idx + 1) % poly.len()]);
+            sub_ras.draw_line(
+                point(start.0 - fx0, start.1 - fy0),
+                point(end.0 - fx0, end.1 - fy0),
+            );
+        }
+    }
+    sub_ras.for_each_pixel(|idx, alpha_val| {
+        let local_x = idx % box_w;
+        let local_y = idx / box_w;
+        canvas.add((bx0 + local_x) as i64, (by0 + local_y) as i64, alpha_val);
+    });
 }
 
 fn signed_area(points: &[(f32, f32)]) -> f32 {
@@ -811,6 +902,51 @@ mod interactive_tests {
         assert!(at_star.alpha.iter().any(|&alpha_val| alpha_val > 0));
         assert!(at_alpha.alpha.iter().any(|&alpha_val| alpha_val > 0));
         assert!(at_frac.alpha.iter().any(|&alpha_val| alpha_val > 0));
+    }
+
+    #[test]
+    fn palette_arrow_and_integral_shafts_have_uniform_coverage() {
+        // Palette thumbnail for `\overset{□}{\rightarrow}`: column alpha sums across the
+        // horizontal shaft must remain uniform instead of spiking 2x where pieces overlap.
+        let arrow = crate::catalog::preview_template(r"\overset{#?}{\rightarrow}").unwrap();
+        let mask = render_alpha_at(&arrow, 17.0, 40.0, 26.0).unwrap();
+        let width = mask.width as usize;
+        let height = mask.height as usize;
+        // Shaft sits below the top placeholder box (lower ~40% of the icon).
+        let shaft_y_start = (height * 58) / 100;
+        let shaft_cols: Vec<u32> = (2..width.saturating_sub(6))
+            .map(|col| {
+                (shaft_y_start..height)
+                    .map(|row| u32::from(mask.alpha[row * width + col]))
+                    .sum::<u32>()
+            })
+            .filter(|&col_sum| col_sum > 0)
+            .collect();
+        let min_col = *shaft_cols.iter().min().unwrap();
+        let max_col = *shaft_cols.iter().max().unwrap();
+        assert!(
+            max_col <= min_col + 25,
+            "arrow shaft column coverage varies too wildly (min={min_col}, max={max_col}, cols={shaft_cols:?})"
+        );
+
+        // Palette thumbnail for `\int`: middle stem join must not produce a brighter knot.
+        let integral = crate::catalog::preview_template(r"\int").unwrap();
+        let int_mask = render_alpha_at(&integral, 17.0, 40.0, 26.0).unwrap();
+        let int_w = int_mask.width as usize;
+        let int_h = int_mask.height as usize;
+        let stem_rows: Vec<u32> = (int_h / 3..(int_h * 2) / 3)
+            .map(|row| {
+                (0..int_w)
+                    .map(|col| u32::from(int_mask.alpha[row * int_w + col]))
+                    .sum::<u32>()
+            })
+            .collect();
+        let min_row = *stem_rows.iter().min().unwrap();
+        let max_row = *stem_rows.iter().max().unwrap();
+        assert!(
+            max_row <= min_row + 30,
+            "integral stem middle coverage spiked at joint (min={min_row}, max={max_row}, rows={stem_rows:?})"
+        );
     }
 
     #[test]
