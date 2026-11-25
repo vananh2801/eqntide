@@ -1936,3 +1936,417 @@ fn command_error_clears_when_backspacing_or_canceling_out_of_popup() {
         direct_app.status
     );
 }
+
+#[test]
+fn placeholder_paint_uses_light_radius_dashed_stroke_and_transparent_interior() {
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    app.canvas_dark = CanvasPreset::DimSlate;
+    app.load_math("<math><mfrac><mrow/><mrow/></mfrac></math>", None, None);
+
+    for (theme, dark) in [(egui::Theme::Light, false), (egui::Theme::Dark, true)] {
+        ctx.set_theme(theme);
+        let pal = app.active_canvas_palette(dark);
+        assert_eq!(pal.placeholder_bg, Color32::TRANSPARENT);
+
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 300.0))),
+                ..Default::default()
+            },
+            |ui| {
+                app.draw_canvas(ui);
+            },
+        );
+        output.textures_delta.clear();
+
+        let dashed_strokes = output
+            .shapes
+            .iter()
+            .filter(|clipped| {
+                matches!(
+                    &clipped.shape,
+                    egui::Shape::LineSegment { stroke, .. }
+                        if stroke.color == pal.placeholder_stroke
+                )
+            })
+            .count();
+        assert!(
+            dashed_strokes >= 8,
+            "expected dashed placeholder segments, got {dashed_strokes}"
+        );
+
+        let rounded_rects_with_fill = output
+            .shapes
+            .iter()
+            .filter(|clipped| {
+                matches!(
+                    &clipped.shape,
+                    egui::Shape::Rect(rect_shape)
+                        if rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS
+                            && rect_shape.rect.width() < 100.0
+                            && rect_shape.rect.height() < 100.0
+                )
+            })
+            .count();
+        assert_eq!(
+            rounded_rects_with_fill, 0,
+            "placeholders must not paint 6px-rounded filled boxes"
+        );
+    }
+}
+
+#[test]
+fn canvas_selection_renders_contiguous_lightly_rounded_highlight() {
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    app.load_math(
+        "<math><mfrac><mn>1</mn><mn>2</mn></mfrac><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mn>2</mn><mi>x</mi><mo>-</mo><mn>1</mn><mo>=</mo><mn>0</mn></math>",
+        None,
+        None,
+    );
+    app.sync_render(&ctx);
+    let pal = app.active_canvas_palette(false);
+
+    // 1) Selecting the full multi-term expression renders one contiguous 2px-rounded selection rect.
+    app.editor.select_all();
+    let mut all_out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 300.0))),
+            ..Default::default()
+        },
+        |ui| {
+            app.draw_canvas(ui);
+        },
+    );
+    all_out.textures_delta.clear();
+
+    let sel_rects: Vec<_> = all_out
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape) if rect_shape.fill == pal.selection_bg => {
+                Some(rect_shape.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sel_rects.len(), 1, "expected 1 contiguous selection rect");
+    assert_eq!(
+        sel_rects[0].corner_radius,
+        theme::CANVAS_OVERLAY_CORNER_RADIUS
+    );
+
+    // 2) Selecting `-` alone uses baseline line-height bounds instead of hanging downward.
+    let minus_id = app.editor.root().children[5].id;
+    let minus_region = app.hit_region(minus_id).unwrap();
+    let scale = app.zoom * 96.0 / 72.0;
+    app.editor.select_node(minus_id);
+    let minus_rect = app.selection_rect(Pos2::ZERO, scale).unwrap();
+    let expected_top = (minus_region.baseline - 0.72 * app.font_pt) * scale;
+    let expected_bottom = (minus_region.baseline + 0.22 * app.font_pt) * scale;
+    assert!((minus_rect.top() - expected_top).abs() < 0.1);
+    assert!((minus_rect.bottom() - expected_bottom).abs() < 0.1);
+    assert!(minus_rect.top() < minus_region.y * scale);
+
+    // 3) Selecting a substring inside a token highlights only the [start..end] caret span.
+    app.load_math("<math><mi>abc</mi></math>", None, None);
+    app.sync_render(&ctx);
+    let token_id = app.editor.root().children[0].id;
+    let token_region = app.hit_region(token_id).unwrap();
+    app.editor.set_caret(
+        Caret {
+            node: token_id,
+            offset: 0,
+        },
+        false,
+    );
+    app.editor.set_caret(
+        Caret {
+            node: token_id,
+            offset: 2,
+        },
+        true,
+    );
+    let sub_rect = app.selection_rect(Pos2::ZERO, scale).unwrap();
+    let expected_width = (token_region.carets[2] - token_region.carets[0]) * scale;
+    assert!((sub_rect.width() - expected_width).abs() < 0.1);
+    assert!(sub_rect.width() < token_region.width * scale);
+}
+
+#[test]
+fn canvas_drag_selection_excludes_character_before_midpoint() {
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    app.load_math(
+        "<math><mfrac><mn>1</mn><mn>2</mn></mfrac><msup><mi>x</mi><mn>2</mn></msup><mo>-</mo><mn>2</mn><mi>x</mi><mo>+</mo><mn>1</mn><mo>=</mo><mn>0</mn></math>",
+        None,
+        None,
+    );
+    app.sync_render(&ctx);
+
+    let msup_id = app.editor.root().children[1].id;
+    let base_x_id = app.editor.root().children[1].children[0].id;
+    let minus_id = app.editor.root().children[2].id;
+    let two_id = app.editor.root().children[3].id;
+
+    let x_region = app.hit_region(base_x_id).unwrap();
+    let two_region = app.hit_region(two_id).unwrap();
+    let scale = app.zoom * 96.0 / 72.0;
+
+    // Initial pass registers the canvas widget and its origin.
+    ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 300.0))),
+            ..Default::default()
+        },
+        |ui| {
+            app.draw_canvas(ui);
+        },
+    )
+    .textures_delta
+    .clear();
+    let canvas_rect = ctx
+        .read_response(egui::Id::unique("equation-canvas"))
+        .unwrap()
+        .rect;
+    let origin = canvas_rect.min + Vec2::new(4.0, 8.0);
+
+    let press_pos = origin
+        + Vec2::new(
+            (x_region.x + x_region.width * 0.2) * scale,
+            (x_region.y + x_region.height * 0.5) * scale,
+        );
+    let drag_before_half = origin
+        + Vec2::new(
+            (two_region.x + two_region.width * 0.25) * scale,
+            (two_region.y + two_region.height * 0.5) * scale,
+        );
+    let drag_after_half = origin
+        + Vec2::new(
+            (two_region.x + two_region.width * 0.75) * scale,
+            (two_region.y + two_region.height * 0.5) * scale,
+        );
+
+    let run_pointer = |app: &mut App, events: Vec<egui::Event>| {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 300.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                app.draw_canvas(ui);
+            },
+        )
+        .textures_delta
+        .clear();
+    };
+
+    // Press in left half of `x` and drag into left half of `2` -> caret sits before `2`,
+    // and `2` is NOT included in the selection highlight.
+    run_pointer(
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(press_pos),
+            egui::Event::PointerButton {
+                pos: press_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    run_pointer(&mut app, vec![egui::Event::PointerMoved(drag_before_half)]);
+    assert_eq!(
+        app.editor.caret(),
+        Caret {
+            node: two_id,
+            offset: 0,
+        }
+    );
+    assert_eq!(app.editor.selected_ids(), vec![msup_id, minus_id]);
+    let selection_before = app.selection_rect(origin, scale).unwrap();
+    assert!(selection_before.right() < origin.x + two_region.x * scale);
+
+    // Continue dragging past the midpoint of `2` -> caret moves after `2` and `2` is included.
+    run_pointer(&mut app, vec![egui::Event::PointerMoved(drag_after_half)]);
+    assert_eq!(
+        app.editor.caret(),
+        Caret {
+            node: two_id,
+            offset: 1,
+        }
+    );
+    assert_eq!(app.editor.selected_ids(), vec![msup_id, minus_id, two_id]);
+    let selection_after = app.selection_rect(origin, scale).unwrap();
+    assert!(selection_after.right() >= origin.x + (two_region.x + two_region.width) * scale - 0.5);
+}
+
+#[test]
+fn canvas_drag_selection_caret_stays_locked_to_selection_edge_across_operator_gap() {
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    app.load_math(
+        "<math><mfrac><mn>1</mn><mn>2</mn></mfrac><msup><mi>x</mi><mn>2</mn></msup><mo>-</mo><mn>2</mn><mi>x</mi><mo>+</mo><mn>1</mn><mo>=</mo><mn>0</mn></math>",
+        None,
+        None,
+    );
+    app.sync_render(&ctx);
+
+    let msup_id = app.editor.root().children[1].id;
+    let base_x_id = app.editor.root().children[1].children[0].id;
+    let minus_id = app.editor.root().children[2].id;
+    let two_id = app.editor.root().children[3].id;
+    let var_x_id = app.editor.root().children[4].id;
+    let plus_id = app.editor.root().children[5].id;
+    let one_id = app.editor.root().children[6].id;
+
+    let base_x_region = app.hit_region(base_x_id).unwrap();
+    let var_x_region = app.hit_region(var_x_id).unwrap();
+    let plus_region = app.hit_region(plus_id).unwrap();
+    let one_region = app.hit_region(one_id).unwrap();
+    let scale = app.zoom * 96.0 / 72.0;
+
+    let run_pointer = |app: &mut App, events: Vec<egui::Event>| {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 300.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                app.draw_canvas(ui);
+            },
+        )
+        .textures_delta
+        .clear();
+    };
+    run_pointer(&mut app, vec![]);
+
+    let canvas_rect = ctx
+        .read_response(egui::Id::unique("equation-canvas"))
+        .unwrap()
+        .rect;
+    let origin = canvas_rect.min + Vec2::new(4.0, 8.0);
+    let midpoint_y = (var_x_region.y + var_x_region.height * 0.5) * scale;
+    let var_x_right_pt = var_x_region.x + var_x_region.width;
+    assert!(plus_region.x - var_x_right_pt > 2.5);
+
+    // Clicking inside the left half of the inter-token gap keeps the caret on `x` instead of jumping to `+`.
+    let gap_left_pos = origin + Vec2::new((var_x_right_pt + 1.2) * scale, midpoint_y);
+    run_pointer(
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(gap_left_pos),
+            egui::Event::PointerButton {
+                pos: gap_left_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: gap_left_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    assert_eq!(
+        app.editor.caret(),
+        Caret {
+            node: var_x_id,
+            offset: 1,
+        }
+    );
+
+    // Dragging across `x^2 - 2x` into the gap and left quarter of `+` keeps both the selection
+    // and the caret bar locked to the right edge of `x`.
+    let press_pos = origin
+        + Vec2::new(
+            (base_x_region.x + base_x_region.width * 0.2) * scale,
+            (base_x_region.y + base_x_region.height * 0.5) * scale,
+        );
+    run_pointer(
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(press_pos),
+            egui::Event::PointerButton {
+                pos: press_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let mut locked_right: Option<f32> = None;
+    for point_x in [
+        var_x_region.x + var_x_region.width * 0.85,
+        var_x_right_pt + 1.2,
+        (var_x_right_pt + plus_region.x) * 0.5 + 0.3,
+        plus_region.x + plus_region.width * 0.25,
+    ] {
+        let drag_pos = origin + Vec2::new(point_x * scale, midpoint_y);
+        run_pointer(&mut app, vec![egui::Event::PointerMoved(drag_pos)]);
+        assert_eq!(
+            app.editor.selected_ids(),
+            vec![msup_id, minus_id, two_id, var_x_id]
+        );
+        let selection_rect = app.selection_rect(origin, scale).unwrap();
+        let caret_rect = app.caret_rect(origin, scale).unwrap();
+        assert!((caret_rect.left() - selection_rect.right()).abs() < 0.01);
+        if let Some(expected) = locked_right {
+            assert!((caret_rect.left() - expected).abs() < 0.01);
+        } else {
+            locked_right = Some(caret_rect.left());
+        }
+    }
+    run_pointer(
+        &mut app,
+        vec![egui::Event::PointerButton {
+            pos: origin
+                + Vec2::new(
+                    (plus_region.x + plus_region.width * 0.25) * scale,
+                    midpoint_y,
+                ),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+
+    // Dragging backward from `1` across `+` locks the caret bar to the left edge of `+`.
+    let back_press =
+        origin + Vec2::new((one_region.x + one_region.width * 0.8) * scale, midpoint_y);
+    run_pointer(
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(back_press),
+            egui::Event::PointerButton {
+                pos: back_press,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let mut locked_left: Option<f32> = None;
+    for point_x in [
+        plus_region.x + plus_region.width * 0.2,
+        var_x_right_pt + 1.2,
+        var_x_region.x + var_x_region.width * 0.85,
+    ] {
+        let drag_pos = origin + Vec2::new(point_x * scale, midpoint_y);
+        run_pointer(&mut app, vec![egui::Event::PointerMoved(drag_pos)]);
+        assert_eq!(app.editor.selected_ids(), vec![plus_id, one_id]);
+        let selection_rect = app.selection_rect(origin, scale).unwrap();
+        let caret_rect = app.caret_rect(origin, scale).unwrap();
+        assert!((caret_rect.left() - selection_rect.left()).abs() < 0.01);
+        if let Some(expected) = locked_left {
+            assert!((caret_rect.left() - expected).abs() < 0.01);
+        } else {
+            locked_left = Some(caret_rect.left());
+        }
+    }
+}

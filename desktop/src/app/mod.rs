@@ -873,9 +873,20 @@ impl App {
 
     /// Renders the bottom status strip showing bridge state, queued sessions, errors, and warnings.
     pub(super) fn draw_status_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let ready = if self.bridge_ready { "●" } else { "○" };
-            ui.label(ready).on_hover_text(&self.bridge_status);
+        ui.horizontal_centered(|ui| {
+            let dot_color = ui.visuals().text_color();
+            let (dot_rect, dot_response) =
+                ui.allocate_exact_size(Vec2::splat(12.0), egui::Sense::hover());
+            if ui.is_rect_visible(dot_rect) {
+                let center = dot_rect.center();
+                if self.bridge_ready {
+                    ui.painter().circle_filled(center, 4.0, dot_color);
+                } else {
+                    ui.painter()
+                        .circle_stroke(center, 3.5, Stroke::new(1.5, dot_color));
+                }
+            }
+            dot_response.on_hover_text(&self.bridge_status);
             if !self.bridge_ready && Self::compact_button(ui, "Retry").clicked() {
                 runtime::start_bridge(self.tx.clone());
                 self.pending_focus_restore = Some(self.active_editor_focus);

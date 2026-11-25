@@ -181,15 +181,12 @@ impl App {
                                 }
                             }
                         }
-                        let selected = self.editor.selected_ids();
-                        for id in selected {
-                            if let Some(node_rect) = self.node_rect(id, origin, scale) {
-                                ui.painter().rect_filled(
-                                    node_rect,
-                                    theme::CONTROL_CORNER_RADIUS,
-                                    pal.selection_bg,
-                                );
-                            }
+                        if let Some(selection_rect) = self.selection_rect(origin, scale) {
+                            ui.painter().rect_filled(
+                                selection_rect,
+                                theme::CANVAS_OVERLAY_CORNER_RADIUS,
+                                pal.selection_bg,
+                            );
                         }
                         let has_canvas_focus =
                             response.has_focus() || ui.memory(|mem| mem.has_focus(response.id));
@@ -314,6 +311,7 @@ impl App {
         }
     }
 
+    /// Applies theme scrollbar colors and platform-appropriate handle opacities for canvas panels.
     pub(super) fn configure_canvas_scroll_style(&self, ui: &mut egui::Ui, pal: CanvasPalette) {
         ui.visuals_mut().widgets.inactive.bg_fill = pal.scroll_inactive;
         ui.visuals_mut().widgets.inactive.fg_stroke.color = pal.scroll_inactive;
@@ -345,12 +343,15 @@ impl App {
         }
     }
 
+    /// Paints an empty structural slot as an unfilled dashed box with light corner rounding.
     pub(super) fn paint_placeholder(painter: &egui::Painter, rect: Rect, pal: CanvasPalette) {
         // Cover only the synthetic square; the formula texture and hit regions stay unchanged.
         painter.rect_filled(rect.expand(0.5), 0.0, pal.bg);
         let rect = rect.shrink(1.0);
-        let radius = theme::CONTROL_CORNER_RADIUS;
-        painter.rect_filled(rect, radius, pal.placeholder_bg);
+        let radius = theme::CANVAS_OVERLAY_CORNER_RADIUS;
+        if pal.placeholder_bg.a() > 0 {
+            painter.rect_filled(rect, radius, pal.placeholder_bg);
+        }
         let mut path = vec![];
         egui::epaint::tessellator::path::rounded_rectangle(
             &mut path,
@@ -400,14 +401,60 @@ impl App {
         result
     }
 
-    pub(super) fn node_rect(&self, id: u64, origin: Pos2, scale: f32) -> Option<Rect> {
-        let region = self.hit_region(id)?;
-        Some(Rect::from_min_size(
-            origin + Vec2::new(region.x * scale, region.y * scale),
-            Vec2::new(
-                region.width.max(2.0) * scale,
-                region.height.max(6.0) * scale,
-            ),
+    /// Computes a single contiguous screen-space rectangle covering the active selection span.
+    pub(super) fn selection_rect(&self, origin: Pos2, scale: f32) -> Option<Rect> {
+        let (container_id, start, end) = self.editor.selection_span()?;
+        let node = self.editor.node(container_id)?;
+        let span_pt = if node.is_token() {
+            let region = self.hit_region(container_id)?;
+            let char_count = node.text.chars().count();
+            let start_idx = start.min(char_count);
+            let end_idx = end.min(char_count);
+            let (left_x, right_x) = if region.carets.len() == char_count + 1 {
+                let first_x = region.carets[start_idx];
+                let second_x = region.carets[end_idx];
+                (first_x.min(second_x), first_x.max(second_x))
+            } else {
+                let total = char_count.max(1) as f32;
+                let first_x = region.x + region.width * start_idx as f32 / total;
+                let second_x = region.x + region.width * end_idx as f32 / total;
+                (first_x.min(second_x), first_x.max(second_x))
+            };
+            let em_pt = self.caret_font_pt(container_id);
+            let top_y = region.y.min(region.baseline - 0.72 * em_pt);
+            let bottom_y = (region.y + region.height).max(region.baseline + 0.22 * em_pt);
+            Some((left_x, top_y, right_x.max(left_x + 2.0), bottom_y))
+        } else {
+            let start_idx = start.min(node.children.len());
+            let end_idx = end.min(node.children.len());
+            if start_idx >= end_idx {
+                return None;
+            }
+            let mut bounds: Option<(f32, f32, f32, f32)> = None;
+            for child in &node.children[start_idx..end_idx] {
+                let Some(region) = self.hit_region(child.id) else {
+                    continue;
+                };
+                let em_pt = self.caret_font_pt(child.id);
+                let child_top = region.y.min(region.baseline - 0.72 * em_pt);
+                let child_bottom = (region.y + region.height).max(region.baseline + 0.22 * em_pt);
+                let child_right = region.x + region.width.max(2.0);
+                bounds = Some(match bounds {
+                    Some((min_x, min_y, max_x, max_y)) => (
+                        min_x.min(region.x),
+                        min_y.min(child_top),
+                        max_x.max(child_right),
+                        max_y.max(child_bottom),
+                    ),
+                    None => (region.x, child_top, child_right, child_bottom),
+                });
+            }
+            bounds
+        }?;
+        let (min_x, min_y, max_x, max_y) = span_pt;
+        Some(Rect::from_min_max(
+            origin + Vec2::new(min_x * scale, min_y * scale),
+            origin + Vec2::new(max_x * scale, max_y * scale),
         ))
     }
 
@@ -479,7 +526,7 @@ impl App {
                 Vec2::new(1.0, height * scale),
             ));
         }
-        let x = if node.is_token() {
+        let raw_x = if node.is_token() {
             if region.carets.len() == node.text.chars().count() + 1 {
                 region.carets[caret.offset.min(region.carets.len() - 1)]
             } else {
@@ -505,6 +552,7 @@ impl App {
         } else {
             region.x
         };
+        let x = self.selection_caret_x(origin, scale).unwrap_or(raw_x);
         let em_pt = self.caret_font_pt(caret.node);
         let top = region.baseline - 0.72 * em_pt;
         let height = (0.72 + 0.22) * em_pt;
@@ -575,13 +623,35 @@ impl App {
                     .clamp(0.0, node.text.chars().count() as f32) as usize
             }
         } else if node.is_row() {
-            node.children
+            let offset = node
+                .children
                 .iter()
                 .position(|child| {
                     self.hit_region(child.id)
                         .is_some_and(|region| point.x < region.x + region.width / 2.0)
                 })
-                .unwrap_or(node.children.len())
+                .unwrap_or(node.children.len());
+            if let (Some(prev_child), Some(next_child)) = (
+                offset.checked_sub(1).and_then(|idx| node.children.get(idx)),
+                node.children.get(offset),
+            ) {
+                if let (Some(prev_region), Some(next_region)) = (
+                    self.hit_region(prev_child.id),
+                    self.hit_region(next_child.id),
+                ) {
+                    let gap_midpoint = (prev_region.x + prev_region.width + next_region.x) * 0.5;
+                    if point.x < gap_midpoint
+                        && prev_child.is_token()
+                        && !prev_child.is_fence_delimiter()
+                    {
+                        return Some(Caret {
+                            node: prev_child.id,
+                            offset: prev_child.text.chars().count(),
+                        });
+                    }
+                }
+            }
+            offset
         } else {
             0
         };
@@ -690,6 +760,7 @@ impl App {
         }
     }
 
+    /// Places the caret at the closest stop inside subtree `id` horizontally aligned with `x`.
     pub(super) fn enter_subtree(&mut self, id: u64, x: f32, extend: bool) {
         let Some(path) = self.editor.path(id) else {
             return;
@@ -771,6 +842,7 @@ impl App {
         visible
     }
 
+    /// Synchronizes keyboard focus tracking between the visual canvas and LaTeX source box.
     pub(super) fn sync_editor_focus(&mut self, ui: &mut egui::Ui) {
         if self.tab != 0 || !ui.is_enabled() {
             return;
@@ -797,10 +869,94 @@ impl App {
         }
     }
 
+    /// Returns the deterministic `egui::Id` associated with `target`'s editor widget.
     pub(super) fn editor_focus_id(target: StartupFocus) -> egui::Id {
         match target {
             StartupFocus::Canvas => egui::Id::unique("equation-canvas"),
             StartupFocus::Latex => egui::Id::unique("latex-source"),
+        }
+    }
+
+    /// Snaps the caret bar to the moving edge of an active selection when the caret lies on
+    /// that outer boundary, preventing inter-element spacing jumps while dragging.
+    fn selection_caret_x(&self, origin: Pos2, scale: f32) -> Option<f32> {
+        let anchor = self.editor.anchor()?;
+        let head = self.editor.caret();
+        if anchor == head {
+            return None;
+        }
+        let (container_id, start, end) = self.editor.selection_span()?;
+        let selection_rect = self.selection_rect(origin, scale)?;
+        let anchor_path = self.editor.path(anchor.node)?;
+        let head_path = self.editor.path(head.node)?;
+        let container_depth = self.editor.path(container_id)?.len();
+        let is_forward = self.is_caret_at_or_before(anchor, &anchor_path, head, &head_path);
+        let is_on_outer_boundary = if head.node == container_id {
+            true
+        } else if let Some(&child_idx) = head_path.get(container_depth) {
+            if is_forward {
+                child_idx == end || child_idx + 1 == end
+            } else {
+                child_idx == start || child_idx + 1 == start
+            }
+        } else {
+            false
+        };
+        if !is_on_outer_boundary {
+            return None;
+        }
+        if head.node != container_id {
+            let container = self.editor.node(container_id)?;
+            if let Some(child_idx) = head_path.get(container_depth).copied() {
+                if let Some(child) = container.children.get(child_idx) {
+                    if matches!(child.tag.as_str(), "mfrac" | "mroot" | "msqrt")
+                        && head_path.len() > container_depth + 1
+                    {
+                        return None;
+                    }
+                }
+            }
+        }
+        let target_screen_x = if is_forward {
+            selection_rect.right()
+        } else {
+            selection_rect.left()
+        };
+        Some((target_screen_x - origin.x) / scale)
+    }
+
+    /// Returns `true` if `left` precedes or equals `right` in structural pre-order.
+    fn is_caret_at_or_before(
+        &self,
+        left: Caret,
+        left_path: &[usize],
+        right: Caret,
+        right_path: &[usize],
+    ) -> bool {
+        if left.node == right.node {
+            return left.offset <= right.offset;
+        }
+        let common = left_path
+            .iter()
+            .zip(right_path)
+            .take_while(|(first, second)| first == second)
+            .count();
+        match (left_path.get(common), right_path.get(common)) {
+            (Some(&left_idx), Some(&right_idx)) => {
+                let is_mroot = self
+                    .editor
+                    .id_at_path(&left_path[..common])
+                    .and_then(|id| self.editor.node(id))
+                    .is_some_and(|node| node.tag == "mroot");
+                if is_mroot {
+                    left_idx >= right_idx
+                } else {
+                    left_idx <= right_idx
+                }
+            }
+            (None, Some(&right_idx)) => left.offset <= right_idx,
+            (Some(&left_idx), None) => left_idx < right.offset,
+            (None, None) => left.offset <= right.offset,
         }
     }
 }

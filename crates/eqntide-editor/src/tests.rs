@@ -992,6 +992,142 @@ mod regression_tests {
     }
 
     #[test]
+    fn selection_span_respects_leading_and_trailing_token_boundaries() {
+        // Dragging from `|x^2` across `-` into the left edge `|2` must exclude `2` in both directions.
+        let mut eq = Editor::new(
+            &MathNode::parse(
+                "<math><mfrac><mn>1</mn><mn>2</mn></mfrac><msup><mi>x</mi><mn>2</mn></msup><mo>-</mo><mn>2</mn><mi>x</mi><mo>+</mo><mn>1</mn><mo>=</mo><mn>0</mn></math>",
+            )
+            .unwrap(),
+        );
+        let root_id = eq.root().id;
+        let frac_id = eq.root().children[0].id;
+        let msup_id = eq.root().children[1].id;
+        let base_x_id = eq.root().children[1].children[0].id;
+        let minus_id = eq.root().children[2].id;
+        let two_id = eq.root().children[3].id;
+
+        // Forward: `|x^2` -> `|2` selects `x^2 -` only.
+        eq.set_caret(
+            Caret {
+                node: base_x_id,
+                offset: 0,
+            },
+            false,
+        );
+        eq.set_caret(
+            Caret {
+                node: two_id,
+                offset: 0,
+            },
+            true,
+        );
+        assert_eq!(eq.selection_span(), Some((root_id, 1, 3)));
+        assert_eq!(eq.selected_ids(), vec![msup_id, minus_id]);
+
+        // Backward: `|2` -> `|x^2` selects `x^2 -` only.
+        eq.set_caret(
+            Caret {
+                node: two_id,
+                offset: 0,
+            },
+            false,
+        );
+        eq.set_caret(
+            Caret {
+                node: base_x_id,
+                offset: 0,
+            },
+            true,
+        );
+        assert_eq!(eq.selection_span(), Some((root_id, 1, 3)));
+        assert_eq!(eq.selected_ids(), vec![msup_id, minus_id]);
+
+        // Dragging left from `|x^2` into `\frac{1}{2}` excludes `x^2`.
+        let num_one_id = eq.root().children[0].children[0].id;
+        eq.set_caret(
+            Caret {
+                node: base_x_id,
+                offset: 0,
+            },
+            false,
+        );
+        eq.set_caret(
+            Caret {
+                node: num_one_id,
+                offset: 0,
+            },
+            true,
+        );
+        assert_eq!(eq.selection_span(), Some((root_id, 0, 1)));
+        assert_eq!(eq.selected_ids(), vec![frac_id]);
+
+        // Dragging from trailing edge of `x` (`x|-2`) to leading edge of `2` (`x-|2`) selects `-` only,
+        // and shared boundaries return `None`.
+        let mut flat = Editor::new(
+            &MathNode::parse("<math><mi>x</mi><mo>-</mo><mrow><mn>2</mn></mrow></math>").unwrap(),
+        );
+        let x_id = flat.root().children[0].id;
+        let flat_minus_id = flat.root().children[1].id;
+        let wrapped_two_id = flat.root().children[2].children[0].id;
+        flat.set_caret(
+            Caret {
+                node: x_id,
+                offset: 1,
+            },
+            false,
+        );
+        flat.set_caret(
+            Caret {
+                node: wrapped_two_id,
+                offset: 0,
+            },
+            true,
+        );
+        assert_eq!(flat.selected_ids(), vec![flat_minus_id]);
+        flat.set_caret(
+            Caret {
+                node: flat_minus_id,
+                offset: 0,
+            },
+            true,
+        );
+        assert_eq!(flat.selection_span(), None);
+
+        // `Shift+Arrow` between adjacent tokens selects only the crossed operator.
+        flat.set_caret(
+            Caret {
+                node: x_id,
+                offset: 1,
+            },
+            false,
+        );
+        flat.move_caret(Move::Right, true);
+        assert_eq!(flat.selected_ids(), vec![flat_minus_id]);
+
+        // Empty placeholders are still covered even at offset 0.
+        let mut with_empty =
+            Editor::new(&MathNode::parse("<math><mrow/><mi>y</mi></math>").unwrap());
+        let empty_id = with_empty.root().children[0].id;
+        let y_id = with_empty.root().children[1].id;
+        with_empty.set_caret(
+            Caret {
+                node: empty_id,
+                offset: 0,
+            },
+            false,
+        );
+        with_empty.set_caret(
+            Caret {
+                node: y_id,
+                offset: 0,
+            },
+            true,
+        );
+        assert_eq!(with_empty.selected_ids(), vec![empty_id]);
+    }
+
+    #[test]
     fn invalid_or_stale_caret_and_boundary_ops_never_panic() {
         let mut editor = Editor::new(&MathNode::new("math"));
         // Stale / nonexistent node IDs in caret must not panic on edits, deletes, or matrix ops.

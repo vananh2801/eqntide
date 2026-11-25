@@ -14,8 +14,11 @@ pub(crate) const SPACE_LG: f32 = 12.0;
 #[allow(dead_code)]
 pub(crate) const SPACE_XL: f32 = 16.0;
 
+pub(crate) const RADIUS_CANVAS_OVERLAY: u8 = 2;
 pub(crate) const RADIUS_CONTROL: u8 = 6;
 pub(crate) const RADIUS_SURFACE: u8 = 8;
+pub(crate) const CANVAS_OVERLAY_CORNER_RADIUS: CornerRadius =
+    CornerRadius::same(RADIUS_CANVAS_OVERLAY);
 pub(crate) const CONTROL_CORNER_RADIUS: CornerRadius = CornerRadius::same(RADIUS_CONTROL);
 pub(crate) const SURFACE_CORNER_RADIUS: CornerRadius = CornerRadius::same(RADIUS_SURFACE);
 
@@ -393,7 +396,7 @@ impl CanvasPreset {
                 bg,
                 border,
                 ink,
-                placeholder_bg: Color32::from_rgb(33, 52, 74),
+                placeholder_bg: Color32::TRANSPARENT,
                 placeholder_stroke: Color32::from_rgb(92, 168, 224),
                 caret: Color32::from_rgb(100, 182, 238),
                 selection_bg: Color32::from_rgba_unmultiplied(76, 168, 232, 72),
@@ -409,7 +412,7 @@ impl CanvasPreset {
                 bg,
                 border,
                 ink,
-                placeholder_bg: Color32::from_rgb(232, 243, 253),
+                placeholder_bg: Color32::TRANSPARENT,
                 placeholder_stroke: Color32::from_rgb(100, 168, 218),
                 caret: Color32::from_rgb(22, 100, 155),
                 selection_bg: Color32::from_rgba_unmultiplied(29, 120, 184, 56),
@@ -573,11 +576,13 @@ mod tests {
             let pal = preset.palette(false);
             assert!(!preset.is_dark_surface());
             assert!(contrast_ratio(pal.ink, pal.bg) >= 10.0);
+            assert_eq!(pal.placeholder_bg, Color32::TRANSPARENT);
             assert_ne!(pal.placeholder_bg, pal.bg);
         }
         for &preset in DARK_CANVAS_PRESETS {
             let pal = preset.palette(true);
             assert!(contrast_ratio(pal.ink, pal.bg) >= 10.0);
+            assert_eq!(pal.placeholder_bg, Color32::TRANSPARENT);
             assert_ne!(pal.placeholder_bg, pal.bg);
             if preset == CanvasPreset::SoftPaper {
                 assert!(!preset.is_dark_surface());

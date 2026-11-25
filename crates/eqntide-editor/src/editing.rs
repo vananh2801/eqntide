@@ -108,7 +108,8 @@ impl Editor {
     }
 
     /// Returns the normalized `(container_id, start, end)` selection range, expanding
-    /// cross-container selections to whole children of their lowest common ancestor.
+    /// cross-container selections to whole children of their lowest common ancestor
+    /// while respecting leading/trailing token boundaries.
     pub fn selection_span(&self) -> Option<(NodeId, usize, usize)> {
         let mut anchor = self.state.anchor?;
         let mut head = self.caret();
@@ -161,24 +162,26 @@ impl Editor {
             .take_while(|(left, right)| left == right)
             .count();
         let parent = self.root().at(&anchor_path[..common_depth]);
-        let anchor_idx = anchor_path
-            .get(common_depth)
-            .copied()
-            .unwrap_or(anchor.offset);
-        let head_idx = head_path.get(common_depth).copied().unwrap_or(head.offset);
-        let (start, end) = if anchor_idx <= head_idx {
-            (
-                anchor_idx,
-                head_idx + usize::from(head_path.len() > common_depth),
-            )
-        } else {
-            (
-                head_idx,
-                anchor_idx + usize::from(anchor_path.len() > common_depth),
-            )
+        let endpoint_span = |caret: Caret, path: &[usize]| -> (usize, usize) {
+            let Some(&child_idx) = path.get(common_depth) else {
+                return (caret.offset, caret.offset);
+            };
+            let Some(child) = parent.children.get(child_idx) else {
+                return (parent.children.len(), parent.children.len());
+            };
+            let tail = &path[common_depth + 1..];
+            if is_at_leading_edge(child, tail, caret.offset) {
+                (child_idx, child_idx)
+            } else if is_at_trailing_edge(child, tail, caret.offset) {
+                (child_idx + 1, child_idx + 1)
+            } else {
+                (child_idx, child_idx + 1)
+            }
         };
-        let start = start.min(parent.children.len());
-        let end = end.min(parent.children.len());
+        let (anchor_lo, anchor_hi) = endpoint_span(anchor, &anchor_path);
+        let (head_lo, head_hi) = endpoint_span(head, &head_path);
+        let start = anchor_lo.min(head_lo).min(parent.children.len());
+        let end = anchor_hi.max(head_hi).min(parent.children.len());
         if start >= end {
             return None;
         }
@@ -588,4 +591,58 @@ pub(crate) fn char_byte_offset(text: &str, char_index: usize) -> usize {
     text.char_indices()
         .nth(char_index)
         .map_or(text.len(), |(byte_idx, _)| byte_idx)
+}
+
+/// Returns `true` if a caret located inside `node` along `path_tail` lies on the visual
+/// leading boundary immediately before `node`, so `node` itself has not been crossed.
+fn is_at_leading_edge(node: &Node, path_tail: &[usize], offset: usize) -> bool {
+    if is_effectively_empty(node) {
+        return false;
+    }
+    if let Some((&child_idx, rest)) = path_tail.split_first() {
+        child_idx == 0
+            && has_transparent_edge(node)
+            && node
+                .children
+                .get(child_idx)
+                .is_some_and(|child| is_at_leading_edge(child, rest, offset))
+    } else if node.is_token() {
+        !node.text.is_empty() && offset == 0
+    } else if node.is_row() && node.tag != "msqrt" {
+        offset == 0
+    } else {
+        false
+    }
+}
+
+/// Returns `true` if a caret located inside `node` along `path_tail` lies on the visual
+/// trailing boundary immediately after `node`.
+fn is_at_trailing_edge(node: &Node, path_tail: &[usize], offset: usize) -> bool {
+    if is_effectively_empty(node) {
+        return false;
+    }
+    if let Some((&child_idx, rest)) = path_tail.split_first() {
+        child_idx + 1 == node.children.len()
+            && has_transparent_edge(node)
+            && node
+                .children
+                .get(child_idx)
+                .is_some_and(|child| is_at_trailing_edge(child, rest, offset))
+    } else if node.is_token() {
+        let char_len = node.text.chars().count();
+        char_len > 0 && offset == char_len
+    } else if node.is_row() && node.tag != "msqrt" {
+        offset == node.children.len()
+    } else {
+        false
+    }
+}
+
+/// Returns `true` if `node`'s outer leading/trailing edge aligns directly with its outer child.
+fn has_transparent_edge(node: &Node) -> bool {
+    (node.is_row() && node.tag != "msqrt")
+        || matches!(
+            node.tag.as_str(),
+            "mstyle" | "mpadded" | "mphantom" | "msup" | "msub" | "msubsup"
+        )
 }

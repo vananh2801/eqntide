@@ -1634,12 +1634,13 @@ fn panel_dividers_draw_over_opaque_fills_and_clear_color_matches_theme() {
 fn status_bar_is_quiet_when_idle_or_busy_and_clears_stale_messages_on_edit() {
     use egui::Key;
 
-    // Idle launch has empty status and only renders the bridge indicator text.
+    // Idle launch has empty status and renders only the static vector bridge indicator dot.
     let mut app = super::helpers::app();
     app.bridge_ready = true;
     assert!(app.status.is_empty());
 
     let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
     let collect_texts = |out: &egui::FullOutput| -> Vec<String> {
         out.shapes
             .iter()
@@ -1649,10 +1650,22 @@ fn status_bar_is_quiet_when_idle_or_busy_and_clears_stale_messages_on_edit() {
             })
             .collect()
     };
+    let collect_circles = |out: &egui::FullOutput| -> Vec<egui::epaint::CircleShape> {
+        out.shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Circle(circle) => Some(*circle),
+                _ => None,
+            })
+            .collect()
+    };
 
     let mut idle_out = ctx.run_ui(egui::RawInput::default(), |ui| app.draw_status_bar(ui));
     idle_out.textures_delta.clear();
-    assert_eq!(collect_texts(&idle_out), vec!["●".to_owned()]);
+    assert!(collect_texts(&idle_out).is_empty());
+    let idle_circles = collect_circles(&idle_out);
+    assert_eq!(idle_circles.len(), 1);
+    assert_ne!(idle_circles[0].fill, Color32::TRANSPARENT);
 
     // Busy state does not animate or add "Working…" / spinner shapes in draw_status_bar.
     for profile in [GpuProfile::Native, GpuProfile::Software] {
@@ -1660,11 +1673,68 @@ fn status_bar_is_quiet_when_idle_or_busy_and_clears_stale_messages_on_edit() {
         app.busy = true;
         let mut busy_out = ctx.run_ui(egui::RawInput::default(), |ui| app.draw_status_bar(ui));
         busy_out.textures_delta.clear();
-        assert_eq!(collect_texts(&busy_out), vec!["●".to_owned()]);
+        assert!(collect_texts(&busy_out).is_empty());
+        assert_eq!(collect_circles(&busy_out).len(), 1);
         assert_eq!(busy_out.shapes.len(), idle_out.shapes.len());
     }
     app.busy = false;
     app.gpu_profile = GpuProfile::Native;
+
+    // Disconnected bridge renders a hollow stroked circle.
+    app.bridge_ready = false;
+    let mut disconnected_out = ctx.run_ui(egui::RawInput::default(), |ui| app.draw_status_bar(ui));
+    disconnected_out.textures_delta.clear();
+    let disconnected_circles = collect_circles(&disconnected_out);
+    assert_eq!(disconnected_circles.len(), 1);
+    assert_eq!(disconnected_circles[0].fill, Color32::TRANSPARENT);
+    assert!(disconnected_circles[0].stroke.width > 0.0);
+    app.bridge_ready = true;
+
+    // Vector readiness dot and status text are vertically centered inside the 32px status bar.
+    app.status = "Saved.".into();
+    let shell_out = run_ui_pass_sized(&ctx, &mut app, Vec2::new(1100.0, 650.0));
+    let status_bar_rect = shell_out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape)
+                if (rect_shape.rect.height() - 32.0).abs() < 0.1
+                    && rect_shape.rect.max.y > 640.0 =>
+            {
+                Some(rect_shape.rect)
+            }
+            _ => None,
+        })
+        .expect("32px bottom status bar rect");
+    let status_mid_y = status_bar_rect.center().y;
+    let dot_circle = shell_out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Circle(circle) if status_bar_rect.contains(circle.center) => Some(*circle),
+            _ => None,
+        })
+        .expect("vector status dot inside status bar");
+    let saved_text_mid_y = shell_out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text_shape) if text_shape.galley.text() == "Saved." => {
+                Some(text_shape.pos.y + text_shape.galley.size().y / 2.0)
+            }
+            _ => None,
+        })
+        .expect("Saved. status label");
+    assert!(
+        (dot_circle.center.y - status_mid_y).abs() <= 1.0,
+        "dot center y={} vs status mid y={status_mid_y}",
+        dot_circle.center.y
+    );
+    assert!(
+        (saved_text_mid_y - status_mid_y).abs() <= 1.5,
+        "text mid y={saved_text_mid_y} vs status mid y={status_mid_y}"
+    );
+    app.status.clear();
 
     // Routine LaTeX command commit, Escape cancel, and custom matrix insert leave status empty.
     type_canvas(&mut app, r"\alpha");
