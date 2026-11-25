@@ -1,6 +1,7 @@
 //! Native Rust desktop. No webview, JavaScript runtime, or MathLive dependency.
 #![forbid(unsafe_code)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod batch;
 mod commands;
@@ -16,10 +17,12 @@ use eqntide::bridge::{DesktopWindowRequest, ServerHandle};
 use eqntide::render::InteractivePreview;
 use std::sync::{mpsc, Arc};
 
+/// Thread-safe event sender that optionally triggers an egui repaint upon delivery.
 pub struct EventSender<T = Event> {
     channel: mpsc::Sender<T>,
     repaint: Arc<std::sync::OnceLock<eframe::egui::Context>>,
 }
+
 impl<T> Clone for EventSender<T> {
     fn clone(&self) -> Self {
         Self {
@@ -28,6 +31,7 @@ impl<T> Clone for EventSender<T> {
         }
     }
 }
+
 impl<T> EventSender<T> {
     fn new(channel: mpsc::Sender<T>) -> Self {
         Self {
@@ -35,6 +39,7 @@ impl<T> EventSender<T> {
             repaint: Default::default(),
         }
     }
+
     fn send(&self, event: T) -> Result<(), mpsc::SendError<T>> {
         self.channel.send(event)?;
         if let Some(ctx) = self.repaint.get() {
@@ -42,19 +47,24 @@ impl<T> EventSender<T> {
         }
         Ok(())
     }
+
     fn send_local(&self, event: T) -> Result<(), mpsc::SendError<T>> {
         self.channel.send(event)
     }
+
     fn attach(&self, ctx: eframe::egui::Context) {
         let _ = self.repaint.set(ctx);
     }
 }
 
+/// Completed interactive equation render payload for the canvas.
 pub struct Rendered {
     placeholders: Vec<eqntide::render::HitRegion>,
     preview: InteractivePreview,
     image: eframe::egui::ColorImage,
 }
+
+/// Background-thread events delivered to the desktop UI event loop.
 pub enum Event {
     Launch(Vec<String>),
     Window(DesktopWindowRequest),
@@ -74,6 +84,7 @@ pub enum Event {
     BatchDone,
 }
 
+/// Returns the per-user log file path inside the EqnTide data directory, creating it if needed.
 pub(crate) fn log_file_path(filename: &str) -> Option<std::path::PathBuf> {
     let dirs = directories::ProjectDirs::from("com", "eqntide", "EqnTide")?;
     let log_dir = dirs.data_local_dir().join("logs");
@@ -167,11 +178,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel();
     let tx = EventSender::new(tx);
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--version") {
+    if args.iter().any(|arg| arg == "--version") {
         println!("eqntide-desktop {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    if args.iter().any(|a| a == "--batch-worker") {
+    if args.iter().any(|arg| arg == "--batch-worker") {
         return batch::run_worker_stdio();
     }
     let Some(instance) = instance::acquire(&args, tx.clone())? else {
@@ -181,13 +192,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let renderer_env = std::env::var("EQNTIDE_RENDERER").unwrap_or_default();
     let use_software =
-        args.iter().any(|a| a == "--software") || renderer_env.eq_ignore_ascii_case("software");
-    let use_wgpu = args.iter().any(|a| a == "--wgpu") || renderer_env.eq_ignore_ascii_case("wgpu");
-    let use_glow = args.iter().any(|a| a == "--glow") || renderer_env.eq_ignore_ascii_case("glow");
+        args.iter().any(|arg| arg == "--software") || renderer_env.eq_ignore_ascii_case("software");
+    let use_wgpu =
+        args.iter().any(|arg| arg == "--wgpu") || renderer_env.eq_ignore_ascii_case("wgpu");
+    let use_glow =
+        args.iter().any(|arg| arg == "--glow") || renderer_env.eq_ignore_ascii_case("glow");
 
     let present_env = std::env::var("EQNTIDE_PRESENT_MODE").unwrap_or_default();
     let use_vsync =
-        args.iter().any(|a| a == "--vsync") || present_env.eq_ignore_ascii_case("vsync");
+        args.iter().any(|arg| arg == "--vsync") || present_env.eq_ignore_ascii_case("vsync");
 
     let wgpu_options = {
         let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();

@@ -1,3 +1,9 @@
+//! Design tokens, egui style configuration, and math canvas color palettes.
+//!
+//! [`ThemeTokens`] defines accessible light and dark UI color roles, translucent panel/card
+//! derivation for custom background images, and global [`egui::Style`] setup. [`CanvasPreset`]
+//! maps light and dark canvas surface presets to concrete [`CanvasPalette`] colors.
+
 use eframe::egui::{self, Color32, CornerRadius, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +24,23 @@ pub(crate) const BUTTON_HEIGHT: f32 = 30.0;
 pub(crate) const SIDEBAR_TAB_HEIGHT: f32 = 34.0;
 pub(crate) const COMPACT_BUTTON_HEIGHT: f32 = 24.0;
 
+/// Ordered list of canvas surface presets exposed in light mode.
+pub(crate) const LIGHT_CANVAS_PRESETS: &[CanvasPreset] = &[
+    CanvasPreset::SoftPaper,
+    CanvasPreset::PureWhite,
+    CanvasPreset::CoolSlate,
+    CanvasPreset::WarmCream,
+];
+
+/// Ordered list of canvas surface presets exposed in dark mode.
+pub(crate) const DARK_CANVAS_PRESETS: &[CanvasPreset] = &[
+    CanvasPreset::SoftPaper,
+    CanvasPreset::DimSlate,
+    CanvasPreset::SoftCharcoal,
+    CanvasPreset::DeepInk,
+];
+
+/// Semantic UI color tokens for chrome, panels, controls, selection, and errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ThemeTokens {
     pub(crate) dark_mode: bool,
@@ -47,6 +70,7 @@ pub(crate) struct ThemeTokens {
 }
 
 impl ThemeTokens {
+    /// Return the base opaque token palette for light or dark mode.
     pub(crate) fn for_mode(dark_mode: bool) -> Self {
         if dark_mode {
             Self {
@@ -105,10 +129,12 @@ impl ThemeTokens {
         }
     }
 
+    /// Derive theme tokens matching `ui.visuals().dark_mode`.
     pub(crate) fn from_ui(ui: &egui::Ui) -> Self {
         Self::for_mode(ui.visuals().dark_mode)
     }
 
+    /// Return base tokens or translucent tokens when a custom background image is active.
     pub(crate) fn for_mode_with_background(
         dark_mode: bool,
         has_background: bool,
@@ -122,6 +148,7 @@ impl ThemeTokens {
         }
     }
 
+    /// Apply translucent panel and card fills so a wallpaper stays visible while keeping text legible.
     pub(crate) fn with_background_opacity(mut self, overlay_opacity: f32) -> Self {
         let opacity = if overlay_opacity.is_finite() {
             overlay_opacity.clamp(0.0, 1.0)
@@ -145,6 +172,7 @@ impl ThemeTokens {
         self
     }
 
+    /// Compute the full-window scrim fill painted between the background image and UI chrome.
     pub(crate) fn background_scrim(dark_mode: bool, overlay_opacity: f32) -> Color32 {
         let opacity = if overlay_opacity.is_finite() {
             overlay_opacity.clamp(0.0, 1.0)
@@ -156,6 +184,7 @@ impl ThemeTokens {
         Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
     }
 
+    /// Install light and dark styles onto the `egui::Context`.
     pub(crate) fn apply_style(egui_ctx: &egui::Context) {
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             let tokens = Self::for_mode(theme == egui::Theme::Dark);
@@ -250,6 +279,7 @@ impl ThemeTokens {
         }
     }
 
+    /// Build a card-styled `egui::Frame` using surface corners and inner spacing.
     pub(crate) fn group_frame(self) -> egui::Frame {
         egui::Frame::new()
             .fill(self.card_bg)
@@ -258,6 +288,7 @@ impl ThemeTokens {
             .inner_margin(SPACE_LG)
     }
 
+    /// Choose icon foreground tint given `selected` and `enabled` states.
     pub(crate) fn icon_tint(self, selected: bool, enabled: bool) -> Color32 {
         if !enabled {
             self.text_disabled
@@ -269,6 +300,7 @@ impl ThemeTokens {
     }
 }
 
+/// Selectable background/ink preset for the interactive math canvas.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CanvasPreset {
@@ -284,38 +316,8 @@ pub(crate) enum CanvasPreset {
     Unknown,
 }
 
-pub(crate) const LIGHT_CANVAS_PRESETS: &[CanvasPreset] = &[
-    CanvasPreset::SoftPaper,
-    CanvasPreset::PureWhite,
-    CanvasPreset::CoolSlate,
-    CanvasPreset::WarmCream,
-];
-
-pub(crate) const DARK_CANVAS_PRESETS: &[CanvasPreset] = &[
-    CanvasPreset::SoftPaper,
-    CanvasPreset::DimSlate,
-    CanvasPreset::SoftCharcoal,
-    CanvasPreset::DeepInk,
-];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CanvasPalette {
-    pub(crate) bg: Color32,
-    pub(crate) border: Color32,
-    pub(crate) ink: Color32,
-    pub(crate) placeholder_bg: Color32,
-    pub(crate) placeholder_stroke: Color32,
-    pub(crate) caret: Color32,
-    pub(crate) selection_bg: Color32,
-    pub(crate) text_caret: Color32,
-    pub(crate) ime_fg: Color32,
-    pub(crate) scroll_inactive: Color32,
-    pub(crate) scroll_hover: Color32,
-    pub(crate) scroll_active: Color32,
-    pub(crate) scroll_track: Color32,
-}
-
 impl CanvasPreset {
+    /// Ensure the preset belongs to the allowed set for `dark_mode`, falling back to `SoftPaper`.
     pub(crate) fn sanitize_for_mode(self, dark_mode: bool) -> Self {
         let allowed = if dark_mode {
             DARK_CANVAS_PRESETS
@@ -329,6 +331,7 @@ impl CanvasPreset {
         }
     }
 
+    /// Return the human-readable UI label for this preset.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::SoftPaper | Self::Unknown => "Soft paper",
@@ -341,10 +344,12 @@ impl CanvasPreset {
         }
     }
 
+    /// Return whether this preset uses a dark canvas surface with light ink.
     pub(crate) fn is_dark_surface(self) -> bool {
         matches!(self, Self::DimSlate | Self::SoftCharcoal | Self::DeepInk)
     }
 
+    /// Resolve concrete canvas colors for this preset under `dark_mode`.
     pub(crate) fn palette(self, dark_mode: bool) -> CanvasPalette {
         let preset = self.sanitize_for_mode(dark_mode);
         let light_border = Color32::from_rgb(212, 220, 230);
@@ -419,50 +424,72 @@ impl CanvasPreset {
     }
 }
 
+/// Concrete canvas background, ink, caret, selection, and scrollbar colors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CanvasPalette {
+    pub(crate) bg: Color32,
+    pub(crate) border: Color32,
+    pub(crate) ink: Color32,
+    pub(crate) placeholder_bg: Color32,
+    pub(crate) placeholder_stroke: Color32,
+    pub(crate) caret: Color32,
+    pub(crate) selection_bg: Color32,
+    pub(crate) text_caret: Color32,
+    pub(crate) ime_fg: Color32,
+    pub(crate) scroll_inactive: Color32,
+    pub(crate) scroll_hover: Color32,
+    pub(crate) scroll_active: Color32,
+    pub(crate) scroll_track: Color32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn relative_luminance(c: Color32) -> f32 {
+    fn relative_luminance(color: Color32) -> f32 {
         fn linear(channel: u8) -> f32 {
-            let s = channel as f32 / 255.0;
-            if s <= 0.03928 {
-                s / 12.92
+            let scaled = channel as f32 / 255.0;
+            if scaled <= 0.03928 {
+                scaled / 12.92
             } else {
-                ((s + 0.055) / 1.055).powf(2.4)
+                ((scaled + 0.055) / 1.055).powf(2.4)
             }
         }
-        0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+        0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
     }
 
-    fn contrast_ratio(a: Color32, b: Color32) -> f32 {
-        let la = relative_luminance(a);
-        let lb = relative_luminance(b);
-        let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    fn contrast_ratio(first: Color32, second: Color32) -> f32 {
+        let lum_first = relative_luminance(first);
+        let lum_second = relative_luminance(second);
+        let (hi, lo) = if lum_first >= lum_second {
+            (lum_first, lum_second)
+        } else {
+            (lum_second, lum_first)
+        };
         (hi + 0.05) / (lo + 0.05)
     }
 
     fn blend_over(fg: Color32, bg: Color32) -> Color32 {
         let [r, g, b, alpha] = fg.to_srgba_unmultiplied();
-        let a = alpha as f32 / 255.0;
-        let inv = 1.0 - a;
+        let alpha_norm = alpha as f32 / 255.0;
+        let inv = 1.0 - alpha_norm;
         Color32::from_rgb(
-            (r as f32 * a + bg.r() as f32 * inv).round() as u8,
-            (g as f32 * a + bg.g() as f32 * inv).round() as u8,
-            (b as f32 * a + bg.b() as f32 * inv).round() as u8,
+            (r as f32 * alpha_norm + bg.r() as f32 * inv).round() as u8,
+            (g as f32 * alpha_norm + bg.g() as f32 * inv).round() as u8,
+            (b as f32 * alpha_norm + bg.b() as f32 * inv).round() as u8,
         )
     }
 
     #[test]
     fn theme_tokens_provide_accessible_contrast_in_light_and_dark_modes() {
         for dark in [false, true] {
-            let t = ThemeTokens::for_mode(dark);
-            assert_eq!(t.dark_mode, dark);
-            assert!(contrast_ratio(t.text_primary, t.panel_bg) >= 7.0);
-            assert!(contrast_ratio(t.text_primary, t.control_bg) >= 7.0);
-            assert!(contrast_ratio(t.selected_fg, t.selected_bg) >= 4.5);
-            assert!(contrast_ratio(t.primary_fg, t.primary_bg) >= 4.5);
-            assert_ne!(t.app_bg, t.panel_bg);
+            let tokens = ThemeTokens::for_mode(dark);
+            assert_eq!(tokens.dark_mode, dark);
+            assert!(contrast_ratio(tokens.text_primary, tokens.panel_bg) >= 7.0);
+            assert!(contrast_ratio(tokens.text_primary, tokens.control_bg) >= 7.0);
+            assert!(contrast_ratio(tokens.selected_fg, tokens.selected_bg) >= 4.5);
+            assert!(contrast_ratio(tokens.primary_fg, tokens.primary_bg) >= 4.5);
+            assert_ne!(tokens.app_bg, tokens.panel_bg);
         }
     }
 
@@ -512,13 +539,13 @@ mod tests {
                 style.visuals.interact_cursor,
                 Some(egui::CursorIcon::PointingHand)
             );
-            let w = &style.visuals.widgets;
+            let widgets = &style.visuals.widgets;
             for state in [
-                &w.noninteractive,
-                &w.inactive,
-                &w.hovered,
-                &w.active,
-                &w.open,
+                &widgets.noninteractive,
+                &widgets.inactive,
+                &widgets.hovered,
+                &widgets.active,
+                &widgets.open,
             ] {
                 assert_eq!(state.corner_radius, CONTROL_CORNER_RADIUS);
                 assert_eq!(state.expansion, 0.0);

@@ -1,7 +1,11 @@
 //! Local LaTeX command completion and validation for the structural canvas and desktop editor.
+
 #[cfg(test)]
 use crate::palette;
 
+const COMMANDS: &[(&str, &str, &str)] = eqntide::catalog::COMMANDS;
+
+/// Autocomplete entry shown in the canvas backslash popup.
 #[derive(Clone, Copy)]
 pub struct Command {
     pub name: &'static str,
@@ -9,6 +13,7 @@ pub struct Command {
     pub source: &'static str,
 }
 
+/// Interactive state for the inline backslash command buffer on the Equation Canvas.
 #[derive(Default)]
 pub struct Input {
     pub name: String,
@@ -19,6 +24,7 @@ pub struct Input {
 }
 
 impl Input {
+    /// Opens a fresh command buffer with initial focus and cursor sync requested.
     pub fn opened() -> Self {
         Self {
             needs_focus: true,
@@ -27,21 +33,17 @@ impl Input {
         }
     }
 
+    /// Returns the number of Unicode scalar values currently in the command buffer.
     pub fn char_len(&self) -> usize {
         self.name.chars().count()
     }
 
-    fn byte_index(&self, char_idx: usize) -> usize {
-        self.name
-            .char_indices()
-            .nth(char_idx)
-            .map_or(self.name.len(), |(idx, _)| idx)
-    }
-
+    /// Clamps `cursor` to the valid character boundary range of `name`.
     pub fn clamp_cursor(&mut self) {
         self.cursor = self.cursor.min(self.char_len());
     }
 
+    /// Inserts `ch` at the current character cursor position and advances it.
     pub fn insert_char(&mut self, ch: char) {
         self.clamp_cursor();
         let byte_idx = self.byte_index(self.cursor);
@@ -69,6 +71,7 @@ impl Input {
         true
     }
 
+    /// Deletes the character at the cursor without moving the cursor position.
     pub fn delete(&mut self) {
         self.clamp_cursor();
         if self.cursor < self.char_len() {
@@ -80,6 +83,7 @@ impl Input {
         }
     }
 
+    /// Moves the cursor one character to the left.
     pub fn move_left(&mut self) {
         self.clamp_cursor();
         if self.cursor > 0 {
@@ -88,6 +92,7 @@ impl Input {
         }
     }
 
+    /// Moves the cursor one character to the right.
     pub fn move_right(&mut self) {
         self.clamp_cursor();
         if self.cursor < self.char_len() {
@@ -96,6 +101,7 @@ impl Input {
         }
     }
 
+    /// Moves the cursor to the start of the command buffer.
     pub fn move_home(&mut self) {
         if self.cursor != 0 {
             self.cursor = 0;
@@ -103,6 +109,7 @@ impl Input {
         }
     }
 
+    /// Moves the cursor to the end of the command buffer.
     pub fn move_end(&mut self) {
         let end = self.char_len();
         if self.cursor != end {
@@ -111,6 +118,7 @@ impl Input {
         }
     }
 
+    /// Replaces the command text and places the cursor at the end.
     pub fn set_name_end(&mut self, name: impl Into<String>) {
         self.name = name.into();
         self.cursor = self.char_len();
@@ -118,11 +126,20 @@ impl Input {
         self.sync_cursor = true;
     }
 
+    /// Returns `true` when the buffer contains only ASCII letters (a command prefix).
     pub fn is_command_prefix(&self) -> bool {
-        self.name.bytes().all(|b| b.is_ascii_alphabetic())
+        self.name.bytes().all(|byte| byte.is_ascii_alphabetic())
+    }
+
+    fn byte_index(&self, char_idx: usize) -> usize {
+        self.name
+            .char_indices()
+            .nth(char_idx)
+            .map_or(self.name.len(), |(idx, _)| idx)
     }
 }
 
+/// Returns `true` for desktop LaTeX commands that require non-empty braced arguments.
 pub fn is_argument_requiring_command(name: &str) -> bool {
     matches!(
         name,
@@ -143,6 +160,7 @@ pub fn is_argument_requiring_command(name: &str) -> bool {
     )
 }
 
+/// Formats the user-facing error message when an argument-requiring command is missing its body.
 pub fn bare_command_error(name: &str) -> String {
     match name {
         "text" => r"Invalid LaTeX command. Use \text{...} to insert text.".into(),
@@ -154,93 +172,6 @@ pub fn bare_command_error(name: &str) -> String {
             r"Invalid LaTeX command. Use \{name}{{...}} with a non-empty braced argument."
         ),
     }
-}
-
-fn validate_specialized_alphabet(cmd: &str, trimmed: &str) -> Result<(), String> {
-    let valid = match cmd {
-        "mathbb" => trimmed
-            .chars()
-            .all(|ch| ch.is_ascii_uppercase() || ch == 'k'),
-        "mathcal" => trimmed
-            .chars()
-            .all(|ch| ch.is_ascii_uppercase() || ch == 'l'),
-        "mathscr" | "mathfrak" => trimmed.chars().all(|ch| ch.is_ascii_alphabetic()),
-        _ => true,
-    };
-    if valid {
-        return Ok(());
-    }
-    Err(match cmd {
-        "mathbb" => r"Invalid LaTeX command: \mathbb{...} supports only uppercase A-Z and k (no digits, operators, or nested scripts; place exponents outside like \mathbb{R}^2).".into(),
-        "mathcal" => r"Invalid LaTeX command: \mathcal{...} supports only uppercase A-Z and l (no digits, operators, or nested scripts; place exponents outside like \mathcal{A}^2).".into(),
-        "mathscr" => r"Invalid LaTeX command: \mathscr{...} supports only letters A-Z and a-z (no digits, operators, or nested scripts; place exponents outside like \mathscr{A}^2).".into(),
-        "mathfrak" => r"Invalid LaTeX command: \mathfrak{...} supports only letters A-Z and a-z (no digits, operators, or nested scripts; place exponents outside like \mathfrak{g}^2).".into(),
-        _ => bare_command_error(cmd),
-    })
-}
-
-struct Scanner<'a> {
-    src: &'a str,
-    pos: usize,
-}
-
-impl<'a> Scanner<'a> {
-    fn rest(&self) -> &'a str {
-        &self.src[self.pos..]
-    }
-
-    fn peek_char(&self) -> Option<char> {
-        self.rest().chars().next()
-    }
-
-    fn skip_ws(&mut self) {
-        while let Some(ch) = self.peek_char() {
-            if ch.is_whitespace() {
-                self.pos += ch.len_utf8();
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn read_braced(&mut self) -> Option<&'a str> {
-        if !self.rest().starts_with('{') {
-            return None;
-        }
-        let start = self.pos + 1;
-        let mut depth = 1usize;
-        let mut escaped = false;
-        for (offset, ch) in self.src[start..].char_indices() {
-            if !escaped {
-                match ch {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            let end = start + offset;
-                            self.pos = end + 1;
-                            return Some(&self.src[start..end]);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            escaped = !escaped && ch == '\\';
-        }
-        None
-    }
-}
-
-fn match_style_group_prefix(inner: &str) -> Option<(&'static str, &str)> {
-    let trimmed = inner.trim_start();
-    for cmd in ["textstyle", "displaystyle"] {
-        if let Some(after_cmd) = trimmed.strip_prefix('\\').and_then(|t| t.strip_prefix(cmd)) {
-            if after_cmd.is_empty() || !after_cmd.as_bytes()[0].is_ascii_alphabetic() {
-                return Some((cmd, after_cmd));
-            }
-        }
-    }
-    None
 }
 
 /// Validates desktop LaTeX input (both Equation Canvas command buffers and `LaTeX source`)
@@ -280,7 +211,10 @@ pub fn validate_desktop_latex(source: &str) -> Result<(), String> {
                 continue;
             }
             let cmd_start = scanner.pos;
-            while scanner.peek_char().is_some_and(|c| c.is_ascii_alphabetic()) {
+            while scanner
+                .peek_char()
+                .is_some_and(|next_ch| next_ch.is_ascii_alphabetic())
+            {
                 scanner.pos += 1;
             }
             let cmd = &scanner.src[cmd_start..scanner.pos];
@@ -351,8 +285,7 @@ pub fn validate_desktop_latex(source: &str) -> Result<(), String> {
     Ok(())
 }
 
-const COMMANDS: &[(&str, &str, &str)] = eqntide::catalog::COMMANDS;
-
+/// Returns up to 8 deduplicated autocomplete suggestions matching `prefix`.
 pub fn suggestions(prefix: &str) -> Vec<Command> {
     let mut commands: Vec<_> = COMMANDS
         .iter()
@@ -361,21 +294,113 @@ pub fn suggestions(prefix: &str) -> Vec<Command> {
             label,
             source,
         })
-        .filter(|c| c.name.starts_with(prefix))
+        .filter(|cmd| cmd.name.starts_with(prefix))
         .collect();
-    commands.sort_by_key(|c| (c.name != prefix, c.name));
-    commands.dedup_by_key(|c| c.name);
+    commands.sort_by_key(|cmd| (cmd.name != prefix, cmd.name));
+    commands.dedup_by_key(|cmd| cmd.name);
     commands.truncate(8);
     commands
 }
 
+/// Looks up a command whose name matches `name` exactly.
 pub fn exact(name: &str) -> Option<Command> {
-    suggestions(name).into_iter().find(|c| c.name == name)
+    suggestions(name).into_iter().find(|cmd| cmd.name == name)
+}
+
+struct Scanner<'a> {
+    src: &'a str,
+    pos: usize,
+}
+
+impl<'a> Scanner<'a> {
+    fn rest(&self) -> &'a str {
+        &self.src[self.pos..]
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        self.rest().chars().next()
+    }
+
+    fn skip_ws(&mut self) {
+        while let Some(ch) = self.peek_char() {
+            if ch.is_whitespace() {
+                self.pos += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn read_braced(&mut self) -> Option<&'a str> {
+        if !self.rest().starts_with('{') {
+            return None;
+        }
+        let start = self.pos + 1;
+        let mut depth = 1usize;
+        let mut escaped = false;
+        for (offset, ch) in self.src[start..].char_indices() {
+            if !escaped {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let end = start + offset;
+                            self.pos = end + 1;
+                            return Some(&self.src[start..end]);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            escaped = !escaped && ch == '\\';
+        }
+        None
+    }
+}
+
+fn validate_specialized_alphabet(cmd: &str, trimmed: &str) -> Result<(), String> {
+    let valid = match cmd {
+        "mathbb" => trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch == 'k'),
+        "mathcal" => trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch == 'l'),
+        "mathscr" | "mathfrak" => trimmed.chars().all(|ch| ch.is_ascii_alphabetic()),
+        _ => true,
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(match cmd {
+        "mathbb" => r"Invalid LaTeX command: \mathbb{...} supports only uppercase A-Z and k (no digits, operators, or nested scripts; place exponents outside like \mathbb{R}^2).".into(),
+        "mathcal" => r"Invalid LaTeX command: \mathcal{...} supports only uppercase A-Z and l (no digits, operators, or nested scripts; place exponents outside like \mathcal{A}^2).".into(),
+        "mathscr" => r"Invalid LaTeX command: \mathscr{...} supports only letters A-Z and a-z (no digits, operators, or nested scripts; place exponents outside like \mathscr{A}^2).".into(),
+        "mathfrak" => r"Invalid LaTeX command: \mathfrak{...} supports only letters A-Z and a-z (no digits, operators, or nested scripts; place exponents outside like \mathfrak{g}^2).".into(),
+        _ => bare_command_error(cmd),
+    })
+}
+
+fn match_style_group_prefix(inner: &str) -> Option<(&'static str, &str)> {
+    let trimmed = inner.trim_start();
+    for cmd in ["textstyle", "displaystyle"] {
+        if let Some(after_cmd) = trimmed
+            .strip_prefix('\\')
+            .and_then(|rest| rest.strip_prefix(cmd))
+        {
+            if after_cmd.is_empty() || !after_cmd.as_bytes()[0].is_ascii_alphabetic() {
+                return Some((cmd, after_cmd));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn every_completion_is_an_insertable_template() {
         for &(name, _, source) in COMMANDS {
@@ -414,7 +439,7 @@ mod tests {
         let mut editor = eqntide_editor::Editor::default();
         editor.insert_template(&template);
         editor.insert_text("5 cm");
-        assert_eq!(editor.root().math().to_latex(), r"\text{5 cm}");
+        assert_eq!(editor.root().to_math_node().to_latex(), r"\text{5 cm}");
     }
 
     #[test]

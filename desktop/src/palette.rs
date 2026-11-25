@@ -1,14 +1,19 @@
 //! Native palette backed by the shared conversion catalog.
+
 #[allow(unused_imports)]
 pub use eqntide::catalog::{
     attaches_to_previous, matrix, preview_template, template, GROUPS, PALETTE,
 };
 
+/// Category identifier for the most-recently-used palette items.
 pub const RECENT_GROUP: &str = "Recent";
+/// Default sidebar category selected on first launch.
 pub const DEFAULT_GROUP: &str = "Fractions";
 
+/// Tuple of `(catalog_group, tooltip_label, latex_template_source)`.
 pub type PaletteItem = (&'static str, &'static str, &'static str);
 
+/// Sidebar category descriptor grouping one or more catalog sections.
 #[derive(Clone, Copy, Debug)]
 pub struct UiGroup {
     pub id: &'static str,
@@ -17,6 +22,7 @@ pub struct UiGroup {
     pub catalog_groups: &'static [&'static str],
 }
 
+/// Ordered sidebar categories displayed in the desktop editor.
 pub const UI_GROUPS: &[UiGroup] = &[
     UiGroup {
         id: RECENT_GROUP,
@@ -104,10 +110,12 @@ pub const UI_GROUPS: &[UiGroup] = &[
     },
 ];
 
+/// Looks up a sidebar UI group descriptor by identifier.
 pub fn ui_group(id: &str) -> Option<&'static UiGroup> {
     UI_GROUPS.iter().find(|group| group.id == id)
 }
 
+/// Resolves an arbitrary template string to its canonical static slice from `PALETTE`.
 pub fn canonical_source(source: &str) -> Option<&'static str> {
     PALETTE
         .iter()
@@ -115,11 +123,13 @@ pub fn canonical_source(source: &str) -> Option<&'static str> {
         .map(|(_, _, item_source)| *item_source)
 }
 
+/// Returns `true` when `ui_group_id` owns `catalog_group` or matches it directly.
 pub fn group_contains(ui_group_id: &str, catalog_group: &str) -> bool {
     ui_group(ui_group_id).is_some_and(|group| group.catalog_groups.contains(&catalog_group))
         || ui_group_id == catalog_group
 }
 
+/// Collects the palette items belonging to `ui_group_id` (or MRU items for `Recent`).
 pub fn items_for_ui_group(ui_group_id: &str, recent: &[&'static str]) -> Vec<&'static PaletteItem> {
     if ui_group_id == RECENT_GROUP {
         return recent
@@ -152,16 +162,18 @@ pub fn items_for_ui_group(ui_group_id: &str, recent: &[&'static str]) -> Vec<&'s
 mod tests {
     use super::*;
     use eqntide::MathNode;
+
     #[test]
     fn every_existing_palette_button_has_a_native_template() {
         let errors: Vec<_> = PALETTE
             .iter()
             .filter_map(|(_, label, source)| {
-                template(source).err().map(|e| format!("{label}: {e}"))
+                template(source).err().map(|err| format!("{label}: {err}"))
             })
             .collect();
         assert!(errors.is_empty(), "{}", errors.join("\n"));
     }
+
     #[test]
     fn every_thumbnail_contains_visible_math_inside_a_math_root() {
         for (_, label, source) in PALETTE {
@@ -170,7 +182,7 @@ mod tests {
             let preview = eqntide::render::render_preview(&math, 12.0).unwrap();
             let pixels = image::load_from_memory(&preview.png).unwrap().to_rgba8();
             assert!(
-                pixels.pixels().any(|p| p.0[3] > 0),
+                pixels.pixels().any(|pixel| pixel.0[3] > 0),
                 "empty thumbnail: {label}"
             );
         }
@@ -180,14 +192,14 @@ mod tests {
 
     #[test]
     fn filled_palette_templates_render_and_export_to_office() {
-        fn fill(n: &mut MathNode) {
-            if matches!(n.tag.as_str(), "mrow" | "mtd")
-                && n.children.is_empty()
-                && n.text.is_empty()
+        fn fill(node: &mut MathNode) {
+            if matches!(node.tag.as_str(), "mrow" | "mtd")
+                && node.children.is_empty()
+                && node.text.is_empty()
             {
-                n.children.push(MathNode::leaf("mi", "x"));
+                node.children.push(MathNode::leaf("mi", "x"));
             }
-            for child in &mut n.children {
+            for child in &mut node.children {
                 fill(child);
             }
         }
@@ -196,7 +208,7 @@ mod tests {
             fill(&mut node);
             let math = MathNode::with_children("math", vec![node]);
             let preview = eqntide::render::render_interactive(&math, 12.0)
-                .unwrap_or_else(|e| panic!("{label}: {e}"));
+                .unwrap_or_else(|err| panic!("{label}: {err}"));
             assert!(!preview.preview.png.is_empty(), "{label}");
             assert!(
                 eqntide::mathml_to_omml_xml(&math)
@@ -230,14 +242,18 @@ mod tests {
             for &icon_name in group.icons {
                 let icon_path = icon_dir.join(format!("{icon_name}.png"));
                 let pixels = image::open(&icon_path)
-                    .unwrap_or_else(|e| {
-                        panic!("{}: failed to open {}: {e}", group.id, icon_path.display())
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "{}: failed to open {}: {err}",
+                            group.id,
+                            icon_path.display()
+                        )
                     })
                     .to_rgba8();
                 assert!(
                     pixels.width() > 0
                         && pixels.height() > 0
-                        && pixels.pixels().any(|p| p.0[3] > 0),
+                        && pixels.pixels().any(|pixel| pixel.0[3] > 0),
                     "empty sidebar icon {icon_name} for {}",
                     group.id
                 );
@@ -246,7 +262,7 @@ mod tests {
         }
 
         for &(canonical, _) in GROUPS {
-            let occurrences = mapped.iter().filter(|&&g| g == canonical).count();
+            let occurrences = mapped.iter().filter(|&&group| group == canonical).count();
             assert_eq!(
                 occurrences, 1,
                 "canonical group {canonical} mapped {occurrences} times"

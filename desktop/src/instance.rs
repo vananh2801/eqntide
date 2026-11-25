@@ -1,4 +1,5 @@
 //! A per-user instance lock and local socket, independent of the Office bridge.
+
 use crate::{Event, EventSender as Sender};
 use fs2::FileExt;
 use interprocess::local_socket::{
@@ -10,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Exclusive single-instance lock guard and local IPC socket cleanup handle.
 pub struct Instance {
     _lock: File,
     endpoint_path: Option<PathBuf>,
@@ -23,31 +25,143 @@ impl Drop for Instance {
     }
 }
 
-fn is_contended(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::WouldBlock
-        || error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
-        || error.raw_os_error() == Some(33) // ERROR_LOCK_VIOLATION on Windows
+/// Acquires the single-instance lock or forwards `args` to the already-running instance.
+///
+/// Returns `Ok(None)` when `args` were delivered to an existing primary process.
+pub fn acquire(args: &[String], tx: Sender<Event>) -> io::Result<Option<Instance>> {
+    let primary_dir = primary_data_dir()?;
+    acquire_in(&primary_dir, args, tx)
 }
 
-fn ensure_private_dir(dir: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-    }
-    Ok(())
+#[derive(serde::Serialize, serde::Deserialize)]
+struct IpcEnvelope {
+    secret: String,
+    args: Vec<String>,
 }
 
-fn open_private_rw(path: &Path) -> io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.create(true).truncate(false).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+fn acquire_in(dir: &Path, args: &[String], tx: Sender<Event>) -> io::Result<Option<Instance>> {
+    let (lock, lock_path) = open_lock_file_in(dir)?;
+    acquire_with_lock(lock, lock_path, args, tx)
+}
+
+fn acquire_with_lock(
+    lock: File,
+    lock_path: PathBuf,
+    args: &[String],
+    tx: Sender<Event>,
+) -> io::Result<Option<Instance>> {
+    let state_dir = lock_path
+        .parent()
+        .ok_or_else(|| io::Error::other("lock path has no parent directory"))?;
+    let endpoint_path = lock_path.with_file_name("desktop.endpoint");
+
+    // Hash the per-user path to keep Unix socket / Windows pipe names short.
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    lock_path.hash(&mut hasher);
+    let base_name = format!("eqntide-desktop-{:x}", hasher.finish());
+
+    if let Err(error) = lock.try_lock_exclusive() {
+        if !is_contended(&error) {
+            return Err(io::Error::new(
+                error.kind(),
+                format!("Failed to acquire lock '{}': {error}", lock_path.display()),
+            ));
+        }
+
+        let mut acquired_after_wait = false;
+        let mut last: Option<(String, io::Error)> = None;
+        for _ in 0..40 {
+            let target_name = read_endpoint_name(&endpoint_path, &base_name);
+            match Stream::connect(target_name.clone().to_ns_name::<GenericNamespaced>()?) {
+                Ok(mut stream) => {
+                    let secret = load_or_create_ipc_secret(state_dir)?;
+                    let payload = IpcEnvelope {
+                        secret,
+                        args: args.to_vec(),
+                    };
+                    serde_json::to_writer(&mut stream, &payload)?;
+                    stream.write_all(b"\n")?;
+                    return Ok(None);
+                }
+                Err(err) => {
+                    last = Some((target_name, err));
+                }
+            }
+
+            if lock.try_lock_exclusive().is_ok() {
+                acquired_after_wait = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        if !acquired_after_wait {
+            return Err(match last {
+                Some((pipe_name, err)) if err.kind() == io::ErrorKind::PermissionDenied => {
+                    io::Error::new(
+                        err.kind(),
+                        format!(
+                            "EqnTide is already running, but access to its IPC pipe '{pipe_name}' was denied ({err}). Switch to the open EqnTide window or close it from Task Manager first."
+                        ),
+                    )
+                }
+                Some((pipe_name, err)) => io::Error::new(
+                    err.kind(),
+                    format!("Failed to connect to running EqnTide instance ('{pipe_name}'): {err}"),
+                ),
+                None => io::Error::other("Desktop did not accept the launch request"),
+            });
+        }
     }
-    opts.open(path)
+
+    let ipc_secret = load_or_create_ipc_secret(state_dir)?;
+    let (listener, active_name) = bind_listener(&base_name)?;
+    let _ = std::fs::write(&endpoint_path, &active_name);
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            // Limit malformed local clients; read each connection separately.
+            let events = tx.clone();
+            let secret = ipc_secret.clone();
+            std::thread::spawn(move || {
+                let mut line = String::new();
+                if BufReader::new(stream.take(1024 * 1024))
+                    .read_line(&mut line)
+                    .is_ok()
+                {
+                    if let Some(args) = verify_ipc_payload(&line, &secret) {
+                        let _ = events.send(Event::Launch(args));
+                    }
+                }
+            });
+        }
+    });
+
+    Ok(Some(Instance {
+        _lock: lock,
+        endpoint_path: Some(endpoint_path),
+    }))
+}
+
+fn primary_data_dir() -> io::Result<PathBuf> {
+    directories::ProjectDirs::from("com", "eqntide", "EqnTide")
+        .map(|dirs| dirs.data_local_dir().to_path_buf())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "Failed to locate per-user EqnTide local data directory",
+            )
+        })
+}
+
+fn open_lock_file_in(dir: &Path) -> io::Result<(File, PathBuf)> {
+    open_lock_in(dir).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("Failed to open lock file in '{}': {err}", dir.display()),
+        )
+    })
 }
 
 fn open_lock_in(dir: &Path) -> io::Result<(File, PathBuf)> {
@@ -66,39 +180,40 @@ fn open_lock_in(dir: &Path) -> io::Result<(File, PathBuf)> {
     }
 }
 
-fn open_lock_file_in(dir: &Path) -> io::Result<(File, PathBuf)> {
-    open_lock_in(dir).map_err(|err| {
-        io::Error::new(
-            err.kind(),
-            format!("Failed to open lock file in '{}': {err}", dir.display()),
-        )
-    })
+fn open_private_rw(path: &Path) -> io::Result<File> {
+    let mut opts = OpenOptions::new();
+    opts.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
 }
 
-fn primary_data_dir() -> io::Result<PathBuf> {
-    directories::ProjectDirs::from("com", "eqntide", "EqnTide")
-        .map(|dirs| dirs.data_local_dir().to_path_buf())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "Failed to locate per-user EqnTide local data directory",
-            )
-        })
+fn ensure_private_dir(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct IpcEnvelope {
-    secret: String,
-    args: Vec<String>,
+fn is_contended(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::WouldBlock
+        || error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+        || error.raw_os_error() == Some(33) // ERROR_LOCK_VIOLATION on Windows
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
         return false;
     }
     let mut diff = 0u8;
-    for (&x, &y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
+    for (&left_byte, &right_byte) in left.iter().zip(right.iter()) {
+        diff |= left_byte ^ right_byte;
     }
     diff == 0
 }
@@ -108,7 +223,7 @@ fn load_or_create_ipc_secret(dir: &Path) -> io::Result<String> {
     let secret_path = dir.join("ipc.secret");
     if let Ok(raw) = std::fs::read_to_string(&secret_path) {
         let trimmed = raw.trim();
-        if trimmed.len() >= 16 && trimmed.bytes().all(|b| b.is_ascii_graphic()) {
+        if trimmed.len() >= 16 && trimmed.bytes().all(|byte| byte.is_ascii_graphic()) {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -149,8 +264,8 @@ fn verify_ipc_payload(line: &str, expected_secret: &str) -> Option<Vec<String>> 
 fn read_endpoint_name(endpoint_path: &Path, fallback: &str) -> String {
     std::fs::read_to_string(endpoint_path)
         .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
         .unwrap_or_else(|| fallback.to_string())
 }
 
@@ -218,116 +333,6 @@ fn bind_listener(base_name: &str) -> io::Result<(Listener, String)> {
         err.kind(),
         format!("Failed to create IPC listener '{base_name}': {err}"),
     ))
-}
-
-pub fn acquire(args: &[String], tx: Sender<Event>) -> io::Result<Option<Instance>> {
-    let primary_dir = primary_data_dir()?;
-    acquire_in(&primary_dir, args, tx)
-}
-
-fn acquire_in(dir: &Path, args: &[String], tx: Sender<Event>) -> io::Result<Option<Instance>> {
-    let (lock, lock_path) = open_lock_file_in(dir)?;
-    acquire_with_lock(lock, lock_path, args, tx)
-}
-
-fn acquire_with_lock(
-    lock: File,
-    lock_path: PathBuf,
-    args: &[String],
-    tx: Sender<Event>,
-) -> io::Result<Option<Instance>> {
-    let state_dir = lock_path
-        .parent()
-        .ok_or_else(|| io::Error::other("lock path has no parent directory"))?;
-    let endpoint_path = lock_path.with_file_name("desktop.endpoint");
-
-    // Hash the per-user path to keep Unix socket / Windows pipe names short.
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    lock_path.hash(&mut hasher);
-    let base_name = format!("eqntide-desktop-{:x}", hasher.finish());
-
-    if let Err(error) = lock.try_lock_exclusive() {
-        if !is_contended(&error) {
-            return Err(io::Error::new(
-                error.kind(),
-                format!("Failed to acquire lock '{}': {error}", lock_path.display()),
-            ));
-        }
-
-        let mut acquired_after_wait = false;
-        let mut last: Option<(String, io::Error)> = None;
-        for _ in 0..40 {
-            let target_name = read_endpoint_name(&endpoint_path, &base_name);
-            match Stream::connect(target_name.clone().to_ns_name::<GenericNamespaced>()?) {
-                Ok(mut stream) => {
-                    let secret = load_or_create_ipc_secret(state_dir)?;
-                    let payload = IpcEnvelope {
-                        secret,
-                        args: args.to_vec(),
-                    };
-                    serde_json::to_writer(&mut stream, &payload)?;
-                    stream.write_all(b"\n")?;
-                    return Ok(None);
-                }
-                Err(e) => {
-                    last = Some((target_name, e));
-                }
-            }
-
-            if lock.try_lock_exclusive().is_ok() {
-                acquired_after_wait = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-
-        if !acquired_after_wait {
-            return Err(match last {
-                Some((pipe_name, err)) if err.kind() == io::ErrorKind::PermissionDenied => {
-                    io::Error::new(
-                        err.kind(),
-                        format!(
-                            "EqnTide is already running, but access to its IPC pipe '{pipe_name}' was denied ({err}). Switch to the open EqnTide window or close it from Task Manager first."
-                        ),
-                    )
-                }
-                Some((pipe_name, err)) => io::Error::new(
-                    err.kind(),
-                    format!("Failed to connect to running EqnTide instance ('{pipe_name}'): {err}"),
-                ),
-                None => io::Error::other("Desktop did not accept the launch request"),
-            });
-        }
-    }
-
-    let ipc_secret = load_or_create_ipc_secret(state_dir)?;
-    let (listener, active_name) = bind_listener(&base_name)?;
-    let _ = std::fs::write(&endpoint_path, &active_name);
-
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            // Limit malformed local clients; read each connection separately.
-            let events = tx.clone();
-            let secret = ipc_secret.clone();
-            std::thread::spawn(move || {
-                let mut line = String::new();
-                if BufReader::new(stream.take(1024 * 1024))
-                    .read_line(&mut line)
-                    .is_ok()
-                {
-                    if let Some(args) = verify_ipc_payload(&line, &secret) {
-                        let _ = events.send(Event::Launch(args));
-                    }
-                }
-            });
-        }
-    });
-
-    Ok(Some(Instance {
-        _lock: lock,
-        endpoint_path: Some(endpoint_path),
-    }))
 }
 
 #[cfg(test)]

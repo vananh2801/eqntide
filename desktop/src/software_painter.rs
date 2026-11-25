@@ -1,8 +1,11 @@
+//! CPU-based egui software frame presenter and cached cover-cropped wallpaper rasterizer.
+
 use eframe::egui;
 use egui_software_backend::{BufferMutRef, ColorFieldOrder, EguiSoftwareRender};
 use std::{num::NonZeroU32, sync::Arc};
 use winit::window::Window;
 
+/// Pre-decoded wallpaper pixels paired with a monotonic revision key for software caching.
 #[derive(Clone)]
 pub(crate) struct SoftwareBackgroundImage {
     pub(crate) revision: u64,
@@ -13,8 +16,9 @@ pub(crate) struct SoftwareBackgroundImage {
 }
 
 impl SoftwareBackgroundImage {
+    /// Builds a software background image buffer from an egui color image.
     pub(crate) fn from_color_image(revision: u64, image: &egui::ColorImage) -> Self {
-        let has_alpha = image.pixels.iter().any(|p| p.a() < 255);
+        let has_alpha = image.pixels.iter().any(|pixel| pixel.a() < 255);
         Self {
             revision,
             width: image.width(),
@@ -25,6 +29,7 @@ impl SoftwareBackgroundImage {
     }
 }
 
+/// Active wallpaper image together with the theme scrim and fallback background color.
 #[derive(Clone)]
 pub(crate) struct SoftwareBackgroundLayer {
     pub(crate) image: Arc<SoftwareBackgroundImage>,
@@ -32,20 +37,7 @@ pub(crate) struct SoftwareBackgroundLayer {
     pub(crate) base_bg: egui::Color32,
 }
 
-#[derive(PartialEq, Eq)]
-struct CachedBackgroundKey {
-    width: usize,
-    height: usize,
-    revision: u64,
-    scrim: [u8; 4],
-    base_bg: [u8; 4],
-}
-
-struct CachedBackground {
-    key: CachedBackgroundKey,
-    pixels_0rgb: Vec<u32>,
-}
-
+/// Presents egui primitives into a `softbuffer` CPU backbuffer.
 pub(crate) struct SoftwarePainter {
     _context: softbuffer::Context<Arc<Window>>,
     surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
@@ -56,11 +48,12 @@ pub(crate) struct SoftwarePainter {
 }
 
 impl SoftwarePainter {
+    /// Creates a software backbuffer surface bound to `window`.
     pub(crate) fn new(window: Arc<Window>) -> Result<Self, String> {
         let context = softbuffer::Context::new(Arc::clone(&window))
-            .map_err(|e| format!("Failed to create software rendering context: {e}"))?;
+            .map_err(|err| format!("Failed to create software rendering context: {err}"))?;
         let surface = softbuffer::Surface::new(&context, Arc::clone(&window))
-            .map_err(|e| format!("Failed to create software rendering surface: {e}"))?;
+            .map_err(|err| format!("Failed to create software rendering surface: {err}"))?;
         Ok(Self {
             _context: context,
             surface,
@@ -71,10 +64,12 @@ impl SoftwarePainter {
         })
     }
 
+    /// Reports the maximum texture edge supported by the software renderer.
     pub(crate) fn max_texture_side(&self) -> usize {
         8192
     }
 
+    /// Updates or clears the background layer composited behind each frame.
     pub(crate) fn set_background(&mut self, background: Option<SoftwareBackgroundLayer>) {
         if background.is_none() {
             self.cached_bg = None;
@@ -82,6 +77,7 @@ impl SoftwarePainter {
         self.background = background;
     }
 
+    /// Resizes the underlying `softbuffer` surface when the physical window dimensions change.
     pub(crate) fn on_window_resized(&mut self, width: NonZeroU32, height: NonZeroU32) {
         if self.dims == Some([width, height]) {
             return;
@@ -94,6 +90,7 @@ impl SoftwarePainter {
         }
     }
 
+    /// Composites the background layer, renders `clipped_primitives`, and presents the frame.
     pub(crate) fn paint_and_update_textures(
         &mut self,
         pixels_per_point: f32,
@@ -103,12 +100,14 @@ impl SoftwarePainter {
         window: &Window,
     ) {
         let size = window.inner_size();
-        let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else {
+        let (Some(nz_width), Some(nz_height)) =
+            (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+        else {
             return;
         };
-        if self.dims != Some([w, h]) {
-            self.on_window_resized(w, h);
-            if self.dims != Some([w, h]) {
+        if self.dims != Some([nz_width, nz_height]) {
+            self.on_window_resized(nz_width, nz_height);
+            if self.dims != Some([nz_width, nz_height]) {
                 return;
             }
         }
@@ -121,8 +120,8 @@ impl SoftwarePainter {
             }
         };
 
-        let width = w.get() as usize;
-        let height = h.get() as usize;
+        let width = nz_width.get() as usize;
+        let height = nz_height.get() as usize;
         let Some(pixel_count) = width.checked_mul(height) else {
             return;
         };
@@ -148,7 +147,7 @@ impl SoftwarePainter {
                     let mut pixels_0rgb = self
                         .cached_bg
                         .take()
-                        .map(|c| c.pixels_0rgb)
+                        .map(|cached| cached.pixels_0rgb)
                         .unwrap_or_default();
                     rasterize_cover_background(layer, width, height, &mut pixels_0rgb);
                     self.cached_bg = Some(CachedBackground { key, pixels_0rgb });
@@ -180,22 +179,7 @@ impl SoftwarePainter {
     }
 }
 
-fn cover_crop_axis(dst_len: usize, uv_start: f32, uv_span: f32, src_len: usize) -> Vec<usize> {
-    if dst_len == 0 || src_len == 0 {
-        return Vec::new();
-    }
-    let max_idx = src_len - 1;
-    let src_f = src_len as f32;
-    let inv_dst = 1.0 / dst_len as f32;
-    (0..dst_len)
-        .map(|i| {
-            let u = uv_start + ((i as f32 + 0.5) * inv_dst) * uv_span;
-            let idx = (u * src_f).floor() as isize;
-            idx.clamp(0, max_idx as isize) as usize
-        })
-        .collect()
-}
-
+/// Rasterizes `layer` into `out_0rgb` using centered cover-crop scaling and scrim blending.
 pub(crate) fn rasterize_cover_background(
     layer: &SoftwareBackgroundLayer,
     width: usize,
@@ -226,43 +210,46 @@ pub(crate) fn rasterize_cover_background(
     // `Color32::to_array()` stores premultiplied RGBA bytes.
     let [sr, sg, sb, sa] = layer.scrim.to_array();
     let inv_sa = 255 - sa as u32;
-    let lut_r: [u32; 256] = std::array::from_fn(|c| {
-        let v = (sr as u32 + ((c as u32 * inv_sa + 127) / 255)).min(255);
-        v << 16
+    let lut_r: [u32; 256] = std::array::from_fn(|channel| {
+        let blended = (sr as u32 + ((channel as u32 * inv_sa + 127) / 255)).min(255);
+        blended << 16
     });
-    let lut_g: [u32; 256] = std::array::from_fn(|c| {
-        let v = (sg as u32 + ((c as u32 * inv_sa + 127) / 255)).min(255);
-        v << 8
+    let lut_g: [u32; 256] = std::array::from_fn(|channel| {
+        let blended = (sg as u32 + ((channel as u32 * inv_sa + 127) / 255)).min(255);
+        blended << 8
     });
-    let lut_b: [u32; 256] =
-        std::array::from_fn(|c| (sb as u32 + ((c as u32 * inv_sa + 127) / 255)).min(255));
+    let lut_b: [u32; 256] = std::array::from_fn(|channel| {
+        (sb as u32 + ((channel as u32 * inv_sa + 127) / 255)).min(255)
+    });
 
     let src_pixels = &layer.image.pixels;
     if !layer.image.has_alpha {
-        for (y, &sy) in y_lut.iter().enumerate() {
-            let src_row = &src_pixels[sy * img_w..(sy + 1) * img_w];
+        for (y, &src_y) in y_lut.iter().enumerate() {
+            let src_row = &src_pixels[src_y * img_w..(src_y + 1) * img_w];
             let dst_row = &mut out_0rgb[y * width..(y + 1) * width];
-            for (dst, &sx) in dst_row.iter_mut().zip(x_lut.iter()) {
-                let p = src_row[sx];
-                *dst = lut_r[p.r() as usize] | lut_g[p.g() as usize] | lut_b[p.b() as usize];
+            for (dst, &src_x) in dst_row.iter_mut().zip(x_lut.iter()) {
+                let pixel = src_row[src_x];
+                *dst = lut_r[pixel.r() as usize]
+                    | lut_g[pixel.g() as usize]
+                    | lut_b[pixel.b() as usize];
             }
         }
     } else {
         let [br, bg, bb, _] = layer.base_bg.to_array();
-        for (y, &sy) in y_lut.iter().enumerate() {
-            let src_row = &src_pixels[sy * img_w..(sy + 1) * img_w];
+        for (y, &src_y) in y_lut.iter().enumerate() {
+            let src_row = &src_pixels[src_y * img_w..(src_y + 1) * img_w];
             let dst_row = &mut out_0rgb[y * width..(y + 1) * width];
-            for (dst, &sx) in dst_row.iter_mut().zip(x_lut.iter()) {
-                let p = src_row[sx];
-                let a = p.a();
-                let (r, g, b) = if a == 255 {
-                    (p.r(), p.g(), p.b())
+            for (dst, &src_x) in dst_row.iter_mut().zip(x_lut.iter()) {
+                let pixel = src_row[src_x];
+                let alpha = pixel.a();
+                let (r, g, b) = if alpha == 255 {
+                    (pixel.r(), pixel.g(), pixel.b())
                 } else {
-                    let inv_a = 255 - a as u32;
+                    let inv_a = 255 - alpha as u32;
                     (
-                        (p.r() as u32 + ((br as u32 * inv_a + 127) / 255)).min(255) as u8,
-                        (p.g() as u32 + ((bg as u32 * inv_a + 127) / 255)).min(255) as u8,
-                        (p.b() as u32 + ((bb as u32 * inv_a + 127) / 255)).min(255) as u8,
+                        (pixel.r() as u32 + ((br as u32 * inv_a + 127) / 255)).min(255) as u8,
+                        (pixel.g() as u32 + ((bg as u32 * inv_a + 127) / 255)).min(255) as u8,
+                        (pixel.b() as u32 + ((bb as u32 * inv_a + 127) / 255)).min(255) as u8,
                     )
                 };
                 *dst = lut_r[r as usize] | lut_g[g as usize] | lut_b[b as usize];
@@ -271,8 +258,38 @@ pub(crate) fn rasterize_cover_background(
     }
 }
 
+#[derive(PartialEq, Eq)]
+struct CachedBackgroundKey {
+    width: usize,
+    height: usize,
+    revision: u64,
+    scrim: [u8; 4],
+    base_bg: [u8; 4],
+}
+
+struct CachedBackground {
+    key: CachedBackgroundKey,
+    pixels_0rgb: Vec<u32>,
+}
+
+fn cover_crop_axis(dst_len: usize, uv_start: f32, uv_span: f32, src_len: usize) -> Vec<usize> {
+    if dst_len == 0 || src_len == 0 {
+        return Vec::new();
+    }
+    let max_idx = src_len - 1;
+    let src_f = src_len as f32;
+    let inv_dst = 1.0 / dst_len as f32;
+    (0..dst_len)
+        .map(|i| {
+            let u = uv_start + ((i as f32 + 0.5) * inv_dst) * uv_span;
+            let idx = (u * src_f).floor() as isize;
+            idx.clamp(0, max_idx as isize) as usize
+        })
+        .collect()
+}
+
 fn clear_color_to_0rgb(clear_color: [f32; 4]) -> u32 {
-    let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let to_u8 = |channel: f32| (channel.clamp(0.0, 1.0) * 255.0).round() as u32;
     (to_u8(clear_color[0]) << 16) | (to_u8(clear_color[1]) << 8) | to_u8(clear_color[2])
 }
 

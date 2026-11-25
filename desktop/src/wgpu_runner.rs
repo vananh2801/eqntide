@@ -1,3 +1,5 @@
+//! Winit event loop runner supporting hardware wgpu rendering with automatic software fallback.
+
 use crate::{
     app::App,
     instance::Instance,
@@ -18,12 +20,54 @@ use winit::{
     window::{Window, WindowId},
 };
 
+/// Graphics backend selection passed into [`run`].
 pub(crate) enum RunnerBackend {
     Wgpu {
         config: Box<egui_wgpu::WgpuConfiguration>,
         force: bool,
     },
     Software,
+}
+
+/// Starts the native `winit` event loop with the chosen graphics or software backend.
+pub(crate) fn run(
+    viewport_builder: egui::ViewportBuilder,
+    backend: RunnerBackend,
+    instance: Instance,
+    tx: EventSender<Event>,
+    rx: Receiver<Event>,
+    args: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let event_loop = EventLoop::<RunnerUserEvent>::with_user_event().build()?;
+    event_loop.listen_device_events(DeviceEvents::Never);
+    let proxy = event_loop.create_proxy();
+    let mut runner = DesktopRunner {
+        viewport_builder,
+        backend: Some(backend),
+        proxy,
+        init: Some((instance, tx, rx, args)),
+        running: None,
+        error: None,
+    };
+    event_loop.run_app(&mut runner)?;
+    if let Some(err) = runner.error {
+        return Err(err.into());
+    }
+    Ok(())
+}
+
+type RunnerInit = (Instance, EventSender<Event>, Receiver<Event>, Vec<String>);
+
+#[derive(Debug)]
+enum RunnerUserEvent {
+    RequestRepaint { when: Instant },
+    AccessKit(egui_winit::accesskit_winit::Event),
+}
+
+impl From<egui_winit::accesskit_winit::Event> for RunnerUserEvent {
+    fn from(event: egui_winit::accesskit_winit::Event) -> Self {
+        Self::AccessKit(event)
+    }
 }
 
 enum RunnerPainter {
@@ -88,20 +132,6 @@ impl RunnerPainter {
         if let Self::Wgpu(painter) = self {
             painter.destroy();
         }
-    }
-}
-
-type RunnerInit = (Instance, EventSender<Event>, Receiver<Event>, Vec<String>);
-
-#[derive(Debug)]
-enum RunnerUserEvent {
-    RequestRepaint { when: Instant },
-    AccessKit(egui_winit::accesskit_winit::Event),
-}
-
-impl From<egui_winit::accesskit_winit::Event> for RunnerUserEvent {
-    fn from(event: egui_winit::accesskit_winit::Event) -> Self {
-        Self::AccessKit(event)
     }
 }
 
@@ -229,13 +259,15 @@ impl RunningState {
             std::iter::once((egui::ViewportId::ROOT, self.viewport_info.clone())).collect();
 
         let pointer_only_events = !raw_input.events.is_empty()
-            && raw_input
-                .events
-                .iter()
-                .all(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerGone));
+            && raw_input.events.iter().all(|event| {
+                matches!(
+                    event,
+                    egui::Event::PointerMoved(_) | egui::Event::PointerGone
+                )
+            });
 
         let close_requested = raw_input.viewport().close_requested();
-        let full_output = self.egui_ctx.run_ui(raw_input, |ui| self.app.ui_pass(ui));
+        let full_output = self.egui_ctx.run_ui(raw_input, |ui| self.app.draw_ui(ui));
 
         self.viewport_info.events.clear();
 
@@ -243,7 +275,7 @@ impl RunningState {
             let canceled = full_output
                 .viewport_output
                 .get(&egui::ViewportId::ROOT)
-                .is_some_and(|o| o.commands.contains(&egui::ViewportCommand::CancelClose));
+                .is_some_and(|out| out.commands.contains(&egui::ViewportCommand::CancelClose));
             if !canceled {
                 self.should_close = true;
             }
@@ -259,17 +291,17 @@ impl RunningState {
 
         self.pending_deltas.append(textures_delta);
 
-        let ime_state = platform_output.ime.as_ref().map(|m| {
+        let ime_state = platform_output.ime.as_ref().map(|ime| {
             (
-                m.cursor_rect,
-                m.purpose,
-                m.should_interrupt_composition,
+                ime.cursor_rect,
+                ime.purpose,
+                ime.should_interrupt_composition,
                 pixels_per_point.to_bits(),
             )
         });
         if pointer_only_events && ime_state == self.last_ime_state {
             // Avoid Win32 IMM32 syscalls inside egui_winit when only the mouse pointer moved.
-            self.egui_ctx.input_mut(|i| i.events.clear());
+            self.egui_ctx.input_mut(|input| input.events.clear());
         }
         self.last_ime_state = ime_state;
 
@@ -396,25 +428,26 @@ impl DesktopRunner {
 
         let egui_ctx = egui::Context::default();
         egui_ctx.set_embed_viewports(false);
-        egui_ctx.options_mut(|o| {
-            if let Some(n) = NonZeroUsize::new(2) {
-                o.max_passes = n;
+        egui_ctx.options_mut(|options| {
+            if let Some(passes) = NonZeroUsize::new(2) {
+                options.max_passes = passes;
             }
         });
 
         let builder = self.viewport_builder.clone().with_visible(false);
         let window = egui_winit::create_window(&egui_ctx, event_loop, &builder)
-            .map_err(|e| format!("Failed to create window: {e}"))?;
+            .map_err(|err| format!("Failed to create window: {err}"))?;
         let window = Arc::new(window);
 
         let mut viewport_info = egui::ViewportInfo::default();
         egui_winit::update_viewport_info(&mut viewport_info, &egui_ctx, &window, true);
         let ppp = egui_winit::pixels_per_point(&egui_ctx, &window);
-        egui_ctx.input_mut(|i| {
-            i.raw
+        egui_ctx.input_mut(|input| {
+            input
+                .raw
                 .viewports
                 .insert(egui::ViewportId::ROOT, viewport_info.clone());
-            i.pixels_per_point = ppp;
+            input.pixels_per_point = ppp;
         });
 
         let (painter, render_state, is_software) = match backend {
@@ -441,8 +474,8 @@ impl DesktopRunner {
                     wgpu_painter.set_window(egui::ViewportId::ROOT, Some(Arc::clone(&window))),
                 );
                 let state = wgpu_painter.render_state();
-                let resolved_cpu = state.as_ref().is_some_and(|rs| {
-                    let info = rs.adapter.get_info();
+                let resolved_cpu = state.as_ref().is_some_and(|render_state| {
+                    let info = render_state.adapter.get_info();
                     info.device_type == egui_wgpu::wgpu::DeviceType::Cpu
                         || crate::app::is_software_adapter_name(&info.name)
                 });
@@ -629,10 +662,10 @@ impl ApplicationHandler<RunnerUserEvent> for DesktopRunner {
                 running.viewport_dirty = true;
                 let size = running.window.inner_size();
                 if running.last_surface_dims != Some([size.width, size.height]) {
-                    if let (Some(w), Some(h)) =
+                    if let (Some(width), Some(height)) =
                         (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
                     {
-                        running.painter.on_window_resized(w, h);
+                        running.painter.on_window_resized(width, height);
                         running.force_paint = true;
                         force_repaint = true;
                     }
@@ -704,7 +737,7 @@ impl ApplicationHandler<RunnerUserEvent> for DesktopRunner {
         }
 
         event_loop.set_control_flow(match running.next_repaint_time {
-            Some(t) => ControlFlow::WaitUntil(t),
+            Some(deadline) => ControlFlow::WaitUntil(deadline),
             None => ControlFlow::Wait,
         });
     }
@@ -715,30 +748,4 @@ impl ApplicationHandler<RunnerUserEvent> for DesktopRunner {
             running.painter.destroy();
         }
     }
-}
-
-pub(crate) fn run(
-    viewport_builder: egui::ViewportBuilder,
-    backend: RunnerBackend,
-    instance: Instance,
-    tx: EventSender<Event>,
-    rx: Receiver<Event>,
-    args: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let event_loop = EventLoop::<RunnerUserEvent>::with_user_event().build()?;
-    event_loop.listen_device_events(DeviceEvents::Never);
-    let proxy = event_loop.create_proxy();
-    let mut runner = DesktopRunner {
-        viewport_builder,
-        backend: Some(backend),
-        proxy,
-        init: Some((instance, tx, rx, args)),
-        running: None,
-        error: None,
-    };
-    event_loop.run_app(&mut runner)?;
-    if let Some(err) = runner.error {
-        return Err(err.into());
-    }
-    Ok(())
 }

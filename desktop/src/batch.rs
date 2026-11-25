@@ -1,3 +1,12 @@
+//! Batch DOCX conversion orchestration, folder-tree presentation, and worker subprocess I/O.
+//!
+//! Supported conversion modes live in [`TARGETS`]. Conversions stage into a
+//! sibling temporary file before atomic commit so interrupted or failed runs
+//! never corrupt inputs or leave stray artifacts. When invoked outside unit
+//! tests, [`run_items`] spawns `eqntide-desktop --batch-worker` and exchanges
+//! newline-delimited JSON messages with [`run_worker_stdio`] so the OS reclaims
+//! memory when the batch completes.
+
 use crate::{Event, EventSender as Sender};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -11,6 +20,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+/// Supported batch conversion targets as `(id, display_label)` pairs.
 pub const TARGETS: &[(&str, &str)] = &[
     ("omml", "MathType → OMML"),
     ("mathtype", "OMML → MathType"),
@@ -18,20 +28,67 @@ pub const TARGETS: &[(&str, &str)] = &[
     ("upgrade_mathtype", "Legacy → modern MathType"),
 ];
 
+/// Presentation mode used to list and select queued batch documents.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BatchSelectionMode {
+    /// Flat list of all queued files.
     FlatList,
+    /// Hierarchical tree grouped by source folder root.
     #[default]
     FolderTree,
 }
 
+/// A queued batch document along with its optional source folder root.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchItem {
+    /// Path to the source `.docx` file.
+    pub input: PathBuf,
+    /// Ancestor folder selected by the user when adding a directory, if any.
+    pub source_root: Option<PathBuf>,
+}
+
+impl BatchItem {
+    /// Create a standalone batch item without a parent folder root.
+    pub fn file(input: PathBuf) -> Self {
+        Self {
+            input,
+            source_root: None,
+        }
+    }
+
+    /// Create a batch item belonging to a selected source folder `root`.
+    pub fn from_folder(input: PathBuf, root: PathBuf) -> Self {
+        Self {
+            input,
+            source_root: Some(root),
+        }
+    }
+
+    /// Format the item path relative to its folder root when available.
+    pub fn display_label(&self) -> String {
+        if let Some(root) = &self.source_root {
+            if let Ok(rel) = self.input.strip_prefix(root) {
+                if let Some(root_name) = root.file_name() {
+                    return Path::new(root_name).join(rel).display().to_string();
+                }
+                return rel.display().to_string();
+            }
+        }
+        self.input.display().to_string()
+    }
+}
+
+/// Output directory metadata recorded after converting a batch item.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchRowOutput {
+    /// Immediate parent directory of the written output file.
     pub file_dir: PathBuf,
+    /// Top-level timestamped output folder when the item came from a directory.
     pub root_output_dir: Option<PathBuf>,
 }
 
 impl BatchRowOutput {
+    /// Compute output directory metadata from a completed conversion path.
     pub fn from_conversion(
         item: &BatchItem,
         output_path: &Path,
@@ -41,7 +98,7 @@ impl BatchRowOutput {
     ) -> Self {
         let file_dir = output_path
             .parent()
-            .filter(|p| !p.as_os_str().is_empty())
+            .filter(|parent_path| !parent_path.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         let root_output_dir = item.source_root.as_deref().map(|root| {
@@ -58,10 +115,14 @@ impl BatchRowOutput {
     }
 }
 
+/// Per-item selection and latest conversion output state across both UI views.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchRowState {
+    /// Selection checkbox state in flat-list mode.
     pub flat_selected: bool,
+    /// Selection checkbox state in folder-tree mode.
     pub tree_selected: bool,
+    /// Directory metadata populated once the item converts successfully.
     pub last_output: Option<BatchRowOutput>,
 }
 
@@ -76,6 +137,7 @@ impl Default for BatchRowState {
 }
 
 impl BatchRowState {
+    /// Return whether this row is selected in the active presentation `mode`.
     pub fn is_selected(&self, mode: BatchSelectionMode) -> bool {
         match mode {
             BatchSelectionMode::FlatList => self.flat_selected,
@@ -83,6 +145,7 @@ impl BatchRowState {
         }
     }
 
+    /// Update the selection state for the given presentation `mode`.
     pub fn set_selected(&mut self, mode: BatchSelectionMode, selected: bool) {
         match mode {
             BatchSelectionMode::FlatList => self.flat_selected = selected,
@@ -91,8 +154,10 @@ impl BatchRowState {
     }
 }
 
+/// Flattened visible row produced for the folder-tree view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TreeRow {
+    /// Collapsible directory or individual-files group header.
     Group {
         key: String,
         label: String,
@@ -101,6 +166,7 @@ pub enum TreeRow {
         collapsed: bool,
         descendant_indices: Vec<usize>,
     },
+    /// Leaf document row referencing an index in the batch item list.
     File {
         item_index: usize,
         label: String,
@@ -109,6 +175,7 @@ pub enum TreeRow {
 }
 
 impl TreeRow {
+    /// Return the indentation depth of this tree row.
     pub fn depth(&self) -> usize {
         match self {
             Self::Group { depth, .. } | Self::File { depth, .. } => *depth,
@@ -116,6 +183,7 @@ impl TreeRow {
     }
 }
 
+/// Box-drawing connector metadata for a single visible [`TreeRow`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TreeGuide {
     /// For each ancestor column `0..depth.saturating_sub(1)`, whether a vertical trunk continues past this row.
@@ -131,10 +199,12 @@ pub fn compute_tree_guides(rows: &[TreeRow]) -> Vec<TreeGuide> {
 
     for (idx, row) in rows.iter().enumerate().rev() {
         let depth = row.depth();
-        active_depths.retain(|&d| d <= depth);
+        active_depths.retain(|&active_depth| active_depth <= depth);
         if depth > 0 {
             let is_last_sibling = !active_depths.contains(&depth);
-            let ancestor_continues = (1..depth).map(|d| active_depths.contains(&d)).collect();
+            let ancestor_continues = (1..depth)
+                .map(|ancestor_depth| active_depths.contains(&ancestor_depth))
+                .collect();
             guides[idx] = TreeGuide {
                 ancestor_continues,
                 is_last_sibling,
@@ -144,6 +214,277 @@ pub fn compute_tree_guides(rows: &[TreeRow]) -> Vec<TreeGuide> {
     }
 
     guides
+}
+
+/// Build flattened visible rows for the Folder Tree view while preserving deterministic order.
+pub fn build_tree_rows(items: &[BatchItem], collapsed: &HashSet<String>) -> Vec<TreeRow> {
+    let mut root_order: Vec<PathBuf> = Vec::new();
+    let mut standalone_indices: Vec<usize> = Vec::new();
+    for item in items {
+        if let Some(root) = &item.source_root {
+            if !root_order.contains(root) {
+                root_order.push(root.clone());
+            }
+        }
+    }
+    for (idx, item) in items.iter().enumerate() {
+        if item.source_root.is_none() {
+            standalone_indices.push(idx);
+        }
+    }
+
+    let mut out = Vec::new();
+    for root in root_order {
+        let root_label = root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| root.display().to_string());
+        let root_key = format!("root:{}", root.display());
+        let mut root_node = DirNode::new(root_key, root_label, Some(root.display().to_string()));
+
+        for (idx, item) in items.iter().enumerate() {
+            if item.source_root.as_ref() != Some(&root) {
+                continue;
+            }
+            root_node.descendants.push(idx);
+            let rel = item
+                .input
+                .strip_prefix(&root)
+                .unwrap_or(item.input.as_path());
+            let mut cur = &mut root_node;
+            if let Some(parent) = rel.parent() {
+                for comp in parent.components() {
+                    if let Component::Normal(seg) = comp {
+                        let name = seg.to_string_lossy().into_owned();
+                        let child_key = format!("{}/{}", cur.key, name);
+                        let child_hover = cur
+                            .hover_path
+                            .as_ref()
+                            .map(|path| Path::new(path).join(&name).display().to_string());
+                        cur = cur
+                            .children
+                            .entry(name.clone())
+                            .or_insert_with(|| DirNode::new(child_key, name, child_hover));
+                        cur.descendants.push(idx);
+                    }
+                }
+            }
+            let filename = rel
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| item.display_label());
+            cur.direct_files.push((filename, idx));
+        }
+
+        root_node.emit(0, collapsed, &mut out);
+    }
+
+    if !standalone_indices.is_empty() {
+        let key = "group:individual".to_owned();
+        let is_collapsed = collapsed.contains(&key);
+        out.push(TreeRow::Group {
+            key,
+            label: "Individual files".to_owned(),
+            hover_path: None,
+            depth: 0,
+            collapsed: is_collapsed,
+            descendant_indices: standalone_indices.clone(),
+        });
+        if !is_collapsed {
+            for idx in standalone_indices {
+                out.push(TreeRow::File {
+                    item_index: idx,
+                    label: items[idx].display_label(),
+                    depth: 1,
+                });
+            }
+        }
+    }
+
+    out
+}
+
+/// Format a [`SystemTime`] in UTC as `YYYYMMDD_HHMMSS` for output directory names.
+pub fn format_timestamp(time: SystemTime) -> String {
+    let secs = time
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let day_secs = secs % 86_400;
+    let hour = day_secs / 3_600;
+    let minute = (day_secs % 3_600) / 60;
+    let second = day_secs % 60;
+
+    // Civil-from-days algorithm (Howard Hinnant) in UTC.
+    let shifted_days = days + 719_468;
+    let era = shifted_days.div_euclid(146_097);
+    let doe = shifted_days.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let base_year = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = base_year + i64::from(month <= 2);
+
+    format!("{year:04}{month:02}{day:02}_{hour:02}{minute:02}{second:02}")
+}
+
+/// Return the current UTC timestamp formatted as `YYYYMMDD_HHMMSS`.
+pub fn timestamp_now() -> String {
+    format_timestamp(SystemTime::now())
+}
+
+/// Compute the sibling timestamped output root for a batch directory conversion.
+pub fn folder_output_dir(root: &Path, target: &str, timestamp: &str) -> PathBuf {
+    let resolved = if root.file_name().is_some() {
+        root.to_path_buf()
+    } else {
+        root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+    };
+    let name = resolved
+        .file_name()
+        .map(|file_name| file_name.to_string_lossy().into_owned())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| "output".to_owned());
+    resolved.with_file_name(format!("{name}_{target}_{timestamp}"))
+}
+
+/// Compute the suffixed output `.docx` path next to a standalone `input` file.
+pub fn output_path(input: &Path, target: &str) -> PathBuf {
+    let mut name = input.file_stem().unwrap_or_default().to_os_string();
+    name.push(format!("_{target}.docx"));
+    input.with_file_name(name)
+}
+
+/// Resolve the final destination path for `item`, respecting overwrite and folder hierarchy settings.
+pub fn item_output_path(
+    item: &BatchItem,
+    target: &str,
+    overwrite: bool,
+    timestamp: &str,
+) -> PathBuf {
+    if overwrite {
+        return item.input.clone();
+    }
+    if let Some(root) = &item.source_root {
+        let out_dir = folder_output_dir(root, target, timestamp);
+        let relative = item
+            .input
+            .strip_prefix(root)
+            .unwrap_or_else(|_| Path::new(item.input.file_name().unwrap_or_default()));
+        return out_dir.join(relative);
+    }
+    output_path(&item.input, target)
+}
+
+/// Convert into a temporary sibling before committing, preserving inputs on failure.
+pub fn convert_item(
+    item: &BatchItem,
+    target: &str,
+    font_pt: f32,
+    overwrite: bool,
+    timestamp: &str,
+) -> Result<eqntide::bridge::ConvertDocumentResponse, String> {
+    match convert_item_with_cancel(item, target, font_pt, overwrite, timestamp, None) {
+        BatchItemOutcome::Finished(res) => res,
+        BatchItemOutcome::Cancelled => Err("document conversion cancelled".into()),
+    }
+}
+
+/// Convert a single standalone file path without folder-root grouping metadata.
+#[allow(dead_code)]
+pub fn convert_one(
+    input: &Path,
+    target: &str,
+    font_pt: f32,
+    overwrite: bool,
+) -> Result<eqntide::bridge::ConvertDocumentResponse, String> {
+    convert_item(
+        &BatchItem::file(input.to_path_buf()),
+        target,
+        font_pt,
+        overwrite,
+        "",
+    )
+}
+
+/// Entry point for `eqntide-desktop --batch-worker`: processes one file at a time
+/// (multi-threaded inside each file) and exits so the OS reclaims 100% of memory.
+pub fn run_worker_stdio() -> Result<(), Box<dyn std::error::Error>> {
+    let stdin = std::io::stdin();
+    let mut reader = BufReader::new(stdin.lock());
+    let mut first_line = String::new();
+    let bytes_read = reader.read_line(&mut first_line)?;
+    if bytes_read == 0 || first_line.trim().is_empty() {
+        return Ok(());
+    }
+    let req: WorkerRequest = serde_json::from_str(&first_line)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_reader = Arc::clone(&stop);
+
+    // Watch stdin for explicit "stop" or EOF (parent closed pipe / clicked Stop)
+    drop(reader);
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut reader = BufReader::new(stdin.lock());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => {
+                    stop_reader.store(true, Ordering::Relaxed);
+                    break;
+                }
+                Ok(_) if line.trim().eq_ignore_ascii_case("stop") => {
+                    stop_reader.store(true, Ordering::Relaxed);
+                    break;
+                }
+                Ok(_) => {}
+            }
+        }
+    });
+
+    let stdout = std::io::stdout();
+    let writer = std::io::BufWriter::new(stdout.lock());
+    execute_worker_request(&req, writer, &stop);
+    Ok(())
+}
+
+/// Spawn a background worker thread (or subprocess outside tests) to convert `items`.
+pub fn run_items(
+    items: Vec<(usize, BatchItem)>,
+    target: String,
+    font_pt: f32,
+    overwrite: bool,
+    timestamp: String,
+    stop: Arc<AtomicBool>,
+    tx: Sender<Event>,
+) {
+    std::thread::spawn(move || {
+        #[cfg(not(test))]
+        let ran_worker =
+            run_via_worker_subprocess(&items, &target, font_pt, overwrite, &timestamp, &stop, &tx);
+        #[cfg(test)]
+        let ran_worker = false;
+
+        if !ran_worker {
+            process_items_sequential(
+                &items,
+                &target,
+                font_pt,
+                overwrite,
+                &timestamp,
+                &stop,
+                |orig_idx, res| {
+                    let _ = tx.send(Event::Batch(orig_idx, res));
+                },
+            );
+        }
+        let _ = tx.send(Event::BatchDone);
+    });
 }
 
 struct DirNode {
@@ -184,7 +525,7 @@ impl DirNode {
             child.emit(depth + 1, collapsed, out);
         }
         self.direct_files
-            .sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            .sort_by(|first, second| first.0.cmp(&second.0).then_with(|| first.1.cmp(&second.1)));
         for (filename, item_index) in &self.direct_files {
             out.push(TreeRow::File {
                 item_index: *item_index,
@@ -195,293 +536,9 @@ impl DirNode {
     }
 }
 
-/// Build flattened visible rows for the Folder Tree view while preserving deterministic order.
-pub fn build_tree_rows(items: &[BatchItem], collapsed: &HashSet<String>) -> Vec<TreeRow> {
-    let mut root_order: Vec<PathBuf> = Vec::new();
-    let mut standalone_indices: Vec<usize> = Vec::new();
-    for item in items {
-        if let Some(root) = &item.source_root {
-            if !root_order.contains(root) {
-                root_order.push(root.clone());
-            }
-        }
-    }
-    for (idx, item) in items.iter().enumerate() {
-        if item.source_root.is_none() {
-            standalone_indices.push(idx);
-        }
-    }
-
-    let mut out = Vec::new();
-    for root in root_order {
-        let root_label = root
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| root.display().to_string());
-        let root_key = format!("root:{}", root.display());
-        let mut root_node = DirNode::new(root_key, root_label, Some(root.display().to_string()));
-
-        for (idx, item) in items.iter().enumerate() {
-            if item.source_root.as_ref() != Some(&root) {
-                continue;
-            }
-            root_node.descendants.push(idx);
-            let rel = item
-                .input
-                .strip_prefix(&root)
-                .unwrap_or(item.input.as_path());
-            let mut cur = &mut root_node;
-            if let Some(parent) = rel.parent() {
-                for comp in parent.components() {
-                    if let Component::Normal(seg) = comp {
-                        let name = seg.to_string_lossy().into_owned();
-                        let child_key = format!("{}/{}", cur.key, name);
-                        let child_hover = cur
-                            .hover_path
-                            .as_ref()
-                            .map(|p| Path::new(p).join(&name).display().to_string());
-                        cur = cur
-                            .children
-                            .entry(name.clone())
-                            .or_insert_with(|| DirNode::new(child_key, name, child_hover));
-                        cur.descendants.push(idx);
-                    }
-                }
-            }
-            let filename = rel
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| item.display_label());
-            cur.direct_files.push((filename, idx));
-        }
-
-        root_node.emit(0, collapsed, &mut out);
-    }
-
-    if !standalone_indices.is_empty() {
-        let key = "group:individual".to_owned();
-        let is_collapsed = collapsed.contains(&key);
-        out.push(TreeRow::Group {
-            key,
-            label: "Individual files".to_owned(),
-            hover_path: None,
-            depth: 0,
-            collapsed: is_collapsed,
-            descendant_indices: standalone_indices.clone(),
-        });
-        if !is_collapsed {
-            for idx in standalone_indices {
-                out.push(TreeRow::File {
-                    item_index: idx,
-                    label: items[idx].display_label(),
-                    depth: 1,
-                });
-            }
-        }
-    }
-
-    out
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BatchItem {
-    pub input: PathBuf,
-    pub source_root: Option<PathBuf>,
-}
-
-impl BatchItem {
-    pub fn file(input: PathBuf) -> Self {
-        Self {
-            input,
-            source_root: None,
-        }
-    }
-
-    pub fn from_folder(input: PathBuf, root: PathBuf) -> Self {
-        Self {
-            input,
-            source_root: Some(root),
-        }
-    }
-
-    pub fn display_label(&self) -> String {
-        if let Some(root) = &self.source_root {
-            if let Ok(rel) = self.input.strip_prefix(root) {
-                if let Some(root_name) = root.file_name() {
-                    return Path::new(root_name).join(rel).display().to_string();
-                }
-                return rel.display().to_string();
-            }
-        }
-        self.input.display().to_string()
-    }
-}
-
-pub fn format_timestamp(time: SystemTime) -> String {
-    let secs = time
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let days = (secs / 86_400) as i64;
-    let day_secs = secs % 86_400;
-    let hour = day_secs / 3_600;
-    let minute = (day_secs % 3_600) / 60;
-    let second = day_secs % 60;
-
-    // Civil-from-days algorithm (Howard Hinnant) in UTC.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097) as u64;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = (yoe as i64) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = y + i64::from(month <= 2);
-
-    format!("{year:04}{month:02}{day:02}_{hour:02}{minute:02}{second:02}")
-}
-
-pub fn timestamp_now() -> String {
-    format_timestamp(SystemTime::now())
-}
-
-pub fn folder_output_dir(root: &Path, target: &str, timestamp: &str) -> PathBuf {
-    let resolved = if root.file_name().is_some() {
-        root.to_path_buf()
-    } else {
-        root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
-    };
-    let name = resolved
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| "output".to_owned());
-    resolved.with_file_name(format!("{name}_{target}_{timestamp}"))
-}
-
-pub fn output_path(input: &Path, target: &str) -> PathBuf {
-    let mut name = input.file_stem().unwrap_or_default().to_os_string();
-    name.push(format!("_{target}.docx"));
-    input.with_file_name(name)
-}
-
-pub fn item_output_path(
-    item: &BatchItem,
-    target: &str,
-    overwrite: bool,
-    timestamp: &str,
-) -> PathBuf {
-    if overwrite {
-        return item.input.clone();
-    }
-    if let Some(root) = &item.source_root {
-        let out_dir = folder_output_dir(root, target, timestamp);
-        let relative = item
-            .input
-            .strip_prefix(root)
-            .unwrap_or_else(|_| Path::new(item.input.file_name().unwrap_or_default()));
-        return out_dir.join(relative);
-    }
-    output_path(&item.input, target)
-}
-
-/// Convert into a temporary sibling before committing, preserving inputs on failure.
-pub fn convert_item(
-    item: &BatchItem,
-    target: &str,
-    font_pt: f32,
-    overwrite: bool,
-    timestamp: &str,
-) -> Result<eqntide::bridge::ConvertDocumentResponse, String> {
-    match convert_item_with_cancel(item, target, font_pt, overwrite, timestamp, None) {
-        BatchItemOutcome::Finished(res) => res,
-        BatchItemOutcome::Cancelled => Err("document conversion cancelled".into()),
-    }
-}
-
 enum BatchItemOutcome {
     Finished(Result<eqntide::bridge::ConvertDocumentResponse, String>),
     Cancelled,
-}
-
-fn convert_item_with_cancel(
-    item: &BatchItem,
-    target: &str,
-    font_pt: f32,
-    overwrite: bool,
-    timestamp: &str,
-    stop: Option<&AtomicBool>,
-) -> BatchItemOutcome {
-    if stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
-        return BatchItemOutcome::Cancelled;
-    }
-    let output = item_output_path(item, target, overwrite, timestamp);
-    if !overwrite && output.exists() {
-        return BatchItemOutcome::Finished(Err(format!(
-            "Output already exists: {}",
-            output.display()
-        )));
-    }
-    let parent = output
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    if let Err(e) = std::fs::create_dir_all(parent) {
-        return BatchItemOutcome::Finished(Err(e.to_string()));
-    }
-    let temp = match tempfile::Builder::new()
-        .prefix(".eqntide-")
-        .suffix(".docx")
-        .tempfile_in(parent)
-    {
-        Ok(t) => t,
-        Err(e) => return BatchItemOutcome::Finished(Err(e.to_string())),
-    };
-    let mut response = match eqntide::service::convert_document_with_cancel(
-        &eqntide::bridge::ConvertDocumentRequest {
-            input_path: item.input.to_string_lossy().into_owned(),
-            output_path: Some(temp.path().to_string_lossy().into_owned()),
-            target: target.into(),
-            preview: "emf".into(),
-            font_pt,
-        },
-        stop,
-    ) {
-        Ok(r) => r,
-        Err(e) if e.status == 499 => return BatchItemOutcome::Cancelled,
-        Err(e) => return BatchItemOutcome::Finished(Err(e.to_string())),
-    };
-    if stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
-        return BatchItemOutcome::Cancelled;
-    }
-    if overwrite {
-        if let Err(e) = temp.persist(&output) {
-            return BatchItemOutcome::Finished(Err(e.to_string()));
-        }
-    } else if let Err(e) = temp.persist_noclobber(&output) {
-        return BatchItemOutcome::Finished(Err(e.to_string()));
-    }
-    response.output_path = output.to_string_lossy().into_owned();
-    BatchItemOutcome::Finished(Ok(response))
-}
-
-#[allow(dead_code)]
-pub fn convert_one(
-    input: &Path,
-    target: &str,
-    font_pt: f32,
-    overwrite: bool,
-) -> Result<eqntide::bridge::ConvertDocumentResponse, String> {
-    convert_item(
-        &BatchItem::file(input.to_path_buf()),
-        target,
-        font_pt,
-        overwrite,
-        "",
-    )
 }
 
 #[derive(Serialize, Deserialize)]
@@ -499,6 +556,67 @@ enum WorkerEvent {
         orig_idx: usize,
         result: Result<eqntide::bridge::ConvertDocumentResponse, String>,
     },
+}
+
+fn convert_item_with_cancel(
+    item: &BatchItem,
+    target: &str,
+    font_pt: f32,
+    overwrite: bool,
+    timestamp: &str,
+    stop: Option<&AtomicBool>,
+) -> BatchItemOutcome {
+    if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return BatchItemOutcome::Cancelled;
+    }
+    let output = item_output_path(item, target, overwrite, timestamp);
+    if !overwrite && output.exists() {
+        return BatchItemOutcome::Finished(Err(format!(
+            "Output already exists: {}",
+            output.display()
+        )));
+    }
+    let parent = output
+        .parent()
+        .filter(|parent_path| !parent_path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if let Err(err) = std::fs::create_dir_all(parent) {
+        return BatchItemOutcome::Finished(Err(err.to_string()));
+    }
+    let temp = match tempfile::Builder::new()
+        .prefix(".eqntide-")
+        .suffix(".docx")
+        .tempfile_in(parent)
+    {
+        Ok(temp_file) => temp_file,
+        Err(err) => return BatchItemOutcome::Finished(Err(err.to_string())),
+    };
+    let mut response = match eqntide::service::convert_document_with_cancel(
+        &eqntide::bridge::ConvertDocumentRequest {
+            input_path: item.input.to_string_lossy().into_owned(),
+            output_path: Some(temp.path().to_string_lossy().into_owned()),
+            target: target.into(),
+            preview: "emf".into(),
+            font_pt,
+        },
+        stop,
+    ) {
+        Ok(converted) => converted,
+        Err(err) if err.status == 499 => return BatchItemOutcome::Cancelled,
+        Err(err) => return BatchItemOutcome::Finished(Err(err.to_string())),
+    };
+    if stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return BatchItemOutcome::Cancelled;
+    }
+    if overwrite {
+        if let Err(err) = temp.persist(&output) {
+            return BatchItemOutcome::Finished(Err(err.to_string()));
+        }
+    } else if let Err(err) = temp.persist_noclobber(&output) {
+        return BatchItemOutcome::Finished(Err(err.to_string()));
+    }
+    response.output_path = output.to_string_lossy().into_owned();
+    BatchItemOutcome::Finished(Ok(response))
 }
 
 fn process_items_sequential(
@@ -546,54 +664,12 @@ fn run_worker_lines<R: BufRead, W: Write>(
     stop: &AtomicBool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut first_line = String::new();
-    let n = reader.read_line(&mut first_line)?;
-    if n == 0 || first_line.trim().is_empty() {
+    let bytes_read = reader.read_line(&mut first_line)?;
+    if bytes_read == 0 || first_line.trim().is_empty() {
         return Ok(());
     }
     let req: WorkerRequest = serde_json::from_str(&first_line)?;
     execute_worker_request(&req, writer, stop);
-    Ok(())
-}
-
-/// Entry point for `eqntide-desktop --batch-worker`: processes one file at a time
-/// (multi-threaded inside each file) and exits so the OS reclaims 100% of memory.
-pub fn run_worker_stdio() -> Result<(), Box<dyn std::error::Error>> {
-    let stdin = std::io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
-    let mut first_line = String::new();
-    let n = reader.read_line(&mut first_line)?;
-    if n == 0 || first_line.trim().is_empty() {
-        return Ok(());
-    }
-    let req: WorkerRequest = serde_json::from_str(&first_line)?;
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_reader = Arc::clone(&stop);
-
-    // Watch stdin for explicit "stop" or EOF (parent closed pipe / clicked Stop)
-    drop(reader);
-    std::thread::spawn(move || {
-        let stdin = std::io::stdin();
-        let mut reader = BufReader::new(stdin.lock());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => {
-                    stop_reader.store(true, Ordering::Relaxed);
-                    break;
-                }
-                Ok(_) if line.trim().eq_ignore_ascii_case("stop") => {
-                    stop_reader.store(true, Ordering::Relaxed);
-                    break;
-                }
-                Ok(_) => {}
-            }
-        }
-    });
-
-    let stdout = std::io::stdout();
-    let writer = std::io::BufWriter::new(stdout.lock());
-    execute_worker_request(&req, writer, &stop);
     Ok(())
 }
 
@@ -689,41 +765,10 @@ fn run_via_worker_subprocess(
     true
 }
 
-pub fn run_items(
-    items: Vec<(usize, BatchItem)>,
-    target: String,
-    font_pt: f32,
-    overwrite: bool,
-    timestamp: String,
-    stop: Arc<AtomicBool>,
-    tx: Sender<Event>,
-) {
-    std::thread::spawn(move || {
-        #[cfg(not(test))]
-        let ran_worker =
-            run_via_worker_subprocess(&items, &target, font_pt, overwrite, &timestamp, &stop, &tx);
-        #[cfg(test)]
-        let ran_worker = false;
-
-        if !ran_worker {
-            process_items_sequential(
-                &items,
-                &target,
-                font_pt,
-                overwrite,
-                &timestamp,
-                &stop,
-                |orig_idx, res| {
-                    let _ = tx.send(Event::Batch(orig_idx, res));
-                },
-            );
-        }
-        let _ = tx.send(Event::BatchDone);
-    });
-}
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn unicode_output_is_distinct_and_keeps_directory() {
         let input = Path::new("folder_α/exercise_β.docx");
@@ -732,6 +777,7 @@ mod tests {
             Path::new("folder_α/exercise_β_omml.docx")
         );
     }
+
     #[test]
     fn failed_conversion_never_replaces_original_or_leaves_temporary_files() {
         let directory = tempfile::tempdir().unwrap();
@@ -741,6 +787,7 @@ mod tests {
         assert_eq!(std::fs::read(&input).unwrap(), b"not a docx");
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
+
     #[test]
     fn existing_suffix_output_is_not_overwritten() {
         let directory = tempfile::tempdir().unwrap();
@@ -752,6 +799,7 @@ mod tests {
             .contains("already exists"));
         assert_eq!(std::fs::read(output).unwrap(), b"keep");
     }
+
     #[test]
     fn successful_batch_commit_preserves_input_then_can_replace_it() {
         use std::io::{Cursor, Write};
@@ -971,8 +1019,8 @@ mod tests {
         collapsed.insert("root:/drive_a/docs_a/ch1".to_owned());
         collapsed.insert("group:individual".to_owned());
         let rows = build_tree_rows(&items, &collapsed);
-        assert!(!rows.iter().any(|r| matches!(
-            r,
+        assert!(!rows.iter().any(|row| matches!(
+            row,
             TreeRow::File {
                 item_index: 0 | 3,
                 ..
@@ -1006,9 +1054,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut items = Vec::new();
         for i in 0..6 {
-            let p = dir.path().join(format!("doc_{i}.docx"));
-            std::fs::write(&p, &original).unwrap();
-            items.push((i, BatchItem::file(p)));
+            let doc_path = dir.path().join(format!("doc_{i}.docx"));
+            std::fs::write(&doc_path, &original).unwrap();
+            items.push((i, BatchItem::file(doc_path)));
         }
 
         // 1. Concurrent full run
@@ -1051,9 +1099,9 @@ mod tests {
         let dir_stop = tempfile::tempdir().unwrap();
         let mut stop_items = Vec::new();
         for i in 0..4 {
-            let p = dir_stop.path().join(format!("stop_{i}.docx"));
-            std::fs::write(&p, &original).unwrap();
-            stop_items.push((i, BatchItem::file(p)));
+            let doc_path = dir_stop.path().join(format!("stop_{i}.docx"));
+            std::fs::write(&doc_path, &original).unwrap();
+            stop_items.push((i, BatchItem::file(doc_path)));
         }
         let (raw_tx2, rx2) = std::sync::mpsc::channel();
         let tx2 = crate::EventSender::new(raw_tx2);
