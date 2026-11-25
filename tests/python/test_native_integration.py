@@ -56,6 +56,18 @@ class NativeIntegration(unittest.TestCase):
             bat_uninstall = (stage / "scripts/uninstall-addin.bat").read_text()
             self.assertIn(r"HKCU\Software\Classes\eqntide", bat_uninstall)
 
+    def test_staged_fonts_exclude_pdfs_and_keep_licenses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = self.stage(Path(tmp), False)
+            fonts_dir = stage / "fonts"
+            self.assertEqual(list(fonts_dir.rglob("*.pdf")), [])
+            self.assertTrue((fonts_dir / "stixfonts-2.13b171/STIXTwoMath-Regular.ttf").is_file())
+            self.assertTrue((fonts_dir / "stixfonts-2.13b171/OFL.txt").is_file())
+            self.assertTrue((fonts_dir / "Nunito/Nunito-Regular.ttf").is_file())
+            self.assertTrue((fonts_dir / "Nunito/OFL.txt").is_file())
+            self.assertTrue((fonts_dir / "JetBrainsMono-2.304/JetBrainsMono-Regular.ttf").is_file())
+            self.assertTrue((fonts_dir / "JetBrainsMono-2.304/OFL.txt").is_file())
+
     def test_windows_repack_removes_stale_web_payload(self):
         from unittest.mock import patch
         import shutil

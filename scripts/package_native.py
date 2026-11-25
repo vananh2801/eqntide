@@ -57,7 +57,7 @@ def populate(stage, binary_dir, windows):
     for name in ("README.md", "LICENSE", "NOTICE"):
         shutil.copy2(ROOT / name, stage / name)
     shutil.copytree(ROOT / "assets/icons", stage / "icons")
-    shutil.copytree(ROOT / "assets/fonts", stage / "fonts")
+    shutil.copytree(ROOT / "assets/fonts", stage / "fonts", ignore=shutil.ignore_patterns("*.pdf"))
     (stage / "scripts").mkdir()
     for script in ("install-addin.sh", "install-addin.ps1", "install-addin.bat", "uninstall-addin.bat", "install-bridge-service.sh", "configure_wps.py", "install-session-addins.py", "install-bridge-startup.ps1"):
         shutil.copy2(ROOT / "scripts" / script, stage / "scripts" / script)
