@@ -1,52 +1,94 @@
-omml-converter
-Copyright (c) 2024-2026 Bohdan Bodnarenko
+EqnTide
 Copyright (c) 2026 Anh <vananh2801> and contributors
 
 This product is licensed under the MIT License. See the LICENSE file for details.
 
 ===============================================================================
-Third-Party Software, Fonts, and Specifications Notice
+Third-Party Software, Fonts, Icons, and Specifications Notice
 ===============================================================================
 
-This project incorporates code, architectural designs, fonts, and specifications
-from the following open-source projects and standards:
+EqnTide (including the native desktop editor, equation image/preview rendering
+engine, DOCX package editing/upgrade pipeline, local bridge, and Office add-ins)
+was written by Anh <vananh2801> and contributors, and incorporates or references
+code, binary format mappings, fonts, icons, and specifications from multiple
+third-party open-source projects and standards:
 
 1. omml-converter (Rust)
-   Original Project: https://github.com/bohdanbodnarenko/omml-converter
+   Repository: https://github.com/bohdanbodnarenko/omml-converter
    Author: Bohdan Bodnarenko
    License: MIT License
    Copyright (c) 2024-2026 Bohdan Bodnarenko
    Description:
-     Initial architecture for forward (OMML → MathType OLE) conversion, .docx
-     package manipulation, and MTEF 5.0 binary generation.
+     Referenced and adapted for initial OMML-to-MTEF 5.0 binary encoding concepts
+     and OLE compound file container layout.
 
 2. mathtypejx (Java)
-   Original Project: https://github.com/a917470154/mathtypejx
+   Repository: https://github.com/a917470154/mathtypejx
    Author: a917470154
    License: MIT License
    Description:
-     Ported and referenced for reverse conversion: MTEF v3 and v5 binary stream
-     decoding, MathML node tree construction, template selector/variation bitmasks,
+     Referenced and ported for MTEF v3 and v5 binary stream decoding, MathML
+     node tree construction, template selector/variation bitmasks,
      sub/superscript base-mover logic, and MathType character mapping tables.
 
 3. mathtype_to_mathml (Ruby)
-   Original Project: https://github.com/jure/mathtype_to_mathml
+   Repository: https://github.com/jure/mathtype_to_mathml
    Author: Jure Triglav
    License: MIT License
    Description:
-     Reference implementation and binary test fixtures for MTEF reverse engineering.
+     Reference implementation and binary test fixtures for MTEF reverse
+     engineering and WMF `MTra` extraction.
 
-4. STIX Fonts Project (STIX Two Text & STIX Two Math)
+4. excel_press.py (Python)
+   Location: word-template/excel_press.py
+   Author: Brandan [coldfusion]
+   Copyright (c) 2015, Brandan [coldfusion]
+   License: MIT License
+   Description:
+     VBA macro compression/decompression helper used at build time to generate
+     the Microsoft Word global template (`word-template/EqnTide.dotm`).
+
+5. STIX Fonts Project (STIX Two Text & STIX Two Math)
    Official Project: https://github.com/stipub/stixfonts
-   Copyright (c) 2001-2021, The STI Pub Companies
+   Copyright 2001-2021 The STIX Fonts Project Authors, with Reserved Font Name "TM Math"
    License: SIL Open Font License, Version 1.1
    License Location: assets/fonts/stixfonts-2.13b171/OFL.txt
    Description:
-     Embedded OpenType fonts in `assets/fonts/` used for vector (EMF) and raster (PNG)
-     equation preview rendering, glyph outline extraction, and OpenType 'MATH' table
-     metric constants.
+     Embedded TrueType/OpenType fonts in `assets/fonts/stixfonts-2.13b171/` used
+     for equation preview rendering (EMF/PNG), desktop editor canvas typesetting,
+     glyph outline extraction, and OpenType 'MATH' table metric constants.
 
-5. Technical Specifications and Standards:
+6. Nunito
+   Official Project: https://github.com/googlefonts/nunito
+   Copyright 2014 The Nunito Project Authors
+   License: SIL Open Font License, Version 1.1
+   License Location: assets/fonts/Nunito/OFL.txt
+   Description:
+     Embedded regular font (`assets/fonts/Nunito/Nunito-Regular.ttf`) used for
+     the native desktop interface.
+
+7. JetBrains Mono
+   Official Project: https://github.com/JetBrains/JetBrainsMono
+   Copyright 2020 The JetBrains Mono Project Authors
+   License: SIL Open Font License, Version 1.1
+   License Location: assets/fonts/JetBrainsMono-2.304/OFL.txt
+   Description:
+     Embedded regular monospace font
+     (`assets/fonts/JetBrainsMono-2.304/JetBrainsMono-Regular.ttf`) used for the
+     LaTeX source editor in the native desktop application.
+
+8. Tabler Icons
+   Official Project: https://github.com/tabler/tabler-icons
+   Author: Paweł Kuna
+   Copyright (c) 2020-2026 Paweł Kuna
+   License: MIT License
+   License Location: assets/icons/tabler-icons/LICENSE.txt
+   Description:
+     Curated outline SVG icons in `assets/icons/tabler-icons/` and derived
+     rasterized PNG icons used across the native desktop UI, Microsoft Word
+     Ribbon template, and WPS Office add-in.
+
+9. Technical Specifications and Standards:
    - ECMA-376 (Office Open XML File Formats, §22.1 Office Math Markup Language - OMML)
      ISO/IEC 29500
    - Microsoft OpenType Specification: The 'MATH' Table
@@ -58,33 +100,35 @@ from the following open-source projects and standards:
    - W3C MathML Core Specification
      https://w3c.github.io/mathml-core/
 
-6. Tabler Icons
-   Official Project: https://github.com/tabler/tabler-icons
-   Author: Paweł Kuna
-   Copyright (c) 2020-2026 Paweł Kuna
-   License: MIT License
-   License Location: assets/icons/tabler-icons/LICENSE.txt
-   Description:
-     Curated outline SVG icons in `assets/icons/tabler-icons/` and derived
-     rasterized PNG icons used across the native desktop UI, Microsoft Word
-     Ribbon template, and WPS Office add-in.
+===============================================================================
+Rust Workspace Dependencies
+===============================================================================
 
-Native desktop UI
------------------
-The native desktop uses egui/eframe (MIT OR Apache-2.0), rfd (MIT),
-arboard (MIT OR Apache-2.0), interprocess (0BSD OR Apache-2.0), fs2
-(MIT OR Apache-2.0), directories (MIT OR Apache-2.0), ureq
-(MIT OR Apache-2.0), image (MIT OR Apache-2.0), and tempfile
-(MIT OR Apache-2.0), together with their platform dependencies.
-Cargo.lock records resolved versions; cargo-deny checks the workspace license
-policy. Bundled STIX fonts retain the SIL Open Font License attribution above.
+- Core Engine & CLI (`eqntide`):
+  quick-xml (MIT), zip (MIT), clap (MIT OR Apache-2.0), log (MIT OR Apache-2.0),
+  uuid (Apache-2.0 OR MIT), ab_glyph_rasterizer (Apache-2.0),
+  read-fonts (MIT OR Apache-2.0), skrifa (MIT OR Apache-2.0),
+  flate2 (MIT OR Apache-2.0), crc32fast (MIT OR Apache-2.0),
+  tiny_http (MIT OR Apache-2.0), serde (MIT OR Apache-2.0),
+  serde_json (MIT OR Apache-2.0), latex2mathml (MIT),
+  directories (MIT OR Apache-2.0), and rayon (MIT OR Apache-2.0).
 
-Nunito (desktop interface)
-Copyright 2014 The Nunito Project Authors (https://github.com/googlefonts/nunito)
-License: SIL Open Font License, Version 1.1
-License Location: assets/fonts/Nunito/OFL.txt
+- Shared Equation Editor (`eqntide-editor`):
+  unicode-segmentation (MIT OR Apache-2.0).
 
-JetBrains Mono (desktop LaTeX source)
-Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
-License: SIL Open Font License, Version 1.1
-License Location: assets/fonts/JetBrainsMono-2.304/OFL.txt
+- Native Desktop UI (`eqntide-desktop`):
+  eframe (MIT OR Apache-2.0), egui-winit (MIT OR Apache-2.0),
+  hdrshot-egui-backend (MIT OR Apache-2.0), softbuffer (MIT OR Apache-2.0),
+  bytemuck (Zlib OR Apache-2.0 OR MIT), pollster (Apache-2.0 OR MIT),
+  winit (Apache-2.0), rfd (MIT), image (MIT OR Apache-2.0),
+  interprocess (0BSD OR Apache-2.0), fs2 (MIT OR Apache-2.0),
+  directories (MIT OR Apache-2.0), serde (MIT OR Apache-2.0),
+  serde_json (MIT OR Apache-2.0), ureq (MIT OR Apache-2.0),
+  tempfile (MIT OR Apache-2.0), uuid (Apache-2.0 OR MIT), and
+  winresource (MIT, Windows build dependency), together with their transitive
+  platform dependencies.
+
+`Cargo.lock` records exact resolved versions across the workspace, and `deny.toml`
+enforces permissive, MIT-compatible license and advisory compliance via `cargo-deny`.
+Bundled fonts and icons retain their respective SIL OFL 1.1 and MIT attributions
+listed above.
