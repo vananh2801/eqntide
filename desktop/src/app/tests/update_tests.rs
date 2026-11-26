@@ -13,6 +13,14 @@ fn all_texts(output: &egui::FullOutput) -> Vec<String> {
         .collect()
 }
 
+fn has_open_url(output: &egui::FullOutput, expected_url: &str) -> bool {
+    output
+        .platform_output
+        .commands
+        .iter()
+        .any(|cmd| matches!(cmd, egui::OutputCommand::OpenUrl(open) if open.url == expected_url))
+}
+
 #[test]
 fn about_tab_starts_idle_without_starting_update_check() {
     let ctx = egui::Context::default();
@@ -106,6 +114,7 @@ fn about_update_states_render_expected_controls_and_open_validated_url() {
     assert!(up_to_date_texts.contains(&expected_status));
 
     app.update_state = UpdateState::Error("Could not reach GitHub".into());
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
     let err_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
     let err_texts = all_texts(&err_out);
     assert!(err_texts
@@ -113,6 +122,12 @@ fn about_update_states_render_expected_controls_and_open_validated_url() {
         .any(|text| text == "Could not reach GitHub"));
     assert!(err_texts.iter().any(|text| text == "Retry"));
     assert!(err_texts.iter().any(|text| text == "Open Releases"));
+    let open_releases_pos = find_text_center(&err_out, |text| text == "Open Releases");
+    let open_releases_click = run_ui_pass_frame(&ctx, &mut app, click_events(open_releases_pos));
+    assert!(has_open_url(
+        &open_releases_click,
+        crate::update::GITHUB_RELEASES_PAGE_URL
+    ));
 
     let release = UpdateRelease {
         version: "0.12.0".into(),
@@ -137,9 +152,11 @@ fn about_update_states_render_expected_controls_and_open_validated_url() {
     };
     let action_pos = find_text_center(&avail_out, |text| text == action_label);
     let clicked_out = run_ui_pass_frame(&ctx, &mut app, click_events(action_pos));
-    assert!(clicked_out.platform_output.commands.iter().any(|cmd| {
-        matches!(cmd, egui::OutputCommand::OpenUrl(open) if open.url == release.download_url)
-    }));
+    assert!(has_open_url(&clicked_out, &release.download_url));
+
+    let notes_pos = find_text_center(&avail_out, |text| text == "Release notes");
+    let notes_click = run_ui_pass_frame(&ctx, &mut app, click_events(notes_pos));
+    assert!(has_open_url(&notes_click, &release.release_url));
 
     // Defense-in-depth: untrusted URLs in state never trigger OpenUrl.
     app.update_state = UpdateState::Available(UpdateRelease {
@@ -156,4 +173,49 @@ fn about_update_states_render_expected_controls_and_open_validated_url() {
         .commands
         .iter()
         .any(|cmd| matches!(cmd, egui::OutputCommand::OpenUrl(_))));
+}
+
+#[test]
+fn about_repository_hyperlink_and_browser_links_feature_are_wired() {
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    ctx.set_theme(egui::Theme::Dark);
+    let mut app = super::helpers::app();
+    app.tab = 3;
+
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let about_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let repo_url = env!("CARGO_PKG_REPOSITORY");
+    let repo_pos = find_text_center(&about_out, |text| text == repo_url);
+    let clicked_out = run_ui_pass_frame(&ctx, &mut app, click_events(repo_pos));
+    assert!(has_open_url(&clicked_out, repo_url));
+
+    // Guard against disabling egui-winit's `links` feature when `default-features = false`.
+    let desktop_manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+    let eframe_line = desktop_manifest
+        .lines()
+        .find(|line| line.trim_start().starts_with("eframe ="))
+        .expect("eframe dependency line in desktop/Cargo.toml");
+    assert!(
+        eframe_line.contains("\"links\""),
+        "eframe must enable the \"links\" feature in desktop/Cargo.toml"
+    );
+    let egui_winit_line = desktop_manifest
+        .lines()
+        .find(|line| line.trim_start().starts_with("egui-winit ="))
+        .expect("egui-winit dependency line in desktop/Cargo.toml");
+    assert!(
+        egui_winit_line.contains("\"links\""),
+        "egui-winit must enable the \"links\" feature in desktop/Cargo.toml"
+    );
+
+    let lockfile = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.lock"));
+    let egui_winit_block = lockfile
+        .split("[[package]]")
+        .find(|block| block.contains("name = \"egui-winit\""))
+        .expect("egui-winit package entry in Cargo.lock");
+    assert!(
+        egui_winit_block.contains("\"webbrowser\""),
+        "Cargo.lock must resolve webbrowser under egui-winit so OpenUrl opens the browser"
+    );
 }
