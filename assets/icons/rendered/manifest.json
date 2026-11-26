@@ -49,6 +49,13 @@
       "size": 48,
       "svg_sha256": "7470626a2491f3644ec83e7168e150ea4b0bad2452f9da461d697f8a677489b8"
     },
+    "dots": {
+      "color": "#FFFFFF",
+      "path": "assets/icons/rendered/dots.png",
+      "png_sha256": "2ec01c2bc804fd273b40a5be0f21026011d957f39edadbd7a1ed3e4485ed46e2",
+      "size": 48,
+      "svg_sha256": "72531fe6d0ee7e679ae928199231178f4228e7f27c8e04e64653993603f02da5"
+    },
     "file": {
       "color": "#FFFFFF",
       "path": "assets/icons/rendered/file.png",

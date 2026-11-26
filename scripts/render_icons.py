@@ -51,6 +51,8 @@ DESKTOP_ICONS = (
     "math-avg",
     "alpha",
     "omega",
+    # Palette custom matrix button
+    "dots",
     # Sidebar tabs
     "file-type-docx",
     "settings",

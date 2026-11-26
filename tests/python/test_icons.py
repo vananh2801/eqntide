@@ -1,5 +1,6 @@
-"""Validate committed pre-rasterized Tabler icon PNGs and manifest sync."""
+"""Validate committed pre-rasterized Tabler icon PNGs, palette SVGs, and atlas sync."""
 
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -9,6 +10,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
+import generate_palette_icons  # noqa: E402
 import package_native  # noqa: E402
 import render_icons  # noqa: E402
 
@@ -18,7 +20,7 @@ class RenderedIconsTests(unittest.TestCase):
         self.assertEqual(render_icons.check_all(), 0)
 
     def test_expected_icon_counts_and_dimensions(self):
-        self.assertEqual(len(render_icons.DESKTOP_ICONS), 30)
+        self.assertEqual(len(render_icons.DESKTOP_ICONS), 31)
         self.assertEqual(len(render_icons.RIBBON_ICONS), 5)
         expected_svgs = set(render_icons.DESKTOP_ICONS) | set(render_icons.RIBBON_ICONS)
         actual_svgs = {p.stem for p in render_icons.SVG_DIR.glob("*.svg")}
@@ -28,6 +30,31 @@ class RenderedIconsTests(unittest.TestCase):
                 self.assertTrue(path.is_file(), f"Missing {path}")
                 w, h, color_type = render_icons.png_dimensions_rgba(path)
                 self.assertEqual((w, h, color_type), (size, size, 6))
+
+    def test_palette_svgs_and_atlas_match_catalog(self):
+        self.assertEqual(generate_palette_icons.check_all(), 0)
+        entries = generate_palette_icons.parse_catalog()
+        self.assertEqual(len(entries), 547)
+        svg_files = list(generate_palette_icons.SVG_OUT_DIR.glob("*.svg"))
+        self.assertEqual(len(svg_files), len(entries))
+
+        meta = json.loads(generate_palette_icons.ATLAS_JSON_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(meta["icon_width"], 40)
+        self.assertEqual(meta["icon_height"], 26)
+        self.assertEqual(meta["scale"], 2)
+        self.assertEqual(len(meta["entries"]), len(entries))
+
+        w, h, color_type = generate_palette_icons.png_dimensions_rgba(
+            generate_palette_icons.ATLAS_PNG_PATH
+        )
+        self.assertEqual((w, h, color_type), (meta["atlas_width"], meta["atlas_height"], 6))
+        for item in meta["entries"]:
+            self.assertEqual(item["w"], 80)
+            self.assertEqual(item["h"], 52)
+            self.assertGreaterEqual(item["x"], 0)
+            self.assertGreaterEqual(item["y"], 0)
+            self.assertLessEqual(item["x"] + item["w"], w)
+            self.assertLessEqual(item["y"] + item["h"], h)
 
     def test_word_dotm_embeds_distinct_ribbon_icons(self):
         expected = {
