@@ -92,4 +92,4 @@ Every `ENTRIES` item defined in `src/catalog/mod.rs` SHALL have a corresponding 
 
 #### Scenario: Icon verification detects missing or stale palette SVGs or atlas data
 - **WHEN** the icon verification test or script runs after catalog or SVG changes
-- **THEN** it verifies a 1-to-1 match between all catalog `ENTRIES` IDs/sources, committed `assets/icons/palette/*.svg` files, and the pre-rasterized sprite atlas and UV manifest
+- **THEN** it verifies a 1-to-1 match between all catalog `ENTRIES` IDs/sources, committed `assets/icons/sources/palette/*.svg` files, and the pre-rasterized sprite atlas and UV manifest under `assets/icons/generated/palette-atlas/`

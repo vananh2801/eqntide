@@ -1,0 +1,17 @@
+# Spec Delta: office-addin-icons
+
+## MODIFIED Requirements
+
+### Requirement: Distinct per-action Ribbon icons in Microsoft Word template
+The generated Microsoft Word global template (`word-template/EqnTide.dotm`) SHALL embed distinct `32x32` `#1D78B8` PNG icons from `assets/icons/generated/office-ribbon/` (derived from `assets/icons/sources/tabler/`) for each Ribbon command button rather than reading from `wps-addin/` or reusing a single shared logo image.
+
+#### Scenario: Word customUI14 maps each Ribbon button to its assigned image relationship
+- **WHEN** `word-template/build_dotm.py` generates `EqnTide.dotm`
+- **THEN** `customUI/customUI14.xml` and `customUI/_rels/customUI14.xml.rels` bind `btnInsertEquation` to `pencil-plus`, `btnEditEquation` to `edit`, `btnToggleLatex` to `tex`, `btnUpgradeMathType` to `arrow-big-up-lines`, and `btnBatchConverter` to `file-type-docx` as `32x32` PNG images under `customUI/images/`
+
+### Requirement: Third-party Tabler Icons attribution and packaging
+The repository SHALL document the Tabler Icons MIT license (`Copyright (c) 2020-2026 Paweł Kuna`, `assets/icons/sources/tabler/LICENSE.txt`) in `NOTICE` and `README.md`, and native distribution packages SHALL retain only runtime brand icons and the Tabler license notice in `icons/` without bundling build-time-only icon sources or desktop/palette pre-rendered assets.
+
+#### Scenario: Attribution files and native packages include Tabler Icons license notice
+- **WHEN** `NOTICE`, `README.md`, and native release staging (`scripts/package_native.py`) are inspected
+- **THEN** `NOTICE` and `README.md` identify Tabler Icons, its copyright holder, MIT License, and `assets/icons/sources/tabler/LICENSE.txt`, and staged `icons/` contains `icon.png`, `icon.ico`, and `tabler-LICENSE.txt` while excluding `sources/`, desktop PNGs, and palette sprite atlases
