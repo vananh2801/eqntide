@@ -69,7 +69,7 @@ A standalone, high-performance **bidirectional math equation converter and edito
 
 ### Linux
 
-- **DEB / RPM packages:** Install `eqntide-native-preview` (`sudo dnf install ./dist/linux/0.10.1/eqntide-native-preview-0.10.1-1.x86_64.rpm` or `sudo apt-get install ./dist/linux/0.10.1/eqntide-native-preview_0.10.1_amd64.deb`). Binaries and resources live under `/usr/lib/eqntide` with launchers in `/usr/bin`, and hooks configure the WPS add-in plus per-user `eqntide.service`.
+- **DEB / RPM packages:** Install `eqntide-native-preview` (`sudo dnf install ./dist/linux/0.11.0/eqntide-native-preview-0.11.0-1.x86_64.rpm` or `sudo apt-get install ./dist/linux/0.11.0/eqntide-native-preview_0.11.0_amd64.deb`). Binaries and resources live under `/usr/lib/eqntide` with launchers in `/usr/bin`, and hooks configure the WPS add-in plus per-user `eqntide.service`.
 - **Portable (`.tar.gz`):** Keep the extracted folder in a stable location and run:
   ```bash
   ./install-user.sh                  # Register eqntide:// desktop entry
@@ -153,7 +153,7 @@ eqntide-cli --server
 
 ### Rust Library (`eqntide`)
 
-Add `eqntide = "0.10.1"` to `Cargo.toml`:
+Add `eqntide = "0.11.0"` to `Cargo.toml`:
 
 ```rust
 use eqntide::{convert, convert_bytes, convert_to_omml_with, ToOmmlOptions};
