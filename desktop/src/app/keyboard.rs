@@ -1,10 +1,7 @@
 //! Keyboard shortcut handling, canvas text/IME input, and inline LaTeX command popup.
 
 use super::{App, Intent};
-use crate::{
-    commands, palette,
-    theme::{self, ThemeTokens},
-};
+use crate::{commands, palette, theme};
 use eframe::egui::{self, Color32, Pos2, Stroke};
 use eqntide_editor::{Caret, Move};
 
@@ -382,7 +379,7 @@ impl App {
             }
         }
 
-        let tokens = ThemeTokens::from_ui(ui);
+        let tokens = self.theme_tokens(ui);
         let mut accept = None;
         let mut popup_edited = false;
         egui::Area::new(egui::Id::unique("canvas-command-popup"))
@@ -423,9 +420,7 @@ impl App {
                                 ui.spacing_mut().item_spacing.x = 2.0;
                                 let prefix_resp = ui.add(
                                     egui::Label::new(
-                                        egui::RichText::new("\\")
-                                            .monospace()
-                                            .color(tokens.text_muted),
+                                        egui::RichText::new("\\").monospace().color(tokens.accent),
                                     )
                                     .sense(egui::Sense::click()),
                                 );
@@ -436,6 +431,7 @@ impl App {
                                         .background_color(Color32::TRANSPARENT)
                                         .font(egui::TextStyle::Monospace)
                                         .text_color(tokens.text_primary)
+                                        .align(egui::Align2::LEFT_CENTER)
                                         .desired_width(f32::INFINITY)
                                         .lock_focus(true),
                                 );
@@ -479,12 +475,12 @@ impl App {
                         ui.label("No matching command — Esc to cancel");
                     }
                     for (index, command) in candidates.iter().enumerate() {
-                        if ui
-                            .selectable_label(
-                                index == selected,
-                                format!("\\{}   {}", command.name, command.label),
-                            )
-                            .clicked()
+                        let is_selected = index == selected;
+                        let item_text = format!("\\{}   {}", command.name, command.label);
+                        if Self::with_selectable_style(ui, tokens, is_selected, |ui| {
+                            ui.selectable_label(is_selected, item_text)
+                        })
+                        .clicked()
                         {
                             accept = Some(index);
                         }
@@ -572,11 +568,13 @@ impl App {
         }
     }
 
+    /// Closes the inline `\command` popup and clears any associated command error.
     pub(super) fn dismiss_command_input(&mut self) {
         self.command_input = None;
         self.clear_command_error();
     }
 
+    /// Clears `command_error` and removes it from the status bar if it is still displayed.
     pub(super) fn clear_command_error(&mut self) {
         if let Some(error) = self.command_error.take() {
             if self.status == error {
@@ -638,6 +636,7 @@ impl App {
         }
     }
 
+    /// Moves the caret outside the `<mtext>` node `id` if it points to a text run.
     pub(super) fn exit_text_run(&mut self, id: u64) -> bool {
         if !self.editor.node(id).is_some_and(|node| node.tag == "mtext") {
             return false;
@@ -671,6 +670,7 @@ impl App {
         false
     }
 
+    /// Advances or exits the enclosing `{...}` scope captured on the canvas.
     pub(super) fn close_latex_group(&mut self) {
         let Some(start) = self.latex_groups.pop() else {
             return;

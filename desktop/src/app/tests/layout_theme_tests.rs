@@ -762,7 +762,7 @@ fn sidebar_icons_load_48px_textures_and_tint_across_themes() {
         ctx.set_theme(theme);
         let mut tint = None;
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            tint = Some(App::icon_tint(ui));
+            tint = Some(app.theme_tokens(ui).icon_tint(false, ui.is_enabled()));
         });
         out.textures_delta.clear();
         assert_eq!(tint, Some(expected_tint));
@@ -1052,12 +1052,10 @@ fn modern_theme_applies_zero_hover_expansion_radii_and_tinted_sidebar_selection(
 }
 
 #[test]
-fn canvas_presets_switch_adapt_ink_and_persist_per_mode() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
+fn ayu_canvas_surfaces_adapt_by_theme_and_hide_preset_pickers_in_settings() {
     let ctx = egui::Context::default();
     ThemeTokens::apply_style(&ctx);
-    let mut app = super::helpers::app().with_settings_path(path.clone(), Some(&ctx));
+    let mut app = super::helpers::app();
     app.load_math("<math><mi>x</mi></math>", None, None);
 
     // Render preview texture for ink verification.
@@ -1097,58 +1095,63 @@ fn canvas_presets_switch_adapt_ink_and_persist_per_mode() {
         })
     };
 
-    // Default in Dark mode still uses SoftPaper (light paper background + dark ink) on both canvas and LaTeX source.
+    // Dark mode defaults directly to Ayu Dark surface + light ink on both canvas and LaTeX source.
     ctx.set_theme(egui::Theme::Dark);
-    let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let dark_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
     let tex_id = app.texture.as_ref().unwrap().id();
     let latex_rect = ctx
         .read_response(egui::Id::unique("latex-source"))
         .unwrap()
         .rect;
-    let soft_dark = CanvasPreset::SoftPaper.palette(true);
-    assert!(out.shapes.iter().any(|clipped| matches!(&clipped.shape,
-        egui::Shape::Rect(rect_shape) if rect_shape.fill == soft_dark.bg && rect_shape.stroke.color == soft_dark.border)));
-    assert!(out.shapes.iter().any(|clipped| matches!(&clipped.shape,
-        egui::Shape::Rect(rect_shape) if rect_shape.fill == soft_dark.bg && rect_shape.rect == latex_rect)));
-    assert!(has_formula_ink(&out, tex_id, soft_dark.ink));
+    let ayu_dark_pal = theme::CanvasPalette::for_mode(true);
+    assert!(dark_out.shapes.iter().any(|clipped| matches!(
+        &clipped.shape,
+        egui::Shape::Rect(rect_shape)
+            if rect_shape.fill == ayu_dark_pal.bg && rect_shape.stroke.color == ayu_dark_pal.border
+    )));
+    assert!(dark_out.shapes.iter().any(|clipped| matches!(
+        &clipped.shape,
+        egui::Shape::Rect(rect_shape) if rect_shape.fill == ayu_dark_pal.bg && rect_shape.rect == latex_rect
+    )));
+    assert!(has_formula_ink(&dark_out, tex_id, ayu_dark_pal.ink));
 
-    // Open Settings and pick CoolSlate for Light mode and DimSlate for Dark mode.
-    app.tab = 2;
-    let tall = Vec2::new(MIN_WINDOW_SIZE[0], 900.0);
-    let out = run_ui_pass_sized(&ctx, &mut app, tall);
-    let cool_pos = find_text_center(&out, |text| text == CanvasPreset::CoolSlate.label());
-    let out = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(cool_pos));
-    let dim_pos = find_text_center(&out, |text| text == CanvasPreset::DimSlate.label());
-    run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(dim_pos));
-
-    let on_disk = Settings::load_from_path(&path);
-    assert_eq!(on_disk.canvas_light, CanvasPreset::CoolSlate);
-    assert_eq!(on_disk.canvas_dark, CanvasPreset::DimSlate);
-
-    // Verify Dark mode now uses DimSlate surface + light ink, and Light mode uses CoolSlate surface + dark ink.
-    app.tab = 0;
-    let dark_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
-    let dim_pal = CanvasPreset::DimSlate.palette(true);
-    assert!(dark_out.shapes.iter().any(|clipped| matches!(&clipped.shape,
-        egui::Shape::Rect(rect_shape) if rect_shape.fill == dim_pal.bg && rect_shape.stroke.color == dim_pal.border)));
-    assert!(dark_out.shapes.iter().any(|clipped| matches!(&clipped.shape,
-        egui::Shape::Rect(rect_shape) if rect_shape.fill == dim_pal.bg && rect_shape.rect == latex_rect)));
-    assert!(has_formula_ink(&dark_out, tex_id, dim_pal.ink));
-
+    // Light mode defaults directly to Ayu Light surface + dark ink on both canvas and LaTeX source.
     ctx.set_theme(egui::Theme::Light);
     let light_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
-    let cool_pal = CanvasPreset::CoolSlate.palette(false);
-    assert!(light_out.shapes.iter().any(|clipped| matches!(&clipped.shape,
-        egui::Shape::Rect(rect_shape) if rect_shape.fill == cool_pal.bg && rect_shape.stroke.color == cool_pal.border)));
-    assert!(light_out.shapes.iter().any(|clipped| matches!(&clipped.shape,
-        egui::Shape::Rect(rect_shape) if rect_shape.fill == cool_pal.bg && rect_shape.rect == latex_rect)));
-    assert!(has_formula_ink(&light_out, tex_id, cool_pal.ink));
+    let ayu_light_pal = theme::CanvasPalette::for_mode(false);
+    assert!(light_out.shapes.iter().any(|clipped| matches!(
+        &clipped.shape,
+        egui::Shape::Rect(rect_shape)
+            if rect_shape.fill == ayu_light_pal.bg && rect_shape.stroke.color == ayu_light_pal.border
+    )));
+    assert!(light_out.shapes.iter().any(|clipped| matches!(
+        &clipped.shape,
+        egui::Shape::Rect(rect_shape) if rect_shape.fill == ayu_light_pal.bg && rect_shape.rect == latex_rect
+    )));
+    assert!(has_formula_ink(&light_out, tex_id, ayu_light_pal.ink));
 
-    // Reload in a fresh App instance and confirm presets restored.
-    let fresh_ctx = egui::Context::default();
-    let reloaded = super::helpers::app().with_settings_path(path, Some(&fresh_ctx));
-    assert_eq!(reloaded.canvas_light, CanvasPreset::CoolSlate);
-    assert_eq!(reloaded.canvas_dark, CanvasPreset::DimSlate);
+    // Settings no longer exposes the multi-option canvas preset pickers.
+    app.tab = 2;
+    let settings_out = run_ui_pass_sized(&ctx, &mut app, Vec2::from(MIN_WINDOW_SIZE));
+    for removed in [
+        "Light mode canvas",
+        "Dark mode canvas",
+        "Soft paper",
+        "Pure white",
+        "Cool slate",
+        "Warm cream",
+        "Dim slate",
+        "Soft charcoal",
+        "Deep ink",
+    ] {
+        assert!(
+            !settings_out.shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::Text(text_shape) if text_shape.galley.text() == removed
+            )),
+            "unexpected removed canvas preset label {removed:?} in Settings"
+        );
+    }
 }
 
 #[test]
@@ -1790,4 +1793,433 @@ fn status_bar_is_quiet_when_idle_or_busy_and_clears_stale_messages_on_edit() {
     // Failed load_math retains its error message.
     assert!(!session_app.load_math("<math><unclosed>", None, None));
     assert!(session_app.status.contains("Could not load equation"));
+}
+
+#[test]
+fn status_bar_readiness_dot_uses_active_accent_while_text_keeps_neutral_or_error_colors() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings_path = dir.path().join("settings.json");
+    let img_path = dir.path().join("cyan-bg.png");
+    let img = image::RgbaImage::from_pixel(48, 48, image::Rgba([20, 140, 220, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&img_path, image::ImageFormat::Png)
+        .unwrap();
+
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(settings_path, Some(&ctx));
+    app.bridge_ready = true;
+    app.status = "Saved.".into();
+
+    let collect_status_dot = |out: &egui::FullOutput| -> egui::epaint::CircleShape {
+        out.shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Circle(circle) => Some(*circle),
+                _ => None,
+            })
+            .expect("status bar readiness circle")
+    };
+
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        let dark_mode = theme == egui::Theme::Dark;
+        ctx.set_theme(theme);
+        let default_tokens = ThemeTokens::for_mode(dark_mode);
+
+        app.bridge_ready = true;
+        let mut ready_out = ctx.run_ui(egui::RawInput::default(), |ui| app.draw_status_bar(ui));
+        ready_out.textures_delta.clear();
+        assert_eq!(collect_status_dot(&ready_out).fill, default_tokens.accent);
+        assert!(ready_out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Text(text_shape)
+                if text_shape.galley.text() == "Saved."
+                    && text_shape.override_text_color != Some(default_tokens.accent)
+        )));
+
+        app.bridge_ready = false;
+        let mut off_out = ctx.run_ui(egui::RawInput::default(), |ui| app.draw_status_bar(ui));
+        off_out.textures_delta.clear();
+        let off_dot = collect_status_dot(&off_out);
+        assert_eq!(off_dot.fill, Color32::TRANSPARENT);
+        assert_eq!(off_dot.stroke.color, default_tokens.accent);
+    }
+
+    app.latex_error = Some("unexpected token".into());
+    ctx.set_theme(egui::Theme::Dark);
+    let mut err_out = ctx.run_ui(egui::RawInput::default(), |ui| app.draw_status_bar(ui));
+    err_out.textures_delta.clear();
+    let dark_tokens = ThemeTokens::for_mode(true);
+    assert!(err_out.shapes.iter().any(|clipped| matches!(
+        &clipped.shape,
+        egui::Shape::Text(text_shape)
+            if text_shape.galley.text().starts_with("LaTeX error:")
+                && text_shape.galley.job.sections.iter().all(|sec| sec.format.color == dark_tokens.error_fg)
+    )));
+    app.latex_error = None;
+
+    app.set_background_image_from_path(&img_path, &ctx);
+    let seed = app.background_accent.expect("cyan accent seed");
+    app.bridge_ready = true;
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        let dark_mode = theme == egui::Theme::Dark;
+        ctx.set_theme(theme);
+        let default_tokens = ThemeTokens::for_mode(dark_mode);
+        let adaptive_tokens = ThemeTokens::for_mode_with_accent(dark_mode, Some(seed));
+        assert_ne!(adaptive_tokens.accent, default_tokens.accent);
+
+        app.background_accent_enabled = true;
+        let mut adaptive_out = ctx.run_ui(egui::RawInput::default(), |ui| app.draw_status_bar(ui));
+        adaptive_out.textures_delta.clear();
+        assert_eq!(
+            collect_status_dot(&adaptive_out).fill,
+            adaptive_tokens.accent
+        );
+
+        app.background_accent_enabled = false;
+        let mut fallback_out = ctx.run_ui(egui::RawInput::default(), |ui| app.draw_status_bar(ui));
+        fallback_out.textures_delta.clear();
+        assert_eq!(
+            collect_status_dot(&fallback_out).fill,
+            default_tokens.accent
+        );
+    }
+}
+
+#[test]
+fn adaptive_background_accent_propagates_to_controls_and_global_style() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings_path = dir.path().join("settings.json");
+    let img_path = dir.path().join("emerald-bg.png");
+    let img = image::RgbaImage::from_pixel(48, 48, image::Rgba([30, 180, 110, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&img_path, image::ImageFormat::Png)
+        .unwrap();
+
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(settings_path, Some(&ctx));
+    app.set_background_image_from_path(&img_path, &ctx);
+    let seed = app.background_accent.expect("emerald accent seed");
+
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        let dark_mode = theme == egui::Theme::Dark;
+        ctx.set_theme(theme);
+        app.background_mode = BackgroundMode::Image;
+        app.background_accent_enabled = true;
+
+        let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let adaptive_tokens = ThemeTokens::for_mode_with_accent(dark_mode, Some(seed));
+        let default_tokens = ThemeTokens::for_mode(dark_mode);
+        assert_ne!(adaptive_tokens.primary_bg, default_tokens.primary_bg);
+
+        let style = ctx.style_of(theme);
+        assert_eq!(style.visuals.hyperlink_color, adaptive_tokens.accent);
+        assert_eq!(
+            style.visuals.text_cursor.stroke.color,
+            adaptive_tokens.accent
+        );
+        assert_eq!(style.visuals.selection.bg_fill, adaptive_tokens.selected_bg);
+
+        let save_pos = find_text_center(&out, |text| text == "Save MathML (Ctrl+S)");
+        assert!(out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == adaptive_tokens.primary_bg
+                    && rect_shape.rect.contains(save_pos)
+        )));
+        assert!(out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == adaptive_tokens.selected_bg
+                    && rect_shape.stroke.color == adaptive_tokens.selected_border
+        )));
+
+        app.background_mode = BackgroundMode::Solid;
+        let solid_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let style_after = ctx.style_of(theme);
+        assert_eq!(style_after.visuals.hyperlink_color, default_tokens.accent);
+        assert_eq!(
+            style_after.visuals.selection.bg_fill,
+            default_tokens.selected_bg
+        );
+        assert!(solid_out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == default_tokens.primary_bg
+                    && rect_shape.rect.contains(save_pos)
+        )));
+    }
+}
+
+#[test]
+fn footer_radios_hover_borders_and_drag_value_focus_reflect_active_accent() {
+    fn extract_text_color(text_shape: &egui::epaint::TextShape) -> Color32 {
+        text_shape
+            .override_text_color
+            .filter(|col| *col != Color32::PLACEHOLDER)
+            .or_else(|| {
+                text_shape
+                    .galley
+                    .job
+                    .sections
+                    .first()
+                    .map(|section| section.format.color)
+                    .filter(|col| *col != Color32::PLACEHOLDER)
+            })
+            .unwrap_or(text_shape.fallback_color)
+    }
+
+    fn find_caption_text(out: &egui::FullOutput, label: &str) -> (Rect, Color32) {
+        out.shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text_shape) if text_shape.galley.text() == label => Some((
+                    clipped.shape.visual_bounding_rect(),
+                    extract_text_color(text_shape),
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing text {label:?}"))
+    }
+
+    fn radio_circles_for(
+        out: &egui::FullOutput,
+        caption_rect: Rect,
+    ) -> Vec<egui::epaint::CircleShape> {
+        let mut circles: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Circle(circle)
+                    if (circle.center.y - caption_rect.center().y).abs() <= 4.0
+                        && circle.center.x < caption_rect.left()
+                        && circle.center.x >= caption_rect.left() - 26.0 =>
+                {
+                    Some(*circle)
+                }
+                _ => None,
+            })
+            .collect();
+        circles.sort_by(|first, second| second.radius.total_cmp(&first.radius));
+        circles
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings_path = dir.path().join("settings.json");
+    let img_path = dir.path().join("cyan-bg.png");
+    let img = image::RgbaImage::from_pixel(48, 48, image::Rgba([20, 150, 230, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&img_path, image::ImageFormat::Png)
+        .unwrap();
+    let folder = dir.path().join("course");
+    std::fs::create_dir_all(&folder).unwrap();
+
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(settings_path, Some(&ctx));
+    app.set_background_image_from_path(&img_path, &ctx);
+    let seed = app.background_accent.expect("cyan accent seed");
+    app.files = vec![
+        batch::BatchItem::from_folder(folder.join("a.docx"), folder.clone()),
+        batch::BatchItem::from_folder(folder.join("b.docx"), folder),
+    ];
+    app.sync_batch_row_state();
+
+    let size = Vec2::new(1056.0, 900.0);
+    let mut frame_time = 0.0_f64;
+    let mut run_frame = |app: &mut App, events: Vec<egui::Event>| {
+        frame_time += 1.0;
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                time: Some(frame_time),
+                events,
+                ..Default::default()
+            },
+            |ui| app.draw_ui(ui),
+        );
+        out.textures_delta.clear();
+        out
+    };
+
+    for (mode, use_adaptive) in [
+        (BackgroundMode::Solid, false),
+        (BackgroundMode::Image, true),
+    ] {
+        app.background_mode = mode;
+        app.background_accent_enabled = use_adaptive;
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let dark_mode = theme == egui::Theme::Dark;
+            ctx.set_theme(theme);
+            let expected = ThemeTokens::for_mode_with_background_and_accent(
+                dark_mode,
+                mode == BackgroundMode::Image,
+                app.background_opacity,
+                if use_adaptive { Some(seed) } else { None },
+            );
+
+            // 1. Enabled footer radios use selected_* indicators while keeping neutral captions.
+            app.tab = 0;
+            app.target = "omml".into();
+            app.draft_dirty = false;
+            let _ = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
+            let editor_out = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
+
+            let (omml_rect, omml_caption_color) = find_caption_text(&editor_out, "OMML");
+            let (mt_rect, mt_caption_color) = find_caption_text(&editor_out, "MathType");
+            assert_eq!(omml_caption_color, expected.text_primary);
+            assert_eq!(mt_caption_color, expected.text_primary);
+
+            let omml_circles = radio_circles_for(&editor_out, omml_rect);
+            let mt_circles = radio_circles_for(&editor_out, mt_rect);
+            assert_eq!(omml_circles.len(), 2);
+            assert_eq!(omml_circles[0].fill, expected.selected_bg);
+            assert_eq!(omml_circles[0].stroke.color, expected.selected_border);
+            assert_eq!(omml_circles[1].fill, expected.selected_fg);
+            assert_eq!(mt_circles.len(), 1);
+            assert_eq!(mt_circles[0].fill, expected.control_bg);
+            assert_eq!(mt_circles[0].stroke.color, expected.border);
+
+            // Clicking MathType switches selection indicator cleanly.
+            let _ = run_frame(&mut app, click_events(mt_rect.center()));
+            assert_eq!(app.target, "mathtype");
+            let switched_out = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
+            let (switched_mt_rect, _) = find_caption_text(&switched_out, "MathType");
+            let (switched_omml_rect, _) = find_caption_text(&switched_out, "OMML");
+            let switched_mt = radio_circles_for(&switched_out, switched_mt_rect);
+            let switched_omml = radio_circles_for(&switched_out, switched_omml_rect);
+            assert_eq!(switched_mt.len(), 2);
+            assert_eq!(switched_mt[0].fill, expected.selected_bg);
+            assert_eq!(switched_mt[0].stroke.color, expected.selected_border);
+            assert_eq!(switched_mt[1].fill, expected.selected_fg);
+            assert_eq!(switched_omml.len(), 1);
+            assert_eq!(switched_omml[0].fill, expected.control_bg);
+            assert_eq!(switched_omml[0].stroke.color, expected.border);
+
+            // 2. Disabled footer radios (draft_dirty = true) keep crisp disabled fill/accent and neutral text_disabled captions.
+            app.draft_dirty = true;
+            let disabled_out = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
+            let (dis_mt_rect, dis_mt_color) = find_caption_text(&disabled_out, "MathType");
+            let (dis_omml_rect, dis_omml_color) = find_caption_text(&disabled_out, "OMML");
+            assert_eq!(dis_mt_color, expected.text_disabled);
+            assert_eq!(dis_omml_color, expected.text_disabled);
+            let dis_mt_circles = radio_circles_for(&disabled_out, dis_mt_rect);
+            let dis_omml_circles = radio_circles_for(&disabled_out, dis_omml_rect);
+            assert_eq!(dis_mt_circles.len(), 2);
+            assert_eq!(dis_mt_circles[0].fill, expected.control_disabled_bg);
+            assert_eq!(dis_mt_circles[0].stroke.color, expected.disabled_accent());
+            assert_eq!(dis_mt_circles[1].fill, expected.disabled_accent());
+            assert_eq!(dis_omml_circles.len(), 1);
+            assert_eq!(dis_omml_circles[0].fill, expected.control_disabled_bg);
+            assert_eq!(dis_omml_circles[0].stroke.color, expected.border);
+            app.draft_dirty = false;
+
+            // 3. Hovered non-selected control border uses control_hover_border() while Batch tree lines stay neutral border_hover.
+            let hover_expected = expected.control_hover_border();
+            assert_ne!(hover_expected, expected.border_hover);
+            let batch_pos = find_text_center(&editor_out, |text| text == "Batch DOCX");
+            let hover_out = run_frame(&mut app, vec![egui::Event::PointerMoved(batch_pos)]);
+            assert!(
+                hover_out.shapes.iter().any(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect_shape) => {
+                        rect_shape.rect.contains(batch_pos)
+                            && rect_shape.rect.height() <= 40.0
+                            && rect_shape.stroke.color == hover_expected
+                    }
+                    _ => false,
+                }),
+                "hovered standard control must use control_hover_border() in {theme:?}/{mode:?}"
+            );
+            let _ = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
+
+            app.tab = 1;
+            let _ = run_frame(&mut app, vec![]);
+            let batch_out = run_frame(&mut app, vec![]);
+            let tree_lines: Vec<_> = batch_out
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::LineSegment { stroke, .. }
+                        if (stroke.width - 1.25).abs() <= 0.05 =>
+                    {
+                        Some(stroke.color)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(!tree_lines.is_empty());
+            assert!(tree_lines
+                .iter()
+                .all(|col| *col == expected.border_hover && *col != hover_expected));
+
+            // 4. Footer DragValue enters edit focus with active accent stroke and updates when mode changes.
+            app.tab = 0;
+            let _ = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
+            let pre_focus_out = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
+            let font_pos = find_text_center(&pre_focus_out, |text| text.ends_with(" pt"));
+            let _ = run_frame(&mut app, click_events(font_pos));
+            let focused_out = run_frame(&mut app, vec![]);
+            assert!(
+                focused_out
+                    .shapes
+                    .iter()
+                    .any(|clipped| match &clipped.shape {
+                        egui::Shape::Rect(rect_shape) => {
+                            rect_shape.rect.contains(font_pos)
+                                && rect_shape.rect.height() <= 40.0
+                                && rect_shape.stroke.color == expected.accent
+                        }
+                        _ => false,
+                    }),
+                "focused DragValue border must use active accent in {theme:?}/{mode:?}"
+            );
+
+            let alt_mode = if mode == BackgroundMode::Solid {
+                BackgroundMode::Image
+            } else {
+                BackgroundMode::Solid
+            };
+            let alt_adaptive = alt_mode == BackgroundMode::Image;
+            app.background_mode = alt_mode;
+            app.background_accent_enabled = alt_adaptive;
+            let alt_expected = ThemeTokens::for_mode_with_background_and_accent(
+                dark_mode,
+                alt_mode == BackgroundMode::Image,
+                app.background_opacity,
+                if alt_adaptive { Some(seed) } else { None },
+            );
+            assert_ne!(alt_expected.accent, expected.accent);
+            let _ = run_frame(&mut app, vec![]);
+            let alt_focused_out = run_frame(&mut app, vec![]);
+            assert!(
+                alt_focused_out
+                    .shapes
+                    .iter()
+                    .any(|clipped| match &clipped.shape {
+                        egui::Shape::Rect(rect_shape) => {
+                            rect_shape.rect.contains(font_pos)
+                                && rect_shape.rect.height() <= 40.0
+                                && rect_shape.stroke.color == alt_expected.accent
+                        }
+                        _ => false,
+                    }),
+                "focused DragValue border must track live mode changes in {theme:?}/{alt_mode:?}"
+            );
+
+            // Exit DragValue edit focus cleanly before next iteration.
+            app.background_mode = mode;
+            app.background_accent_enabled = use_adaptive;
+            let _ = run_frame(
+                &mut app,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+    }
 }

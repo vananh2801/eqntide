@@ -1,11 +1,11 @@
-//! Design tokens, egui style configuration, and math canvas color palettes.
+//! Design tokens, egui style configuration, adaptive background accents, and math canvas palettes.
 //!
-//! [`ThemeTokens`] defines accessible light and dark UI color roles, translucent panel/card
-//! derivation for custom background images, and global [`egui::Style`] setup. [`CanvasPreset`]
-//! maps light and dark canvas surface presets to concrete [`CanvasPalette`] colors.
+//! [`ThemeTokens`] defines accessible Ayu Light and Ayu Dark UI color roles, translucent
+//! panel/card derivation for custom background images, dual-tone accent derivation from image
+//! color seeds, and global [`egui::Style`] setup. [`CanvasPalette`] maps Light mode
+//! (`Ayu light`) and Dark mode (`Ayu dark`) canvas surfaces to high-contrast equation colors.
 
 use eframe::egui::{self, Color32, CornerRadius, Stroke, Vec2};
-use serde::{Deserialize, Serialize};
 
 pub(crate) const SPACE_XS: f32 = 4.0;
 pub(crate) const SPACE_SM: f32 = 6.0;
@@ -27,21 +27,8 @@ pub(crate) const BUTTON_HEIGHT: f32 = 30.0;
 pub(crate) const SIDEBAR_TAB_HEIGHT: f32 = 34.0;
 pub(crate) const COMPACT_BUTTON_HEIGHT: f32 = 24.0;
 
-/// Ordered list of canvas surface presets exposed in light mode.
-pub(crate) const LIGHT_CANVAS_PRESETS: &[CanvasPreset] = &[
-    CanvasPreset::SoftPaper,
-    CanvasPreset::PureWhite,
-    CanvasPreset::CoolSlate,
-    CanvasPreset::WarmCream,
-];
-
-/// Ordered list of canvas surface presets exposed in dark mode.
-pub(crate) const DARK_CANVAS_PRESETS: &[CanvasPreset] = &[
-    CanvasPreset::SoftPaper,
-    CanvasPreset::DimSlate,
-    CanvasPreset::SoftCharcoal,
-    CanvasPreset::DeepInk,
-];
+const AYU_DARK_TEXT_INK: Color32 = Color32::from_rgb(13, 16, 22);
+const MAX_BACKGROUND_SCRIM_ALPHA: f32 = 0.65;
 
 /// Semantic UI color tokens for chrome, panels, controls, selection, and errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,77 +60,92 @@ pub(crate) struct ThemeTokens {
 }
 
 impl ThemeTokens {
-    /// Return the base opaque token palette for light or dark mode.
+    /// Return the base opaque Ayu token palette for light or dark mode.
     pub(crate) fn for_mode(dark_mode: bool) -> Self {
-        if dark_mode {
+        Self::for_mode_with_accent(dark_mode, None)
+    }
+
+    /// Return the base opaque Ayu token palette with an optional adaptive RGB accent seed.
+    pub(crate) fn for_mode_with_accent(dark_mode: bool, accent_seed: Option<[u8; 3]>) -> Self {
+        let mut tokens = if dark_mode {
             Self {
                 dark_mode: true,
-                app_bg: Color32::from_rgb(22, 26, 32),
-                panel_bg: Color32::from_rgb(29, 34, 43),
-                card_bg: Color32::from_rgb(36, 42, 53),
-                extreme_bg: Color32::from_rgb(19, 23, 29),
-                control_bg: Color32::from_rgb(42, 49, 62),
-                control_hover_bg: Color32::from_rgb(51, 60, 75),
-                control_active_bg: Color32::from_rgb(35, 41, 52),
-                control_disabled_bg: Color32::from_rgb(32, 37, 47),
-                border: Color32::from_rgb(53, 62, 77),
-                border_hover: Color32::from_rgb(86, 102, 126),
-                text_primary: Color32::from_rgb(229, 234, 242),
-                text_muted: Color32::from_rgb(154, 166, 184),
-                text_disabled: Color32::from_rgb(93, 104, 122),
-                accent: Color32::from_rgb(76, 168, 232),
-                primary_bg: Color32::from_rgb(35, 118, 178),
-                primary_hover_bg: Color32::from_rgb(46, 136, 200),
-                primary_active_bg: Color32::from_rgb(28, 98, 150),
-                primary_fg: Color32::WHITE,
-                selected_bg: Color32::from_rgb(30, 52, 72),
-                selected_hover_bg: Color32::from_rgb(36, 63, 88),
-                selected_border: Color32::from_rgb(76, 168, 232),
-                selected_fg: Color32::from_rgb(124, 196, 245),
-                error_fg: Color32::from_rgb(242, 123, 123),
+                app_bg: AYU_DARK_TEXT_INK,
+                panel_bg: Color32::from_rgb(31, 33, 39),
+                card_bg: Color32::from_rgb(37, 40, 48),
+                extreme_bg: Color32::from_rgb(9, 12, 16),
+                control_bg: Color32::from_rgb(37, 40, 48),
+                control_hover_bg: Color32::from_rgb(45, 47, 52),
+                control_active_bg: Color32::from_rgb(62, 64, 67),
+                control_disabled_bg: Color32::from_rgb(27, 29, 34),
+                border: Color32::from_rgb(63, 64, 67),
+                border_hover: Color32::from_rgb(92, 95, 102),
+                text_primary: Color32::from_rgb(220, 218, 210),
+                text_muted: Color32::from_rgb(138, 137, 134),
+                text_disabled: Color32::from_rgb(105, 106, 106),
+                accent: Color32::from_rgb(255, 180, 84),
+                primary_bg: Color32::from_rgb(245, 165, 58),
+                primary_hover_bg: Color32::from_rgb(255, 183, 86),
+                primary_active_bg: Color32::from_rgb(222, 144, 42),
+                primary_fg: AYU_DARK_TEXT_INK,
+                selected_bg: Color32::from_rgb(54, 41, 24),
+                selected_hover_bg: Color32::from_rgb(68, 52, 30),
+                selected_border: Color32::from_rgb(255, 180, 84),
+                selected_fg: Color32::from_rgb(255, 206, 138),
+                error_fg: Color32::from_rgb(239, 113, 119),
             }
         } else {
             Self {
                 dark_mode: false,
-                app_bg: Color32::from_rgb(239, 242, 246),
-                panel_bg: Color32::from_rgb(248, 250, 252),
-                card_bg: Color32::WHITE,
+                app_bg: Color32::from_rgb(228, 230, 232),
+                panel_bg: Color32::from_rgb(236, 236, 237),
+                card_bg: Color32::from_rgb(252, 252, 252),
                 extreme_bg: Color32::WHITE,
-                control_bg: Color32::WHITE,
-                control_hover_bg: Color32::from_rgb(233, 238, 245),
-                control_active_bg: Color32::from_rgb(220, 229, 240),
-                control_disabled_bg: Color32::from_rgb(241, 245, 249),
-                border: Color32::from_rgb(212, 220, 230),
-                border_hover: Color32::from_rgb(148, 168, 190),
-                text_primary: Color32::from_rgb(30, 41, 59),
-                text_muted: Color32::from_rgb(82, 96, 117),
-                text_disabled: Color32::from_rgb(148, 163, 184),
-                accent: Color32::from_rgb(29, 120, 184),
-                primary_bg: Color32::from_rgb(29, 120, 184),
-                primary_hover_bg: Color32::from_rgb(22, 100, 155),
-                primary_active_bg: Color32::from_rgb(18, 83, 128),
+                control_bg: Color32::from_rgb(252, 252, 252),
+                control_hover_bg: Color32::from_rgb(223, 224, 225),
+                control_active_bg: Color32::from_rgb(207, 208, 210),
+                control_disabled_bg: Color32::from_rgb(229, 230, 231),
+                border: Color32::from_rgb(207, 209, 210),
+                border_hover: Color32::from_rgb(154, 158, 162),
+                text_primary: Color32::from_rgb(46, 50, 56),
+                text_muted: Color32::from_rgb(107, 112, 118),
+                text_disabled: Color32::from_rgb(158, 162, 166),
+                accent: Color32::from_rgb(186, 94, 6),
+                primary_bg: Color32::from_rgb(176, 86, 4),
+                primary_hover_bg: Color32::from_rgb(154, 74, 3),
+                primary_active_bg: Color32::from_rgb(132, 62, 2),
                 primary_fg: Color32::WHITE,
-                selected_bg: Color32::from_rgb(226, 240, 250),
-                selected_hover_bg: Color32::from_rgb(211, 232, 247),
-                selected_border: Color32::from_rgb(29, 120, 184),
-                selected_fg: Color32::from_rgb(20, 91, 142),
-                error_fg: Color32::from_rgb(200, 55, 55),
+                selected_bg: Color32::from_rgb(251, 238, 219),
+                selected_hover_bg: Color32::from_rgb(246, 226, 196),
+                selected_border: Color32::from_rgb(186, 94, 6),
+                selected_fg: Color32::from_rgb(134, 66, 3),
+                error_fg: Color32::from_rgb(204, 58, 58),
             }
+        };
+
+        if let Some(seed) = accent_seed {
+            let derived = derive_ui_accent_roles(dark_mode, seed, tokens.panel_bg);
+            tokens.accent = derived.accent;
+            tokens.primary_bg = derived.primary_bg;
+            tokens.primary_hover_bg = derived.primary_hover_bg;
+            tokens.primary_active_bg = derived.primary_active_bg;
+            tokens.primary_fg = derived.primary_fg;
+            tokens.selected_bg = derived.selected_bg;
+            tokens.selected_hover_bg = derived.selected_hover_bg;
+            tokens.selected_border = derived.selected_border;
+            tokens.selected_fg = derived.selected_fg;
         }
+        tokens
     }
 
-    /// Derive theme tokens matching `ui.visuals().dark_mode`.
-    pub(crate) fn from_ui(ui: &egui::Ui) -> Self {
-        Self::for_mode(ui.visuals().dark_mode)
-    }
-
-    /// Return base tokens or translucent tokens when a custom background image is active.
-    pub(crate) fn for_mode_with_background(
+    /// Return base or translucent tokens for the current mode, background state, and accent seed.
+    pub(crate) fn for_mode_with_background_and_accent(
         dark_mode: bool,
         has_background: bool,
         overlay_opacity: f32,
+        accent_seed: Option<[u8; 3]>,
     ) -> Self {
-        let base = Self::for_mode(dark_mode);
+        let base = Self::for_mode_with_accent(dark_mode, accent_seed);
         if has_background {
             base.with_background_opacity(overlay_opacity)
         } else {
@@ -151,14 +153,27 @@ impl ThemeTokens {
         }
     }
 
+    /// Return base tokens or translucent tokens when a custom background image is active.
+    #[cfg(test)]
+    pub(crate) fn for_mode_with_background(
+        dark_mode: bool,
+        has_background: bool,
+        overlay_opacity: f32,
+    ) -> Self {
+        Self::for_mode_with_background_and_accent(dark_mode, has_background, overlay_opacity, None)
+    }
+
     /// Apply translucent panel and card fills so a wallpaper stays visible while keeping text legible.
+    ///
+    /// `panel_bg` and `card_bg` scale across `0.38..=1.00` (becoming completely opaque at `100%`),
+    /// while `app_bg` stays transparent so open backdrop regions keep revealing the wallpaper and scrim.
     pub(crate) fn with_background_opacity(mut self, overlay_opacity: f32) -> Self {
         let opacity = if overlay_opacity.is_finite() {
             overlay_opacity.clamp(0.0, 1.0)
         } else {
             0.70
         };
-        let surface_alpha = ((0.38 + 0.54 * opacity) * 255.0).round() as u8;
+        let surface_alpha = ((0.38 + 0.62 * opacity) * 255.0).round() as u8;
         self.app_bg = Color32::TRANSPARENT;
         self.panel_bg = Color32::from_rgba_unmultiplied(
             self.panel_bg.r(),
@@ -176,6 +191,9 @@ impl ThemeTokens {
     }
 
     /// Compute the full-window scrim fill painted between the background image and UI chrome.
+    ///
+    /// Scrim alpha scales across `0.00..=0.65` so the background image remains visible even when
+    /// `Overlay opacity` is set to `100%`.
     pub(crate) fn background_scrim(dark_mode: bool, overlay_opacity: f32) -> Color32 {
         let opacity = if overlay_opacity.is_finite() {
             overlay_opacity.clamp(0.0, 1.0)
@@ -183,14 +201,71 @@ impl ThemeTokens {
             0.70
         };
         let base = Self::for_mode(dark_mode).app_bg;
-        let alpha = (opacity * 0.72 * 255.0).round() as u8;
+        let alpha = (opacity * MAX_BACKGROUND_SCRIM_ALPHA * 255.0).round() as u8;
         Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
     }
 
-    /// Install light and dark styles onto the `egui::Context`.
+    /// Return a muted, fully opaque accent color for disabled accent controls so trailing fills cannot bleed through.
+    pub(crate) fn disabled_accent(self) -> Color32 {
+        let base_card = Self::for_mode(self.dark_mode).card_bg;
+        blend_rgb(self.accent, base_card, 0.58)
+    }
+
+    /// Return a subtly accent-tinted hover border for interactive chrome without altering neutral tree lines.
+    pub(crate) fn control_hover_border(self) -> Color32 {
+        blend_rgb(
+            self.border_hover,
+            self.accent,
+            if self.dark_mode { 0.28 } else { 0.24 },
+        )
+    }
+
+    /// Build a card-styled `egui::Frame` using surface corners and inner spacing.
+    pub(crate) fn group_frame(self) -> egui::Frame {
+        egui::Frame::new()
+            .fill(self.card_bg)
+            .corner_radius(SURFACE_CORNER_RADIUS)
+            .stroke(Stroke::new(1.0, self.border))
+            .inner_margin(SPACE_LG)
+    }
+
+    /// Choose icon foreground tint given `selected` and `enabled` states.
+    pub(crate) fn icon_tint(self, selected: bool, enabled: bool) -> Color32 {
+        if !enabled {
+            self.text_disabled
+        } else if selected {
+            self.selected_fg
+        } else {
+            self.text_primary
+        }
+    }
+
+    /// Install light and dark styles onto the `egui::Context` using the default Ayu accent.
     pub(crate) fn apply_style(egui_ctx: &egui::Context) {
+        Self::apply_style_with_accent(egui_ctx, None);
+    }
+
+    /// Update accent-derived `egui::Style` colors without altering layout or GPU profile settings.
+    pub(crate) fn apply_accent_to_style(egui_ctx: &egui::Context, accent_seed: Option<[u8; 3]>) {
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
-            let tokens = Self::for_mode(theme == egui::Theme::Dark);
+            let tokens = Self::for_mode_with_accent(theme == egui::Theme::Dark, accent_seed);
+            egui_ctx.style_mut_of(theme, |style| {
+                let visuals = &mut style.visuals;
+                visuals.selection.bg_fill = tokens.selected_bg;
+                visuals.selection.stroke = Stroke::new(1.0, tokens.selected_border);
+                visuals.hyperlink_color = tokens.accent;
+                visuals.text_cursor.stroke = Stroke::new(1.5, tokens.accent);
+                visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.control_hover_border());
+                visuals.widgets.active.bg_stroke = Stroke::new(1.0, tokens.accent);
+                visuals.widgets.open.bg_stroke = Stroke::new(1.0, tokens.accent);
+            });
+        }
+    }
+
+    /// Install light and dark styles onto the `egui::Context` with an optional accent seed.
+    pub(crate) fn apply_style_with_accent(egui_ctx: &egui::Context, accent_seed: Option<[u8; 3]>) {
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let tokens = Self::for_mode_with_accent(theme == egui::Theme::Dark, accent_seed);
             egui_ctx.style_mut_of(theme, |style| {
                 style.text_styles = [
                     (egui::TextStyle::Small, egui::FontId::proportional(11.0)),
@@ -255,7 +330,7 @@ impl ThemeTokens {
 
                 widgets.hovered.bg_fill = tokens.control_hover_bg;
                 widgets.hovered.weak_bg_fill = tokens.control_hover_bg;
-                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.border_hover);
+                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.control_hover_border());
                 widgets.hovered.fg_stroke = Stroke::new(1.0, tokens.text_primary);
 
                 widgets.active.bg_fill = tokens.control_active_bg;
@@ -281,150 +356,6 @@ impl ThemeTokens {
             });
         }
     }
-
-    /// Build a card-styled `egui::Frame` using surface corners and inner spacing.
-    pub(crate) fn group_frame(self) -> egui::Frame {
-        egui::Frame::new()
-            .fill(self.card_bg)
-            .corner_radius(SURFACE_CORNER_RADIUS)
-            .stroke(Stroke::new(1.0, self.border))
-            .inner_margin(SPACE_LG)
-    }
-
-    /// Choose icon foreground tint given `selected` and `enabled` states.
-    pub(crate) fn icon_tint(self, selected: bool, enabled: bool) -> Color32 {
-        if !enabled {
-            self.text_disabled
-        } else if selected {
-            self.selected_fg
-        } else {
-            self.text_primary
-        }
-    }
-}
-
-/// Selectable background/ink preset for the interactive math canvas.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum CanvasPreset {
-    #[default]
-    SoftPaper,
-    PureWhite,
-    CoolSlate,
-    WarmCream,
-    DimSlate,
-    SoftCharcoal,
-    DeepInk,
-    #[serde(other)]
-    Unknown,
-}
-
-impl CanvasPreset {
-    /// Ensure the preset belongs to the allowed set for `dark_mode`, falling back to `SoftPaper`.
-    pub(crate) fn sanitize_for_mode(self, dark_mode: bool) -> Self {
-        let allowed = if dark_mode {
-            DARK_CANVAS_PRESETS
-        } else {
-            LIGHT_CANVAS_PRESETS
-        };
-        if allowed.contains(&self) {
-            self
-        } else {
-            Self::SoftPaper
-        }
-    }
-
-    /// Return the human-readable UI label for this preset.
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::SoftPaper | Self::Unknown => "Soft paper",
-            Self::PureWhite => "Pure white",
-            Self::CoolSlate => "Cool slate",
-            Self::WarmCream => "Warm cream",
-            Self::DimSlate => "Dim slate",
-            Self::SoftCharcoal => "Soft charcoal",
-            Self::DeepInk => "Deep ink",
-        }
-    }
-
-    /// Return whether this preset uses a dark canvas surface with light ink.
-    pub(crate) fn is_dark_surface(self) -> bool {
-        matches!(self, Self::DimSlate | Self::SoftCharcoal | Self::DeepInk)
-    }
-
-    /// Resolve concrete canvas colors for this preset under `dark_mode`.
-    pub(crate) fn palette(self, dark_mode: bool) -> CanvasPalette {
-        let preset = self.sanitize_for_mode(dark_mode);
-        let light_border = Color32::from_rgb(212, 220, 230);
-        let dark_border = Color32::from_rgb(53, 62, 77);
-        let (bg, border, ink) = match preset {
-            Self::SoftPaper | Self::Unknown => (
-                Color32::from_rgb(250, 249, 245),
-                if dark_mode { dark_border } else { light_border },
-                Color32::from_rgb(26, 32, 44),
-            ),
-            Self::PureWhite => (Color32::WHITE, light_border, Color32::from_rgb(17, 24, 39)),
-            Self::CoolSlate => (
-                Color32::from_rgb(237, 242, 247),
-                Color32::from_rgb(203, 213, 225),
-                Color32::from_rgb(30, 41, 59),
-            ),
-            Self::WarmCream => (
-                Color32::from_rgb(246, 241, 228),
-                Color32::from_rgb(223, 213, 190),
-                Color32::from_rgb(41, 37, 36),
-            ),
-            Self::DimSlate => (
-                Color32::from_rgb(30, 36, 46),
-                dark_border,
-                Color32::from_rgb(230, 236, 245),
-            ),
-            Self::SoftCharcoal => (
-                Color32::from_rgb(37, 41, 50),
-                Color32::from_rgb(60, 67, 82),
-                Color32::from_rgb(236, 239, 244),
-            ),
-            Self::DeepInk => (
-                Color32::from_rgb(20, 24, 32),
-                Color32::from_rgb(46, 55, 70),
-                Color32::from_rgb(220, 230, 245),
-            ),
-        };
-
-        if preset.is_dark_surface() {
-            CanvasPalette {
-                bg,
-                border,
-                ink,
-                placeholder_bg: Color32::TRANSPARENT,
-                placeholder_stroke: Color32::from_rgb(92, 168, 224),
-                caret: Color32::from_rgb(100, 182, 238),
-                selection_bg: Color32::from_rgba_unmultiplied(76, 168, 232, 72),
-                text_caret: Color32::from_rgb(199, 154, 77),
-                ime_fg: Color32::from_rgb(124, 196, 245),
-                scroll_inactive: Color32::from_rgb(76, 94, 118),
-                scroll_hover: Color32::from_rgb(76, 168, 232),
-                scroll_active: Color32::from_rgb(100, 182, 238),
-                scroll_track: Color32::from_rgb(27, 33, 43),
-            }
-        } else {
-            CanvasPalette {
-                bg,
-                border,
-                ink,
-                placeholder_bg: Color32::TRANSPARENT,
-                placeholder_stroke: Color32::from_rgb(100, 168, 218),
-                caret: Color32::from_rgb(22, 100, 155),
-                selection_bg: Color32::from_rgba_unmultiplied(29, 120, 184, 56),
-                text_caret: Color32::from_rgb(171, 115, 37),
-                ime_fg: Color32::from_rgb(22, 100, 155),
-                scroll_inactive: Color32::from_rgb(148, 178, 206),
-                scroll_hover: Color32::from_rgb(29, 120, 184),
-                scroll_active: Color32::from_rgb(22, 100, 155),
-                scroll_track: Color32::from_rgb(235, 242, 249),
-            }
-        }
-    }
 }
 
 /// Concrete canvas background, ink, caret, selection, and scrollbar colors.
@@ -445,32 +376,273 @@ pub(crate) struct CanvasPalette {
     pub(crate) scroll_track: Color32,
 }
 
+impl CanvasPalette {
+    /// Resolve Ayu Light (`dark_mode == false`) or Ayu Dark (`dark_mode == true`) canvas colors.
+    #[cfg(test)]
+    pub(crate) fn for_mode(dark_mode: bool) -> Self {
+        Self::for_mode_with_accent(dark_mode, None)
+    }
+
+    /// Resolve Ayu Light or Ayu Dark canvas colors with an optional adaptive RGB accent seed.
+    pub(crate) fn for_mode_with_accent(dark_mode: bool, accent_seed: Option<[u8; 3]>) -> Self {
+        let (bg, border, ink) = if dark_mode {
+            (
+                AYU_DARK_TEXT_INK,
+                Color32::from_rgb(63, 64, 67),
+                Color32::from_rgb(214, 212, 204),
+            )
+        } else {
+            (
+                Color32::from_rgb(252, 252, 252),
+                Color32::from_rgb(207, 209, 210),
+                Color32::from_rgb(53, 57, 62),
+            )
+        };
+
+        let ui_tokens = ThemeTokens::for_mode_with_accent(dark_mode, accent_seed);
+        let accent = ui_tokens.accent;
+        let selection_alpha = if dark_mode { 72 } else { 56 };
+        let selection_bg =
+            Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), selection_alpha);
+        let placeholder_stroke = blend_rgb(accent, bg, if dark_mode { 0.16 } else { 0.22 });
+        let caret = if dark_mode {
+            ui_tokens.selected_fg
+        } else {
+            ui_tokens.primary_bg
+        };
+        let scroll_inactive = blend_rgb(accent, bg, if dark_mode { 0.62 } else { 0.56 });
+        let scroll_track = if dark_mode {
+            blend_rgb(bg, Color32::BLACK, 0.15)
+        } else {
+            blend_rgb(bg, Color32::from_rgb(225, 228, 232), 0.45)
+        };
+        let text_caret = if dark_mode {
+            Color32::from_rgb(90, 193, 254)
+        } else {
+            Color32::from_rgb(29, 120, 184)
+        };
+
+        CanvasPalette {
+            bg,
+            border,
+            ink,
+            placeholder_bg: Color32::TRANSPARENT,
+            placeholder_stroke,
+            caret,
+            selection_bg,
+            text_caret,
+            ime_fg: ui_tokens.selected_fg,
+            scroll_inactive,
+            scroll_hover: accent,
+            scroll_active: caret,
+            scroll_track,
+        }
+    }
+}
+
+/// Convert an sRGB color triplet into `(hue_deg, saturation, lightness)`.
+pub(crate) fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let red = r as f32 / 255.0;
+    let green = g as f32 / 255.0;
+    let blue = b as f32 / 255.0;
+    let max_c = red.max(green).max(blue);
+    let min_c = red.min(green).min(blue);
+    let delta = max_c - min_c;
+    let lum = (max_c + min_c) * 0.5;
+    if delta <= 1e-6 {
+        return (0.0, 0.0, lum);
+    }
+    let sat = delta / (1.0 - (2.0 * lum - 1.0).abs()).max(1e-6);
+    let hue_raw = if (max_c - red).abs() <= 1e-6 {
+        ((green - blue) / delta) % 6.0
+    } else if (max_c - green).abs() <= 1e-6 {
+        (blue - red) / delta + 2.0
+    } else {
+        (red - green) / delta + 4.0
+    };
+    let mut hue = hue_raw * 60.0;
+    if hue < 0.0 {
+        hue += 360.0;
+    }
+    (hue, sat.clamp(0.0, 1.0), lum.clamp(0.0, 1.0))
+}
+
+struct DerivedAccentRoles {
+    accent: Color32,
+    primary_bg: Color32,
+    primary_hover_bg: Color32,
+    primary_active_bg: Color32,
+    primary_fg: Color32,
+    selected_bg: Color32,
+    selected_hover_bg: Color32,
+    selected_border: Color32,
+    selected_fg: Color32,
+}
+
+fn derive_ui_accent_roles(dark_mode: bool, seed: [u8; 3], panel_bg: Color32) -> DerivedAccentRoles {
+    let (hue, raw_sat, _) = rgb_to_hsl(seed[0], seed[1], seed[2]);
+    let sat = raw_sat.clamp(0.45, 0.88);
+    if dark_mode {
+        let mut accent_lum = 0.66_f32;
+        let mut accent = hsl_to_color32(hue, sat, accent_lum);
+        while contrast_ratio(accent, panel_bg) < 4.5 && accent_lum < 0.86 {
+            accent_lum += 0.03;
+            accent = hsl_to_color32(hue, sat, accent_lum);
+        }
+
+        let primary_lum = 0.58_f32;
+        let primary_bg = hsl_to_color32(hue, sat.min(0.84), primary_lum);
+        let primary_hover_bg = hsl_to_color32(hue, sat.min(0.86), (primary_lum + 0.07).min(0.82));
+        let primary_active_bg = hsl_to_color32(hue, sat.min(0.84), (primary_lum - 0.08).max(0.28));
+        let primary_fg = best_contrast_fg(primary_bg);
+        let primary_bg = ensure_fg_contrast(hue, sat.min(0.84), primary_lum, primary_fg, dark_mode);
+
+        let selected_bg = hsl_to_color32(hue, (sat * 0.55).clamp(0.28, 0.50), 0.19);
+        let selected_hover_bg = hsl_to_color32(hue, (sat * 0.58).clamp(0.30, 0.54), 0.24);
+        let mut fg_lum = 0.78_f32;
+        let mut selected_fg = hsl_to_color32(hue, sat.min(0.88), fg_lum);
+        while contrast_ratio(selected_fg, selected_bg) < 5.0 && fg_lum < 0.92 {
+            fg_lum += 0.03;
+            selected_fg = hsl_to_color32(hue, sat.min(0.88), fg_lum);
+        }
+
+        DerivedAccentRoles {
+            accent,
+            primary_bg,
+            primary_hover_bg,
+            primary_active_bg,
+            primary_fg,
+            selected_bg,
+            selected_hover_bg,
+            selected_border: accent,
+            selected_fg,
+        }
+    } else {
+        let mut accent_lum = 0.39_f32;
+        let mut accent = hsl_to_color32(hue, sat, accent_lum);
+        while contrast_ratio(accent, panel_bg) < 3.5 && accent_lum > 0.20 {
+            accent_lum -= 0.02;
+            accent = hsl_to_color32(hue, sat, accent_lum);
+        }
+
+        let mut primary_lum = accent_lum.min(0.38);
+        let mut primary_bg = hsl_to_color32(hue, sat, primary_lum);
+        while contrast_ratio(Color32::WHITE, primary_bg) < 4.6 && primary_lum > 0.16 {
+            primary_lum -= 0.02;
+            primary_bg = hsl_to_color32(hue, sat, primary_lum);
+        }
+        let primary_fg = if contrast_ratio(Color32::WHITE, primary_bg) >= 4.5 {
+            Color32::WHITE
+        } else {
+            best_contrast_fg(primary_bg)
+        };
+        let primary_hover_bg = hsl_to_color32(hue, sat, (primary_lum - 0.05).max(0.12));
+        let primary_active_bg = hsl_to_color32(hue, sat, (primary_lum - 0.10).max(0.08));
+
+        let selected_bg = hsl_to_color32(hue, (sat * 0.78).clamp(0.45, 0.75), 0.91);
+        let selected_hover_bg = hsl_to_color32(hue, (sat * 0.80).clamp(0.48, 0.78), 0.86);
+        let mut fg_lum = 0.30_f32;
+        let mut selected_fg = hsl_to_color32(hue, sat, fg_lum);
+        while contrast_ratio(selected_fg, selected_bg) < 5.0 && fg_lum > 0.14 {
+            fg_lum -= 0.02;
+            selected_fg = hsl_to_color32(hue, sat, fg_lum);
+        }
+
+        DerivedAccentRoles {
+            accent,
+            primary_bg,
+            primary_hover_bg,
+            primary_active_bg,
+            primary_fg,
+            selected_bg,
+            selected_hover_bg,
+            selected_border: accent,
+            selected_fg,
+        }
+    }
+}
+
+fn best_contrast_fg(bg: Color32) -> Color32 {
+    if contrast_ratio(AYU_DARK_TEXT_INK, bg) >= contrast_ratio(Color32::WHITE, bg) {
+        AYU_DARK_TEXT_INK
+    } else {
+        Color32::WHITE
+    }
+}
+
+fn ensure_fg_contrast(hue: f32, sat: f32, start_lum: f32, fg: Color32, dark_mode: bool) -> Color32 {
+    let mut lum = start_lum;
+    let mut bg = hsl_to_color32(hue, sat, lum);
+    let step = if fg == Color32::WHITE { -0.02 } else { 0.02 };
+    for _ in 0..16 {
+        if contrast_ratio(fg, bg) >= 4.6 {
+            break;
+        }
+        lum = (lum + step).clamp(if dark_mode { 0.22 } else { 0.14 }, 0.82);
+        bg = hsl_to_color32(hue, sat, lum);
+    }
+    bg
+}
+
+fn blend_rgb(first: Color32, second: Color32, weight_second: f32) -> Color32 {
+    let weight = weight_second.clamp(0.0, 1.0);
+    let inv = 1.0 - weight;
+    Color32::from_rgb(
+        (first.r() as f32 * inv + second.r() as f32 * weight).round() as u8,
+        (first.g() as f32 * inv + second.g() as f32 * weight).round() as u8,
+        (first.b() as f32 * inv + second.b() as f32 * weight).round() as u8,
+    )
+}
+
+fn hsl_to_color32(hue_deg: f32, sat: f32, lum: f32) -> Color32 {
+    let hue = ((hue_deg % 360.0) + 360.0) % 360.0;
+    let sat = sat.clamp(0.0, 1.0);
+    let lum = lum.clamp(0.0, 1.0);
+    let chroma = (1.0 - (2.0 * lum - 1.0).abs()) * sat;
+    let sector = hue / 60.0;
+    let secondary = chroma * (1.0 - ((sector % 2.0) - 1.0).abs());
+    let (r1, g1, b1) = match sector as u32 {
+        0 => (chroma, secondary, 0.0),
+        1 => (secondary, chroma, 0.0),
+        2 => (0.0, chroma, secondary),
+        3 => (0.0, secondary, chroma),
+        4 => (secondary, 0.0, chroma),
+        _ => (chroma, 0.0, secondary),
+    };
+    let match_lum = lum - chroma * 0.5;
+    Color32::from_rgb(
+        ((r1 + match_lum).clamp(0.0, 1.0) * 255.0).round() as u8,
+        ((g1 + match_lum).clamp(0.0, 1.0) * 255.0).round() as u8,
+        ((b1 + match_lum).clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+fn relative_luminance(color: Color32) -> f32 {
+    fn linear(channel: u8) -> f32 {
+        let scaled = channel as f32 / 255.0;
+        if scaled <= 0.03928 {
+            scaled / 12.92
+        } else {
+            ((scaled + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+}
+
+fn contrast_ratio(first: Color32, second: Color32) -> f32 {
+    let lum_first = relative_luminance(first);
+    let lum_second = relative_luminance(second);
+    let (hi, lo) = if lum_first >= lum_second {
+        (lum_first, lum_second)
+    } else {
+        (lum_second, lum_first)
+    };
+    (hi + 0.05) / (lo + 0.05)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn relative_luminance(color: Color32) -> f32 {
-        fn linear(channel: u8) -> f32 {
-            let scaled = channel as f32 / 255.0;
-            if scaled <= 0.03928 {
-                scaled / 12.92
-            } else {
-                ((scaled + 0.055) / 1.055).powf(2.4)
-            }
-        }
-        0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
-    }
-
-    fn contrast_ratio(first: Color32, second: Color32) -> f32 {
-        let lum_first = relative_luminance(first);
-        let lum_second = relative_luminance(second);
-        let (hi, lo) = if lum_first >= lum_second {
-            (lum_first, lum_second)
-        } else {
-            (lum_second, lum_first)
-        };
-        (hi + 0.05) / (lo + 0.05)
-    }
 
     fn blend_over(fg: Color32, bg: Color32) -> Color32 {
         let [r, g, b, alpha] = fg.to_srgba_unmultiplied();
@@ -493,6 +665,38 @@ mod tests {
             assert!(contrast_ratio(tokens.selected_fg, tokens.selected_bg) >= 4.5);
             assert!(contrast_ratio(tokens.primary_fg, tokens.primary_bg) >= 4.5);
             assert_ne!(tokens.app_bg, tokens.panel_bg);
+            let disabled = tokens.disabled_accent();
+            assert_eq!(disabled.a(), 255);
+            assert_ne!(disabled, tokens.accent);
+            assert_ne!(disabled, tokens.card_bg);
+        }
+        // Default Ayu accent is warm amber/orange (r > g > b) in both modes.
+        let light = ThemeTokens::for_mode(false);
+        let dark = ThemeTokens::for_mode(true);
+        assert!(light.accent.r() > light.accent.g() && light.accent.g() >= light.accent.b());
+        assert!(dark.accent.r() > dark.accent.g() && dark.accent.g() > dark.accent.b());
+    }
+
+    #[test]
+    fn adaptive_accent_derivation_preserves_contrast_across_diverse_hues() {
+        let seeds = [
+            [242, 151, 24], // warm amber
+            [56, 189, 248], // sky cyan
+            [74, 222, 128], // mint green
+            [168, 85, 247], // violet
+            [244, 63, 94],  // coral red
+            [250, 204, 21], // bright yellow
+        ];
+        for seed in seeds {
+            let light = ThemeTokens::for_mode_with_accent(false, Some(seed));
+            let dark = ThemeTokens::for_mode_with_accent(true, Some(seed));
+
+            for tokens in [light, dark] {
+                assert!(contrast_ratio(tokens.primary_fg, tokens.primary_bg) >= 4.5);
+                assert!(contrast_ratio(tokens.selected_fg, tokens.selected_bg) >= 4.5);
+                assert!(contrast_ratio(tokens.accent, tokens.panel_bg) >= 3.0);
+            }
+            assert!(relative_luminance(dark.accent) > relative_luminance(light.accent));
         }
     }
 
@@ -517,15 +721,37 @@ mod tests {
                 assert!(contrast_ratio(translucent.text_primary, after_panel) >= 7.0);
                 assert!(contrast_ratio(translucent.text_primary, after_card) >= 7.0);
             }
+
+            // At 100% overlay opacity, panels/cards are fully opaque while app_bg and the 65% scrim keep the wallpaper visible.
+            let full_opacity = ThemeTokens::for_mode_with_background(dark, true, 1.0);
+            let full_scrim = ThemeTokens::background_scrim(dark, 1.0);
+            assert_eq!(full_opacity.panel_bg, opaque.panel_bg);
+            assert_eq!(full_opacity.card_bg, opaque.card_bg);
+            assert_eq!(full_opacity.app_bg, Color32::TRANSPARENT);
+            assert_eq!(
+                full_scrim.a(),
+                (MAX_BACKGROUND_SCRIM_ALPHA * 255.0).round() as u8
+            );
+            assert_ne!(blend_over(full_scrim, Color32::WHITE), opaque.app_bg);
+            assert_ne!(blend_over(full_scrim, Color32::BLACK), opaque.app_bg);
+
+            // At 0% overlay opacity, the scrim is transparent while surfaces keep a readable floor.
+            let zero_opacity = ThemeTokens::for_mode_with_background(dark, true, 0.0);
+            let zero_scrim = ThemeTokens::background_scrim(dark, 0.0);
+            assert_eq!(zero_scrim.a(), 0);
+            assert_eq!(zero_opacity.app_bg, Color32::TRANSPARENT);
+            assert!(zero_opacity.panel_bg.a() > 0 && zero_opacity.panel_bg.a() < 255);
         }
     }
 
     #[test]
     fn apply_style_configures_radii_cursor_and_zero_hover_expansion() {
         let ctx = egui::Context::default();
-        ThemeTokens::apply_style(&ctx);
+        ThemeTokens::apply_style_with_accent(&ctx, Some([56, 189, 248]));
 
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let expected =
+                ThemeTokens::for_mode_with_accent(theme == egui::Theme::Dark, Some([56, 189, 248]));
             let style = ctx.style_of(theme);
             assert_eq!(
                 style.text_styles.get(&egui::TextStyle::Button),
@@ -538,6 +764,16 @@ mod tests {
             assert_eq!(style.drag_value_text_style, egui::TextStyle::Button);
             assert_eq!(style.visuals.window_corner_radius, SURFACE_CORNER_RADIUS);
             assert_eq!(style.visuals.menu_corner_radius, SURFACE_CORNER_RADIUS);
+            assert_eq!(style.visuals.hyperlink_color, expected.accent);
+            assert_eq!(style.visuals.selection.bg_fill, expected.selected_bg);
+            assert_eq!(
+                style.visuals.widgets.hovered.bg_stroke.color,
+                expected.control_hover_border()
+            );
+            assert_ne!(
+                style.visuals.widgets.hovered.bg_stroke.color,
+                expected.border_hover
+            );
             assert_eq!(
                 style.visuals.interact_cursor,
                 Some(egui::CursorIcon::PointingHand)
@@ -557,38 +793,22 @@ mod tests {
     }
 
     #[test]
-    fn canvas_presets_sanitize_per_mode_and_keep_high_ink_contrast() {
-        assert_eq!(CanvasPreset::default(), CanvasPreset::SoftPaper);
-        assert_eq!(
-            CanvasPreset::DimSlate.sanitize_for_mode(false),
-            CanvasPreset::SoftPaper
-        );
-        assert_eq!(
-            CanvasPreset::PureWhite.sanitize_for_mode(true),
-            CanvasPreset::SoftPaper
-        );
-        assert_eq!(
-            CanvasPreset::Unknown.sanitize_for_mode(true),
-            CanvasPreset::SoftPaper
-        );
+    fn canvas_palette_uses_ayu_light_and_dark_with_high_ink_contrast() {
+        let light_pal = CanvasPalette::for_mode(false);
+        let dark_pal = CanvasPalette::for_mode(true);
+        assert_eq!(light_pal.bg, Color32::from_rgb(252, 252, 252));
+        assert_eq!(dark_pal.bg, AYU_DARK_TEXT_INK);
+        for pal in [light_pal, dark_pal] {
+            assert!(contrast_ratio(pal.ink, pal.bg) >= 10.0);
+            assert_eq!(pal.placeholder_bg, Color32::TRANSPARENT);
+            assert_ne!(pal.placeholder_bg, pal.bg);
+        }
 
-        for &preset in LIGHT_CANVAS_PRESETS {
-            let pal = preset.palette(false);
-            assert!(!preset.is_dark_surface());
-            assert!(contrast_ratio(pal.ink, pal.bg) >= 10.0);
-            assert_eq!(pal.placeholder_bg, Color32::TRANSPARENT);
-            assert_ne!(pal.placeholder_bg, pal.bg);
-        }
-        for &preset in DARK_CANVAS_PRESETS {
-            let pal = preset.palette(true);
-            assert!(contrast_ratio(pal.ink, pal.bg) >= 10.0);
-            assert_eq!(pal.placeholder_bg, Color32::TRANSPARENT);
-            assert_ne!(pal.placeholder_bg, pal.bg);
-            if preset == CanvasPreset::SoftPaper {
-                assert!(!preset.is_dark_surface());
-            } else {
-                assert!(preset.is_dark_surface());
-            }
-        }
+        let cyan_dark = CanvasPalette::for_mode_with_accent(true, Some([56, 189, 248]));
+        let cyan_light = CanvasPalette::for_mode_with_accent(false, Some([56, 189, 248]));
+        assert_ne!(cyan_dark.caret, dark_pal.caret);
+        assert_ne!(cyan_light.caret, light_pal.caret);
+        assert!(contrast_ratio(cyan_dark.caret, cyan_dark.bg) >= 3.0);
+        assert!(contrast_ratio(cyan_light.caret, cyan_light.bg) >= 3.0);
     }
 }

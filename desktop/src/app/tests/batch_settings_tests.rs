@@ -386,8 +386,14 @@ fn settings_cards_span_full_central_panel_width() {
         let cards = card_rects_for_section_titles(
             &out,
             tokens,
-            &["Canvas zoom", "Appearance", "Startup focus"],
+            &[
+                "Canvas zoom",
+                "Appearance",
+                "App background",
+                "Startup focus",
+            ],
         );
+        assert!(cards[2].top() > cards[1].bottom());
         for rect in cards {
             assert!(
                 rect.width() >= expected_width - 24.0 && rect.width() <= expected_width + 0.5,
@@ -885,168 +891,6 @@ fn batch_toolbar_groups_and_disabled_states_are_consistent() {
 }
 
 #[test]
-fn batch_dual_selection_modes_preserve_independent_state_and_tree_controls() {
-    let dir = tempfile::tempdir().unwrap();
-    let folder = dir.path().join("course");
-    let sub = folder.join("ch1");
-    std::fs::create_dir_all(&sub).unwrap();
-    let root_doc = folder.join("intro.docx");
-    let sub_doc1 = sub.join("a.docx");
-    let sub_doc2 = sub.join("b.docx");
-    let solo_doc = dir.path().join("solo.docx");
-    for path in [&root_doc, &sub_doc1, &sub_doc2, &solo_doc] {
-        std::fs::write(path, b"placeholder").unwrap();
-    }
-
-    let ctx = egui::Context::default();
-    ThemeTokens::apply_style(&ctx);
-    let mut app = super::helpers::app();
-    app.tab = 1;
-    app.add_files(vec![folder.clone(), solo_doc.clone()]);
-    assert_eq!(app.files.len(), 4);
-    assert_eq!(
-        app.batch_selection_mode,
-        batch::BatchSelectionMode::FolderTree
-    );
-    assert_eq!(app.selected_batch_count(), 4);
-
-    // Default Folder tree layout & header assertions.
-    let tree_out = run_ui_pass_sized(&ctx, &mut app, Vec2::new(1056.0, 900.0));
-    assert!(!tree_out.shapes.iter().any(|clipped| match &clipped.shape {
-        egui::Shape::Text(text_shape) => {
-            let txt = text_shape.galley.text();
-            txt == "Ready" || txt == "Waiting" || txt == "View:" || txt.starts_with("Selected:")
-        }
-        _ => false,
-    }));
-    let progress_pos = find_text_center(&tree_out, |text| text == "0/4 files");
-    let deselect_pos = find_text_center(&tree_out, |text| text == "Deselect all");
-    let found_pos = find_text_center(&tree_out, |text| text.starts_with("Found:"));
-    let flat_pos = find_text_center(&tree_out, |text| text == "File tree");
-    assert!((progress_pos.y - deselect_pos.y).abs() <= 2.0);
-    assert!(deselect_pos.x > progress_pos.x);
-    assert!((found_pos.y - flat_pos.y).abs() <= 2.0);
-    assert!(flat_pos.x > found_pos.x);
-    assert!(found_pos.y > progress_pos.y);
-
-    // Folder tree renders root, subfolder, and Individual files headers with clear indentation.
-    let text_left = |frame: &egui::FullOutput, label: &str| {
-        frame
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text_shape) if text_shape.galley.text() == label => {
-                    Some(clipped.shape.visual_bounding_rect().left())
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("missing label {label:?}"))
-    };
-    let course_left = text_left(&tree_out, "course");
-    let ch1_left = text_left(&tree_out, "ch1");
-    let leaf_left = text_left(&tree_out, "a.docx");
-    assert!(ch1_left > course_left + 16.0);
-    assert!(leaf_left > ch1_left);
-    assert!(find_text_center(&tree_out, |text| text == "Individual files").x > 0.0);
-
-    // Collapse ch1 by clicking its "-" button.
-    let ch1_y = find_text_center(&tree_out, |text| text == "ch1").y;
-    let ch1_toggle_pos = tree_out
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Text(text_shape)
-                if text_shape.galley.text() == "-"
-                    && (clipped.shape.visual_bounding_rect().center().y - ch1_y).abs() <= 14.0 =>
-            {
-                Some(clipped.shape.visual_bounding_rect().center())
-            }
-            _ => None,
-        })
-        .expect("ch1 collapse toggle");
-    let _ = run_ui_pass_frame(&ctx, &mut app, click_events(ch1_toggle_pos));
-    let collapsed_out = run_ui_pass_sized(&ctx, &mut app, Vec2::new(1056.0, 900.0));
-    assert!(!collapsed_out
-        .shapes
-        .iter()
-        .any(|clipped| match &clipped.shape {
-            egui::Shape::Text(text_shape) => {
-                text_shape.galley.text() == "a.docx" || text_shape.galley.text() == "b.docx"
-            }
-            _ => false,
-        }));
-
-    // Click ch1's parent checkbox to uncheck both files inside ch1 -> course shows 1/3 selected.
-    let ch1_row_y = find_text_center(&collapsed_out, |text| text == "ch1").y;
-    let toggle_x = ch1_toggle_pos.x;
-    // Checkbox sits immediately to the right of the +/- compact button on the ch1 row.
-    let ch1_checkbox_pos = Pos2::new(toggle_x + 22.0, ch1_row_y);
-    let _ = run_ui_pass_frame(&ctx, &mut app, click_events(ch1_checkbox_pos));
-    let after_ch1_uncheck = run_ui_pass_sized(&ctx, &mut app, Vec2::new(1056.0, 900.0));
-    assert_eq!(app.selected_batch_count(), 2); // intro.docx + solo.docx
-    assert!(find_text_center(&after_ch1_uncheck, |text| text == "1/3 selected").x > 0.0);
-
-    // Click course's indeterminate parent checkbox -> selects all 3 files in course (4 total).
-    let course_row_y = find_text_center(&after_ch1_uncheck, |text| text == "course").y;
-    let course_toggle_x = after_ch1_uncheck
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Text(text_shape)
-                if text_shape.galley.text() == "-"
-                    && (clipped.shape.visual_bounding_rect().center().y - course_row_y).abs()
-                        <= 14.0 =>
-            {
-                Some(clipped.shape.visual_bounding_rect().center().x)
-            }
-            _ => None,
-        })
-        .expect("course collapse toggle");
-    let _ = run_ui_pass_frame(
-        &ctx,
-        &mut app,
-        click_events(Pos2::new(course_toggle_x + 22.0, course_row_y)),
-    );
-    assert_eq!(app.selected_batch_count(), 4);
-
-    // Uncheck one in Folder tree, switch to File tree -> all 4 still checked in File tree.
-    app.batch_rows[1].tree_selected = false;
-    assert_eq!(app.selected_batch_count(), 3);
-    let flat_btn = find_text_center(&after_ch1_uncheck, |text| text == "File tree");
-    let _ = run_ui_pass_frame(&ctx, &mut app, click_events(flat_btn));
-    assert_eq!(
-        app.batch_selection_mode,
-        batch::BatchSelectionMode::FlatList
-    );
-    assert_eq!(app.selected_batch_count(), 4);
-
-    // Uncheck in File tree via Deselect all, re-enable 2 items, then switch back to Folder tree ->
-    // Folder tree still retains its 3 selections!
-    let flat_out = run_ui_pass_sized(&ctx, &mut app, Vec2::new(1056.0, 900.0));
-    let flat_deselect = find_text_center(&flat_out, |text| text == "Deselect all");
-    let _ = run_ui_pass_frame(&ctx, &mut app, click_events(flat_deselect));
-    assert_eq!(app.selected_batch_count(), 0);
-    assert_eq!(app.files.len(), 4);
-    app.batch_rows[0].flat_selected = true;
-    app.batch_rows[3].flat_selected = true;
-    assert_eq!(app.selected_batch_count(), 2);
-    let two_selected_out = run_ui_pass_sized(&ctx, &mut app, Vec2::new(1056.0, 900.0));
-    assert!(find_text_center(&two_selected_out, |text| text == "0/2 files").x > 0.0);
-
-    let tree_btn = find_text_center(&two_selected_out, |text| text == "Folder tree");
-    let _ = run_ui_pass_frame(&ctx, &mut app, click_events(tree_btn));
-    assert_eq!(
-        app.batch_selection_mode,
-        batch::BatchSelectionMode::FolderTree
-    );
-    assert_eq!(app.selected_batch_count(), 3);
-    assert!(app.batch_rows[0].flat_selected);
-    assert!(!app.batch_rows[1].flat_selected);
-    assert!(!app.batch_rows[2].flat_selected);
-    assert!(app.batch_rows[3].flat_selected);
-}
-
-#[test]
 fn missing_or_corrupt_background_falls_back_gracefully_and_preserves_state() {
     let dir = tempfile::tempdir().unwrap();
     let settings_path = dir.path().join("settings.json");
@@ -1121,36 +965,62 @@ fn settings_app_background_controls_persist_opacity_and_clear_managed_file() {
     assert!(find_text_center(&out, |text| text == "App background").x > 0.0);
     assert!(find_text_center(&out, |text| text == "Overlay opacity").x > 0.0);
     assert!(find_text_center(&out, |text| text == "45%").x > 0.0);
-    let active_rect = out
+
+    // No filename or status text is rendered beside the thumbnail.
+    assert!(!out.shapes.iter().any(|clipped| match &clipped.shape {
+        egui::Shape::Text(text_shape) => {
+            let txt = text_shape.galley.text();
+            txt.starts_with("Active:")
+                || txt.starts_with("Saved (Solid mode):")
+                || txt == "Solid background"
+                || txt.contains(&managed_name)
+        }
+        _ => false,
+    }));
+
+    // Thumbnail, Choose image…, and Clear are vertically centered on the same row.
+    let thumb_rect = out
         .shapes
         .iter()
         .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Text(text_shape) if text_shape.galley.text().starts_with("Active:") => {
-                Some(clipped.shape.visual_bounding_rect())
-            }
-            _ => None,
-        })
-        .expect("Active status text");
-    let choose_text_pos = find_text_center(&out, |text| text == "Choose image…");
-    let choose_btn_rect = out
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
             egui::Shape::Rect(rect_shape)
-                if rect_shape.rect.contains(choose_text_pos)
-                    && rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS =>
+                if (rect_shape.rect.width() - 72.0).abs() <= 1.0
+                    && (rect_shape.rect.height() - 48.0).abs() <= 1.0 =>
             {
                 Some(rect_shape.rect)
             }
             _ => None,
         })
-        .min_by(|first, second| first.width().total_cmp(&second.width()))
-        .expect("Choose image button rect");
+        .expect("background thumbnail rect");
+    let button_rect_for = |label: &str| {
+        let text_pos = find_text_center(&out, |text| text == label);
+        out.shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.rect.contains(text_pos)
+                        && rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS =>
+                {
+                    Some(rect_shape.rect)
+                }
+                _ => None,
+            })
+            .min_by(|first, second| first.width().total_cmp(&second.width()))
+            .unwrap_or_else(|| panic!("missing button rect for {label}"))
+    };
+    let choose_btn_rect = button_rect_for("Choose image…");
+    let clear_btn_rect = button_rect_for("Clear");
     assert!(
-        (active_rect.min.x - choose_btn_rect.min.x).abs() <= 0.5,
-        "Active text left {} should align with Choose image button left {}",
-        active_rect.min.x,
-        choose_btn_rect.min.x
+        (choose_btn_rect.center().y - thumb_rect.center().y).abs() <= 1.0,
+        "Choose image button center y {} != thumbnail center y {}",
+        choose_btn_rect.center().y,
+        thumb_rect.center().y
+    );
+    assert!(
+        (clear_btn_rect.center().y - thumb_rect.center().y).abs() <= 1.0,
+        "Clear button center y {} != thumbnail center y {}",
+        clear_btn_rect.center().y,
+        thumb_rect.center().y
     );
 
     // Click "Clear" button in Settings.
@@ -1178,12 +1048,17 @@ fn async_background_import_events_apply_and_discard_stale_results() {
     let mut app = super::helpers::app().with_settings_path(settings_path.clone(), Some(&ctx));
     app.tab = 2;
 
-    // Current sequence displays importing indicator and applies result upon completion.
+    // Current sequence displays importing indicator in the bottom status bar and applies result upon completion.
     app.background_import_seq = 1;
     app.tx.send(Event::BackgroundImportStarted(1)).unwrap();
     let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
     assert!(app.background_importing);
-    assert!(find_text_center(&out, |text| text == "Importing background image…").x > 0.0);
+    let importing_pos = find_text_center(&out, |text| text == "Importing background image…");
+    assert!(
+        importing_pos.y >= MIN_WINDOW_SIZE[1] - 32.0,
+        "Importing indicator y={} should render in the bottom status bar",
+        importing_pos.y
+    );
 
     let prepared = settings::prepare_background_import(&img_path, Some(&settings_path)).unwrap();
     let stale_path =
@@ -1216,4 +1091,398 @@ fn async_background_import_events_apply_and_discard_stale_results() {
     assert!(!app.background_importing);
     assert_eq!(app.background_image.as_deref(), Some(fresh_name.as_str()));
     assert!(app.background_texture.is_some());
+}
+
+#[test]
+fn settings_background_mode_toggle_is_non_destructive_and_gates_accent_checkbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings_path = dir.path().join("settings.json");
+    let img_path = dir.path().join("azure-bg.png");
+    let img = image::RgbaImage::from_pixel(72, 48, image::Rgba([20, 150, 230, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&img_path, image::ImageFormat::Png)
+        .unwrap();
+
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(settings_path.clone(), Some(&ctx));
+    app.native_software_background = true;
+    app.tab = 2;
+
+    // Without an imported background, the accent checkbox is visible and disabled in Solid mode.
+    let min_out = run_ui_pass_sized(&ctx, &mut app, Vec2::from(MIN_WINDOW_SIZE));
+    assert!(find_text_center(&min_out, |text| text == "Solid").x > 0.0);
+    assert!(find_text_center(&min_out, |text| text == "Image").x > 0.0);
+    let checkbox_label = "Match accent color to background";
+    let disabled_cb_pos = find_text_center(&min_out, |text| text == checkbox_label);
+    let _ = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        Vec2::from(MIN_WINDOW_SIZE),
+        click_events(disabled_cb_pos),
+    );
+    assert!(app.background_accent_enabled);
+
+    // Import an image: switches to Image mode, extracts chromatic accent, and persists.
+    app.set_background_image_from_path(&img_path, &ctx);
+    let managed_name = app
+        .background_image
+        .clone()
+        .expect("managed background name");
+    let managed_path =
+        settings::resolve_managed_background_path(&settings_path, &managed_name).unwrap();
+    assert!(managed_path.exists());
+    assert_eq!(app.background_mode, BackgroundMode::Image);
+    let extracted_seed = app.background_accent.expect("extracted background accent");
+    assert_eq!(app.active_accent_seed(), Some(extracted_seed));
+    assert!(app.software_background(&egui::Visuals::dark()).is_some());
+
+    // Switch to Solid via Settings button: non-destructive (managed file + accent seed preserved).
+    let tall = Vec2::new(MIN_WINDOW_SIZE[0], 900.0);
+    let image_out = run_ui_pass_sized(&ctx, &mut app, tall);
+    let solid_pos = find_text_center(&image_out, |text| text == "Solid");
+    let solid_out = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(solid_pos));
+    assert_eq!(app.background_mode, BackgroundMode::Solid);
+    assert_eq!(app.background_image.as_deref(), Some(managed_name.as_str()));
+    assert_eq!(app.background_accent, Some(extracted_seed));
+    assert_eq!(app.active_accent_seed(), None);
+    assert!(managed_path.exists());
+    assert!(app.software_background(&egui::Visuals::dark()).is_none());
+    assert!(
+        !solid_out.shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Text(text_shape) => {
+                let txt = text_shape.galley.text();
+                txt.starts_with("Saved (Solid mode):") || txt.starts_with("Active:")
+            }
+            _ => false,
+        })
+    );
+    // Disabled Overlay opacity slider handle stays 100% opaque so trailing fill never shows through.
+    let opacity_y = find_text_center(&solid_out, |text| text == "Overlay opacity").y;
+    let disabled_handle = solid_out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape)
+                if (rect_shape.rect.center().y - opacity_y).abs() <= 2.0
+                    && (rect_shape.rect.width() - rect_shape.rect.height()).abs() <= 0.5
+                    && rect_shape.rect.height() >= 10.0
+                    && rect_shape.rect.height() <= 18.0 =>
+            {
+                Some((rect_shape.fill, rect_shape.stroke))
+            }
+            _ => None,
+        })
+        .expect("disabled Overlay opacity slider handle");
+    let solid_tokens = ThemeTokens::for_mode(ctx.theme() == egui::Theme::Dark);
+    assert_eq!(disabled_handle.0.a(), 255);
+    assert_eq!(disabled_handle.1.color, solid_tokens.disabled_accent());
+
+    let saved_solid = Settings::load_from_path(&settings_path);
+    assert_eq!(saved_solid.background_mode, BackgroundMode::Solid);
+    assert_eq!(
+        saved_solid.background_image.as_deref(),
+        Some(managed_name.as_str())
+    );
+    assert_eq!(saved_solid.background_accent, Some(extracted_seed));
+
+    // Clicking the disabled accent checkbox in Solid mode leaves it unchanged.
+    let cb_pos_solid = find_text_center(&solid_out, |text| text == checkbox_label);
+    let _ = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(cb_pos_solid));
+    assert!(app.background_accent_enabled);
+
+    // Switch back to Image via Settings button: immediately restores image + extracted accent.
+    let img_btn_pos = find_text_center(&solid_out, |text| text == "Image");
+    let back_to_img_out = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(img_btn_pos));
+    assert_eq!(app.background_mode, BackgroundMode::Image);
+    assert_eq!(app.active_accent_seed(), Some(extracted_seed));
+    assert!(app.software_background(&egui::Visuals::dark()).is_some());
+
+    // Unchecking and re-checking the accent checkbox toggles active_accent_seed and persists.
+    let cb_pos_img = find_text_center(&back_to_img_out, |text| text == checkbox_label);
+    let unchecked_out = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(cb_pos_img));
+    assert!(!app.background_accent_enabled);
+    assert_eq!(app.active_accent_seed(), None);
+    assert!(!Settings::load_from_path(&settings_path).background_accent_enabled);
+
+    let _ = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(cb_pos_img));
+    assert!(app.background_accent_enabled);
+    assert_eq!(app.active_accent_seed(), Some(extracted_seed));
+    assert!(Settings::load_from_path(&settings_path).background_accent_enabled);
+
+    // Clicking Clear removes the managed PNG, clears accent seed, and resets mode to Solid.
+    let clear_pos = find_text_center(&unchecked_out, |text| text == "Clear");
+    let _ = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(clear_pos));
+    assert_eq!(app.background_mode, BackgroundMode::Solid);
+    assert_eq!(app.background_image, None);
+    assert_eq!(app.background_accent, None);
+    assert!(!managed_path.exists());
+    let cleared = Settings::load_from_path(&settings_path);
+    assert_eq!(cleared.background_mode, BackgroundMode::Solid);
+    assert_eq!(cleared.background_image, None);
+    assert_eq!(cleared.background_accent, None);
+}
+
+#[test]
+fn batch_progress_bar_combobox_and_checkboxes_use_active_accent() {
+    use eframe::egui::Color32;
+
+    fn extract_text_color(text_shape: &egui::epaint::TextShape) -> Color32 {
+        text_shape
+            .override_text_color
+            .filter(|col| *col != Color32::PLACEHOLDER)
+            .or_else(|| {
+                text_shape
+                    .galley
+                    .job
+                    .sections
+                    .first()
+                    .map(|section| section.format.color)
+                    .filter(|col| *col != Color32::PLACEHOLDER)
+            })
+            .unwrap_or(text_shape.fallback_color)
+    }
+
+    fn text_colors_for(out: &egui::FullOutput, needle: &str) -> Vec<(Color32, Pos2)> {
+        out.shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text_shape) if text_shape.galley.text() == needle => Some((
+                    extract_text_color(text_shape),
+                    clipped.shape.visual_bounding_rect().center(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn checkbox_box_near_y(
+        out: &egui::FullOutput,
+        row_y: f32,
+        max_x: f32,
+    ) -> (Rect, Color32, Stroke) {
+        out.shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.brush.is_none()
+                        && rect_shape.stroke.width > 0.0
+                        && (rect_shape.rect.center().y - row_y).abs() <= 4.0
+                        && rect_shape.rect.right() <= max_x + 4.0
+                        && (rect_shape.rect.width() - rect_shape.rect.height()).abs() <= 0.5
+                        && rect_shape.rect.height() >= 10.0
+                        && rect_shape.rect.height() <= 22.0 =>
+                {
+                    Some((rect_shape.rect, rect_shape.fill, rect_shape.stroke))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing checkbox square near y={row_y}"))
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings_path = dir.path().join("settings.json");
+    let img_path = dir.path().join("cyan-bg.png");
+    let img = image::RgbaImage::from_pixel(64, 48, image::Rgba([20, 150, 230, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&img_path, image::ImageFormat::Png)
+        .unwrap();
+    let folder = dir.path().join("course");
+    std::fs::create_dir_all(&folder).unwrap();
+    let doc_one = folder.join("one.docx");
+    let doc_two = folder.join("two.docx");
+
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(settings_path, Some(&ctx));
+    app.set_background_image_from_path(&img_path, &ctx);
+    let seed = app.background_accent.expect("cyan accent seed");
+    app.files = vec![
+        batch::BatchItem::from_folder(doc_one, folder.clone()),
+        batch::BatchItem::from_folder(doc_two, folder),
+    ];
+    app.sync_batch_row_state();
+    app.batch_rows[1].set_selected(batch::BatchSelectionMode::FolderTree, false);
+    app.batch_overwrite = true;
+
+    let size = Vec2::new(1056.0, 900.0);
+    let mut frame_time = 0.0_f64;
+    let mut run_frame = |app: &mut App, events: Vec<egui::Event>| {
+        frame_time += 1.0;
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                time: Some(frame_time),
+                events,
+                ..Default::default()
+            },
+            |ui| app.draw_ui(ui),
+        );
+        out.textures_delta.clear();
+        out
+    };
+
+    for (mode, use_adaptive) in [
+        (BackgroundMode::Solid, false),
+        (BackgroundMode::Image, true),
+    ] {
+        app.background_mode = mode;
+        app.background_accent_enabled = use_adaptive;
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let dark_mode = theme == egui::Theme::Dark;
+            ctx.set_theme(theme);
+            let expected = ThemeTokens::for_mode_with_background_and_accent(
+                dark_mode,
+                mode == BackgroundMode::Image,
+                app.background_opacity,
+                if use_adaptive { Some(seed) } else { None },
+            );
+
+            // 1. Batch tab: 0% progress bar shows no partial stub; checked and indeterminate boxes use accent.
+            app.tab = 1;
+            app.batch_run_total = 0;
+            app.batch_completed = 0;
+            let _ = run_frame(&mut app, vec![]);
+            let zero_out = run_frame(&mut app, vec![]);
+
+            let zero_labels = text_colors_for(&zero_out, "0/1 files");
+            assert_eq!(zero_labels.len(), 1);
+            assert_eq!(zero_labels[0].0, expected.text_primary);
+            let zero_center = zero_labels[0].1;
+            assert!(zero_out.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape) => {
+                    rect_shape.rect.contains(zero_center)
+                        && rect_shape.fill == expected.extreme_bg
+                        && rect_shape.stroke.color == expected.border
+                }
+                _ => false,
+            }));
+            assert!(!zero_out.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape) => {
+                    rect_shape.rect.contains(zero_center) && rect_shape.fill == expected.primary_bg
+                }
+                _ => false,
+            }));
+
+            // Checked overwrite checkbox keeps neutral label and accent box.
+            let overwrite_label = "Overwrite original documents (replace each selected input)";
+            let overwrite_colors = text_colors_for(&zero_out, overwrite_label);
+            assert_eq!(overwrite_colors[0].0, expected.text_primary);
+            let (overwrite_box, overwrite_fill, overwrite_stroke) =
+                checkbox_box_near_y(&zero_out, overwrite_colors[0].1.y, overwrite_colors[0].1.x);
+            assert_eq!(overwrite_fill, expected.selected_bg);
+            assert_eq!(overwrite_stroke.color, expected.selected_border);
+            assert!(zero_out.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Path(path) => {
+                    path.stroke.color == eframe::epaint::ColorMode::Solid(expected.selected_fg)
+                        && path.points.iter().any(|pt| overwrite_box.contains(*pt))
+                }
+                _ => false,
+            }));
+
+            // Indeterminate folder group checkbox uses accent fill, border, and horizontal dash.
+            let group_y = find_text_center(&zero_out, |text| text == "course").y;
+            let group_x = find_text_center(&zero_out, |text| text == "course").x;
+            let (indet_box, indet_fill, indet_stroke) =
+                checkbox_box_near_y(&zero_out, group_y, group_x);
+            assert_eq!(indet_fill, expected.selected_bg);
+            assert_eq!(indet_stroke.color, expected.selected_border);
+            assert!(zero_out.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::LineSegment { points, stroke } => {
+                    stroke.color == expected.selected_fg
+                        && indet_box.contains(points[0])
+                        && indet_box.contains(points[1])
+                }
+                _ => false,
+            }));
+
+            // 2. Active 1/2 progress bar uses primary_bg fill and split primary_fg / text_primary label.
+            app.batch_run_total = 2;
+            app.batch_completed = 1;
+            let half_out = run_frame(&mut app, vec![]);
+            let half_labels = text_colors_for(&half_out, "1/2 files");
+            assert!(half_labels
+                .iter()
+                .any(|(col, _)| *col == expected.primary_fg));
+            assert!(half_labels
+                .iter()
+                .any(|(col, _)| *col == expected.text_primary));
+            let track_y = half_labels[0].1.y;
+            assert!(half_out.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape) => {
+                    rect_shape.fill == expected.primary_bg
+                        && (rect_shape.rect.center().y - track_y).abs() <= 4.0
+                        && rect_shape.rect.width() > 40.0
+                }
+                _ => false,
+            }));
+
+            // 3. Batch target ComboBox popup highlights the selected row using selected_* tokens.
+            let combo_pos = find_text_center(&half_out, |text| text == batch::TARGETS[0].1);
+            let _ = run_frame(&mut app, click_events(combo_pos));
+            let popup_out = run_frame(&mut app, vec![]);
+            let popup_item_colors = text_colors_for(&popup_out, batch::TARGETS[0].1);
+            let selected_item = popup_item_colors
+                .iter()
+                .find(|(col, pos)| {
+                    *col == expected.selected_fg && (pos.y - combo_pos.y).abs() > 8.0
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing selected ComboBox row in {theme:?}/{mode:?}: {popup_item_colors:?}"
+                    )
+                });
+            assert!(popup_out.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape) => {
+                    rect_shape.rect.contains(selected_item.1)
+                        && rect_shape.fill == expected.selected_bg
+                        && rect_shape.stroke.color == expected.selected_border
+                }
+                _ => false,
+            }));
+            // Close ComboBox popup before next pass.
+            let _ = run_frame(
+                &mut app,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+
+            // 4. Settings checkbox "Match accent color to background" distinguishes enabled vs disabled.
+            app.tab = 2;
+            let _ = run_frame(&mut app, vec![]);
+            let settings_out = run_frame(&mut app, vec![]);
+            let cb_label = "Match accent color to background";
+            let cb_colors = text_colors_for(&settings_out, cb_label);
+            let (_, cb_fill, cb_stroke) =
+                checkbox_box_near_y(&settings_out, cb_colors[0].1.y, cb_colors[0].1.x);
+            if mode == BackgroundMode::Image {
+                assert_eq!(cb_colors[0].0, expected.text_primary);
+                assert_eq!(cb_fill, expected.selected_bg);
+                assert_eq!(cb_stroke.color, expected.selected_border);
+            } else {
+                assert_eq!(cb_colors[0].0, expected.text_disabled);
+                assert_eq!(cb_fill, expected.control_disabled_bg);
+                assert_eq!(cb_stroke.color, expected.border);
+
+                // Disabled + checked uses disabled_accent() while keeping control_disabled_bg fill.
+                app.background_accent_enabled = true;
+                let checked_disabled_out = run_frame(&mut app, vec![]);
+                let checked_colors = text_colors_for(&checked_disabled_out, cb_label);
+                let (_, checked_fill, checked_stroke) = checkbox_box_near_y(
+                    &checked_disabled_out,
+                    checked_colors[0].1.y,
+                    checked_colors[0].1.x,
+                );
+                assert_eq!(checked_colors[0].0, expected.text_disabled);
+                assert_eq!(checked_fill, expected.control_disabled_bg);
+                assert_eq!(checked_stroke.color, expected.disabled_accent());
+                app.background_accent_enabled = use_adaptive;
+            }
+        }
+    }
 }

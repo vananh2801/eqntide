@@ -292,7 +292,7 @@ impl App {
             "Save MathML (Ctrl+S)"
         };
         let enabled = self.can_save() && !self.draft_dirty && self.command_input.is_none();
-        if Self::primary_button(ui, enabled, label).clicked() {
+        if self.primary_button(ui, enabled, label).clicked() {
             self.save_clicked = true;
         }
     }

@@ -58,7 +58,8 @@ impl App {
                                     self.palette_atlases.insert(self.category.clone(), atlas);
                                 }
                             }
-                            let icon_color = Self::icon_tint(ui);
+                            let icon_color =
+                                self.theme_tokens(ui).icon_tint(false, ui.is_enabled());
                             let mut clicked_source = None;
                             {
                                 let atlas = self.palette_atlases.get(&self.category);
@@ -307,16 +308,13 @@ impl App {
         self.ui_icons.get(name).map(|texture| texture.id())
     }
 
-    pub(super) fn icon_tint(ui: &egui::Ui) -> Color32 {
-        ThemeTokens::from_ui(ui).icon_tint(false, ui.is_enabled())
-    }
-
+    /// Styles and enables a primary action widget using the supplied [`ThemeTokens`].
     pub(super) fn primary_button_with<R>(
         ui: &mut egui::Ui,
+        tokens: ThemeTokens,
         enabled: bool,
         add_button: impl FnOnce(&mut egui::Ui) -> R,
     ) -> R {
-        let tokens = ThemeTokens::from_ui(ui);
         ui.scope(|ui| {
             let widgets = &mut ui.visuals_mut().widgets;
             if enabled {
@@ -349,12 +347,20 @@ impl App {
         .inner
     }
 
-    pub(super) fn primary_button(ui: &mut egui::Ui, enabled: bool, label: &str) -> egui::Response {
-        Self::primary_button_with(ui, enabled, |ui| {
+    /// Renders a standard-height primary action button tinted with the active accent.
+    pub(super) fn primary_button(
+        &self,
+        ui: &mut egui::Ui,
+        enabled: bool,
+        label: &str,
+    ) -> egui::Response {
+        let tokens = self.theme_tokens(ui);
+        Self::primary_button_with(ui, tokens, enabled, |ui| {
             ui.add(egui::Button::new(label).min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)))
         })
     }
 
+    /// Renders a standard-height primary action button with a theme-contrasted Tabler icon.
     pub(super) fn icon_primary_button(
         &mut self,
         ui: &mut egui::Ui,
@@ -362,14 +368,14 @@ impl App {
         icon: &'static str,
         label: &str,
     ) -> egui::Response {
-        let tokens = ThemeTokens::from_ui(ui);
+        let tokens = self.theme_tokens(ui);
         let tint = if enabled {
             tokens.primary_fg
         } else {
             tokens.text_primary
         };
         let image = self.ui_icon(ui.ctx(), icon, UI_ICON_SIZE, tint);
-        Self::primary_button_with(ui, enabled, |ui| {
+        Self::primary_button_with(ui, tokens, enabled, |ui| {
             ui.add(
                 egui::Button::image_and_text(image, label)
                     .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
@@ -381,13 +387,14 @@ impl App {
         ui.add(egui::Button::new(label).min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)))
     }
 
+    /// Renders a standard-height secondary button with a theme-tinted Tabler icon.
     pub(super) fn icon_standard_button(
         &mut self,
         ui: &mut egui::Ui,
         icon: &'static str,
         label: &str,
     ) -> egui::Response {
-        let tint = ThemeTokens::from_ui(ui).icon_tint(false, ui.is_enabled());
+        let tint = self.theme_tokens(ui).icon_tint(false, ui.is_enabled());
         let image = self.ui_icon(ui.ctx(), icon, UI_ICON_SIZE, tint);
         ui.add(
             egui::Button::image_and_text(image, label)
@@ -403,15 +410,20 @@ impl App {
         .inner
     }
 
+    /// Applies tinted-accent selection styling around a selectable option widget.
     pub(super) fn with_selectable_style<R>(
         ui: &mut egui::Ui,
+        tokens: ThemeTokens,
         selected: bool,
         add_contents: impl FnOnce(&mut egui::Ui) -> R,
     ) -> R {
-        let tokens = ThemeTokens::from_ui(ui);
         ui.scope(|ui| {
             if selected {
-                let widgets = &mut ui.visuals_mut().widgets;
+                let visuals = ui.visuals_mut();
+                visuals.selection.bg_fill = tokens.selected_bg;
+                visuals.selection.stroke = Stroke::new(1.0, tokens.selected_fg);
+
+                let widgets = &mut visuals.widgets;
                 widgets.inactive.bg_fill = tokens.selected_bg;
                 widgets.inactive.weak_bg_fill = tokens.selected_bg;
                 widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.selected_border);
@@ -430,6 +442,109 @@ impl App {
             add_contents(ui)
         })
         .inner
+    }
+
+    /// Renders a checkbox whose checked or indeterminate box uses the active theme accent while keeping the label neutral.
+    pub(super) fn accent_checkbox(
+        ui: &mut egui::Ui,
+        tokens: ThemeTokens,
+        checked: &mut bool,
+        indeterminate: bool,
+        label: &str,
+    ) -> egui::Response {
+        let enabled = ui.is_enabled();
+        let label_color = if enabled {
+            tokens.text_primary
+        } else {
+            tokens.text_disabled
+        };
+        let is_marked = *checked || indeterminate;
+        ui.scope(|ui| {
+            if !enabled {
+                // Keep disabled checkbox fills and text crisp instead of double-dimming via painter opacity.
+                ui.set_opacity(1.0);
+                let widgets = &mut ui.visuals_mut().widgets;
+                let border_color = if is_marked {
+                    tokens.disabled_accent()
+                } else {
+                    tokens.border
+                };
+                for widget_visuals in [
+                    &mut widgets.noninteractive,
+                    &mut widgets.inactive,
+                    &mut widgets.hovered,
+                    &mut widgets.active,
+                ] {
+                    widget_visuals.bg_fill = tokens.control_disabled_bg;
+                    widget_visuals.weak_bg_fill = tokens.control_disabled_bg;
+                    widget_visuals.bg_stroke = Stroke::new(1.0, border_color);
+                    widget_visuals.fg_stroke = Stroke::new(1.5, border_color);
+                }
+            } else if is_marked {
+                let widgets = &mut ui.visuals_mut().widgets;
+                widgets.inactive.bg_fill = tokens.selected_bg;
+                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.inactive.fg_stroke = Stroke::new(1.5, tokens.selected_fg);
+
+                widgets.hovered.bg_fill = tokens.selected_hover_bg;
+                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.hovered.fg_stroke = Stroke::new(1.5, tokens.selected_fg);
+
+                widgets.active.bg_fill = tokens.selected_hover_bg;
+                widgets.active.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.active.fg_stroke = Stroke::new(1.5, tokens.selected_fg);
+            }
+            let checkbox = if label.is_empty() {
+                egui::Checkbox::without_text(checked)
+            } else {
+                egui::Checkbox::new(checked, egui::RichText::new(label).color(label_color))
+            };
+            ui.add(checkbox.indeterminate(indeterminate))
+        })
+        .inner
+    }
+
+    /// Renders a radio option whose selected indicator uses the active theme accent while keeping the caption neutral.
+    pub(super) fn accent_radio_value<Value: PartialEq>(
+        ui: &mut egui::Ui,
+        tokens: ThemeTokens,
+        current_value: &mut Value,
+        alternative: Value,
+        label: &str,
+    ) -> egui::Response {
+        let enabled = ui.is_enabled();
+        let selected = *current_value == alternative;
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let caption_color = if enabled {
+            tokens.text_primary
+        } else {
+            tokens.text_disabled
+        };
+        let caption = egui::RichText::new(label).font(font).color(caption_color);
+        Self::with_selectable_style(ui, tokens, selected && enabled, |ui| {
+            if !enabled {
+                // Keep disabled radio indicators and captions crisp instead of double-dimming via painter opacity.
+                ui.set_opacity(1.0);
+                let widgets = &mut ui.visuals_mut().widgets;
+                let border_color = if selected {
+                    tokens.disabled_accent()
+                } else {
+                    tokens.border
+                };
+                for widget_visuals in [
+                    &mut widgets.noninteractive,
+                    &mut widgets.inactive,
+                    &mut widgets.hovered,
+                    &mut widgets.active,
+                ] {
+                    widget_visuals.bg_fill = tokens.control_disabled_bg;
+                    widget_visuals.weak_bg_fill = tokens.control_disabled_bg;
+                    widget_visuals.bg_stroke = Stroke::new(1.0, border_color);
+                    widget_visuals.fg_stroke = Stroke::new(1.0, border_color);
+                }
+            }
+            ui.radio_value(current_value, alternative, caption)
+        })
     }
 
     pub(super) fn full_width_card<R>(

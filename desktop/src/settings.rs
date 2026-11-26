@@ -1,11 +1,11 @@
 //! Persisted desktop application settings, atomic JSON save, and managed background images.
 //!
 //! [`Settings`] are stored in the platform config directory (`settings.json`) and sanitized on load
-//! so out-of-range numeric preferences, unknown presets, or invalid palette entries fall back
+//! so out-of-range numeric preferences or invalid palette entries fall back
 //! safely to defaults. User-selected background images are downscaled and re-encoded as managed
 //! PNG files beside `settings.json` via temporary files so crashes never corrupt stored assets.
 
-use crate::{batch, palette, theme::CanvasPreset};
+use crate::{batch, palette, theme};
 use directories::ProjectDirs;
 use eframe::egui;
 use image::{
@@ -45,6 +45,45 @@ pub struct PreparedBackground {
     pub filename: String,
     /// Unmultiplied RGBA pixel image ready for upload to egui.
     pub image: egui::ColorImage,
+    /// Dominant chromatic accent RGB seed extracted from the image, if chromatic.
+    pub accent: Option<[u8; 3]>,
+}
+
+/// Newly imported managed background PNG, decoded RGBA dimensions, and extracted accent seed.
+pub(crate) struct ImportedBackground {
+    /// Managed PNG filename stored beside `settings.json`.
+    pub(crate) filename: String,
+    /// Decoded unmultiplied RGBA pixel buffer.
+    pub(crate) rgba: Vec<u8>,
+    /// Decoded image width in pixels.
+    pub(crate) width: u32,
+    /// Decoded image height in pixels.
+    pub(crate) height: u32,
+    /// Dominant chromatic accent RGB seed extracted from the image, if chromatic.
+    pub(crate) accent: Option<[u8; 3]>,
+}
+
+/// Decoded RGBA pixels from an existing managed background PNG plus its extracted accent seed.
+pub(crate) struct LoadedBackground {
+    /// Decoded unmultiplied RGBA pixel buffer.
+    pub(crate) rgba: Vec<u8>,
+    /// Decoded image width in pixels.
+    pub(crate) width: u32,
+    /// Decoded image height in pixels.
+    pub(crate) height: u32,
+    /// Dominant chromatic accent RGB seed extracted from the image, if chromatic.
+    pub(crate) accent: Option<[u8; 3]>,
+}
+
+/// Application background display mode persisted to disk.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum BackgroundMode {
+    /// Standard opaque Ayu Light/Dark neutral background.
+    #[default]
+    Solid,
+    /// Custom imported wallpaper image with adjustable overlay scrim.
+    Image,
 }
 
 /// Application color theme preference persisted to disk.
@@ -96,15 +135,18 @@ impl<'de> Deserialize<'de> for StartupFocus {
 }
 
 /// Persisted user preferences and workspace defaults for the desktop application.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct Settings {
     pub(crate) zoom: f32,
     pub(crate) theme: ThemeMode,
-    pub(crate) canvas_light: CanvasPreset,
-    pub(crate) canvas_dark: CanvasPreset,
+    /// Active application background display mode (`solid` or `image`).
+    pub(crate) background_mode: BackgroundMode,
     pub(crate) background_image: Option<String>,
     pub(crate) background_opacity: f32,
+    /// Whether UI and canvas accents adapt to the imported background image seed.
+    pub(crate) background_accent_enabled: bool,
+    /// Cached RGB accent seed extracted from the managed background image.
+    pub(crate) background_accent: Option<[u8; 3]>,
     pub(crate) startup_focus: StartupFocus,
     pub(crate) font_pt: f32,
     pub(crate) target: String,
@@ -119,10 +161,11 @@ impl Default for Settings {
         Self {
             zoom: DEFAULT_ZOOM,
             theme: ThemeMode::System,
-            canvas_light: CanvasPreset::SoftPaper,
-            canvas_dark: CanvasPreset::SoftPaper,
+            background_mode: BackgroundMode::Solid,
             background_image: None,
             background_opacity: DEFAULT_BACKGROUND_OPACITY,
+            background_accent_enabled: true,
+            background_accent: None,
             startup_focus: StartupFocus::Canvas,
             font_pt: DEFAULT_FONT_PT,
             target: DEFAULT_TARGET.into(),
@@ -131,6 +174,85 @@ impl Default for Settings {
             batch_target: 0,
             batch_overwrite: false,
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for Settings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(default)]
+        struct RawSettings {
+            zoom: f32,
+            theme: ThemeMode,
+            #[serde(deserialize_with = "deserialize_optional_background_mode")]
+            background_mode: Option<BackgroundMode>,
+            background_image: Option<String>,
+            background_opacity: f32,
+            background_accent_enabled: bool,
+            background_accent: Option<[u8; 3]>,
+            startup_focus: StartupFocus,
+            font_pt: f32,
+            target: String,
+            category: String,
+            recent_palette: Vec<String>,
+            batch_target: usize,
+            batch_overwrite: bool,
+        }
+
+        impl Default for RawSettings {
+            fn default() -> Self {
+                let defaults = Settings::default();
+                Self {
+                    zoom: defaults.zoom,
+                    theme: defaults.theme,
+                    background_mode: None,
+                    background_image: defaults.background_image,
+                    background_opacity: defaults.background_opacity,
+                    background_accent_enabled: defaults.background_accent_enabled,
+                    background_accent: defaults.background_accent,
+                    startup_focus: defaults.startup_focus,
+                    font_pt: defaults.font_pt,
+                    target: defaults.target,
+                    category: defaults.category,
+                    recent_palette: defaults.recent_palette,
+                    batch_target: defaults.batch_target,
+                    batch_overwrite: defaults.batch_overwrite,
+                }
+            }
+        }
+
+        let raw = RawSettings::deserialize(deserializer)?;
+        let sanitized_bg = raw
+            .background_image
+            .as_deref()
+            .and_then(sanitize_background_filename);
+        let background_mode = match raw.background_mode {
+            Some(mode) => mode,
+            None => {
+                if sanitized_bg.is_some() {
+                    BackgroundMode::Image
+                } else {
+                    BackgroundMode::Solid
+                }
+            }
+        };
+
+        Ok(Self {
+            zoom: raw.zoom,
+            theme: raw.theme,
+            background_mode,
+            background_image: sanitized_bg,
+            background_opacity: raw.background_opacity,
+            background_accent_enabled: raw.background_accent_enabled,
+            background_accent: raw.background_accent,
+            startup_focus: raw.startup_focus,
+            font_pt: raw.font_pt,
+            target: raw.target,
+            category: raw.category,
+            recent_palette: raw.recent_palette,
+            batch_target: raw.batch_target,
+            batch_overwrite: raw.batch_overwrite,
+        })
     }
 }
 
@@ -191,12 +313,14 @@ impl Settings {
             self.batch_target = 0;
         }
 
-        self.canvas_light = self.canvas_light.sanitize_for_mode(false);
-        self.canvas_dark = self.canvas_dark.sanitize_for_mode(true);
         self.background_image = self
             .background_image
             .as_deref()
             .and_then(sanitize_background_filename);
+        if self.background_image.is_none() {
+            self.background_mode = BackgroundMode::Solid;
+            self.background_accent = None;
+        }
         self.background_opacity = if self.background_opacity.is_finite() {
             self.background_opacity.clamp(
                 *BACKGROUND_OPACITY_RANGE.start(),
@@ -254,21 +378,6 @@ impl Settings {
     }
 }
 
-/// Newly imported managed background PNG and its decoded RGBA dimensions.
-pub(crate) struct ImportedBackground {
-    pub(crate) filename: String,
-    pub(crate) rgba: Vec<u8>,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-}
-
-/// Decoded RGBA pixels from an existing managed background PNG.
-pub(crate) struct LoadedBackground {
-    pub(crate) rgba: Vec<u8>,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-}
-
 /// Accept only single-component filenames without directory separators or traversal.
 pub(crate) fn sanitize_background_filename(name: &str) -> Option<String> {
     let trimmed = name.trim();
@@ -306,6 +415,82 @@ pub(crate) fn remove_managed_background_file(settings_path: &Path, filename: &st
     }
 }
 
+/// Extract a dominant chromatic RGB accent seed from an RGBA image, or `None` if grayscale.
+pub(crate) fn extract_background_accent(rgba: &[u8], width: u32, height: u32) -> Option<[u8; 3]> {
+    if width == 0 || height == 0 || rgba.len() < (width as usize) * (height as usize) * 4 {
+        return None;
+    }
+    const BUCKETS: usize = 36;
+    let mut bucket_weights = [0.0_f32; BUCKETS];
+    let mut bucket_rgb = [[0.0_f32; 3]; BUCKETS];
+
+    let step_x = (width / 64).max(1) as usize;
+    let step_y = (height / 64).max(1) as usize;
+    let stride_w = width as usize;
+
+    for y in (0..height as usize).step_by(step_y) {
+        for x in (0..stride_w).step_by(step_x) {
+            let offset = (y * stride_w + x) * 4;
+            let alpha = rgba[offset + 3];
+            if alpha < 128 {
+                continue;
+            }
+            let r = rgba[offset];
+            let g = rgba[offset + 1];
+            let b = rgba[offset + 2];
+            let (hue, sat, lum) = theme::rgb_to_hsl(r, g, b);
+            if sat < 0.14 || lum < 0.08 || lum > 0.92 {
+                continue;
+            }
+            let lum_balance = 1.0 - (2.0 * lum - 1.0).abs() * 0.5;
+            let weight = sat * sat * lum_balance * (alpha as f32 / 255.0);
+            let bucket = ((hue / 10.0).floor() as usize) % BUCKETS;
+            bucket_weights[bucket] += weight;
+            bucket_rgb[bucket][0] += r as f32 * weight;
+            bucket_rgb[bucket][1] += g as f32 * weight;
+            bucket_rgb[bucket][2] += b as f32 * weight;
+        }
+    }
+
+    let mut best_bucket = 0;
+    let mut best_score = 0.0_f32;
+    for bucket in 0..BUCKETS {
+        let prev = (bucket + BUCKETS - 1) % BUCKETS;
+        let next = (bucket + 1) % BUCKETS;
+        let smoothed =
+            bucket_weights[bucket] + 0.35 * (bucket_weights[prev] + bucket_weights[next]);
+        if smoothed > best_score {
+            best_score = smoothed;
+            best_bucket = bucket;
+        }
+    }
+
+    if best_score < 0.05 {
+        return None;
+    }
+
+    let prev = (best_bucket + BUCKETS - 1) % BUCKETS;
+    let next = (best_bucket + 1) % BUCKETS;
+    let mut total_w = 0.0_f32;
+    let mut sum_rgb = [0.0_f32; 3];
+    for idx in [prev, best_bucket, next] {
+        let neighbor_scale = if idx == best_bucket { 1.0 } else { 0.5 };
+        total_w += bucket_weights[idx] * neighbor_scale;
+        for channel in 0..3 {
+            sum_rgb[channel] += bucket_rgb[idx][channel] * neighbor_scale;
+        }
+    }
+    if total_w <= 1e-6 {
+        return None;
+    }
+
+    Some([
+        (sum_rgb[0] / total_w).round().clamp(0.0, 255.0) as u8,
+        (sum_rgb[1] / total_w).round().clamp(0.0, 255.0) as u8,
+        (sum_rgb[2] / total_w).round().clamp(0.0, 255.0) as u8,
+    ])
+}
+
 /// Decode, resize, and atomically persist a background image into the config directory.
 pub(crate) fn import_background_image(
     source_path: &Path,
@@ -332,6 +517,7 @@ pub(crate) fn import_background_image(
     if width == 0 || height == 0 {
         return Err("Background image has zero dimensions.".into());
     }
+    let accent = extract_background_accent(rgba.as_raw(), width, height);
 
     let parent = config_parent_dir(settings_path);
     std::fs::create_dir_all(parent)
@@ -374,6 +560,7 @@ pub(crate) fn import_background_image(
         rgba: rgba.into_raw(),
         width,
         height,
+        accent,
     })
 }
 
@@ -391,6 +578,7 @@ pub(crate) fn prepare_background_import(
         return Ok(PreparedBackground {
             filename: imported.filename,
             image,
+            accent: imported.accent,
         });
     }
 
@@ -413,6 +601,7 @@ pub(crate) fn prepare_background_import(
     if width == 0 || height == 0 {
         return Err("Background image has zero dimensions.".into());
     }
+    let accent = extract_background_accent(rgba.as_raw(), width, height);
     let filename = source_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -420,7 +609,11 @@ pub(crate) fn prepare_background_import(
         .unwrap_or_else(|| "app-background.png".into());
     let image =
         egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], rgba.as_raw());
-    Ok(PreparedBackground { filename, image })
+    Ok(PreparedBackground {
+        filename,
+        image,
+        accent,
+    })
 }
 
 /// Decode a previously imported managed background PNG from beside `settings_path`.
@@ -442,10 +635,26 @@ pub(crate) fn load_managed_background(
     if width == 0 || height == 0 {
         return Err("Managed background image has zero dimensions.".into());
     }
+    let accent = extract_background_accent(rgba.as_raw(), width, height);
     Ok(LoadedBackground {
         rgba: rgba.into_raw(),
         width,
         height,
+        accent,
+    })
+}
+
+fn deserialize_optional_background_mode<'de, D>(
+    deserializer: D,
+) -> Result<Option<BackgroundMode>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(match raw.as_deref() {
+        Some("solid") => Some(BackgroundMode::Solid),
+        Some("image") => Some(BackgroundMode::Image),
+        _ => None,
     })
 }
 
@@ -491,10 +700,11 @@ mod tests {
         let raw = Settings {
             zoom: 10.0,
             theme: ThemeMode::Dark,
-            canvas_light: CanvasPreset::DimSlate,
-            canvas_dark: CanvasPreset::PureWhite,
+            background_mode: BackgroundMode::Image,
             background_image: Some("../escape.png".into()),
             background_opacity: 1.5,
+            background_accent_enabled: false,
+            background_accent: Some([40, 140, 220]),
             startup_focus: StartupFocus::Latex,
             font_pt: 81.3,
             target: "latex".into(),
@@ -512,9 +722,10 @@ mod tests {
 
         assert_eq!(raw.zoom, *ZOOM_RANGE.end());
         assert_eq!(raw.theme, ThemeMode::Dark);
-        assert_eq!(raw.canvas_light, CanvasPreset::SoftPaper);
-        assert_eq!(raw.canvas_dark, CanvasPreset::SoftPaper);
+        assert_eq!(raw.background_mode, BackgroundMode::Solid);
         assert_eq!(raw.background_image, None);
+        assert_eq!(raw.background_accent, None);
+        assert!(!raw.background_accent_enabled);
         assert_eq!(raw.background_opacity, 1.0);
         assert_eq!(raw.font_pt, *FONT_PT_RANGE.end());
         assert_eq!(raw.target, "omml");
@@ -549,6 +760,7 @@ mod tests {
         assert_eq!(snapped_font.zoom, *ZOOM_RANGE.start());
         assert_eq!(snapped_font.background_opacity, 0.0);
         assert_eq!(snapped_font.background_image, None);
+        assert_eq!(snapped_font.background_mode, BackgroundMode::Solid);
     }
 
     #[test]
@@ -570,6 +782,47 @@ mod tests {
     }
 
     #[test]
+    fn legacy_settings_migrate_background_mode_and_accent_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let with_bg = dir.path().join("legacy_bg.json");
+        std::fs::write(
+            &with_bg,
+            r#"{
+                "background_image": "app-background-legacy.png",
+                "background_opacity": 0.65
+            }"#,
+        )
+        .unwrap();
+        let loaded_bg = Settings::load_from_path(&with_bg);
+        assert_eq!(loaded_bg.background_mode, BackgroundMode::Image);
+        assert_eq!(
+            loaded_bg.background_image.as_deref(),
+            Some("app-background-legacy.png")
+        );
+        assert!(loaded_bg.background_accent_enabled);
+
+        let solid_with_saved = dir.path().join("solid_with_saved.json");
+        std::fs::write(
+            &solid_with_saved,
+            r#"{
+                "background_mode": "solid",
+                "background_image": "app-background-saved.png",
+                "background_accent_enabled": false,
+                "background_accent": [52, 168, 235]
+            }"#,
+        )
+        .unwrap();
+        let loaded_solid = Settings::load_from_path(&solid_with_saved);
+        assert_eq!(loaded_solid.background_mode, BackgroundMode::Solid);
+        assert_eq!(
+            loaded_solid.background_image.as_deref(),
+            Some("app-background-saved.png")
+        );
+        assert!(!loaded_solid.background_accent_enabled);
+        assert_eq!(loaded_solid.background_accent, Some([52, 168, 235]));
+    }
+
+    #[test]
     fn atomic_round_trip_saves_and_reloads_all_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("settings.json");
@@ -577,10 +830,11 @@ mod tests {
         let original = Settings {
             zoom: 3.25,
             theme: ThemeMode::Light,
-            canvas_light: CanvasPreset::CoolSlate,
-            canvas_dark: CanvasPreset::DimSlate,
+            background_mode: BackgroundMode::Image,
             background_image: Some("app-background-123.png".into()),
             background_opacity: 0.55,
+            background_accent_enabled: false,
+            background_accent: Some([44, 152, 224]),
             startup_focus: StartupFocus::Latex,
             font_pt: 16.5,
             target: "mathtype".into(),
@@ -620,8 +874,6 @@ mod tests {
 
         let loaded = Settings::load_from_path(&path);
         assert_eq!(loaded.zoom, 2.5);
-        assert_eq!(loaded.canvas_light, CanvasPreset::SoftPaper);
-        assert_eq!(loaded.canvas_dark, CanvasPreset::SoftPaper);
         assert!((loaded.background_opacity - 0.42).abs() < 1e-6);
         assert_eq!(loaded.startup_focus, StartupFocus::Canvas);
     }
@@ -645,6 +897,17 @@ mod tests {
     }
 
     #[test]
+    fn background_accent_extraction_handles_chromatic_and_grayscale_images() {
+        let teal = RgbaImage::from_pixel(32, 32, Rgba([32, 180, 170, 255]));
+        let extracted = extract_background_accent(teal.as_raw(), 32, 32)
+            .expect("chromatic teal image should yield accent seed");
+        assert!(extracted[1] > extracted[0] && extracted[2] > extracted[0]);
+
+        let gray = RgbaImage::from_pixel(32, 32, Rgba([128, 128, 128, 255]));
+        assert_eq!(extract_background_accent(gray.as_raw(), 32, 32), None);
+    }
+
+    #[test]
     fn managed_background_import_supports_formats_resizes_survives_source_delete_and_cleans_up() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("cfg").join("settings.json");
@@ -661,6 +924,7 @@ mod tests {
         let first_path = resolve_managed_background_path(&settings_path, &first.filename).unwrap();
         assert_eq!(first.width, MAX_BACKGROUND_EDGE);
         assert_eq!(first.height, MAX_BACKGROUND_EDGE / 2);
+        assert!(first.accent.is_some());
         assert!(first_path.exists());
 
         // Deleting external source does not break loading the managed copy.
@@ -668,6 +932,7 @@ mod tests {
         let loaded = load_managed_background(&settings_path, &first.filename).unwrap();
         assert_eq!(loaded.width, first.width);
         assert_eq!(loaded.height, first.height);
+        assert!(loaded.accent.is_some());
 
         // Import a WebP image and verify the previous managed PNG is cleaned up.
         let src_webp = dir.path().join("second.webp");
@@ -681,6 +946,7 @@ mod tests {
             resolve_managed_background_path(&settings_path, &second.filename).unwrap();
         assert_eq!(second.width, 64);
         assert_eq!(second.height, 48);
+        assert!(second.accent.is_some());
         assert!(!first_path.exists());
         assert!(second_path.exists());
 

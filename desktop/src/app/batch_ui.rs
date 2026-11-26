@@ -6,7 +6,7 @@ use crate::{
     theme::{self, ThemeTokens},
     Event,
 };
-use eframe::egui::{self, Rect, Stroke, Vec2};
+use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
 use std::{
     path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc},
@@ -84,19 +84,24 @@ impl App {
                         .selected_text(batch::TARGETS[self.batch_target].1)
                         .show_ui(ui, |ui| {
                             for (index, (_, label)) in batch::TARGETS.iter().enumerate() {
-                                ui.selectable_value(&mut self.batch_target, index, *label);
+                                let selected = self.batch_target == index;
+                                Self::with_selectable_style(ui, tokens, selected, |ui| {
+                                    ui.selectable_value(&mut self.batch_target, index, *label)
+                                });
                             }
                         });
                     if self.batch_target != before_batch_target {
                         self.persisted.batch_target = self.batch_target;
                         self.settings_dirty = true;
                     }
-                    if ui
-                        .checkbox(
-                            &mut self.batch_overwrite,
-                            "Overwrite original documents (replace each selected input)",
-                        )
-                        .changed()
+                    if Self::accent_checkbox(
+                        ui,
+                        tokens,
+                        &mut self.batch_overwrite,
+                        false,
+                        "Overwrite original documents (replace each selected input)",
+                    )
+                    .changed()
                     {
                         self.persisted.batch_overwrite = self.batch_overwrite;
                         self.settings_dirty = true;
@@ -200,11 +205,13 @@ impl App {
                     }
                 });
                 let bar_width = ui.available_width().max(80.0);
-                ui.add(
-                    egui::ProgressBar::new(progress_fraction)
-                        .desired_width(bar_width)
-                        .desired_height(theme::COMPACT_BUTTON_HEIGHT)
-                        .text(format!("{display_completed}/{display_total} files")),
+                Self::draw_batch_progress_bar(
+                    ui,
+                    tokens,
+                    bar_width,
+                    theme::COMPACT_BUTTON_HEIGHT,
+                    progress_fraction,
+                    &format!("{display_completed}/{display_total} files"),
                 );
             },
         );
@@ -218,8 +225,10 @@ impl App {
                     (batch::BatchSelectionMode::FolderTree, "Folder tree"),
                 ] {
                     let active = self.batch_selection_mode == mode;
-                    if Self::with_selectable_style(ui, active, |ui| Self::compact_button(ui, label))
-                        .clicked()
+                    if Self::with_selectable_style(ui, tokens, active, |ui| {
+                        Self::compact_button(ui, label)
+                    })
+                    .clicked()
                     {
                         self.batch_selection_mode = mode;
                         if !self.batch_running {
@@ -324,6 +333,75 @@ impl App {
         });
     }
 
+    /// Renders the batch conversion progress bar with `primary_bg` fill and split-contrast status text.
+    pub(super) fn draw_batch_progress_bar(
+        ui: &mut egui::Ui,
+        tokens: ThemeTokens,
+        width: f32,
+        height: f32,
+        fraction: f32,
+        label: &str,
+    ) {
+        let clamped = if fraction.is_finite() {
+            fraction.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
+        response.widget_info(|| {
+            let mut info =
+                egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, ui.is_enabled(), label);
+            info.value = Some((f64::from(clamped) * 100.0).floor());
+            info
+        });
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+        let painter = ui.painter();
+        painter.rect(
+            rect,
+            theme::CONTROL_CORNER_RADIUS,
+            tokens.extreme_bg,
+            Stroke::new(1.0, tokens.border),
+            egui::StrokeKind::Inside,
+        );
+        let mut fill_rect = None;
+        if clamped > 0.0 {
+            let min_fill = (2.0 * f32::from(theme::RADIUS_CONTROL)).min(rect.width());
+            let fill_width = (rect.width() * clamped).max(min_fill).min(rect.width());
+            let bar_rect = Rect::from_min_size(rect.min, Vec2::new(fill_width, rect.height()));
+            painter.rect_filled(bar_rect, theme::CONTROL_CORNER_RADIUS, tokens.primary_bg);
+            fill_rect = Some(bar_rect);
+        }
+        let font_id = egui::TextStyle::Button.resolve(ui.style());
+        let galley = ui.fonts_mut(|fonts| {
+            fonts.layout_no_wrap(label.to_owned(), font_id, egui::Color32::PLACEHOLDER)
+        });
+        let text_pos = Pos2::new(
+            rect.left() + theme::SPACE_MD,
+            rect.center().y - galley.size().y * 0.5,
+        );
+        if let Some(bar_rect) = fill_rect {
+            painter.with_clip_rect(bar_rect.intersect(rect)).galley(
+                text_pos,
+                Arc::clone(&galley),
+                tokens.primary_fg,
+            );
+            if bar_rect.right() < rect.right() {
+                let remaining_rect =
+                    Rect::from_min_max(Pos2::new(bar_rect.right(), rect.top()), rect.max);
+                painter
+                    .with_clip_rect(remaining_rect.intersect(rect))
+                    .galley(text_pos, galley, tokens.text_primary);
+            }
+        } else {
+            painter
+                .with_clip_rect(rect)
+                .galley(text_pos, galley, tokens.text_primary);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn paint_batch_row_chrome(
         ui: &egui::Ui,
@@ -422,10 +500,7 @@ impl App {
                     }
                 }
                 ui.add_enabled_ui(!self.batch_running, |ui| {
-                    if ui
-                        .add(egui::Checkbox::new(&mut all_checked, "").indeterminate(partial))
-                        .changed()
-                    {
+                    if Self::accent_checkbox(ui, tokens, &mut all_checked, partial, "").changed() {
                         let target = all_checked;
                         for &idx in descendant_indices {
                             self.batch_rows[idx].tree_selected = target;
@@ -521,7 +596,7 @@ impl App {
                     ui.add_space(theme::COMPACT_BUTTON_HEIGHT);
                 }
                 ui.add_enabled_ui(!self.batch_running, |ui| {
-                    if ui.checkbox(&mut checked, "").changed() {
+                    if Self::accent_checkbox(ui, tokens, &mut checked, false, "").changed() {
                         self.batch_rows[idx].set_selected(mode, checked);
                         self.batch_run_total = 0;
                         self.batch_completed = 0;

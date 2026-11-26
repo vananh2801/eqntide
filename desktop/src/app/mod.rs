@@ -39,8 +39,8 @@ use crate::{
     batch, commands,
     instance::Instance,
     palette, runtime,
-    settings::{self, Settings, StartupFocus},
-    theme::{self, CanvasPreset, ThemeTokens},
+    settings::{self, BackgroundMode, Settings, StartupFocus},
+    theme::{self, ThemeTokens},
     Event, Rendered,
 };
 use eframe::egui::{self, Rect, Stroke, Vec2};
@@ -272,14 +272,18 @@ pub struct App {
     pub(super) persisted: Settings,
     /// True when `persisted` has unsaved changes waiting for flush.
     pub(super) settings_dirty: bool,
-    /// Selected canvas color preset for light mode.
-    pub(super) canvas_light: CanvasPreset,
-    /// Selected canvas color preset for dark mode.
-    pub(super) canvas_dark: CanvasPreset,
+    /// Selected background display mode (`Solid` or `Image`).
+    pub(super) background_mode: BackgroundMode,
     /// Managed filename of the custom app background image, if any.
     pub(super) background_image: Option<String>,
     /// Opacity (`0.0..=1.0`) of the frosted UI panels/scrim over the background.
     pub(super) background_opacity: f32,
+    /// Whether adaptive accent derivation from the background image is enabled.
+    pub(super) background_accent_enabled: bool,
+    /// Dominant chromatic RGB accent seed extracted from the saved background image.
+    pub(super) background_accent: Option<[u8; 3]>,
+    /// Last accent seed synced into `egui::Context` global styles.
+    pub(super) applied_accent_seed: Option<[u8; 3]>,
     /// GPU texture handle for the custom app background image.
     pub(super) background_texture: Option<egui::TextureHandle>,
     /// Deferred load flag so startup disk image decoding runs on first UI frame.
@@ -508,10 +512,12 @@ impl App {
             settings_path: None,
             persisted: Settings::default(),
             settings_dirty: false,
-            canvas_light: CanvasPreset::SoftPaper,
-            canvas_dark: CanvasPreset::SoftPaper,
+            background_mode: BackgroundMode::Solid,
             background_image: None,
             background_opacity: settings::DEFAULT_BACKGROUND_OPACITY,
+            background_accent_enabled: true,
+            background_accent: None,
+            applied_accent_seed: None,
             background_texture: None,
             background_load_pending: false,
             background_importing: false,
@@ -584,6 +590,7 @@ impl App {
         }
         self.sync_render(ui.ctx());
         self.ensure_background_texture(ui.ctx());
+        self.sync_accent_style(ui.ctx());
         self.paint_app_background(ui);
         let tokens = self.theme_tokens(ui);
         egui::Panel::bottom("app-status")
@@ -692,7 +699,7 @@ impl App {
                     let selected = self.tab == tab;
                     let icon_tint = tokens.icon_tint(selected, enabled);
                     let icon_img = self.ui_icon(ui.ctx(), icon, UI_ICON_SIZE, icon_tint);
-                    if Self::with_selectable_style(ui, selected, |ui| {
+                    if Self::with_selectable_style(ui, tokens, selected, |ui| {
                         ui.add_sized(
                             [ui.available_width(), theme::SIDEBAR_TAB_HEIGHT],
                             egui::Button::image_and_text(icon_img, label),
@@ -744,7 +751,7 @@ impl App {
                         }
                         _ => unreachable!("sidebar category must have 1 or 2 icons"),
                     };
-                    let response = Self::with_selectable_style(ui, selected, |ui| {
+                    let response = Self::with_selectable_style(ui, tokens, selected, |ui| {
                         ui.add_sized(button_size, button)
                     });
                     response.widget_info(|| {
@@ -768,6 +775,7 @@ impl App {
 
     /// Renders the bottom action bar with target format radio buttons, font size, undo/redo, and save.
     pub(super) fn draw_footer(&mut self, ui: &mut egui::Ui) {
+        let tokens = self.theme_tokens(ui);
         ui.add_enabled_ui(
             !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
             |ui| {
@@ -778,14 +786,21 @@ impl App {
                         let color = ui.visuals().widgets.inactive.fg_stroke.color;
                         let caption =
                             |text: &str| egui::RichText::new(text).font(font.clone()).color(color);
-                        let mt_resp = ui.radio_value(
+                        let mt_resp = Self::accent_radio_value(
+                            ui,
+                            tokens,
                             &mut self.target,
                             "mathtype".into(),
-                            caption("MathType"),
+                            "MathType",
                         );
                         ui.add_space(theme::SPACE_MD);
-                        let omml_resp =
-                            ui.radio_value(&mut self.target, "omml".into(), caption("OMML"));
+                        let omml_resp = Self::accent_radio_value(
+                            ui,
+                            tokens,
+                            &mut self.target,
+                            "omml".into(),
+                            "OMML",
+                        );
                         if mt_resp.changed() || omml_resp.changed() {
                             self.persisted.target = self.target.clone();
                             self.settings_dirty = true;
@@ -826,8 +841,7 @@ impl App {
                         if drag_resp.drag_stopped() && !drag_resp.has_focus() {
                             self.pending_focus_restore = Some(self.active_editor_focus);
                         }
-                        let history_tint =
-                            ThemeTokens::from_ui(ui).icon_tint(false, ui.is_enabled());
+                        let history_tint = self.theme_tokens(ui).icon_tint(false, ui.is_enabled());
                         let undo_img =
                             self.ui_icon(ui.ctx(), "arrow-back-up", UI_ICON_SIZE, history_tint);
                         let undo_resp = ui.add(
@@ -874,7 +888,7 @@ impl App {
     /// Renders the bottom status strip showing bridge state, queued sessions, errors, and warnings.
     pub(super) fn draw_status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            let dot_color = ui.visuals().text_color();
+            let dot_color = self.theme_tokens(ui).accent;
             let (dot_rect, dot_response) =
                 ui.allocate_exact_size(Vec2::splat(12.0), egui::Sense::hover());
             if ui.is_rect_visible(dot_rect) {
@@ -971,6 +985,8 @@ impl App {
                 .on_hover_text(error);
             } else if self.tab == 0 && self.draft_dirty {
                 ui.label("Updating equation…");
+            } else if self.background_importing {
+                ui.label("Importing background image…");
             } else if let Some(warning) = target_warning {
                 ui.add(
                     egui::Label::new(

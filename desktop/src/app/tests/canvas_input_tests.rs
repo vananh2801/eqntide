@@ -109,8 +109,6 @@ fn canvas_arrows_keep_decomposed_vietnamese_letters_together() {
 #[test]
 fn canvas_caret_switches_to_the_active_text_color_without_moving() {
     let mut app = super::helpers::app();
-    app.canvas_light = CanvasPreset::WarmCream;
-    app.canvas_dark = CanvasPreset::DeepInk;
     type_canvas(&mut app, r"\text{ngày đến}");
     canvas_key(&mut app, egui::Key::Enter);
     type_canvas(&mut app, "=x");
@@ -1713,7 +1711,7 @@ fn canvas_caret_blinks_when_idle_and_resets_on_activity() {
     let ctx = egui::Context::default();
     ThemeTokens::apply_style(&ctx);
     let mut app = super::helpers::app();
-    let caret_stroke = CanvasPreset::SoftPaper.palette(false).caret;
+    let caret_stroke = theme::CanvasPalette::for_mode(ctx.theme() == egui::Theme::Dark).caret;
     let run_at = |app: &mut App, time: f64, events: Vec<egui::Event>| {
         let mut out = ctx.run_ui(
             egui::RawInput {
@@ -1941,7 +1939,6 @@ fn command_error_clears_when_backspacing_or_canceling_out_of_popup() {
 fn placeholder_paint_uses_light_radius_dashed_stroke_and_transparent_interior() {
     let ctx = egui::Context::default();
     let mut app = super::helpers::app();
-    app.canvas_dark = CanvasPreset::DimSlate;
     app.load_math("<math><mfrac><mrow/><mrow/></mfrac></math>", None, None);
 
     for (theme, dark) in [(egui::Theme::Light, false), (egui::Theme::Dark, true)] {
@@ -2006,7 +2003,7 @@ fn canvas_selection_renders_contiguous_lightly_rounded_highlight() {
         None,
     );
     app.sync_render(&ctx);
-    let pal = app.active_canvas_palette(false);
+    let pal = app.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
 
     // 1) Selecting the full multi-term expression renders one contiguous 2px-rounded selection rect.
     app.editor.select_all();
@@ -2347,6 +2344,280 @@ fn canvas_drag_selection_caret_stays_locked_to_selection_edge_across_operator_ga
             assert!((caret_rect.left() - expected).abs() < 0.01);
         } else {
             locked_left = Some(caret_rect.left());
+        }
+    }
+}
+
+#[test]
+fn command_popup_backslash_prefix_aligns_with_input_and_uses_active_accent() {
+    fn find_text_shape(shape: &egui::Shape, target: &str) -> Option<(Pos2, Rect, Color32)> {
+        match shape {
+            egui::Shape::Text(text_shape) if text_shape.galley.text() == target => {
+                let color = text_shape
+                    .override_text_color
+                    .filter(|col| *col != Color32::PLACEHOLDER)
+                    .or_else(|| {
+                        text_shape
+                            .galley
+                            .job
+                            .sections
+                            .first()
+                            .map(|sec| sec.format.color)
+                    })
+                    .unwrap_or_default();
+                Some((text_shape.pos, shape.visual_bounding_rect(), color))
+            }
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .find_map(|child| find_text_shape(child, target)),
+            _ => None,
+        }
+    }
+
+    fn has_accent_border(
+        shape: &egui::Shape,
+        accent: Color32,
+        prefix_center: Pos2,
+        input_center: Pos2,
+    ) -> bool {
+        match shape {
+            egui::Shape::Rect(rect_shape) => {
+                rect_shape.stroke.color == accent
+                    && rect_shape.rect.contains(prefix_center)
+                    && rect_shape.rect.contains(input_center)
+            }
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .any(|child| has_accent_border(child, accent, prefix_center, input_center)),
+            _ => false,
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings_path = dir.path().join("settings.json");
+    let img_path = dir.path().join("cyan-bg.png");
+    let img = image::RgbaImage::from_pixel(48, 48, image::Rgba([20, 140, 220, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&img_path, image::ImageFormat::Png)
+        .unwrap();
+
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(settings_path, Some(&ctx));
+    app.set_background_image_from_path(&img_path, &ctx);
+    let seed = app.background_accent.expect("cyan accent seed");
+    let canvas_id = egui::Id::unique("equation-canvas");
+
+    let mut frame_time = 0.0_f64;
+    let mut send = |app: &mut App, events: Vec<egui::Event>| {
+        frame_time += 1.0;
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                time: Some(frame_time),
+                events,
+                ..Default::default()
+            },
+            |ui| app.draw_shell(ui),
+        );
+        out.textures_delta.clear();
+        out
+    };
+
+    for (mode, use_adaptive) in [
+        (crate::settings::BackgroundMode::Solid, false),
+        (crate::settings::BackgroundMode::Image, true),
+    ] {
+        app.background_mode = mode;
+        app.background_accent_enabled = use_adaptive;
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let dark_mode = theme == egui::Theme::Dark;
+            ctx.set_theme(theme);
+            let expected_tokens = ThemeTokens::for_mode_with_accent(
+                dark_mode,
+                if use_adaptive { Some(seed) } else { None },
+            );
+
+            app.dismiss_command_input();
+            ctx.memory_mut(|mem| mem.request_focus(canvas_id));
+            send(&mut app, vec![]);
+            send(&mut app, vec![egui::Event::Text(r"\int_a^b".into())]);
+            let out = send(&mut app, vec![]);
+
+            let (prefix_pos, prefix_rect, prefix_color) = out
+                .shapes
+                .iter()
+                .find_map(|clipped| find_text_shape(&clipped.shape, r"\"))
+                .expect("leading backslash shape must be visible");
+            let (input_pos, input_rect, _) = out
+                .shapes
+                .iter()
+                .find_map(|clipped| find_text_shape(&clipped.shape, "int_a^b"))
+                .expect("command input text shape must be visible");
+
+            assert_eq!(
+                prefix_color, expected_tokens.accent,
+                "leading backslash must use active accent color"
+            );
+            assert!(
+                (prefix_pos.y - input_pos.y).abs() <= 0.1,
+                "backslash y ({}) must align with input y ({})",
+                prefix_pos.y,
+                input_pos.y
+            );
+            assert!(
+                (prefix_rect.center().y - input_rect.center().y).abs() <= 0.5,
+                "backslash center y ({}) must align with input center y ({})",
+                prefix_rect.center().y,
+                input_rect.center().y
+            );
+            assert!(
+                out.shapes.iter().any(|clipped| has_accent_border(
+                    &clipped.shape,
+                    expected_tokens.accent,
+                    prefix_rect.center(),
+                    input_rect.center()
+                )),
+                "focused popup border must use active accent color"
+            );
+        }
+    }
+}
+
+#[test]
+fn command_popup_selected_suggestion_uses_active_selection_tokens() {
+    fn find_prefix_text(shape: &egui::Shape, prefix: &str) -> Option<(Rect, Color32)> {
+        match shape {
+            egui::Shape::Text(text_shape) if text_shape.galley.text().starts_with(prefix) => {
+                let color = text_shape
+                    .override_text_color
+                    .filter(|col| *col != Color32::PLACEHOLDER)
+                    .or_else(|| {
+                        text_shape
+                            .galley
+                            .job
+                            .sections
+                            .first()
+                            .map(|sec| sec.format.color)
+                            .filter(|col| *col != Color32::PLACEHOLDER)
+                    })
+                    .unwrap_or(text_shape.fallback_color);
+                Some((shape.visual_bounding_rect(), color))
+            }
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .find_map(|child| find_prefix_text(child, prefix)),
+            _ => None,
+        }
+    }
+
+    fn has_selected_row_rect(
+        shape: &egui::Shape,
+        point: Pos2,
+        expected: crate::theme::ThemeTokens,
+    ) -> bool {
+        match shape {
+            egui::Shape::Rect(rect_shape) => {
+                rect_shape.rect.contains(point)
+                    && rect_shape.fill == expected.selected_bg
+                    && rect_shape.stroke.color == expected.selected_border
+            }
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .any(|child| has_selected_row_rect(child, point, expected)),
+            _ => false,
+        }
+    }
+
+    let suggestions = commands::suggestions("al");
+    assert!(suggestions.len() >= 2);
+    let first_prefix = format!(r"\{}   ", suggestions[0].name);
+    let second_prefix = format!(r"\{}   ", suggestions[1].name);
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings_path = dir.path().join("settings.json");
+    let img_path = dir.path().join("cyan-bg.png");
+    let img = image::RgbaImage::from_pixel(48, 48, image::Rgba([20, 140, 220, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&img_path, image::ImageFormat::Png)
+        .unwrap();
+
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(settings_path, Some(&ctx));
+    app.set_background_image_from_path(&img_path, &ctx);
+    let seed = app.background_accent.expect("cyan accent seed");
+    let canvas_id = egui::Id::unique("equation-canvas");
+
+    let mut frame_time = 0.0_f64;
+    let mut send = |app: &mut App, events: Vec<egui::Event>| {
+        frame_time += 1.0;
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 650.0))),
+                time: Some(frame_time),
+                events,
+                ..Default::default()
+            },
+            |ui| app.draw_shell(ui),
+        );
+        out.textures_delta.clear();
+        out
+    };
+
+    for (mode, use_adaptive) in [
+        (crate::settings::BackgroundMode::Solid, false),
+        (crate::settings::BackgroundMode::Image, true),
+    ] {
+        app.background_mode = mode;
+        app.background_accent_enabled = use_adaptive;
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let dark_mode = theme == egui::Theme::Dark;
+            ctx.set_theme(theme);
+            let expected = ThemeTokens::for_mode_with_background_and_accent(
+                dark_mode,
+                mode == crate::settings::BackgroundMode::Image,
+                app.background_opacity,
+                if use_adaptive { Some(seed) } else { None },
+            );
+
+            app.dismiss_command_input();
+            ctx.memory_mut(|mem| mem.request_focus(canvas_id));
+            send(&mut app, vec![]);
+            send(&mut app, vec![egui::Event::Text(r"\al".into())]);
+            let first_out = send(&mut app, vec![]);
+
+            let (first_rect, first_color) = first_out
+                .shapes
+                .iter()
+                .find_map(|clipped| find_prefix_text(&clipped.shape, &first_prefix))
+                .expect("first command suggestion row");
+            assert_eq!(first_color, expected.selected_fg);
+            assert!(first_color != expected.accent);
+            assert!(first_out.shapes.iter().any(|clipped| {
+                has_selected_row_rect(&clipped.shape, first_rect.center(), expected)
+            }));
+
+            // ArrowDown moves selection highlight to the second suggestion row.
+            let down_out = send(
+                &mut app,
+                vec![egui::Event::Key {
+                    key: egui::Key::ArrowDown,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            let (second_rect, second_color) = down_out
+                .shapes
+                .iter()
+                .find_map(|clipped| find_prefix_text(&clipped.shape, &second_prefix))
+                .expect("second command suggestion row");
+            assert_eq!(second_color, expected.selected_fg);
+            assert!(down_out.shapes.iter().any(|clipped| {
+                has_selected_row_rect(&clipped.shape, second_rect.center(), expected)
+            }));
         }
     }
 }
