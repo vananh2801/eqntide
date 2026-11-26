@@ -29,11 +29,8 @@ fn about_tab_starts_idle_without_starting_update_check() {
 
     assert_eq!(app.update_state, UpdateState::Idle);
     assert_eq!(app.update_check_seq, 0);
-    let cards = card_rects_for_section_titles(
-        &about_out,
-        tokens,
-        &[concat!("EqnTide ", env!("CARGO_PKG_VERSION"))],
-    );
+    let expected_title = format!("EqnTide {}", crate::version::app_version());
+    let cards = card_rects_for_section_titles(&about_out, tokens, &[expected_title.as_str()]);
     let button_pos = find_text_center(&about_out, |text| text == "Check for updates");
     assert!(cards[0].contains(button_pos));
 }
@@ -105,9 +102,8 @@ fn about_update_states_render_expected_controls_and_open_validated_url() {
     let up_to_date_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
     let up_to_date_texts = all_texts(&up_to_date_out);
     assert!(up_to_date_texts.iter().any(|text| text == "Check again"));
-    assert!(up_to_date_texts
-        .iter()
-        .any(|text| text.contains("is up to date.")));
+    let expected_status = format!("EqnTide {} is up to date.", crate::version::app_version());
+    assert!(up_to_date_texts.contains(&expected_status));
 
     app.update_state = UpdateState::Error("Could not reach GitHub".into());
     let err_out = run_ui_pass_frame(&ctx, &mut app, vec![]);

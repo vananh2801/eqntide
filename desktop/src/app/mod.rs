@@ -26,8 +26,10 @@
 //!    └── drain_before_close() / flush_settings()
 //! ```
 
+mod about_ui;
 mod batch_ui;
 mod canvas;
+mod dialogs;
 mod events;
 mod keyboard;
 mod palette_ui;

@@ -1,35 +1,97 @@
+//! Embeds the desktop release tag and configures Windows binary resources.
+
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-fn le_u16(b: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes([b[off], b[off + 1]])
-}
+fn main() {
+    let ico_path = PathBuf::from("../assets/brand/icon.ico");
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed={}", ico_path.display());
+    emit_build_tag_env();
 
-fn le_u32(b: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
-}
-
-fn push_res_entry(out: &mut Vec<u8>, res_type: u16, res_id: u16, data: &[u8]) {
-    let data_size = data.len() as u32;
-    let header_size: u32 = 32;
-    out.extend_from_slice(&data_size.to_le_bytes());
-    out.extend_from_slice(&header_size.to_le_bytes());
-    // Type: 0xFFFF + integer ID
-    out.extend_from_slice(&0xFFFFu16.to_le_bytes());
-    out.extend_from_slice(&res_type.to_le_bytes());
-    // Name: 0xFFFF + integer ID
-    out.extend_from_slice(&0xFFFFu16.to_le_bytes());
-    out.extend_from_slice(&res_id.to_le_bytes());
-    // DataVersion, MemoryFlags (MOVEABLE|PURE|DISCARDABLE), LanguageId (0x0409), Version, Characteristics
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&0x1030u16.to_le_bytes());
-    out.extend_from_slice(&0x0409u16.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(data);
-    while !out.len().is_multiple_of(4) {
-        out.push(0);
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "windows" {
+        return;
     }
+
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if target_env == "msvc" {
+        // Reserve an 8 MiB main-thread stack (matching Linux) so Typst layout,
+        // egui, and Windows GPU driver initialization never hit STATUS_STACK_OVERFLOW.
+        println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+        let ico = fs::read(&ico_path).expect("failed to read ../assets/brand/icon.ico");
+        let res = build_icon_res(&ico);
+        let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR missing"));
+        let res_path = out_dir.join("eqntide_icon.res");
+        fs::write(&res_path, &res).expect("failed to write eqntide_icon.res");
+        println!("cargo:rustc-link-arg={}", res_path.display());
+    } else {
+        println!("cargo:rustc-link-arg-bins=-Wl,--stack,8388608");
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("../assets/brand/icon.ico");
+        res.compile()
+            .expect("failed to compile Windows icon resource");
+    }
+}
+
+fn emit_build_tag_env() {
+    println!("cargo:rerun-if-env-changed=EQNTIDE_BUILD_TAG");
+    println!("cargo:rerun-if-env-changed=GITHUB_REF_NAME");
+    watch_git_refs();
+
+    let raw_tag = non_empty_env("EQNTIDE_BUILD_TAG")
+        .or_else(|| non_empty_env("GITHUB_REF_NAME"))
+        .or_else(|| git_output(&["describe", "--tags", "--exact-match", "HEAD"]))
+        .unwrap_or_default();
+    // Cargo build directives occupy one line. Ignore malformed tag candidates.
+    let build_tag = if raw_tag.contains(['\r', '\n', '\0']) {
+        ""
+    } else {
+        &raw_tag
+    };
+    println!("cargo:rustc-env=EQNTIDE_BUILD_TAG_RAW={build_tag}");
+}
+
+fn watch_git_refs() {
+    let head_ref = git_output(&["symbolic-ref", "--quiet", "HEAD"]);
+    let mut args = vec![
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-path",
+        "HEAD",
+        "--git-path",
+        "packed-refs",
+        "--git-path",
+        "refs/tags",
+    ];
+    if let Some(head_ref) = head_ref.as_deref() {
+        args.extend(["--git-path", head_ref]);
+    }
+
+    if let Some(paths) = git_output(&args) {
+        for path in paths.lines().filter(|path| Path::new(path).exists()) {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn git_output(args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| value.trim_end().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn build_icon_res(ico: &[u8]) -> Vec<u8> {
@@ -84,32 +146,38 @@ fn build_icon_res(ico: &[u8]) -> Vec<u8> {
     res
 }
 
-fn main() {
-    let ico_path = PathBuf::from("../assets/brand/icon.ico");
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed={}", ico_path.display());
-
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if target_os != "windows" {
-        return;
+fn push_res_entry(out: &mut Vec<u8>, res_type: u16, res_id: u16, data: &[u8]) {
+    let data_size = data.len() as u32;
+    let header_size: u32 = 32;
+    out.extend_from_slice(&data_size.to_le_bytes());
+    out.extend_from_slice(&header_size.to_le_bytes());
+    // Type: 0xFFFF + integer ID
+    out.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    out.extend_from_slice(&res_type.to_le_bytes());
+    // Name: 0xFFFF + integer ID
+    out.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    out.extend_from_slice(&res_id.to_le_bytes());
+    // DataVersion, MemoryFlags (MOVEABLE|PURE|DISCARDABLE), LanguageId (0x0409), Version, Characteristics
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0x1030u16.to_le_bytes());
+    out.extend_from_slice(&0x0409u16.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(data);
+    while !out.len().is_multiple_of(4) {
+        out.push(0);
     }
+}
 
-    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    if target_env == "msvc" {
-        // Reserve an 8 MiB main-thread stack (matching Linux) so Typst layout,
-        // egui, and Windows GPU driver initialization never hit STATUS_STACK_OVERFLOW.
-        println!("cargo:rustc-link-arg-bins=/STACK:8388608");
-        let ico = fs::read(&ico_path).expect("failed to read ../assets/brand/icon.ico");
-        let res = build_icon_res(&ico);
-        let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR missing"));
-        let res_path = out_dir.join("eqntide_icon.res");
-        fs::write(&res_path, &res).expect("failed to write eqntide_icon.res");
-        println!("cargo:rustc-link-arg={}", res_path.display());
-    } else {
-        println!("cargo:rustc-link-arg-bins=-Wl,--stack,8388608");
-        let mut res = winresource::WindowsResource::new();
-        res.set_icon("../assets/brand/icon.ico");
-        res.compile()
-            .expect("failed to compile Windows icon resource");
-    }
+fn le_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+fn le_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
 }

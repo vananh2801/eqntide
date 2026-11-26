@@ -12,6 +12,7 @@ mod settings;
 mod software_painter;
 mod theme;
 mod update;
+mod version;
 mod wgpu_runner;
 
 use eqntide::bridge::{DesktopWindowRequest, ServerHandle};
@@ -181,7 +182,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let tx = EventSender::new(tx);
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--version") {
-        println!("eqntide-desktop {}", env!("CARGO_PKG_VERSION"));
+        println!("eqntide-desktop {}", version::app_version());
         return Ok(());
     }
     if args.iter().any(|arg| arg == "--batch-worker") {

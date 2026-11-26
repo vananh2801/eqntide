@@ -1,13 +1,13 @@
 //! On-demand GitHub Releases stable update checker for the desktop About view.
 
+use crate::version::{app_version, parse_running_version, parse_stable_semver};
 use crate::{Event, EventSender as Sender};
 use std::time::Duration;
 
-/// GitHub REST endpoint returning the latest non-draft, non-prerelease release.
-pub(crate) const GITHUB_LATEST_RELEASE_URL: &str =
-    "https://api.github.com/repos/vananh2801/eqntide/releases/latest";
 /// Public GitHub Releases page used as a safe fallback link.
 pub(crate) const GITHUB_RELEASES_PAGE_URL: &str = "https://github.com/vananh2801/eqntide/releases";
+const GITHUB_LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/vananh2801/eqntide/releases/latest";
 const ALLOWED_RELEASE_URL_PREFIX: &str = "https://github.com/vananh2801/eqntide/";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -52,15 +52,20 @@ pub(crate) fn spawn_update_check(tx: Sender<Event>, seq: u64) {
     std::thread::spawn(move || {
         let result = check_latest_release(
             GITHUB_LATEST_RELEASE_URL,
-            env!("CARGO_PKG_VERSION"),
+            app_version(),
             cfg!(target_os = "windows"),
         );
         let _ = tx.send(Event::UpdateCheck(seq, result));
     });
 }
 
+/// Returns `true` when `url` is a clean HTTPS link under the EqnTide GitHub repository.
+pub(crate) fn is_trusted_release_url(url: &str) -> bool {
+    url.starts_with(ALLOWED_RELEASE_URL_PREFIX) && !url.chars().any(char::is_whitespace)
+}
+
 /// Fetches release JSON from `api_url` and evaluates whether a newer stable update exists.
-pub(crate) fn check_latest_release(
+fn check_latest_release(
     api_url: &str,
     current_version: &str,
     is_windows: bool,
@@ -96,7 +101,7 @@ pub(crate) fn check_latest_release(
 }
 
 /// Evaluates a GitHub Release JSON payload against `current_version`.
-pub(crate) fn evaluate_release_payload(
+fn evaluate_release_payload(
     payload: &serde_json::Value,
     current_version: &str,
     is_windows: bool,
@@ -114,10 +119,12 @@ pub(crate) fn evaluate_release_payload(
 
     let remote_semver = parse_stable_semver(raw_tag)
         .ok_or_else(|| format!("Unexpected release tag format: '{raw_tag}'."))?;
-    let current_semver = parse_stable_semver(current_version)
+    let (current_semver, current_is_prerelease) = parse_running_version(current_version)
         .ok_or_else(|| format!("Invalid application version: '{current_version}'."))?;
 
-    if remote_semver <= current_semver {
+    let is_newer_stable = remote_semver > current_semver
+        || (remote_semver == current_semver && current_is_prerelease);
+    if !is_newer_stable {
         return Ok(UpdateCheckOutcome::UpToDate);
     }
 
@@ -143,11 +150,6 @@ pub(crate) fn evaluate_release_payload(
     }))
 }
 
-/// Returns `true` when `url` is a clean HTTPS link under the EqnTide GitHub repository.
-pub(crate) fn is_trusted_release_url(url: &str) -> bool {
-    url.starts_with(ALLOWED_RELEASE_URL_PREFIX) && !url.chars().any(char::is_whitespace)
-}
-
 fn is_prerelease_tag(raw: &str) -> bool {
     let trimmed = raw
         .trim()
@@ -158,32 +160,6 @@ fn is_prerelease_tag(raw: &str) -> bool {
         return false;
     };
     !suffix.is_empty() && parse_stable_semver(core).is_some()
-}
-
-fn parse_stable_semver(raw: &str) -> Option<(u64, u64, u64)> {
-    let trimmed = raw.trim();
-    let without_v = trimmed
-        .strip_prefix('v')
-        .or_else(|| trimmed.strip_prefix('V'))
-        .unwrap_or(trimmed);
-    if without_v.contains('-') || without_v.contains('+') {
-        return None;
-    }
-    let mut parts = without_v.split('.');
-    let major = parse_ascii_u64(parts.next()?)?;
-    let minor = parse_ascii_u64(parts.next()?)?;
-    let patch = parse_ascii_u64(parts.next()?)?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((major, minor, patch))
-}
-
-fn parse_ascii_u64(part: &str) -> Option<u64> {
-    if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    part.parse().ok()
 }
 
 fn select_windows_setup_url(payload: &serde_json::Value) -> Option<String> {
@@ -254,9 +230,9 @@ mod tests {
 
     #[test]
     fn equal_and_older_releases_report_up_to_date() {
-        let equal = sample_release("v0.11.0", false, false);
+        let equal = sample_release("v0.12.0", false, false);
         assert_eq!(
-            evaluate_release_payload(&equal, "0.11.0", true).unwrap(),
+            evaluate_release_payload(&equal, "0.12.0", true).unwrap(),
             UpdateCheckOutcome::UpToDate
         );
 
@@ -271,6 +247,31 @@ mod tests {
             evaluate_release_payload(&newer_major, "0.11.0", false).unwrap(),
             UpdateCheckOutcome::Available(_)
         ));
+    }
+
+    #[test]
+    fn running_prerelease_sees_matching_stable_as_available_and_older_stable_as_up_to_date() {
+        let matching_stable = sample_release("v0.12.0", false, false);
+        assert_eq!(
+            evaluate_release_payload(&matching_stable, "0.12.0-beta.1", true).unwrap(),
+            UpdateCheckOutcome::Available(UpdateRelease {
+                version: "0.12.0".into(),
+                release_url: "https://github.com/vananh2801/eqntide/releases/tag/v0.12.0".into(),
+                download_url: "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/EqnTide-0.12.0-Setup.exe".into(),
+            })
+        );
+
+        let older_stable = sample_release("v0.11.0", false, false);
+        assert_eq!(
+            evaluate_release_payload(&older_stable, "0.12.0-beta.1", false).unwrap(),
+            UpdateCheckOutcome::UpToDate
+        );
+
+        let remote_prerelease = sample_release("v0.12.0-rc.1", false, false);
+        assert_eq!(
+            evaluate_release_payload(&remote_prerelease, "0.12.0-beta.1", true).unwrap(),
+            UpdateCheckOutcome::UpToDate
+        );
     }
 
     #[test]
@@ -353,7 +354,7 @@ mod tests {
         });
 
         let url = format!("http://{addr}/releases/latest");
-        let ok = check_latest_release(&url, "0.11.0", true).unwrap();
+        let ok = check_latest_release(&url, "0.12.0-beta.1", true).unwrap();
         assert!(matches!(ok, UpdateCheckOutcome::Available(_)));
 
         let rate_err = check_latest_release(&url, "0.11.0", true).unwrap_err();

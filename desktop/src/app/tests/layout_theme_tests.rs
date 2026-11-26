@@ -635,9 +635,8 @@ fn sidebar_settings_and_about_tabs_work_and_toggle_theme() {
             _ => None,
         })
         .collect();
-    assert!(texts
-        .iter()
-        .any(|text| text == concat!("EqnTide ", env!("CARGO_PKG_VERSION"))));
+    let expected_title = format!("EqnTide {}", crate::version::app_version());
+    assert!(texts.contains(&expected_title));
     assert!(!texts.iter().any(|text| text == "About EqnTide"));
     assert!(!texts
         .iter()
@@ -1449,11 +1448,8 @@ fn about_card_spans_full_central_panel_width() {
         let _ = run_ui_pass_sized(&ctx, &mut app, size);
         let out = run_ui_pass_sized(&ctx, &mut app, size);
         let expected_width = width - 2.0 * theme::SPACE_LG;
-        let cards = card_rects_for_section_titles(
-            &out,
-            tokens,
-            &[concat!("EqnTide ", env!("CARGO_PKG_VERSION"))],
-        );
+        let expected_title = format!("EqnTide {}", crate::version::app_version());
+        let cards = card_rects_for_section_titles(&out, tokens, &[expected_title.as_str()]);
         let rect = cards[0];
         assert!(
             rect.width() >= expected_width - 24.0 && rect.width() <= expected_width + 0.5,
@@ -1491,10 +1487,7 @@ fn about_card_spans_full_central_panel_width() {
             .shapes
             .iter()
             .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text_shape)
-                    if text_shape.galley.text()
-                        == concat!("EqnTide ", env!("CARGO_PKG_VERSION")) =>
-                {
+                egui::Shape::Text(text_shape) if text_shape.galley.text() == expected_title => {
                     Some(clipped.shape.visual_bounding_rect())
                 }
                 _ => None,
