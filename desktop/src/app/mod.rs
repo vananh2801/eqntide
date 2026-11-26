@@ -162,6 +162,8 @@ pub struct App {
     pub(super) editor: Editor,
     /// Clean MathML XML baseline used for dirty detection.
     pub(super) saved_xml: String,
+    /// True when the clean baseline equation started empty (`Edit` vs `Insert`).
+    pub(super) saved_empty: bool,
     /// Clean font size (pt) baseline used for dirty detection.
     pub(super) saved_font: f32,
     /// Clean export target (`"omml"` or `"mathtype"`) baseline.
@@ -451,7 +453,9 @@ impl App {
         args: Vec<String>,
     ) -> Self {
         let editor = Editor::default();
-        let xml = editor.math().to_xml();
+        let math = editor.math();
+        let xml = math.to_xml();
+        let saved_empty = math.children.is_empty();
         Self {
             _instance: instance,
             tx,
@@ -461,6 +465,7 @@ impl App {
             bridge_status: "Connecting bridge…".into(),
             editor,
             saved_xml: xml,
+            saved_empty,
             saved_font: 12.0,
             saved_mode: "omml".into(),
             latex: String::new(),

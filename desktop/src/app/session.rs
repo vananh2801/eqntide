@@ -163,7 +163,9 @@ impl App {
                     .unwrap_or(self.persisted.font_pt);
                 self.saved_font = self.font_pt;
                 self.mark_canvas_changed();
-                self.saved_xml = self.editor.math().to_xml();
+                let loaded_math = self.editor.math();
+                self.saved_xml = loaded_math.to_xml();
+                self.saved_empty = loaded_math.children.is_empty();
                 self.saved_mode = self.target.clone();
                 true
             }

@@ -152,7 +152,12 @@ impl App {
                             }
                             Key::Backspace => self.editor.delete(true),
                             Key::Delete => self.editor.delete(false),
-                            Key::Escape => self.pending = Some(Intent::Close),
+                            Key::Escape => {
+                                self.pending = Some(Intent::Close);
+                                ui.ctx().input_mut(|input| {
+                                    let _ = input.consume_key(modifiers, Key::Escape);
+                                });
+                            }
                             _ => {}
                         }
                     }

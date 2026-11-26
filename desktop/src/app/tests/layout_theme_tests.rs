@@ -2309,3 +2309,130 @@ fn canvas_opacity_updates_equation_canvas_and_latex_box_without_affecting_solid_
         app.background_mode = BackgroundMode::Image;
     }
 }
+
+#[test]
+fn equation_canvas_dims_behind_modals_but_stays_opaque_for_draft_dirty() {
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    ctx.set_theme(egui::Theme::Dark);
+    let mut app = super::helpers::app();
+    app.editor.insert_text("x");
+    app.mark_canvas_changed();
+
+    let pal = app.active_canvas_palette(true);
+    let has_full_canvas_frame = |output: &egui::FullOutput| {
+        output.shapes.iter().any(|clipped| {
+            matches!(
+                &clipped.shape,
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                        && rect_shape.fill == pal.bg
+                        && rect_shape.stroke.color == pal.border
+            )
+        })
+    };
+    let has_dimmed_canvas_frame = |output: &egui::FullOutput| {
+        let dimmed_bg = pal
+            .bg
+            .gamma_multiply(ctx.style_of(egui::Theme::Dark).visuals.disabled_alpha());
+        let dimmed_border = pal
+            .border
+            .gamma_multiply(ctx.style_of(egui::Theme::Dark).visuals.disabled_alpha());
+        output.shapes.iter().any(|clipped| {
+            matches!(
+                &clipped.shape,
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                        && rect_shape.fill == dimmed_bg
+                        && rect_shape.stroke.color == dimmed_border
+            )
+        })
+    };
+
+    let normal_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert!(has_full_canvas_frame(&normal_out));
+
+    // Pending LaTeX draft disables canvas interaction while keeping the preview fully opaque.
+    app.draft_dirty = true;
+    let draft_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert!(has_full_canvas_frame(&draft_out));
+    app.draft_dirty = false;
+
+    // Modal dialogs dim the Equation Canvas uniformly with surrounding panels.
+    app.pending = Some(Intent::Close);
+    let pending_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert!(!has_full_canvas_frame(&pending_out));
+    assert!(has_dimmed_canvas_frame(&pending_out));
+    app.pending = None;
+
+    app.matrix_dialog = Some(MatrixDialog::default());
+    let matrix_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert!(!has_full_canvas_frame(&matrix_out));
+    assert!(has_dimmed_canvas_frame(&matrix_out));
+}
+
+#[test]
+fn primary_and_standard_buttons_render_distinct_focus_borders_in_light_and_dark_modes() {
+    for (theme, dark_mode) in [(egui::Theme::Light, false), (egui::Theme::Dark, true)] {
+        let tokens = ThemeTokens::for_mode(dark_mode);
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        ctx.set_theme(theme);
+
+        let mut primary_id = egui::Id::NULL;
+        let mut standard_id = egui::Id::NULL;
+        let mut unfocused = ctx.run_ui(egui::RawInput::default(), |ui| {
+            primary_id =
+                App::primary_button_with(ui, tokens, true, |ui| ui.add(egui::Button::new("Save")))
+                    .id;
+            standard_id = App::standard_button(ui, "Cancel").id;
+        });
+        unfocused.textures_delta.clear();
+        assert!(unfocused.shapes.iter().any(|clipped| {
+            matches!(
+                &clipped.shape,
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.fill == tokens.primary_bg
+                        && rect_shape.stroke.color == tokens.primary_bg
+            )
+        }));
+
+        ctx.memory_mut(|mem| mem.request_focus(primary_id));
+        let mut focused_primary = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ =
+                App::primary_button_with(ui, tokens, true, |ui| ui.add(egui::Button::new("Save")));
+            let _ = App::standard_button(ui, "Cancel");
+        });
+        focused_primary.textures_delta.clear();
+        let expected_focus_border = if dark_mode {
+            tokens.text_primary
+        } else {
+            tokens.primary_fg
+        };
+        assert!(focused_primary.shapes.iter().any(|clipped| {
+            matches!(
+                &clipped.shape,
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.fill == tokens.primary_active_bg
+                        && rect_shape.stroke.color == expected_focus_border
+                        && rect_shape.stroke.width >= 1.0
+            )
+        }));
+
+        ctx.memory_mut(|mem| mem.request_focus(standard_id));
+        let mut focused_standard = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ =
+                App::primary_button_with(ui, tokens, true, |ui| ui.add(egui::Button::new("Save")));
+            let _ = App::standard_button(ui, "Cancel");
+        });
+        focused_standard.textures_delta.clear();
+        assert!(focused_standard.shapes.iter().any(|clipped| {
+            matches!(
+                &clipped.shape,
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.fill == tokens.control_active_bg
+                        && rect_shape.stroke.color == tokens.accent
+            )
+        }));
+    }
+}

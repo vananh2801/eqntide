@@ -75,8 +75,13 @@ impl App {
         ui: &mut egui::Ui,
     ) -> egui::scroll_area::ScrollAreaOutput<()> {
         self.sync_render(ui.ctx());
-        // A pending/invalid source disables editing, but keeps the last preview legible.
-        ui.set_opacity(1.0);
+        // Keep the preview legible while editing an invalid/pending LaTeX draft,
+        // but dim uniformly when disabled by a modal or blocking operation.
+        if self.busy || self.pending.is_some() || self.matrix_dialog.is_some() {
+            ui.set_opacity(ui.visuals().disabled_alpha());
+        } else {
+            ui.set_opacity(1.0);
+        }
         let scale = self.zoom * 96.0 / 72.0;
         let height = (ui.available_height() - 26.0).max(12.0);
         let pal = self.active_canvas_palette(ui.visuals().dark_mode);

@@ -162,9 +162,145 @@ fn invalid_source_or_changed_size_still_requires_confirmation() {
             app.latex = "\\frac{".into();
             app.mark_source_changed(Instant::now());
         } else {
+            assert!(app.load_math("<math><mi>x</mi></math>", None, None));
+            app.pending = Some(Intent::Close);
             app.font_pt += 2.0;
         }
         assert!(draw_dialogs(&mut app));
+    }
+}
+
+#[test]
+fn close_confirmation_respects_initial_edit_vs_insert_baseline() {
+    fn close_raw_input() -> egui::RawInput {
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::from(MIN_WINDOW_SIZE))),
+            ..Default::default()
+        };
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(egui::ViewportEvent::Close);
+        input
+    }
+
+    fn has_finish_modal(output: &egui::FullOutput) -> bool {
+        output.shapes.iter().any(|clipped| {
+            matches!(
+                &clipped.shape,
+                egui::Shape::Text(text_shape)
+                    if text_shape.galley.text() == "Finish current equation"
+            )
+        })
+    }
+
+    // 1. Insert / standalone empty closes immediately without popup even if font size or target changed.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.font_pt += 2.0;
+        app.target = "mathtype".into();
+        let mut out = ctx.run_ui(close_raw_input(), |ui| app.draw_ui(ui));
+        out.textures_delta.clear();
+        assert!(!has_finish_modal(&out));
+        assert!(app.allow_close);
+        assert!(app.pending.is_none());
+    }
+
+    // 2. Insert session typed then cleared back to empty closes without popup (even during debounced LaTeX clear).
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.editor.insert_text("x");
+        app.mark_canvas_changed();
+        assert!(app.is_dirty());
+        app.latex.clear();
+        app.mark_source_changed(Instant::now() + Duration::from_secs(10));
+        assert!(app.draft_dirty);
+        assert!(!app.is_dirty());
+        let mut out = ctx.run_ui(close_raw_input(), |ui| app.draw_ui(ui));
+        out.textures_delta.clear();
+        assert!(!has_finish_modal(&out));
+        assert!(app.allow_close);
+        assert!(app.pending.is_none());
+    }
+
+    {
+        let mut app = super::helpers::app();
+        assert!(app.load_math("", None, None));
+        app.session = Some("insert-session".into());
+        app.editor.insert_text("x");
+        app.mark_canvas_changed();
+        assert!(app.is_dirty());
+        app.editor.delete(true);
+        app.mark_canvas_changed();
+        assert!(!app.is_dirty());
+        app.pending = Some(Intent::Close);
+        assert!(!draw_dialogs(&mut app));
+        assert!(app.busy);
+    }
+
+    // 3. Edit session left untouched cancels/closes without popup.
+    {
+        let mut app = super::helpers::app();
+        assert!(app.load_math("<math><mi>x</mi></math>", None, None));
+        app.session = Some("edit-session".into());
+        app.pending = Some(Intent::Close);
+        assert!(!draw_dialogs(&mut app));
+        assert!(app.busy);
+    }
+
+    // 4. Edit session whose pre-existing equation is deleted on canvas MUST prompt.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        assert!(app.load_math("<math><mi>x</mi></math>", None, None));
+        app.session = Some("edit-session".into());
+        app.editor.select_all();
+        app.editor.delete(true);
+        app.mark_canvas_changed();
+        assert!(app.editor.math().children.is_empty());
+        assert!(app.latex.is_empty());
+        assert!(app.is_dirty());
+
+        let mut out = ctx.run_ui(close_raw_input(), |ui| app.draw_ui(ui));
+        out.textures_delta.clear();
+        assert!(!app.allow_close);
+        assert!(matches!(app.pending, Some(Intent::Close)));
+        assert!(has_finish_modal(&out));
+    }
+
+    // 5. Edit session cleared in LaTeX box MUST prompt both during draft_dirty and after parse completes.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        assert!(app.load_math("<math><mi>x</mi></math>", None, None));
+        app.session = Some("edit-session".into());
+        app.latex.clear();
+        app.mark_source_changed(Instant::now() + Duration::from_secs(10));
+        let generation = app.latex_generation;
+        assert!(app.draft_dirty);
+        assert!(app.is_dirty());
+
+        let mut out = ctx.run_ui(close_raw_input(), |ui| app.draw_ui(ui));
+        out.textures_delta.clear();
+        assert!(!app.allow_close);
+        assert!(matches!(app.pending, Some(Intent::Close)));
+        assert!(has_finish_modal(&out));
+
+        app.pending = None;
+        parsed(&mut app, generation, Ok(eqntide::MathNode::new("math")));
+        assert!(app.editor.math().children.is_empty());
+        assert!(!app.draft_dirty);
+        assert!(app.is_dirty());
+
+        let mut out = ctx.run_ui(close_raw_input(), |ui| app.draw_ui(ui));
+        out.textures_delta.clear();
+        assert!(!app.allow_close);
+        assert!(matches!(app.pending, Some(Intent::Close)));
+        assert!(has_finish_modal(&out));
     }
 }
 
@@ -590,5 +726,298 @@ fn live_latex_source_blocks_invalid_commands_and_keeps_valid_style_groups() {
         assert!(!app.draft_dirty, "{valid}");
         assert!(app.latex_error.is_none(), "{valid}: {:?}", app.latex_error);
         assert!(!app.editor.math().children.is_empty(), "{valid}");
+    }
+}
+
+fn modal_key_event(key: egui::Key, shift: bool) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            shift,
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn finish_equation_modal_centers_over_backdrop_and_ignores_outside_clicks() {
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app();
+    app.editor.insert_text("x");
+    app.mark_canvas_changed();
+    app.pending = Some(Intent::Close);
+
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let window_size = Vec2::from(MIN_WINDOW_SIZE);
+    let window_center = Pos2::new(window_size.x / 2.0, window_size.y / 2.0);
+    let heading_center = find_text_center(&out, |text| text == "Finish current equation");
+    let save_center = find_text_center(&out, |text| text == "Save");
+    let discard_center = find_text_center(&out, |text| text == "Discard / cancel session");
+    let continue_center = find_text_center(&out, |text| text == "Continue editing");
+    fn find_button_rect(shape: &egui::Shape, point: Pos2) -> Option<Rect> {
+        match shape {
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.rect.height() < 45.0
+                    && rect_shape.rect.width() < 240.0
+                    && rect_shape.rect.contains(point) =>
+            {
+                Some(rect_shape.rect)
+            }
+            egui::Shape::Vec(inner) => inner
+                .iter()
+                .find_map(|child| find_button_rect(child, point)),
+            _ => None,
+        }
+    }
+    let save_rect = out
+        .shapes
+        .iter()
+        .find_map(|clipped| find_button_rect(&clipped.shape, save_center))
+        .expect("Save button rect");
+    let discard_rect = out
+        .shapes
+        .iter()
+        .find_map(|clipped| find_button_rect(&clipped.shape, discard_center))
+        .expect("Discard button rect");
+    let continue_rect = out
+        .shapes
+        .iter()
+        .find_map(|clipped| find_button_rect(&clipped.shape, continue_center))
+        .expect("Continue button rect");
+    assert_eq!(
+        (
+            save_rect.height(),
+            discard_rect.height(),
+            continue_rect.height()
+        ),
+        (
+            theme::BUTTON_HEIGHT,
+            theme::BUTTON_HEIGHT,
+            theme::BUTTON_HEIGHT
+        ),
+        "save={save_rect:?}, discard={discard_rect:?}, continue={continue_rect:?}"
+    );
+    assert_eq!(save_rect.min.y, discard_rect.min.y);
+    assert_eq!(save_rect.max.y, discard_rect.max.y);
+    assert_eq!(continue_rect.min.y, discard_rect.min.y);
+    fn find_modal_rect(
+        shape: &egui::Shape,
+        heading: Pos2,
+        button: Pos2,
+        max_width: f32,
+    ) -> Option<Rect> {
+        match shape {
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.rect.width() < max_width
+                    && rect_shape.rect.width() < 500.0
+                    && rect_shape.stroke.width > 0.0
+                    && rect_shape.rect.contains(heading)
+                    && rect_shape.rect.contains(button) =>
+            {
+                Some(rect_shape.rect)
+            }
+            egui::Shape::Vec(inner) => inner
+                .iter()
+                .find_map(|child| find_modal_rect(child, heading, button, max_width)),
+            _ => None,
+        }
+    }
+    let modal_rect = out
+        .shapes
+        .iter()
+        .find_map(|clipped| {
+            find_modal_rect(
+                &clipped.shape,
+                heading_center,
+                continue_center,
+                window_size.x,
+            )
+        })
+        .expect("centered Finish current equation modal rect");
+    assert!(
+        (modal_rect.center().x - window_center.x).abs() < 4.0
+            && (modal_rect.center().y - window_center.y).abs() < 4.0,
+        "expected centered modal rect near {window_center:?}, got {:?}",
+        modal_rect.center()
+    );
+    assert!(
+        (heading_center.x - modal_rect.center().x).abs() < 4.0,
+        "expected centered heading near modal center {}, got {}",
+        modal_rect.center().x,
+        heading_center.x
+    );
+    assert!(
+        !out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Text(text_shape)
+                if text_shape.galley.text() == "Save your changes, discard them, or continue editing."
+        )),
+        "subtitle should be omitted from Finish current equation modal"
+    );
+    assert!(
+        out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.rect == Rect::from_min_size(Pos2::ZERO, window_size)
+                    && rect_shape.fill.a() > 0
+        )),
+        "expected full-window modal backdrop scrim"
+    );
+
+    let _ = run_ui_pass_frame(&ctx, &mut app, click_events(Pos2::new(10.0, 10.0)));
+    assert!(
+        matches!(app.pending, Some(Intent::Close)),
+        "clicking outside modal backdrop must do nothing"
+    );
+}
+
+#[test]
+fn finish_equation_modal_opens_on_canvas_escape_and_closes_on_second_escape() {
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    app.editor.insert_text("x");
+    app.mark_canvas_changed();
+
+    // Prime canvas focus first.
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let canvas_id = App::editor_focus_id(StartupFocus::Canvas);
+    assert!(ctx.memory(|mem| mem.has_focus(canvas_id)));
+
+    // Pressing Escape on canvas opens the modal without immediately self-closing on the same frame.
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        vec![modal_key_event(egui::Key::Escape, false)],
+    );
+    assert!(matches!(app.pending, Some(Intent::Close)));
+
+    // Settle the modal sizing pass, then press Escape again to continue editing.
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        vec![modal_key_event(egui::Key::Escape, false)],
+    );
+    assert!(app.pending.is_none());
+    assert_eq!(app.editor.math().to_latex(), "x");
+
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert!(
+        ctx.memory(|mem| mem.has_focus(canvas_id)),
+        "Escape should restore focus back to the active editor"
+    );
+}
+
+#[test]
+fn finish_equation_modal_keyboard_navigation_and_enter_activation() {
+    // 1. Default initial focus lands on Save; Enter triggers finish_session(true).
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.session = Some("office".into());
+        app.editor.insert_text("x");
+        app.mark_canvas_changed();
+        app.pending = Some(Intent::Close);
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![modal_key_event(egui::Key::Enter, false)],
+        );
+        assert!(app.busy, "Enter on initial focus should activate Save");
+    }
+
+    // 2. Tab, Shift+Tab, ArrowLeft, and ArrowRight cycle cleanly among modal buttons without escaping.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.bridge_ready = false; // Show status bar Retry button behind modal to verify Tab traps inside modal.
+        app.editor.insert_text("x");
+        app.mark_canvas_changed();
+        app.pending = Some(Intent::Close);
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let save_id = ctx.memory(|mem| mem.focused()).expect("Save initial focus");
+
+        // Tab: Save -> Discard -> Continue -> Save (wrapped)
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![modal_key_event(egui::Key::Tab, false)]);
+        let discard_id = ctx.memory(|mem| mem.focused()).expect("Discard focus");
+        assert_ne!(discard_id, save_id);
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![modal_key_event(egui::Key::Tab, false)]);
+        let continue_id = ctx.memory(|mem| mem.focused()).expect("Continue focus");
+        assert_ne!(continue_id, save_id);
+        assert_ne!(continue_id, discard_id);
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![modal_key_event(egui::Key::Tab, false)]);
+        assert_eq!(ctx.memory(|mem| mem.focused()), Some(save_id));
+
+        // Shift+Tab: Save -> Continue
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![modal_key_event(egui::Key::Tab, true)]);
+        assert_eq!(ctx.memory(|mem| mem.focused()), Some(continue_id));
+
+        // ArrowLeft / ArrowRight: Continue -> Discard -> Save -> Discard -> Continue
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![modal_key_event(egui::Key::ArrowLeft, false)],
+        );
+        assert_eq!(ctx.memory(|mem| mem.focused()), Some(discard_id));
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![modal_key_event(egui::Key::ArrowLeft, false)],
+        );
+        assert_eq!(ctx.memory(|mem| mem.focused()), Some(save_id));
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![modal_key_event(egui::Key::ArrowRight, false)],
+        );
+        assert_eq!(ctx.memory(|mem| mem.focused()), Some(discard_id));
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![modal_key_event(egui::Key::ArrowRight, false)],
+        );
+        assert_eq!(ctx.memory(|mem| mem.focused()), Some(continue_id));
+
+        // Enter on Continue editing dismisses the modal cleanly.
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![modal_key_event(egui::Key::Enter, false)],
+        );
+        assert!(app.pending.is_none());
+    }
+
+    // 3. When batch_running is true, Stop batch receives initial focus and activates on Enter.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.batch_running = true;
+        app.pending = Some(Intent::Close);
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let stop_id = ctx
+            .memory(|mem| mem.focused())
+            .expect("Stop batch initial focus");
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![modal_key_event(egui::Key::Tab, false)]);
+        assert_eq!(ctx.memory(|mem| mem.focused()), Some(stop_id));
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![modal_key_event(egui::Key::Enter, false)],
+        );
+        assert!(app.stop.load(std::sync::atomic::Ordering::Relaxed));
     }
 }

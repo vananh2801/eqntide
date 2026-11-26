@@ -254,9 +254,14 @@ impl App {
                 widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.primary_hover_bg);
                 widgets.hovered.fg_stroke = Stroke::new(1.0, tokens.primary_fg);
 
+                let focus_border = if tokens.dark_mode {
+                    tokens.text_primary
+                } else {
+                    tokens.primary_fg
+                };
                 widgets.active.bg_fill = tokens.primary_active_bg;
                 widgets.active.weak_bg_fill = tokens.primary_active_bg;
-                widgets.active.bg_stroke = Stroke::new(1.0, tokens.primary_active_bg);
+                widgets.active.bg_stroke = Stroke::new(1.0, focus_border);
                 widgets.active.fg_stroke = Stroke::new(1.0, tokens.primary_fg);
             } else {
                 widgets.noninteractive.bg_fill = tokens.control_bg;

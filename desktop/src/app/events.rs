@@ -142,7 +142,9 @@ impl App {
                     match result {
                         Ok(()) => {
                             self.flush_settings();
-                            self.saved_xml = self.editor.math().to_xml();
+                            let math = self.editor.math();
+                            self.saved_xml = math.to_xml();
+                            self.saved_empty = math.children.is_empty();
                             self.saved_font = self.font_pt;
                             self.saved_mode = self.target.clone();
                             self.draft_dirty = false;
@@ -319,8 +321,18 @@ impl App {
         self.status.clear();
     }
 
-    /// Returns `true` when the active equation, LaTeX buffer, font size, or target differs from saved state.
+    /// Returns `true` when the active equation differs from the initial/saved baseline.
+    ///
+    /// Starting with an empty equation (`saved_empty`) and remaining empty (or returning to empty)
+    /// does not count as dirty even if font size or target mode changed, whereas clearing a
+    /// pre-existing equation does count as dirty.
     pub(super) fn is_dirty(&self) -> bool {
+        let current_empty = self.latex.trim().is_empty()
+            && self.command_input.is_none()
+            && (self.editor.math().children.is_empty() || self.draft_dirty);
+        if self.saved_empty && current_empty {
+            return false;
+        }
         self.draft_dirty
             || self.command_input.is_some()
             || self.editor.math().to_xml() != self.saved_xml

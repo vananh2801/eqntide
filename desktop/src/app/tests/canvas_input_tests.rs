@@ -2694,3 +2694,246 @@ fn translucent_canvas_renders_placeholders_without_opaque_cover_or_baked_square(
         );
     }
 }
+
+fn matrix_modal_key_event(key: egui::Key, shift: bool) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            shift,
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn custom_matrix_dialog_ignores_backdrop_clicks_and_supports_keyboard_navigation() {
+    // 1. Backdrop click does nothing; ArrowRight -> Cancel + Enter closes without changes.
+    {
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut app = super::helpers::app();
+        app.editor.insert_text("x");
+        app.mark_canvas_changed();
+        let before = app.editor.math();
+        app.matrix_dialog = Some(MatrixDialog::default());
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let matrix_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let heading_center = find_text_center(&matrix_out, |text| text == "Custom matrix");
+        let cancel_center = find_text_center(&matrix_out, |text| text == "Cancel");
+        let insert_center = find_text_center(&matrix_out, |text| text == "Insert matrix");
+        assert!(insert_center.x < cancel_center.x);
+        fn find_matrix_modal_rect(
+            shape: &egui::Shape,
+            heading: Pos2,
+            button: Pos2,
+            max_width: f32,
+        ) -> Option<Rect> {
+            match shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.rect.width() < max_width
+                        && rect_shape.rect.width() < 500.0
+                        && rect_shape.stroke.width > 0.0
+                        && rect_shape.rect.contains(heading)
+                        && rect_shape.rect.contains(button) =>
+                {
+                    Some(rect_shape.rect)
+                }
+                egui::Shape::Vec(inner) => inner
+                    .iter()
+                    .find_map(|child| find_matrix_modal_rect(child, heading, button, max_width)),
+                _ => None,
+            }
+        }
+        let matrix_rect = matrix_out
+            .shapes
+            .iter()
+            .find_map(|clipped| {
+                find_matrix_modal_rect(
+                    &clipped.shape,
+                    heading_center,
+                    cancel_center,
+                    MIN_WINDOW_SIZE[0],
+                )
+            })
+            .unwrap_or_else(|| panic!("Custom matrix modal rect missing: heading={heading_center:?}, insert={insert_center:?}, cancel={cancel_center:?}"));
+        assert!(
+            (heading_center.x - matrix_rect.center().x).abs() < 4.0,
+            "expected centered Custom matrix heading near {}, got {} (rect={matrix_rect:?})",
+            matrix_rect.center().x,
+            heading_center.x
+        );
+        fn find_matrix_button_rect(shape: &egui::Shape, point: Pos2) -> Option<Rect> {
+            match shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.rect.height() < 45.0
+                        && rect_shape.rect.width() < 200.0
+                        && rect_shape.rect.contains(point) =>
+                {
+                    Some(rect_shape.rect)
+                }
+                egui::Shape::Vec(inner) => inner
+                    .iter()
+                    .find_map(|child| find_matrix_button_rect(child, point)),
+                _ => None,
+            }
+        }
+        let insert_rect = matrix_out
+            .shapes
+            .iter()
+            .find_map(|clipped| find_matrix_button_rect(&clipped.shape, insert_center))
+            .expect("Insert matrix button rect");
+        let cancel_rect = matrix_out
+            .shapes
+            .iter()
+            .find_map(|clipped| find_matrix_button_rect(&clipped.shape, cancel_center))
+            .expect("Cancel button rect");
+        assert_eq!(
+            (insert_rect.height(), cancel_rect.height()),
+            (theme::BUTTON_HEIGHT, theme::BUTTON_HEIGHT)
+        );
+        assert_eq!(insert_rect.min.y, cancel_rect.min.y);
+        assert!(
+            matrix_rect.width() >= 270.0 && matrix_rect.width() < 330.0,
+            "expected balanced Custom matrix modal width (270..330px), got {}",
+            matrix_rect.width()
+        );
+        let rows_rect = matrix_out
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text_shape) if text_shape.galley.text() == "Rows" => {
+                    Some(clipped.shape.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .expect("Rows label rect");
+        let matrix_heading_rect = matrix_out
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text_shape) if text_shape.galley.text() == "Custom matrix" => {
+                    Some(clipped.shape.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .expect("Custom matrix heading rect");
+        let left_pad = rows_rect.left() - matrix_rect.left();
+        let right_pad = matrix_rect.right() - cancel_rect.right();
+        let bottom_pad = matrix_rect.bottom() - cancel_rect.bottom();
+        let top_pad = matrix_heading_rect.top() - matrix_rect.top();
+        assert!(
+            (left_pad - right_pad).abs() <= 2.0,
+            "left={left_pad}, right={right_pad}"
+        );
+        assert!(
+            (right_pad - bottom_pad).abs() <= 1.0,
+            "right={right_pad}, bottom={bottom_pad}"
+        );
+        assert!(
+            right_pad >= 18.0 && top_pad >= 18.0,
+            "right={right_pad}, top={top_pad}"
+        );
+        let _ = run_ui_pass_frame(&ctx, &mut app, click_events(Pos2::new(10.0, 10.0)));
+        assert!(
+            app.matrix_dialog.is_some(),
+            "clicking outside Custom matrix backdrop must do nothing"
+        );
+
+        let insert_id = ctx
+            .memory(|mem| mem.focused())
+            .expect("Insert matrix initial focus");
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![matrix_modal_key_event(egui::Key::ArrowRight, false)],
+        );
+        let cancel_id = ctx.memory(|mem| mem.focused()).expect("Cancel focus");
+        assert_ne!(cancel_id, insert_id);
+
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![matrix_modal_key_event(egui::Key::Enter, false)],
+        );
+        assert!(app.matrix_dialog.is_none());
+        assert_eq!(app.editor.math(), before);
+    }
+
+    // 2. Pressing Enter right after opening inserts the default 2x2 matrix.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.matrix_dialog = Some(MatrixDialog::default());
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![matrix_modal_key_event(egui::Key::Enter, false)],
+        );
+        assert!(app.matrix_dialog.is_none());
+        let math = app.editor.math();
+        let table = math
+            .iter()
+            .into_iter()
+            .find(|node| node.tag == "mtable")
+            .unwrap();
+        assert_eq!(table.children.len(), 2);
+        assert_eq!(table.children[0].children.len(), 2);
+    }
+
+    // 3. Tab cycles into DragValue where ArrowUp adjusts rows, then Shift+Tab + ArrowLeft + Enter inserts 3x2.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.matrix_dialog = Some(MatrixDialog::default());
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        // Tab from Insert matrix -> Cancel -> Rows
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![matrix_modal_key_event(egui::Key::Tab, false)],
+        );
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![matrix_modal_key_event(egui::Key::Tab, false)],
+        );
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![egui::Event::Text("3".into())]);
+        // Moving focus out of DragValue via Shift+Tab commits the edited value.
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![matrix_modal_key_event(egui::Key::Tab, true)],
+        );
+        assert_eq!(app.matrix_dialog.as_ref().unwrap().rows, 3);
+
+        // ArrowLeft moves from Cancel to Insert matrix, Enter inserts 3x2.
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![matrix_modal_key_event(egui::Key::ArrowLeft, false)],
+        );
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![matrix_modal_key_event(egui::Key::Enter, false)],
+        );
+        assert!(app.matrix_dialog.is_none());
+        let math = app.editor.math();
+        let table = math
+            .iter()
+            .into_iter()
+            .find(|node| node.tag == "mtable")
+            .unwrap();
+        assert_eq!(table.children.len(), 3);
+        assert_eq!(table.children[0].children.len(), 2);
+    }
+}
