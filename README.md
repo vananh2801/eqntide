@@ -64,13 +64,12 @@ A standalone, high-performance **bidirectional math equation converter and edito
 
 ### Windows
 
-- **Installer (`EqnTide-<version>-Setup.exe`, recommended):** Installs `eqntide-desktop.exe` and `eqntide-cli.exe`, registers the `eqntide://` URI handler, installs `EqnTide.dotm` into Word `STARTUP`, registers the WPS add-in, and configures the hidden per-user login bridge. Close Word and WPS before upgrading.
-- **Portable (`eqntide-native-preview-<version>-x86_64-pc-windows-msvc.zip`):** Extract the archive and run `install-addins.bat` to register `eqntide://`, Word `.dotm`, and WPS add-ins (`scripts\install-addin.ps1 -Uninstall` removes them). Use `start-server.bat` if you want a standalone bridge outside the desktop app.
+- **Installer (`eqntide-<version>-windows-x64-setup.exe`):** Installs `eqntide-desktop.exe` and `eqntide-cli.exe`, registers the `eqntide://` URI handler, installs `EqnTide.dotm` into Word `STARTUP`, registers the WPS add-in, and configures the hidden per-user login bridge. Close Word and WPS before upgrading.
 
 ### Linux
 
-- **DEB / RPM packages:** Install `eqntide-native-preview` (`sudo dnf install ./dist/linux/1.0.0/eqntide-native-preview-1.0.0-1.x86_64.rpm` or `sudo apt-get install ./dist/linux/1.0.0/eqntide-native-preview_1.0.0_amd64.deb`). Binaries and resources live under `/usr/lib/eqntide` with launchers in `/usr/bin`, and hooks configure the WPS add-in plus per-user `eqntide.service`.
-- **Portable (`.tar.gz`):** Keep the extracted folder in a stable location and run:
+- **DEB / RPM packages:** Install `eqntide` (`sudo dnf install ./dist/linux/<version>/eqntide-<version>-linux-x64.rpm` or `sudo apt-get install ./dist/linux/<version>/eqntide-<version>-linux-x64.deb`). Binaries and resources live under `/usr/lib/eqntide` with launchers in `/usr/bin`, and hooks configure the WPS add-in plus per-user `eqntide.service`.
+- **Portable (`eqntide-<version>-linux-x64.tar.gz`):** Keep the extracted folder in a stable location and run:
   ```bash
   ./install-user.sh                  # Register eqntide:// desktop entry
   bash scripts/install-addin.sh      # Register WPS JS add-in (--uninstall to remove)
@@ -190,7 +189,7 @@ Low-level codecs are exposed under `eqntide::omml` (`omml_to_mathml`, `mathml_to
   - *Ubuntu/Debian:* `sudo apt-get install git build-essential pkg-config python3 dpkg-dev libx11-dev libxi-dev libxrandr-dev libxkbcommon-dev libgl1-mesa-dev libwayland-dev`
   - *Runtime:* OpenGL, X11 or Wayland, XDG Desktop Portal, and `zenity`.
 - **Windows:** Visual Studio C++ Build Tools + Windows SDK (`.cargo/config.toml` links static CRT for `x86_64-pc-windows-msvc`).
-- **Packaging / DOTM rebuild:** Python 3.11+ (`dpkg-deb` for DEB, `rpmbuild` for RPM, NSIS for Windows `Setup.exe`).
+- **Packaging / DOTM rebuild:** Python 3.11+ (`dpkg-deb` for DEB, `rpmbuild` for RPM, NSIS for Windows setup installer).
 
 ### Build & Run Tests
 
@@ -211,7 +210,7 @@ python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format all
 ```
 
 ```powershell
-# Windows portable ZIP + NSIS Setup -> dist/windows/<version>/
+# Windows NSIS Setup -> dist/windows/<version>/eqntide-<version>-windows-x64-setup.exe
 cargo build --workspace --release --locked --target x86_64-pc-windows-msvc
 python scripts/package_native.py --target x86_64-pc-windows-msvc
 $version = python scripts/package_native.py --print-version
@@ -220,7 +219,7 @@ makensis "/DPACKAGE_DIR=$((Resolve-Path "dist/windows/$version").Path)" scripts/
 
 GitHub Actions (`.github/workflows/ci.yml`, `build-native.yml`, `release.yml`) runs workspace tests, `clippy`, `cargo-deny`, JS/PowerShell/Python checks, and packages Linux/Windows artifacts on PRs to `main`, manual dispatch, or `v*` tags. On Linux with `cargo-xwin` and NSIS configured, you can also cross-build Windows binaries with `cargo xwin build --workspace --release --locked --target x86_64-pc-windows-msvc`.
 
-> **Release versioning & tags:** Before tagging a release, keep clean `X.Y.Z` versions synchronized across `Cargo.toml`, `desktop/Cargo.toml`, and `crates/eqntide-editor/Cargo.toml` (never add pre-release suffixes like `-beta.1` inside `Cargo.toml`, as `.deb`/`.rpm` packaging and desktop SemVer checks expect `X.Y.Z`). Clean tags (`vX.Y.Z`) publish as **Latest** stable releases (`prerelease: false`), while hyphenated tags (`vX.Y.Z-beta.1`, `vX.Y.Z-rc.1`) automatically publish as pre-releases (`prerelease: true`).
+> **Release versioning & tags:** Before tagging a release, keep clean `X.Y.Z` versions synchronized across `Cargo.toml`, `desktop/Cargo.toml`, and `crates/eqntide-editor/Cargo.toml` (never add pre-release suffixes like `-beta.1` inside `Cargo.toml`, as `.deb`/`.rpm` packaging and desktop SemVer checks expect `X.Y.Z`). Clean tags (`vX.Y.Z`) publish as **Latest** stable releases (`prerelease: false`), while hyphenated tags (`vX.Y.Z-beta.1`, `vX.Y.Z-rc.1`) automatically publish as pre-releases (`prerelease: true`) and include the pre-release suffix in packaged asset filenames.
 
 ---
 

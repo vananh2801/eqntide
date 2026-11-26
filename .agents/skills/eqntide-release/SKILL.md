@@ -20,13 +20,13 @@ Never create a special release branch or toggle `prerelease` manually in `.githu
 
 Before packaging or tagging, verify or bump the exact same clean `X.Y.Z` version (no `-beta` or `+meta` suffix) across all three workspace manifests:
 
-1. `Cargo.toml` (`[package].version`) — read by `scripts/package_native.py` and `scripts/installer.nsi` for archive/package/installer names.
+1. `Cargo.toml` (`[package].version`) — validated by `scripts/package_native.py` and used as the base version for archive/package/installer names.
 2. `desktop/Cargo.toml` (`[package].version`) — compiled into `eqntide-desktop` as `CARGO_PKG_VERSION`, shown in **About**, and compared by `desktop/src/update.rs`.
 3. `crates/eqntide-editor/Cargo.toml` (`[package].version`) — kept aligned with the workspace.
 
 Rules:
 - Never put `-beta.1` into any `Cargo.toml`: `scripts/package_native.py` (`validate_versions`) rejects mismatched manifests or non-`X.Y.Z` versions, `rpmbuild` rejects `-` in `Version:`, `.deb` sorts hyphenated pre-releases higher than `X.Y.Z`, and `desktop/src/update.rs` (`parse_stable_semver`) parses `CARGO_PKG_VERSION` as three numeric components.
-- For a beta tag like `v0.12.0-beta.1`, keep `Cargo.toml` versions at clean `X.Y.Z` (e.g., `0.11.0` or `0.12.0`) and put `-beta.1` only on the Git tag.
+- For a beta tag like `v0.12.0-beta.1`, keep `Cargo.toml` versions at clean `X.Y.Z` (e.g., `0.12.0`) and put `-beta.1` only on the Git tag. When building/packaging from that matching tag (`EQNTIDE_BUILD_TAG`, `GITHUB_REF_NAME`, or `git describe --tags --exact-match HEAD`), `scripts/package_native.py` uses `0.12.0-beta.1` in output filenames (`eqntide-0.12.0-beta.1-...`) while keeping valid internal DEB (`1.0.0~beta.1`) and RPM (`Version: 1.0.0`, `Release: 0.beta.1`) metadata.
 - Update `Cargo.lock` if workspace versions changed (`cargo check --workspace` updates lockfile workspace entries cleanly).
 - Ask the user before choosing a new `X.Y.Z` version or deciding between stable vs. beta/rc if unspecified.
 
@@ -60,6 +60,8 @@ cargo build --workspace --release --locked
 python3 scripts/package_native.py --target x86_64-unknown-linux-gnu --format all
 ```
 
+Emits `eqntide-<version>-linux-x64.tar.gz`, `eqntide-<version>-linux-x64.deb`, and `eqntide-<version>-linux-x64.rpm`.
+
 ### Windows (`dist/windows/<version>/`)
 
 ```powershell
@@ -69,12 +71,12 @@ $version = python scripts/package_native.py --print-version
 makensis "/DPACKAGE_DIR=$((Resolve-Path "dist/windows/$version").Path)" scripts/installer.nsi
 ```
 
-Verify Windows Setup output keeps the `-Setup.exe` suffix (`EqnTide-<version>-Setup.exe`), which `desktop/src/update.rs` selects for Windows browser download handoff.
+Verify Windows Setup output keeps the `-setup.exe` suffix (`eqntide-<version>-windows-x64-setup.exe`), which `desktop/src/update.rs` selects for Windows browser download handoff.
 
 ## 5. Tagging & Publish Safety
 
 Before creating or pushing a release tag:
 
 1. Confirm `git status --short` is clean (all version bumps and doc updates committed).
-2. Confirm `python3 scripts/package_native.py --print-version` returns the expected `X.Y.Z`.
+2. Confirm `python3 scripts/package_native.py --print-version` returns the expected `X.Y.Z` (or `X.Y.Z-<suffix>` when checking out a matching tag).
 3. Never run `git tag` or `git push origin <tag>` without explicit confirmation from the user stating the exact tag (`vX.Y.Z` or `vX.Y.Z-beta.1`) and confirming the resulting GitHub Release mode (`stable` vs `prerelease`).

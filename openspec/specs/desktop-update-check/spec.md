@@ -44,8 +44,8 @@ The update checker SHALL query the repository's latest stable GitHub Release (`h
 The **About** tab SHALL display update check results inline (`Checking`, `Up to date`, `Update available`, or `Error`) and, when an update is available, provide an action button that opens a validated `https://` GitHub release or installer URL in the user's system browser.
 
 #### Scenario: Windows update action prefers the NSIS Setup installer asset
-- **WHEN** an update is available on Windows and the release payload includes an HTTPS asset URL ending in `-Setup.exe` under `https://github.com/`
-- **THEN** clicking the update download button opens that installer URL (or falls back to the validated release `html_url` if no matching Setup asset exists)
+- **WHEN** an update is available on Windows and the release payload includes an HTTPS asset URL ending in `-setup.exe` under `https://github.com/`
+- **THEN** clicking the update download button opens that installer URL (or falls back to the validated release `html_url` if no matching setup asset exists)
 
 #### Scenario: Linux update action opens the release page
 - **WHEN** an update is available on Linux
