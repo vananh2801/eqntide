@@ -88,7 +88,23 @@ third-party open-source projects and standards:
      rasterized PNG icons used across the native desktop UI, Microsoft Word
      Ribbon template, and WPS Office add-in.
 
-9. Technical Specifications and Standards:
+9. ayu & ayu-colors (including Zed Editor's Ayu theme port)
+   Official Projects:
+     - https://github.com/dempfi/ayu
+     - https://github.com/ayu-theme/ayu-colors
+     - https://github.com/zed-industries/zed/tree/main/assets/themes/ayu
+   Authors & Copyright:
+     - Copyright (c) 2016 Ike Ku (ayu & Zed `assets/themes/ayu/LICENSE`)
+     - Copyright (c) Konstantin Pschera <me@kons.ch> (kons.ch) (ayu-colors)
+   License: MIT License
+   Description:
+     Color palette basis for the native desktop UI theme (`desktop/src/theme.rs`):
+     neutral Light/Dark surface, border, disabled, and error values follow
+     Zed Editor's MIT-licensed Ayu port (`assets/themes/ayu/ayu.json`),
+     paired with Ayu's amber/orange accent (`ayu-colors`) and WCAG-adjusted
+     foreground contrast tokens.
+
+10. Technical Specifications and Standards:
    - ECMA-376 (Office Open XML File Formats, §22.1 Office Math Markup Language - OMML)
      ISO/IEC 29500
    - Microsoft OpenType Specification: The 'MATH' Table

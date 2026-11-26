@@ -222,6 +222,7 @@ GitHub Actions (`.github/workflows/ci.yml`, `build-native.yml`, `release.yml`) r
 
 - **[KNOWN_ISSUES.md](KNOWN_ISSUES.md)**: Documents host-specific caveats and implemented workarounds — including WPS Writer temporarily hiding outside equations after `Range.InsertXML` (mitigated via `View.ShowFieldCodes` refresh), automatic CPU 2D software renderer fallback on GPU-less Windows/Linux VMs, and intentional XML CRLF entity handling.
 - **[tests/TESTING.md](tests/TESTING.md)**: Documents the 4-tier test suite (`run_all.sh --quick` / `--visual`), Rust conversion matrix, Python DOTM/packaging tests, mocked WPS JS tests, and white-background PNG visual layout exports under `target/test_exports/visual/`.
+- **[CODING_CONVENTIONS.md](CODING_CONVENTIONS.md)**: Documents the coding rules on this repository. Follow it before adding pull requests.
 
 ---
 
@@ -232,6 +233,7 @@ EqnTide builds upon specifications and open-source reference work from:
 2. [mathtypejx](https://github.com/a917470154/mathtypejx) & [mathtype_to_mathml](https://github.com/jure/mathtype_to_mathml) (Jure Triglav) — MTEF v3/v5 decoding, WMF `MTra` extraction, and MathType character mappings.
 3. Design Science MTEF v3 & v5 specifications, ECMA-376 (§22.1 OMML), Microsoft OpenType `MATH` table specification, Donald E. Knuth's *The TeXbook* (Appendix G), and W3C MathML Core.
 4. [STIX Fonts](https://github.com/stipub/stixfonts), [Nunito](https://github.com/googlefonts/nunito), [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), and [Tabler Icons](https://github.com/tabler/tabler-icons).
+5. [ayu](https://github.com/dempfi/ayu) (Ike Ku), [ayu-colors](https://github.com/ayu-theme/ayu-colors) (Konstantin Pschera), and Zed Editor's MIT-licensed [Ayu theme port](https://github.com/zed-industries/zed/tree/main/assets/themes/ayu) — color palette basis for the native desktop UI theme.
 
 ### License
 
@@ -239,4 +241,5 @@ EqnTide builds upon specifications and open-source reference work from:
 - **STIX Two Text & Math fonts (`assets/fonts/stixfonts-2.13b171/`):** [SIL Open Font License 1.1](assets/fonts/stixfonts-2.13b171/OFL.txt).
 - **Nunito & JetBrains Mono fonts (`assets/fonts/Nunito/`, `assets/fonts/JetBrainsMono-2.304/`):** [SIL Open Font License 1.1](assets/fonts/Nunito/OFL.txt) and [JetBrains Mono OFL](assets/fonts/JetBrainsMono-2.304/OFL.txt).
 - **Tabler Icons (`assets/icons/tabler-icons/`):** Copyright (c) 2020-2026 Paweł Kuna, licensed under the [MIT License](assets/icons/tabler-icons/LICENSE.txt).
+- **Ayu / ayu-colors theme palette:** Copyright (c) 2016 Ike Ku (MIT License) & Copyright (c) Konstantin Pschera (MIT License); see [NOTICE](NOTICE).
 - Full third-party copyright and license notices are listed in [NOTICE](NOTICE).
