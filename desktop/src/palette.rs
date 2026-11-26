@@ -14,7 +14,8 @@ pub const DEFAULT_GROUP: &str = "Fractions";
 pub type PaletteItem = (&'static str, &'static str, &'static str);
 
 /// Embedded metadata JSON for the pre-rasterized palette sprite atlas.
-pub(crate) const ATLAS_JSON: &str = include_str!("../../assets/icons/generated/palette-atlas/atlas.json");
+pub(crate) const ATLAS_JSON: &str =
+    include_str!("../../assets/icons/generated/palette-atlas/atlas.json");
 
 /// Metadata describing the packed pre-rasterized palette sprite atlas.
 #[derive(Debug, Deserialize)]
@@ -272,8 +273,8 @@ mod tests {
         assert!(!items_for_ui_group(DEFAULT_GROUP, &[]).is_empty());
 
         let mut mapped = Vec::new();
-        let icon_dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/icons/generated/desktop");
+        let icon_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../assets/icons/generated/desktop");
         for group in UI_GROUPS {
             assert!(
                 matches!(group.icons.len(), 1 | 2),
