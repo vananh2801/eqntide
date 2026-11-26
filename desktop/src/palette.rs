@@ -4,14 +4,56 @@
 pub use eqntide::catalog::{
     attaches_to_previous, matrix, preview_template, template, GROUPS, PALETTE,
 };
+use serde::Deserialize;
 
 /// Category identifier for the most-recently-used palette items.
 pub const RECENT_GROUP: &str = "Recent";
 /// Default sidebar category selected on first launch.
 pub const DEFAULT_GROUP: &str = "Fractions";
-
 /// Tuple of `(catalog_group, tooltip_label, latex_template_source)`.
 pub type PaletteItem = (&'static str, &'static str, &'static str);
+
+/// Embedded metadata JSON for the pre-rasterized palette sprite atlas.
+pub(crate) const ATLAS_JSON: &str = include_str!("../../assets/icons/palette-rendered/atlas.json");
+
+/// Metadata describing the packed pre-rasterized palette sprite atlas.
+#[derive(Debug, Deserialize)]
+pub(crate) struct AtlasMetadata {
+    /// Total atlas texture width in physical pixels.
+    pub(crate) atlas_width: u32,
+    /// Total atlas texture height in physical pixels.
+    pub(crate) atlas_height: u32,
+    /// Logical icon width in DIP.
+    pub(crate) icon_width: f32,
+    /// Logical icon height in DIP.
+    pub(crate) icon_height: f32,
+    /// Per-entry pixel coordinates and catalog source mappings.
+    pub(crate) entries: Vec<AtlasEntryMetadata>,
+}
+
+/// Pixel bounds and catalog source mapping for one palette icon in [`AtlasMetadata`].
+#[derive(Debug, Deserialize)]
+pub(crate) struct AtlasEntryMetadata {
+    /// Canonical LaTeX template source string.
+    pub(crate) source: String,
+    /// Left pixel coordinate inside the atlas texture.
+    pub(crate) x: u32,
+    /// Top pixel coordinate inside the atlas texture.
+    pub(crate) y: u32,
+    /// Cell width in physical pixels.
+    #[serde(rename = "w")]
+    pub(crate) width: u32,
+    /// Cell height in physical pixels.
+    #[serde(rename = "h")]
+    pub(crate) height: u32,
+}
+
+impl AtlasMetadata {
+    /// Parses the embedded [`ATLAS_JSON`] metadata manifest.
+    pub(crate) fn load_embedded() -> Self {
+        serde_json::from_str(ATLAS_JSON).expect("bundled palette atlas.json is valid")
+    }
+}
 
 /// Sidebar category descriptor grouping one or more catalog sections.
 #[derive(Clone, Copy, Debug)]
@@ -312,6 +354,46 @@ mod tests {
             let actual_again = canonical_source(&owned.clone()).unwrap();
             assert_eq!(actual, *source);
             assert!(std::ptr::eq(actual, actual_again));
+        }
+    }
+
+    #[test]
+    fn embedded_palette_atlas_covers_every_palette_entry_with_valid_uvs() {
+        let meta = AtlasMetadata::load_embedded();
+        assert_eq!(meta.icon_width, 40.0);
+        assert_eq!(meta.icon_height, 26.0);
+        assert!(meta.atlas_width > 0 && meta.atlas_height > 0);
+        assert_eq!(meta.entries.len(), PALETTE.len());
+
+        let by_source: std::collections::HashMap<&str, &AtlasEntryMetadata> = meta
+            .entries
+            .iter()
+            .map(|entry| (entry.source.as_str(), entry))
+            .collect();
+        assert_eq!(by_source.len(), PALETTE.len());
+
+        for (_, label, source) in PALETTE {
+            let entry = by_source
+                .get(*source)
+                .unwrap_or_else(|| panic!("missing atlas entry for {label} ({source})"));
+            assert!(entry.width > 0 && entry.height > 0, "zero size for {label}");
+            assert!(
+                entry.x + entry.width <= meta.atlas_width
+                    && entry.y + entry.height <= meta.atlas_height,
+                "out-of-bounds rect for {label}"
+            );
+            let u_min = entry.x as f32 / meta.atlas_width as f32;
+            let v_min = entry.y as f32 / meta.atlas_height as f32;
+            let u_max = (entry.x + entry.width) as f32 / meta.atlas_width as f32;
+            let v_max = (entry.y + entry.height) as f32 / meta.atlas_height as f32;
+            assert!(
+                u_min >= 0.0 && u_max <= 1.0 && u_max > u_min,
+                "invalid U bounds for {label}"
+            );
+            assert!(
+                v_min >= 0.0 && v_max <= 1.0 && v_max > v_min,
+                "invalid V bounds for {label}"
+            );
         }
     }
 }

@@ -126,7 +126,12 @@ fn user_ui_edits_persist_atomically_and_coalesce_pointer_drag() {
     assert_eq!(Settings::load_from_path(&path).category, "Scripts");
 
     // 2. Click a palette item in "Scripts".
-    let scripts_tex = app.palette_atlases["Scripts"].texture.id();
+    let scripts_tex = app
+        .palette_atlas
+        .as_ref()
+        .expect("shared palette atlas")
+        .texture
+        .id();
     let item_pos = out
         .shapes
         .iter()

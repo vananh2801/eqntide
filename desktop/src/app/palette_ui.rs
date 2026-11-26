@@ -1,8 +1,8 @@
-//! Palette ribbon UI, DPI-aware icon/glyph atlas builder, and shared button/card helpers.
+//! Palette ribbon UI, pre-rasterized SVG sprite atlas loader, and shared button/card helpers.
 
 use super::{
     tabler_icon_bytes, App, MatrixDialog, PaletteAtlas, PaletteAtlasEntry, PALETTE_BUTTON_SIZE,
-    PALETTE_GAP, PALETTE_ICON_TARGET_EM, UI_ICON_SIZE,
+    PALETTE_GAP, UI_ICON_SIZE,
 };
 use crate::{
     palette,
@@ -11,6 +11,8 @@ use crate::{
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
+
+const PALETTE_ATLAS_PNG: &[u8] = include_bytes!("../../../assets/icons/palette-rendered/atlas.png");
 
 impl App {
     /// Renders the horizontal template/symbol palette grid for the active sidebar category.
@@ -49,20 +51,12 @@ impl App {
                         .show(ui, |ui| {
                             ui.spacing_mut().button_padding = Vec2::splat(3.0);
                             ui.spacing_mut().item_spacing = Vec2::splat(PALETTE_GAP);
-                            let ppp = ui.ctx().pixels_per_point();
-                            self.sync_atlas_dpi(ppp);
-                            if !self.palette_atlases.contains_key(&self.category) {
-                                if let Some(atlas) =
-                                    Self::build_palette_atlas(ui.ctx(), &self.category, &items, ppp)
-                                {
-                                    self.palette_atlases.insert(self.category.clone(), atlas);
-                                }
-                            }
+                            self.ensure_palette_atlas(ui.ctx());
                             let icon_color =
                                 self.theme_tokens(ui).icon_tint(false, ui.is_enabled());
                             let mut clicked_source = None;
                             {
-                                let atlas = self.palette_atlases.get(&self.category);
+                                let atlas = self.palette_atlas.as_ref();
                                 for (index, (_, label, source)) in items.iter().enumerate() {
                                     let response = if let Some((atlas, entry)) =
                                         atlas.and_then(|cached| {
@@ -107,19 +101,27 @@ impl App {
                                 self.insert_template(source);
                                 self.pending_focus_restore = Some(self.active_editor_focus);
                             }
-                            if has_matrix_tools
-                                && ui
-                                    .add_sized(PALETTE_BUTTON_SIZE, egui::Button::new("⋯"))
-                                    .on_hover_text("Custom matrix")
-                                    .clicked()
-                            {
-                                self.dismiss_command_input();
-                                self.matrix_dialog = Some(MatrixDialog::default());
-                                ui.memory_mut(|mem| {
-                                    mem.surrender_focus(Self::editor_focus_id(
-                                        self.active_editor_focus,
-                                    ))
+                            if has_matrix_tools {
+                                let dots_image =
+                                    self.ui_icon(ui.ctx(), "dots", UI_ICON_SIZE, icon_color);
+                                let custom_btn = ui
+                                    .add_sized(PALETTE_BUTTON_SIZE, egui::Button::new(dots_image));
+                                custom_btn.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::Role::Button,
+                                        ui.is_enabled(),
+                                        "Custom matrix",
+                                    )
                                 });
+                                if custom_btn.on_hover_text("Custom matrix").clicked() {
+                                    self.dismiss_command_input();
+                                    self.matrix_dialog = Some(MatrixDialog::default());
+                                    ui.memory_mut(|mem| {
+                                        mem.surrender_focus(Self::editor_focus_id(
+                                            self.active_editor_focus,
+                                        ))
+                                    });
+                                }
                             }
                         });
                 });
@@ -145,7 +147,6 @@ impl App {
         self.recent_palette.retain(|&existing| existing != source);
         self.recent_palette.insert(0, source);
         self.recent_palette.truncate(MAX_RECENT_PALETTE);
-        self.palette_atlases.remove(palette::RECENT_GROUP);
         self.persisted.recent_palette = self
             .recent_palette
             .iter()
@@ -154,123 +155,47 @@ impl App {
         self.settings_dirty = true;
     }
 
-    pub(super) fn sync_atlas_dpi(&mut self, ppp: f32) {
-        if (self.palette_ppp - ppp).abs() > f32::EPSILON {
-            self.palette_atlases.clear();
-            self.palette_ppp = ppp;
-        }
-    }
-
-    /// Rasterizes and packs all glyph previews in a palette category into a single texture atlas.
-    pub(super) fn build_palette_atlas(
-        ctx: &egui::Context,
-        category: &str,
-        items: &[&palette::PaletteItem],
-        ppp: f32,
-    ) -> Option<PaletteAtlas> {
-        let mut rendered = Vec::new();
-        for (_, _, source) in items {
-            let Ok(math) = palette::preview_template(source) else {
-                continue;
-            };
-            let Ok(mask) = eqntide::render_alpha_at(
-                &math,
-                PALETTE_ICON_TARGET_EM * ppp,
-                40.0 * ppp,
-                26.0 * ppp,
-            ) else {
-                continue;
-            };
-            if mask.width > 0 && mask.height > 0 {
-                rendered.push((*source, mask));
-            }
-        }
-        Self::build_mask_atlas(ctx, &format!("palette-atlas-{category}"), rendered, ppp)
-    }
-
-    /// Packs rendered alpha masks row-by-row into a GPU texture atlas with gamma compensation.
-    pub(super) fn build_mask_atlas(
-        ctx: &egui::Context,
-        texture_name: &str,
-        rendered: Vec<(&'static str, eqntide::AlphaMask)>,
-        ppp: f32,
-    ) -> Option<PaletteAtlas> {
-        if rendered.is_empty() {
-            return None;
-        }
-        const PAD: usize = 1;
-        const MAX_ATLAS_W: usize = 512;
-        let mut placements = Vec::with_capacity(rendered.len());
-        let mut cur_x = PAD;
-        let mut cur_y = PAD;
-        let mut row_h = 0usize;
-        let mut atlas_w = 0usize;
-        for (idx, (_, mask)) in rendered.iter().enumerate() {
-            let width = mask.width as usize;
-            let height = mask.height as usize;
-            if cur_x > PAD && cur_x + width + PAD > MAX_ATLAS_W {
-                cur_x = PAD;
-                cur_y += row_h + PAD;
-                row_h = 0;
-            }
-            placements.push((idx, cur_x, cur_y, width, height));
-            cur_x += width + PAD;
-            atlas_w = atlas_w.max(cur_x);
-            row_h = row_h.max(height);
-        }
-        let atlas_h = (cur_y + row_h + PAD).max(1);
-        let atlas_w = atlas_w.max(1);
-        let mut rgba = vec![0u8; atlas_w * atlas_h * 4];
-        let mut entries = HashMap::with_capacity(placements.len());
-        let mut gamma_lut = [0u8; 256];
-        for (idx, slot) in gamma_lut.iter_mut().enumerate().skip(1) {
-            let alpha_norm = idx as f32 / 255.0;
-            *slot = (alpha_norm.powf(0.70) * 255.0).round().min(255.0) as u8;
-        }
-        for (idx, glyph_x, glyph_y, width, height) in placements {
-            let (key, mask) = &rendered[idx];
-            for y in 0..height {
-                let src_row = y * width;
-                let dst_row = (glyph_y + y) * atlas_w + glyph_x;
-                for x in 0..width {
-                    let alpha = mask.alpha[src_row + x];
-                    if alpha == 0 {
-                        continue;
-                    }
-                    let dst = (dst_row + x) * 4;
-                    rgba[dst] = 255;
-                    rgba[dst + 1] = 255;
-                    rgba[dst + 2] = 255;
-                    rgba[dst + 3] = gamma_lut[alpha as usize];
+    /// Lazily decodes the bundled pre-rasterized palette sprite atlas and uploads it once.
+    pub(super) fn ensure_palette_atlas(&mut self, ctx: &egui::Context) -> &PaletteAtlas {
+        self.palette_atlas.get_or_insert_with(|| {
+            let meta = palette::AtlasMetadata::load_embedded();
+            let pixels = image::load_from_memory(PALETTE_ATLAS_PNG)
+                .expect("bundled palette atlas PNG is valid")
+                .to_rgba8();
+            let width = pixels.width() as usize;
+            let height = pixels.height() as usize;
+            assert_eq!(
+                (width as u32, height as u32),
+                (meta.atlas_width, meta.atlas_height),
+                "bundled palette atlas PNG dimensions must match atlas.json"
+            );
+            let image = egui::ColorImage::from_rgba_unmultiplied([width, height], pixels.as_raw());
+            let texture = ctx.load_texture("palette-atlas", image, egui::TextureOptions::LINEAR);
+            let atlas_width = meta.atlas_width as f32;
+            let atlas_height = meta.atlas_height as f32;
+            let display_size = Vec2::new(meta.icon_width, meta.icon_height);
+            let mut entries = HashMap::with_capacity(meta.entries.len());
+            for item in meta.entries {
+                if let Some(canonical) = palette::canonical_source(&item.source) {
+                    let uv = Rect::from_min_max(
+                        Pos2::new(item.x as f32 / atlas_width, item.y as f32 / atlas_height),
+                        Pos2::new(
+                            (item.x + item.width) as f32 / atlas_width,
+                            (item.y + item.height) as f32 / atlas_height,
+                        ),
+                    );
+                    entries.insert(canonical, PaletteAtlasEntry { uv, display_size });
                 }
             }
-            let uv = Rect::from_min_max(
-                Pos2::new(
-                    glyph_x as f32 / atlas_w as f32,
-                    glyph_y as f32 / atlas_h as f32,
-                ),
-                Pos2::new(
-                    (glyph_x + width) as f32 / atlas_w as f32,
-                    (glyph_y + height) as f32 / atlas_h as f32,
-                ),
-            );
-            entries.insert(
-                *key,
-                PaletteAtlasEntry {
-                    uv,
-                    display_size: Vec2::new(width as f32 / ppp, height as f32 / ppp),
-                },
-            );
-        }
-        let image = egui::ColorImage::from_rgba_unmultiplied([atlas_w, atlas_h], &rgba);
-        let texture = ctx.load_texture(texture_name, image, egui::TextureOptions::NEAREST);
-        Some(PaletteAtlas { texture, entries })
+            PaletteAtlas { texture, entries }
+        })
     }
 
+    /// Returns the active GPU texture IDs used for palette icons.
     #[cfg(test)]
     pub(super) fn palette_texture_ids(&self) -> std::collections::HashSet<egui::TextureId> {
-        self.palette_atlases
-            .values()
+        self.palette_atlas
+            .iter()
             .map(|atlas| atlas.texture.id())
             .collect()
     }

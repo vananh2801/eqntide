@@ -61,7 +61,6 @@ pub(super) const PALETTE_BUTTON_SIZE: Vec2 = Vec2::new(46.0, 32.0);
 pub(super) const PALETTE_GAP: f32 = theme::SPACE_XS;
 const SIDEBAR_CATEGORY_ICON_SIZE: f32 = 22.0;
 pub(super) const UI_ICON_SIZE: f32 = 16.0;
-pub(super) const PALETTE_ICON_TARGET_EM: f32 = 17.0;
 pub(super) const PALETTE_HEIGHT: f32 =
     3.0 * PALETTE_BUTTON_SIZE.y + 2.0 * PALETTE_GAP + CONTENT_PADDING as f32;
 pub(super) const LATEX_PANEL_HEIGHT: f32 = 88.0;
@@ -103,15 +102,19 @@ pub(super) enum Intent {
     Next,
 }
 
-/// UV bounds and DIP display dimensions for a single glyph in a [`PaletteAtlas`].
+/// UV bounds and DIP display dimensions for a single icon in [`PaletteAtlas`].
 pub(super) struct PaletteAtlasEntry {
+    /// Normalized texture UV rectangle inside the sprite sheet.
     pub(super) uv: Rect,
+    /// Logical display size in DIP (`40x26`).
     pub(super) display_size: Vec2,
 }
 
-/// Packed alpha texture atlas and lookup map for one palette category.
+/// Shared pre-rasterized sprite atlas and lookup map for all palette entries.
 pub(super) struct PaletteAtlas {
+    /// Uploaded GPU texture handle backing all palette icons.
     pub(super) texture: egui::TextureHandle,
+    /// Lookup table keyed by canonical `PALETTE` LaTeX template source.
     pub(super) entries: HashMap<&'static str, PaletteAtlasEntry>,
 }
 
@@ -202,12 +205,10 @@ pub struct App {
     pub(super) category: String,
     /// State for the modal custom matrix dimensions/fence dialog.
     pub(super) matrix_dialog: Option<MatrixDialog>,
-    /// Cached per-category rendered glyph texture atlases at `palette_ppp`.
-    pub(super) palette_atlases: HashMap<String, PaletteAtlas>,
+    /// Shared pre-rasterized sprite atlas covering all palette symbols and templates.
+    pub(super) palette_atlas: Option<PaletteAtlas>,
     /// Loaded Tabler SVG/PNG icon textures keyed by icon name.
     pub(super) ui_icons: HashMap<&'static str, egui::TextureHandle>,
-    /// `pixels_per_point` at which `palette_atlases` were rasterized.
-    pub(super) palette_ppp: f32,
     /// Most-recently-used palette template sources.
     pub(super) recent_palette: Vec<&'static str>,
     /// Cached application logo texture for the About view.
@@ -475,9 +476,8 @@ impl App {
             tab: 0,
             category: palette::DEFAULT_GROUP.into(),
             matrix_dialog: None,
-            palette_atlases: HashMap::new(),
+            palette_atlas: None,
             ui_icons: HashMap::new(),
-            palette_ppp: 0.0,
             recent_palette: Vec::new(),
             gpu_profile: GpuProfile::Native,
             last_enforced_viewport: None,
@@ -1071,6 +1071,7 @@ pub(super) fn tabler_icon_bytes(name: &str) -> &'static [u8] {
         }
         "brand-github" => include_bytes!("../../../assets/icons/rendered/brand-github.png"),
         "chevron-left" => include_bytes!("../../../assets/icons/rendered/chevron-left.png"),
+        "dots" => include_bytes!("../../../assets/icons/rendered/dots.png"),
         "file" => include_bytes!("../../../assets/icons/rendered/file.png"),
         "file-type-docx" => include_bytes!("../../../assets/icons/rendered/file-type-docx.png"),
         "file-upload" => include_bytes!("../../../assets/icons/rendered/file-upload.png"),

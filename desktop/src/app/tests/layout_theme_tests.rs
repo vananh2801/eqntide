@@ -559,8 +559,9 @@ fn palette_icons_use_theme_contrast_and_physical_dpi() {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.draw_shell(ui));
         output.textures_delta.clear();
         let texture_ids = app.palette_texture_ids();
-        assert!(!texture_ids.is_empty());
-        assert!((app.palette_ppp - 1.5).abs() < f32::EPSILON);
+        assert_eq!(texture_ids.len(), 1);
+        let atlas = app.palette_atlas.as_ref().expect("shared palette atlas");
+        assert_eq!(atlas.texture.size(), [2016, 1288]);
         let tinted_match = output.shapes.iter().any(|clipped| match &clipped.shape {
             egui::Shape::Rect(rect_shape) => rect_shape.brush.as_ref().is_some_and(|brush| {
                 texture_ids.contains(&brush.fill_texture_id) && rect_shape.fill == expected_tint
@@ -800,7 +801,12 @@ fn recent_palette_tracks_mru_without_duplicates_and_renders() {
         |ui| app.draw_shell(ui),
     );
     frac_out.textures_delta.clear();
-    let frac_tex = app.palette_atlases["Fractions"].texture.id();
+    let frac_tex = app
+        .palette_atlas
+        .as_ref()
+        .expect("shared palette atlas")
+        .texture
+        .id();
     let first_pos = frac_out
         .shapes
         .iter()
@@ -857,7 +863,12 @@ fn recent_palette_tracks_mru_without_duplicates_and_renders() {
         |ui| app.draw_shell(ui),
     );
     recent_out.textures_delta.clear();
-    let recent_tex = app.palette_atlases[palette::RECENT_GROUP].texture.id();
+    let recent_tex = app
+        .palette_atlas
+        .as_ref()
+        .expect("shared palette atlas")
+        .texture
+        .id();
     let rendered_recent = recent_out
         .shapes
         .iter()
@@ -931,7 +942,12 @@ fn palette_scrolls_horizontally_on_vertical_mouse_wheel() {
             settle_out.textures_delta.clear();
         }
 
-        let palette_tex = app.palette_atlases[category].texture.id();
+        let palette_tex = app
+            .palette_atlas
+            .as_ref()
+            .expect("shared palette atlas")
+            .texture
+            .id();
         let first_x = |shapes: &[egui::epaint::ClippedShape]| -> f32 {
             shapes
                 .iter()
@@ -1188,7 +1204,7 @@ fn sidebar_and_palette_icons_render_at_uniform_base_em_scale() {
     }
 
     let scripts_items = palette::items_for_ui_group("Scripts", &[]);
-    let scripts_atlas = &app.palette_atlases["Scripts"];
+    let scripts_atlas = app.palette_atlas.as_ref().expect("shared palette atlas");
     let first_h = scripts_atlas.entries[scripts_items[0].2].display_size.y;
     let second_h = scripts_atlas.entries[scripts_items[1].2].display_size.y;
     assert!(first_h <= 26.0 && second_h <= 26.0);
@@ -1303,6 +1319,14 @@ fn button_height_tiers_align_footer_tabs_and_compact_controls() {
         let tab_rect = button_rect_around(tab_label);
         assert!((tab_rect.height() - theme::SIDEBAR_TAB_HEIGHT).abs() <= 0.5);
     }
+
+    // Custom Matrix palette button uses Tabler "dots" icon in a 46x32 button and opens MatrixDialog.
+    let dots_rect = icon_button_rect("dots");
+    assert!((dots_rect.width() - PALETTE_BUTTON_SIZE.x).abs() <= 0.5);
+    assert!((dots_rect.height() - PALETTE_BUTTON_SIZE.y).abs() <= 0.5);
+    assert!(app.matrix_dialog.is_none());
+    let _ = run_ui_pass_frame(&ctx, &mut app, click_events(dots_rect.center()));
+    assert!(app.matrix_dialog.is_some());
 
     // Compact matrix controls share COMPACT_BUTTON_HEIGHT (24px).
     for matrix_label in ["+ row", "− row", "+ col", "− col"] {
