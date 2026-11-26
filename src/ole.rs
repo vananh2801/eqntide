@@ -49,9 +49,9 @@ pub const MATHTYPE_PROG_IDS: &[&str] = &["Equation.DSMT4", "Equation.3", "Equati
 /// Known stream names in MathType OLE containers.
 pub const MTEF_STREAM_NAMES: &[&str] = &["Equation Native", "EquationNative", "Equation"];
 
-const COMPOBJ: &[u8] = include_bytes!("../assets/compobj.bin");
-const OLE_STREAM: &[u8] = include_bytes!("../assets/ole.bin");
-const OBJINFO: &[u8] = include_bytes!("../assets/objinfo.bin");
+const COMPOBJ: &[u8] = include_bytes!("../assets/ole/compobj.bin");
+const OLE_STREAM: &[u8] = include_bytes!("../assets/ole/ole.bin");
+const OBJINFO: &[u8] = include_bytes!("../assets/ole/objinfo.bin");
 
 /// `{0002CE03-0000-0000-C000-000000000046}` in on-disk byte order.
 const MATHTYPE_CLSID: [u8; 16] = [
