@@ -14,8 +14,8 @@ RequestExecutionLevel user
 
 ; Interface Settings
 !define MUI_ABORTWARNING
-!define MUI_ICON "..\assets\icons\icon.ico"
-!define MUI_UNICON "..\assets\icons\icon.ico"
+!define MUI_ICON "..\assets\brand\icon.ico"
+!define MUI_UNICON "..\assets\brand\icon.ico"
 
 ; Pages
 !insertmacro MUI_PAGE_WELCOME

@@ -307,11 +307,11 @@ def build_vba_ole2(streams: dict[str, bytes]) -> bytes:
 DOTM_PATH = "word-template/EqnTide.dotm"
 BAS_PATH = "word-template/EqnTide.bas"
 RIBBON_IMAGES = (
-    ("iconInsertEq", "images/pencil-plus.png", "wps-addin/assets/icons/pencil-plus-32.png"),
-    ("iconEditEq", "images/edit.png", "wps-addin/assets/icons/edit-32.png"),
-    ("iconToggleLatex", "images/tex.png", "wps-addin/assets/icons/tex-32.png"),
-    ("iconUpgradeMt", "images/arrow-big-up-lines.png", "wps-addin/assets/icons/arrow-big-up-lines-32.png"),
-    ("iconBatchConv", "images/file-type-docx.png", "wps-addin/assets/icons/file-type-docx-32.png"),
+    ("iconInsertEq", "images/pencil-plus.png", "assets/icons/generated/office-ribbon/pencil-plus-32.png"),
+    ("iconEditEq", "images/edit.png", "assets/icons/generated/office-ribbon/edit-32.png"),
+    ("iconToggleLatex", "images/tex.png", "assets/icons/generated/office-ribbon/tex-32.png"),
+    ("iconUpgradeMt", "images/arrow-big-up-lines.png", "assets/icons/generated/office-ribbon/arrow-big-up-lines-32.png"),
+    ("iconBatchConv", "images/file-type-docx.png", "assets/icons/generated/office-ribbon/file-type-docx-32.png"),
 )
 
 if UI_ONLY:

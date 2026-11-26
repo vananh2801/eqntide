@@ -89,7 +89,11 @@ class RenderedIconsTests(unittest.TestCase):
             package_native.populate(stage, binaries, windows=False)
             self.assertTrue((stage / "NOTICE").is_file())
             self.assertIn("Tabler Icons", (stage / "NOTICE").read_text(encoding="utf-8"))
-            self.assertTrue((stage / "icons/tabler-icons/LICENSE.txt").is_file())
+            self.assertTrue((stage / "icons/icon.png").is_file())
+            self.assertTrue((stage / "icons/icon.ico").is_file())
+            self.assertTrue((stage / "icons/tabler-LICENSE.txt").is_file())
+            self.assertFalse((stage / "icons/sources").exists())
+            self.assertFalse((stage / "icons/generated").exists())
             self.assertTrue((stage / "wps-addin/assets/icons/pencil-plus-32.png").is_file())
             self.assertTrue((stage / "word-template/EqnTide.dotm").is_file())
 

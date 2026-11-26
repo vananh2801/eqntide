@@ -445,7 +445,7 @@ impl App {
         let logo_id = self
             .logo_texture
             .get_or_insert_with(|| {
-                let bytes = include_bytes!("../../../assets/icons/icon.png");
+                let bytes = include_bytes!("../../../assets/brand/icon.png");
                 let pixels = image::load_from_memory(bytes)
                     .expect("bundled icon is valid")
                     .to_rgba8();

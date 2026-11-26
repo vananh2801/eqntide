@@ -2,217 +2,217 @@
   "desktop": {
     "alpha": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/alpha.png",
+      "path": "assets/icons/generated/desktop/alpha.png",
       "png_sha256": "e5b917108f70a68175d8bd1826c682634dda61fc550a58d0f5b91f19f58343b7",
       "size": 48,
       "svg_sha256": "fe5b11c4b98433c2f031041097d26d412dee4e5b755702b76d4d800bf692456f"
     },
     "arrow-autofit-right": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/arrow-autofit-right.png",
+      "path": "assets/icons/generated/desktop/arrow-autofit-right.png",
       "png_sha256": "cc63fc934bc89da6f8548e17b17551908e4ee4b284f5d66507f94f19e7043889",
       "size": 48,
       "svg_sha256": "8cf256eec9811520fbd3a48f62bf88db675b224af8556d165d6099150816bcdc"
     },
     "arrow-back-up": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/arrow-back-up.png",
+      "path": "assets/icons/generated/desktop/arrow-back-up.png",
       "png_sha256": "6eaa9081f53e9b1c23726c3db3ff0828c3224bb3522ad4da8f53086381fde57e",
       "size": 48,
       "svg_sha256": "d5f6aeb852f7fcba6ab2767592cb12475845328b1908d8d0bb3374de413956bd"
     },
     "arrow-forward-up": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/arrow-forward-up.png",
+      "path": "assets/icons/generated/desktop/arrow-forward-up.png",
       "png_sha256": "f7f1c3e706bf3e21dc7082de51a54f0d0b1caf532783884ebb4e36dc34db623e",
       "size": 48,
       "svg_sha256": "e550d9130836cb16b296daac8fb0d4ddb80a61d53f668e155a5c4aa87807c230"
     },
     "arrows-left-right": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/arrows-left-right.png",
+      "path": "assets/icons/generated/desktop/arrows-left-right.png",
       "png_sha256": "53063b59cda9c428a67534bea36c50d9d399b40c26dcdf1a2e6c46bfdcd2844e",
       "size": 48,
       "svg_sha256": "56ab20e4be9dd26aad80947d3f4ed9709dd121f32456f3de93500dde06cf4ee9"
     },
     "brand-github": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/brand-github.png",
+      "path": "assets/icons/generated/desktop/brand-github.png",
       "png_sha256": "70f494ff04584b396ffd75a193d3f0f164695b71263205180b8293f8a2ad789b",
       "size": 48,
       "svg_sha256": "7060be8cf4c1ec2e8339c5512c6439e4324da4eb06fd40ad72165adb3cf8c5fc"
     },
     "chevron-left": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/chevron-left.png",
+      "path": "assets/icons/generated/desktop/chevron-left.png",
       "png_sha256": "32876f520cd848f6005a72318ba8b7ea028b987fd24b863ed7c8064aff849ceb",
       "size": 48,
       "svg_sha256": "7470626a2491f3644ec83e7168e150ea4b0bad2452f9da461d697f8a677489b8"
     },
     "dots": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/dots.png",
+      "path": "assets/icons/generated/desktop/dots.png",
       "png_sha256": "2ec01c2bc804fd273b40a5be0f21026011d957f39edadbd7a1ed3e4485ed46e2",
       "size": 48,
       "svg_sha256": "72531fe6d0ee7e679ae928199231178f4228e7f27c8e04e64653993603f02da5"
     },
     "file": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/file.png",
+      "path": "assets/icons/generated/desktop/file.png",
       "png_sha256": "4a94c7c26ba0c6a38af32de150b41d0cc90057ebff9cd5d0967788cc99bfbdab",
       "size": 48,
       "svg_sha256": "86aba13d5a4d32bd21b79b7a9e7338414ef16e36e874c5616a48968820ddc2a4"
     },
     "file-type-docx": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/file-type-docx.png",
+      "path": "assets/icons/generated/desktop/file-type-docx.png",
       "png_sha256": "a0769407f77f1e5c69e0df43cccab0d92c844d117cf1346f463ab3b254e0cf9f",
       "size": 48,
       "svg_sha256": "e71ac1af697713f3a3c228d9a2a61d80652b33ea0baf8d031871d00c23b2dedf"
     },
     "file-upload": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/file-upload.png",
+      "path": "assets/icons/generated/desktop/file-upload.png",
       "png_sha256": "0b196e8c04032015947820c0bf0e67554e6e1b3f279f84d6307565afd01f64c9",
       "size": 48,
       "svg_sha256": "1b640be9a1167d627d7442ae718fb3fb9c64af10c976c8b5007a8daa2852a02e"
     },
     "folder": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/folder.png",
+      "path": "assets/icons/generated/desktop/folder.png",
       "png_sha256": "5e8e01fb1351040c8444e5b814e2c40b9dc8d9cd71420ae95a45727179f77086",
       "size": 48,
       "svg_sha256": "444a8405905b7e121cbb5aa42d6ecfeae9da8dc39ed79b5b2a87f0c0590607d5"
     },
     "folder-open": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/folder-open.png",
+      "path": "assets/icons/generated/desktop/folder-open.png",
       "png_sha256": "8ec16787cacb35e65bb9d7129ceaf349ddb58a88fc76da235fa7e62b786e8a94",
       "size": 48,
       "svg_sha256": "4b143b6ee7838920358060408d83036046277fcac46c61a273a1f8d4b4b37143"
     },
     "history": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/history.png",
+      "path": "assets/icons/generated/desktop/history.png",
       "png_sha256": "d1d99b9a395c990971ed9e429c46e7f640e9f07220f8ec26354cbb65f134eeef",
       "size": 48,
       "svg_sha256": "9e0825db1f37a42ac45aa5add6cba4614b4b107af7c33398ee51ff2295ef30a3"
     },
     "info-circle": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/info-circle.png",
+      "path": "assets/icons/generated/desktop/info-circle.png",
       "png_sha256": "98ac2f1936036d1e18d8b39c98ad9165320f23ba7e7dd61d3952b1f2b5ea9cc0",
       "size": 48,
       "svg_sha256": "2e7c31bdd43953291099a3d7fecce25ca57167ed418fd96e814c33d576296210"
     },
     "license": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/license.png",
+      "path": "assets/icons/generated/desktop/license.png",
       "png_sha256": "1347b346bad865d182ca47cf2906c743c360a48e6d06df124c017b3c954fb3d4",
       "size": 48,
       "svg_sha256": "284f1323e27aa05457b9e5624608bf2d3007078e26e26c5bda0c24e201b4aa51"
     },
     "math-avg": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/math-avg.png",
+      "path": "assets/icons/generated/desktop/math-avg.png",
       "png_sha256": "e8c2a08e60db1e4c569a444d87c478923a77459e65052f0b20e2df4b73b59fba",
       "size": 48,
       "svg_sha256": "fd5b62c1bbc36d09afd365b799e7a0e85dc03c94ebf2d18d5ef40bdd873a2123"
     },
     "math-equal-lower": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/math-equal-lower.png",
+      "path": "assets/icons/generated/desktop/math-equal-lower.png",
       "png_sha256": "e11e2e5a03c7a24f2d693b1cb306df1fad3632b39afca5d1e8071373b60ef5d1",
       "size": 48,
       "svg_sha256": "454565301e509e9d6103cfc2cc3719868d6b45a936613bef4e05d83de5c5f82e"
     },
     "math-integral": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/math-integral.png",
+      "path": "assets/icons/generated/desktop/math-integral.png",
       "png_sha256": "c9f3ed0e66961aed4fdf2ff6d60008e4bed60c8619eaef008075bda80153c0c2",
       "size": 48,
       "svg_sha256": "5b0e440333bdb68f1c64d08ec7dff5930202b83b674b00535f049dab4dec3dee"
     },
     "math-sin": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/math-sin.png",
+      "path": "assets/icons/generated/desktop/math-sin.png",
       "png_sha256": "f7e797ffde69d28b30f3e36e6b936c246ac2a672c2ca9b068e88162253bca4ab",
       "size": 48,
       "svg_sha256": "b8072f6e07c8fc352dd627a8f861a5ec403f88d739694af2620653312aecccd9"
     },
     "math-x-divide-y": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/math-x-divide-y.png",
+      "path": "assets/icons/generated/desktop/math-x-divide-y.png",
       "png_sha256": "ddb3e643550c875602a25bdeecf55f0038da32a2633ef196480f369297810aef",
       "size": 48,
       "svg_sha256": "7213a489f14f62e8624a1282c189f0f707574b2aac7773ebea5e9bb347691c97"
     },
     "matrix": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/matrix.png",
+      "path": "assets/icons/generated/desktop/matrix.png",
       "png_sha256": "84db2275b5394498564d23b0cea245ed315586900f5d14ee0e3a85bd37511c87",
       "size": 48,
       "svg_sha256": "894c6d75704fd671271e73a482ff1beb7eedb3ee69342c1d95388ee906741d11"
     },
     "omega": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/omega.png",
+      "path": "assets/icons/generated/desktop/omega.png",
       "png_sha256": "a487d83293c45dadcab9ed108e1a7af1aad31e0bfe9f1a0ea6c1be24d39d8d9a",
       "size": 48,
       "svg_sha256": "6e030348c746300343a0ca2bf13d31112f4973b7694b5328cd367ead18999dda"
     },
     "overline": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/overline.png",
+      "path": "assets/icons/generated/desktop/overline.png",
       "png_sha256": "13cb5bbeed7ac2433b1efb141e831fdf5e2ac552d0157d2c92029a951af34f19",
       "size": 48,
       "svg_sha256": "7f4840e6c113373ed8874d9be73dc7cad1040fdab619804c0f54d633918abac2"
     },
     "parentheses": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/parentheses.png",
+      "path": "assets/icons/generated/desktop/parentheses.png",
       "png_sha256": "8e4cbf14ed79db64048b447a3ce900b1d09119cefaa8289153f6b64f9ed08ea1",
       "size": 48,
       "svg_sha256": "893455ee8acbd13da782fa49bdb2118727e9bd5d48fb7b7bd6bbeb0663946653"
     },
     "settings": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/settings.png",
+      "path": "assets/icons/generated/desktop/settings.png",
       "png_sha256": "fa241aa100c6969f564b028fa840bd75bfa801631d0ed0ff814f60f968d2eada",
       "size": 48,
       "svg_sha256": "73a44284108f39eeb86928af714c8f38bbe1dd751d962f4da0ebde52b7c66840"
     },
     "square-root-2": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/square-root-2.png",
+      "path": "assets/icons/generated/desktop/square-root-2.png",
       "png_sha256": "a61a3659ef9065ed0e98e47f8435149ba291d8d62b01a35cf85c155fa36c4d49",
       "size": 48,
       "svg_sha256": "00361a53e3cc85404d22f1f2c7901a5cedff4a1f1bc7be446f3d11eddbad773c"
     },
     "sum": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/sum.png",
+      "path": "assets/icons/generated/desktop/sum.png",
       "png_sha256": "4f7d44d10a4c5ae4e73d14a3d45d0516eeda099d26a11cf608a00f5969a0bd83",
       "size": 48,
       "svg_sha256": "63dd40b029bb7b26d5469e6bddd27e37d6318c0f533cb784db60efa9381ff3dd"
     },
     "underline": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/underline.png",
+      "path": "assets/icons/generated/desktop/underline.png",
       "png_sha256": "ff14b494a8b523a4f8c0c60e77c9a2884050597deadc7d65b5d46d3dd68823ee",
       "size": 48,
       "svg_sha256": "c5748a4422197fad7a1f48e9924de7de6d81c28487fb30837c39c7edb5895cd1"
     },
     "user": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/user.png",
+      "path": "assets/icons/generated/desktop/user.png",
       "png_sha256": "6dcb53a39e3b7d5e51b95da8896abee65dc743a2a74f386c860ba4d599ba2f18",
       "size": 48,
       "svg_sha256": "352e6abfe3d98b4afeb4d25bd5ec34d8824988b3ba103133e6d160f4bed098e4"
     },
     "x-power-y": {
       "color": "#FFFFFF",
-      "path": "assets/icons/rendered/x-power-y.png",
+      "path": "assets/icons/generated/desktop/x-power-y.png",
       "png_sha256": "b2abdc4edda00e55a4090dbcf502c3d83ea9cc1d2ae5d265623adae5a5d596c5",
       "size": 48,
       "svg_sha256": "3d189fa902926437f819f672043bc12584f1149be056f82bd22d17b94dc07723"
@@ -221,35 +221,40 @@
   "ribbon": {
     "arrow-big-up-lines": {
       "color": "#1D78B8",
-      "path": "wps-addin/assets/icons/arrow-big-up-lines-32.png",
+      "mirror_path": "wps-addin/assets/icons/arrow-big-up-lines-32.png",
+      "path": "assets/icons/generated/office-ribbon/arrow-big-up-lines-32.png",
       "png_sha256": "7f1a79919ea0edbadc4886759990c92f2eb18e7ae447025c17da78be3215080c",
       "size": 32,
       "svg_sha256": "55689aa281f2c2be38f9666603642bc188330fa83024628b9592cb6395ec5c20"
     },
     "edit": {
       "color": "#1D78B8",
-      "path": "wps-addin/assets/icons/edit-32.png",
+      "mirror_path": "wps-addin/assets/icons/edit-32.png",
+      "path": "assets/icons/generated/office-ribbon/edit-32.png",
       "png_sha256": "ee5f119751c86b9a21b615d711f2d6848a5efe9cde6d2c1a73f0b685ce634807",
       "size": 32,
       "svg_sha256": "d5a5a8c6cd6dcdb7cd7c50bf5864ebc8c1a501435f28f3713695753f8765ffbc"
     },
     "file-type-docx": {
       "color": "#1D78B8",
-      "path": "wps-addin/assets/icons/file-type-docx-32.png",
+      "mirror_path": "wps-addin/assets/icons/file-type-docx-32.png",
+      "path": "assets/icons/generated/office-ribbon/file-type-docx-32.png",
       "png_sha256": "4644175cc53846232ba1d7f8fd874923ebf6b89842a7b89c5fd37a757be0b2f3",
       "size": 32,
       "svg_sha256": "e71ac1af697713f3a3c228d9a2a61d80652b33ea0baf8d031871d00c23b2dedf"
     },
     "pencil-plus": {
       "color": "#1D78B8",
-      "path": "wps-addin/assets/icons/pencil-plus-32.png",
+      "mirror_path": "wps-addin/assets/icons/pencil-plus-32.png",
+      "path": "assets/icons/generated/office-ribbon/pencil-plus-32.png",
       "png_sha256": "8337658e26fff1469caf4c1837840fd0b7d08404bdc22035dfffd7f8ce1420ae",
       "size": 32,
       "svg_sha256": "bb6138b4bc8ad507d8ebf3b89c85b7d5917196b59be295c9e3db1660d4b98ac3"
     },
     "tex": {
       "color": "#1D78B8",
-      "path": "wps-addin/assets/icons/tex-32.png",
+      "mirror_path": "wps-addin/assets/icons/tex-32.png",
+      "path": "assets/icons/generated/office-ribbon/tex-32.png",
       "png_sha256": "409756004b36280fb8f1f321d1965221823865cd4a32a9b52b7d330419935f24",
       "size": 32,
       "svg_sha256": "e1395a66f92f9cc498bbe826cec56abb9f5a2625a5e8cf43a73cb9914acc248f"

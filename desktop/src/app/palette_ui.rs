@@ -12,7 +12,7 @@ use crate::{
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::HashMap;
 
-const PALETTE_ATLAS_PNG: &[u8] = include_bytes!("../../../assets/icons/palette-rendered/atlas.png");
+const PALETTE_ATLAS_PNG: &[u8] = include_bytes!("../../../assets/icons/generated/palette-atlas/atlas.png");
 
 impl App {
     /// Renders the horizontal template/symbol palette grid for the active sidebar category.

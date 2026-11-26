@@ -56,7 +56,10 @@ def populate(stage, binary_dir, windows):
     shutil.copy2(ROOT / "word-template/EqnTide.dotm", stage / "word-template/EqnTide.dotm")
     for name in ("README.md", "LICENSE", "NOTICE"):
         shutil.copy2(ROOT / name, stage / name)
-    shutil.copytree(ROOT / "assets/icons", stage / "icons")
+    (stage / "icons").mkdir()
+    shutil.copy2(ROOT / "assets/brand/icon.png", stage / "icons/icon.png")
+    shutil.copy2(ROOT / "assets/brand/icon.ico", stage / "icons/icon.ico")
+    shutil.copy2(ROOT / "assets/icons/sources/tabler/LICENSE.txt", stage / "icons/tabler-LICENSE.txt")
     shutil.copytree(ROOT / "assets/fonts", stage / "fonts", ignore=shutil.ignore_patterns("*.pdf"))
     (stage / "scripts").mkdir()
     for script in ("install-addin.sh", "install-addin.ps1", "install-addin.bat", "uninstall-addin.bat", "install-bridge-service.sh", "configure_wps.py", "install-session-addins.py", "install-bridge-startup.ps1"):

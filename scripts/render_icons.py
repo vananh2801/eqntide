@@ -22,9 +22,10 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-SVG_DIR = ROOT / "assets/icons/tabler-icons"
-DESKTOP_OUT_DIR = ROOT / "assets/icons/rendered"
-RIBBON_OUT_DIR = ROOT / "wps-addin/assets/icons"
+SVG_DIR = ROOT / "assets/icons/sources/tabler"
+DESKTOP_OUT_DIR = ROOT / "assets/icons/generated/desktop"
+RIBBON_OUT_DIR = ROOT / "assets/icons/generated/office-ribbon"
+WPS_RIBBON_OUT_DIR = ROOT / "wps-addin/assets/icons"
 MANIFEST_PATH = DESKTOP_OUT_DIR / "manifest.json"
 
 DESKTOP_SIZE = 48
@@ -176,6 +177,7 @@ def expected_specs() -> list[tuple[str, str, Path, int, str]]:
 def generate_all() -> None:
     renderer = detect_renderer()
     manifest: dict[str, dict[str, dict[str, object]]] = {"desktop": {}, "ribbon": {}}
+    WPS_RIBBON_OUT_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="eqntide-icons-") as tmp:
         tmp_dir = Path(tmp)
         for group, name, out_path, size, color in expected_specs():
@@ -183,13 +185,18 @@ def generate_all() -> None:
             if not svg_path.is_file():
                 raise FileNotFoundError(f"Missing source SVG: {svg_path}")
             render_svg_to_png(renderer, svg_path, out_path, size, color, tmp_dir)
-            manifest[group][name] = {
+            entry: dict[str, object] = {
                 "path": out_path.relative_to(ROOT).as_posix(),
                 "size": size,
                 "color": color,
                 "svg_sha256": sha256_file(svg_path),
                 "png_sha256": sha256_file(out_path),
             }
+            if group == "ribbon":
+                mirror_path = WPS_RIBBON_OUT_DIR / out_path.name
+                shutil.copy2(out_path, mirror_path)
+                entry["mirror_path"] = mirror_path.relative_to(ROOT).as_posix()
+            manifest[group][name] = entry
     MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Rendered {len(DESKTOP_ICONS)} desktop icons and {len(RIBBON_ICONS)} ribbon icons using {renderer}.")
@@ -217,12 +224,28 @@ def check_all() -> int:
         if not entry:
             errors.append(f"{MANIFEST_PATH}: missing manifest entry for {group}/{name}")
             continue
+        expected_rel = out_path.relative_to(ROOT).as_posix()
+        if entry.get("path") != expected_rel:
+            errors.append(f"{group}/{name}: manifest path mismatch ({entry.get('path')!r} != {expected_rel!r})")
         if entry.get("size") != size or entry.get("color") != color:
             errors.append(f"{group}/{name}: manifest metadata mismatch ({entry})")
         if entry.get("svg_sha256") != sha256_file(svg_path):
             errors.append(f"{group}/{name}: SVG changed since last render; re-run scripts/render_icons.py")
-        if entry.get("png_sha256") != sha256_file(out_path):
+        expected_png_sha = sha256_file(out_path)
+        if entry.get("png_sha256") != expected_png_sha:
             errors.append(f"{group}/{name}: PNG checksum mismatch; re-run scripts/render_icons.py")
+        if group == "ribbon":
+            mirror_path = WPS_RIBBON_OUT_DIR / out_path.name
+            expected_mirror_rel = mirror_path.relative_to(ROOT).as_posix()
+            if entry.get("mirror_path") != expected_mirror_rel:
+                errors.append(
+                    f"{group}/{name}: manifest mirror_path mismatch "
+                    f"({entry.get('mirror_path')!r} != {expected_mirror_rel!r})"
+                )
+            if not mirror_path.is_file():
+                errors.append(f"Missing WPS ribbon mirror PNG: {mirror_path}")
+            elif sha256_file(mirror_path) != expected_png_sha:
+                errors.append(f"{group}/{name}: WPS ribbon mirror checksum mismatch ({mirror_path}); re-run scripts/render_icons.py")
 
     if errors:
         for err in errors:

@@ -1060,41 +1060,41 @@ impl eframe::App for App {
 /// Returns embedded PNG bytes for the named bundled Tabler UI icon.
 pub(super) fn tabler_icon_bytes(name: &str) -> &'static [u8] {
     match name {
-        "alpha" => include_bytes!("../../../assets/icons/rendered/alpha.png"),
+        "alpha" => include_bytes!("../../../assets/icons/generated/desktop/alpha.png"),
         "arrow-autofit-right" => {
-            include_bytes!("../../../assets/icons/rendered/arrow-autofit-right.png")
+            include_bytes!("../../../assets/icons/generated/desktop/arrow-autofit-right.png")
         }
-        "arrow-back-up" => include_bytes!("../../../assets/icons/rendered/arrow-back-up.png"),
-        "arrow-forward-up" => include_bytes!("../../../assets/icons/rendered/arrow-forward-up.png"),
+        "arrow-back-up" => include_bytes!("../../../assets/icons/generated/desktop/arrow-back-up.png"),
+        "arrow-forward-up" => include_bytes!("../../../assets/icons/generated/desktop/arrow-forward-up.png"),
         "arrows-left-right" => {
-            include_bytes!("../../../assets/icons/rendered/arrows-left-right.png")
+            include_bytes!("../../../assets/icons/generated/desktop/arrows-left-right.png")
         }
-        "brand-github" => include_bytes!("../../../assets/icons/rendered/brand-github.png"),
-        "chevron-left" => include_bytes!("../../../assets/icons/rendered/chevron-left.png"),
-        "dots" => include_bytes!("../../../assets/icons/rendered/dots.png"),
-        "file" => include_bytes!("../../../assets/icons/rendered/file.png"),
-        "file-type-docx" => include_bytes!("../../../assets/icons/rendered/file-type-docx.png"),
-        "file-upload" => include_bytes!("../../../assets/icons/rendered/file-upload.png"),
-        "folder" => include_bytes!("../../../assets/icons/rendered/folder.png"),
-        "folder-open" => include_bytes!("../../../assets/icons/rendered/folder-open.png"),
-        "history" => include_bytes!("../../../assets/icons/rendered/history.png"),
-        "info-circle" => include_bytes!("../../../assets/icons/rendered/info-circle.png"),
-        "license" => include_bytes!("../../../assets/icons/rendered/license.png"),
-        "math-avg" => include_bytes!("../../../assets/icons/rendered/math-avg.png"),
-        "math-equal-lower" => include_bytes!("../../../assets/icons/rendered/math-equal-lower.png"),
-        "math-integral" => include_bytes!("../../../assets/icons/rendered/math-integral.png"),
-        "math-sin" => include_bytes!("../../../assets/icons/rendered/math-sin.png"),
-        "math-x-divide-y" => include_bytes!("../../../assets/icons/rendered/math-x-divide-y.png"),
-        "matrix" => include_bytes!("../../../assets/icons/rendered/matrix.png"),
-        "omega" => include_bytes!("../../../assets/icons/rendered/omega.png"),
-        "overline" => include_bytes!("../../../assets/icons/rendered/overline.png"),
-        "parentheses" => include_bytes!("../../../assets/icons/rendered/parentheses.png"),
-        "settings" => include_bytes!("../../../assets/icons/rendered/settings.png"),
-        "square-root-2" => include_bytes!("../../../assets/icons/rendered/square-root-2.png"),
-        "sum" => include_bytes!("../../../assets/icons/rendered/sum.png"),
-        "underline" => include_bytes!("../../../assets/icons/rendered/underline.png"),
-        "user" => include_bytes!("../../../assets/icons/rendered/user.png"),
-        "x-power-y" => include_bytes!("../../../assets/icons/rendered/x-power-y.png"),
+        "brand-github" => include_bytes!("../../../assets/icons/generated/desktop/brand-github.png"),
+        "chevron-left" => include_bytes!("../../../assets/icons/generated/desktop/chevron-left.png"),
+        "dots" => include_bytes!("../../../assets/icons/generated/desktop/dots.png"),
+        "file" => include_bytes!("../../../assets/icons/generated/desktop/file.png"),
+        "file-type-docx" => include_bytes!("../../../assets/icons/generated/desktop/file-type-docx.png"),
+        "file-upload" => include_bytes!("../../../assets/icons/generated/desktop/file-upload.png"),
+        "folder" => include_bytes!("../../../assets/icons/generated/desktop/folder.png"),
+        "folder-open" => include_bytes!("../../../assets/icons/generated/desktop/folder-open.png"),
+        "history" => include_bytes!("../../../assets/icons/generated/desktop/history.png"),
+        "info-circle" => include_bytes!("../../../assets/icons/generated/desktop/info-circle.png"),
+        "license" => include_bytes!("../../../assets/icons/generated/desktop/license.png"),
+        "math-avg" => include_bytes!("../../../assets/icons/generated/desktop/math-avg.png"),
+        "math-equal-lower" => include_bytes!("../../../assets/icons/generated/desktop/math-equal-lower.png"),
+        "math-integral" => include_bytes!("../../../assets/icons/generated/desktop/math-integral.png"),
+        "math-sin" => include_bytes!("../../../assets/icons/generated/desktop/math-sin.png"),
+        "math-x-divide-y" => include_bytes!("../../../assets/icons/generated/desktop/math-x-divide-y.png"),
+        "matrix" => include_bytes!("../../../assets/icons/generated/desktop/matrix.png"),
+        "omega" => include_bytes!("../../../assets/icons/generated/desktop/omega.png"),
+        "overline" => include_bytes!("../../../assets/icons/generated/desktop/overline.png"),
+        "parentheses" => include_bytes!("../../../assets/icons/generated/desktop/parentheses.png"),
+        "settings" => include_bytes!("../../../assets/icons/generated/desktop/settings.png"),
+        "square-root-2" => include_bytes!("../../../assets/icons/generated/desktop/square-root-2.png"),
+        "sum" => include_bytes!("../../../assets/icons/generated/desktop/sum.png"),
+        "underline" => include_bytes!("../../../assets/icons/generated/desktop/underline.png"),
+        "user" => include_bytes!("../../../assets/icons/generated/desktop/user.png"),
+        "x-power-y" => include_bytes!("../../../assets/icons/generated/desktop/x-power-y.png"),
         other => panic!("unknown tabler icon: {other}"),
     }
 }

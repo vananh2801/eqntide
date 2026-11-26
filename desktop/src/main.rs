@@ -162,7 +162,7 @@ fn probe_wgpu_adapter(config: &eframe::egui_wgpu::WgpuConfiguration) -> AdapterP
 
 fn desktop_viewport() -> eframe::egui::ViewportBuilder {
     let icon =
-        eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icons/icon.png")).ok();
+        eframe::icon_data::from_png_bytes(include_bytes!("../../assets/brand/icon.png")).ok();
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_app_id("eqntide")
         .with_title("EqnTide — Equation Editor")

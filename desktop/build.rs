@@ -85,7 +85,7 @@ fn build_icon_res(ico: &[u8]) -> Vec<u8> {
 }
 
 fn main() {
-    let ico_path = PathBuf::from("../assets/icons/icon.ico");
+    let ico_path = PathBuf::from("../assets/brand/icon.ico");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", ico_path.display());
 
@@ -99,7 +99,7 @@ fn main() {
         // Reserve an 8 MiB main-thread stack (matching Linux) so Typst layout,
         // egui, and Windows GPU driver initialization never hit STATUS_STACK_OVERFLOW.
         println!("cargo:rustc-link-arg-bins=/STACK:8388608");
-        let ico = fs::read(&ico_path).expect("failed to read ../assets/icons/icon.ico");
+        let ico = fs::read(&ico_path).expect("failed to read ../assets/brand/icon.ico");
         let res = build_icon_res(&ico);
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR missing"));
         let res_path = out_dir.join("eqntide_icon.res");
@@ -108,7 +108,7 @@ fn main() {
     } else {
         println!("cargo:rustc-link-arg-bins=-Wl,--stack,8388608");
         let mut res = winresource::WindowsResource::new();
-        res.set_icon("../assets/icons/icon.ico");
+        res.set_icon("../assets/brand/icon.ico");
         res.compile()
             .expect("failed to compile Windows icon resource");
     }

@@ -30,8 +30,8 @@ import palette_svg_builders as builders  # noqa: E402
 ROOT = SCRIPT_DIR.parent
 CATALOG_PATH = ROOT / "src/catalog/mod.rs"
 FONT_DIR = ROOT / "assets/fonts"
-SVG_OUT_DIR = ROOT / "assets/icons/palette"
-ATLAS_OUT_DIR = ROOT / "assets/icons/palette-rendered"
+SVG_OUT_DIR = ROOT / "assets/icons/sources/palette"
+ATLAS_OUT_DIR = ROOT / "assets/icons/generated/palette-atlas"
 ATLAS_PNG_PATH = ATLAS_OUT_DIR / "atlas.png"
 ATLAS_JSON_PATH = ATLAS_OUT_DIR / "atlas.json"
 
