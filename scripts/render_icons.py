@@ -86,6 +86,10 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def sha256_svg(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def png_dimensions_rgba(path: Path) -> tuple[int, int, int]:
     data = path.read_bytes()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
@@ -189,7 +193,7 @@ def generate_all() -> None:
                 "path": out_path.relative_to(ROOT).as_posix(),
                 "size": size,
                 "color": color,
-                "svg_sha256": sha256_file(svg_path),
+                "svg_sha256": sha256_svg(svg_path),
                 "png_sha256": sha256_file(out_path),
             }
             if group == "ribbon":
@@ -229,7 +233,7 @@ def check_all() -> int:
             errors.append(f"{group}/{name}: manifest path mismatch ({entry.get('path')!r} != {expected_rel!r})")
         if entry.get("size") != size or entry.get("color") != color:
             errors.append(f"{group}/{name}: manifest metadata mismatch ({entry})")
-        if entry.get("svg_sha256") != sha256_file(svg_path):
+        if entry.get("svg_sha256") != sha256_svg(svg_path):
             errors.append(f"{group}/{name}: SVG changed since last render; re-run scripts/render_icons.py")
         expected_png_sha = sha256_file(out_path)
         if entry.get("png_sha256") != expected_png_sha:

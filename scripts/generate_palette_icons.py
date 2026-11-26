@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 from dataclasses import dataclass
 import hashlib
 import html
@@ -110,8 +111,40 @@ def parse_catalog() -> list[CatalogEntry]:
     return entries
 
 
+def svg_stems_for_entries(entries: list[CatalogEntry]) -> dict[str, str]:
+    """Map each catalog entry ID to a case-insensitive-unique SVG filename stem."""
+    buckets: dict[str, list[CatalogEntry]] = defaultdict(list)
+    for entry in entries:
+        buckets[entry.id.lower()].append(entry)
+
+    stems: dict[str, str] = {}
+    for bucket in buckets.values():
+        if len(bucket) == 1:
+            entry = bucket[0]
+            stems[entry.id] = entry.id
+            continue
+
+        non_lower = [entry for entry in bucket if entry.tid != entry.tid.lower()]
+        for entry in bucket:
+            if entry.tid == entry.tid.lower():
+                stems[entry.id] = entry.id
+            elif len(non_lower) == 1:
+                stems[entry.id] = f"{entry.id}--cap"
+            else:
+                short_hash = hashlib.sha1(entry.id.encode("utf-8")).hexdigest()[:6]
+                stems[entry.id] = f"{entry.id}--{short_hash}"
+
+    if len({stem.lower() for stem in stems.values()}) != len(entries):
+        raise RuntimeError("SVG filename stems still have case-insensitive collisions")
+    return stems
+
+
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sha256_svg(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def png_dimensions_rgba(path: Path) -> tuple[int, int, int]:
@@ -535,6 +568,7 @@ def center_elements(
 
 def generate_all() -> None:
     entries = parse_catalog()
+    svg_stems = svg_stems_for_entries(entries)
     builders.FONT_SPECS.clear()
     planned: list[tuple[CatalogEntry, list[str], list[builders.TextPlacement]]] = []
     for entry in entries:
@@ -544,7 +578,7 @@ def generate_all() -> None:
     font_paths = extract_font_paths(builders.FONT_SPECS)
 
     SVG_OUT_DIR.mkdir(parents=True, exist_ok=True)
-    expected_files = {f"{entry.id}.svg" for entry in entries}
+    expected_files = {f"{svg_stems[entry.id]}.svg" for entry in entries}
     for old_svg in SVG_OUT_DIR.glob("*.svg"):
         if old_svg.name not in expected_files:
             old_svg.unlink()
@@ -579,7 +613,7 @@ def generate_all() -> None:
     atlas_entries: list[dict[str, object]] = []
     for idx, (entry, full_els) in enumerate(zip(entries, centered_elements)):
         svg_text = builders.wrap_svg(full_els)
-        svg_path = SVG_OUT_DIR / f"{entry.id}.svg"
+        svg_path = SVG_OUT_DIR / f"{svg_stems[entry.id]}.svg"
         svg_path.write_text(svg_text, encoding="utf-8")
 
         col = idx % GRID_COLS
@@ -594,7 +628,7 @@ def generate_all() -> None:
                 "y": cell_y_dip * SCALE,
                 "w": ICON_W * SCALE,
                 "h": ICON_H * SCALE,
-                "svg_sha256": sha256_file(svg_path),
+                "svg_sha256": sha256_svg(svg_path),
             }
         )
 
@@ -622,6 +656,7 @@ def generate_all() -> None:
 def check_all() -> int:
     errors: list[str] = []
     entries = parse_catalog()
+    svg_stems = svg_stems_for_entries(entries)
     if not ATLAS_PNG_PATH.is_file():
         errors.append(f"Missing atlas PNG: {ATLAS_PNG_PATH}")
     if not ATLAS_JSON_PATH.is_file():
@@ -639,10 +674,11 @@ def check_all() -> int:
         errors.append("Atlas PNG checksum mismatch; re-run scripts/generate_palette_icons.py")
 
     expected_by_id = {e.id: e for e in entries}
+    expected_stems = set(svg_stems.values())
     actual_svgs = {p.stem for p in SVG_OUT_DIR.glob("*.svg")}
-    if actual_svgs != set(expected_by_id.keys()):
-        missing = sorted(set(expected_by_id.keys()) - actual_svgs)
-        extra = sorted(actual_svgs - set(expected_by_id.keys()))
+    if actual_svgs != expected_stems:
+        missing = sorted(expected_stems - actual_svgs)
+        extra = sorted(actual_svgs - expected_stems)
         errors.append(f"Palette SVG set mismatch (missing={missing[:5]}, extra={extra[:5]})")
 
     atlas_by_id = {item["id"]: item for item in meta.get("entries", [])}
@@ -650,7 +686,7 @@ def check_all() -> int:
         errors.append("Atlas entry IDs do not match src/catalog/mod.rs")
 
     for eid, entry in expected_by_id.items():
-        svg_path = SVG_OUT_DIR / f"{eid}.svg"
+        svg_path = SVG_OUT_DIR / f"{svg_stems[eid]}.svg"
         if not svg_path.is_file():
             continue
         svg_text = svg_path.read_text(encoding="utf-8")
@@ -661,7 +697,7 @@ def check_all() -> int:
             continue
         if item.get("source") != entry.source:
             errors.append(f"{eid}: source mismatch in atlas.json ({item.get('source')!r} != {entry.source!r})")
-        if item.get("svg_sha256") != sha256_file(svg_path):
+        if item.get("svg_sha256") != sha256_svg(svg_path):
             errors.append(f"{eid}: SVG changed since last atlas build; re-run scripts/generate_palette_icons.py")
 
     if errors:

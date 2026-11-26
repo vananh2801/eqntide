@@ -37,6 +37,7 @@ class RenderedIconsTests(unittest.TestCase):
         self.assertEqual(len(entries), 547)
         svg_files = list(generate_palette_icons.SVG_OUT_DIR.glob("*.svg"))
         self.assertEqual(len(svg_files), len(entries))
+        self.assertEqual(len({p.name.lower() for p in svg_files}), len(entries))
 
         meta = json.loads(generate_palette_icons.ATLAS_JSON_PATH.read_text(encoding="utf-8"))
         self.assertEqual(meta["icon_width"], 40)
