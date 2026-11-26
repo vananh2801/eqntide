@@ -240,6 +240,6 @@ EqnTide builds upon specifications and open-source reference work from:
 - **Source code:** [MIT License](LICENSE).
 - **STIX Two Text & Math fonts (`assets/fonts/stixfonts-2.13b171/`):** [SIL Open Font License 1.1](assets/fonts/stixfonts-2.13b171/OFL.txt).
 - **Nunito & JetBrains Mono fonts (`assets/fonts/Nunito/`, `assets/fonts/JetBrainsMono-2.304/`):** [SIL Open Font License 1.1](assets/fonts/Nunito/OFL.txt) and [JetBrains Mono OFL](assets/fonts/JetBrainsMono-2.304/OFL.txt).
-- **Tabler Icons (`assets/icons/tabler-icons/`):** Copyright (c) 2020-2026 Paweł Kuna, licensed under the [MIT License](assets/icons/tabler-icons/LICENSE.txt).
+- **Tabler Icons (`assets/icons/sources/tabler/`):** Copyright (c) 2020-2026 Paweł Kuna, licensed under the [MIT License](assets/icons/sources/tabler/LICENSE.txt).
 - **Ayu / ayu-colors theme palette:** Copyright (c) 2016 Ike Ku (MIT License) & Copyright (c) Konstantin Pschera (MIT License); see [NOTICE](NOTICE).
 - Full third-party copyright and license notices are listed in [NOTICE](NOTICE).

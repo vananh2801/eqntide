@@ -82,9 +82,9 @@ third-party open-source projects and standards:
    Author: Paweł Kuna
    Copyright (c) 2020-2026 Paweł Kuna
    License: MIT License
-   License Location: assets/icons/tabler-icons/LICENSE.txt
+   License Location: assets/icons/sources/tabler/LICENSE.txt
    Description:
-     Curated outline SVG icons in `assets/icons/tabler-icons/` and derived
+     Curated outline SVG icons in `assets/icons/sources/tabler/` and derived
      rasterized PNG icons used across the native desktop UI, Microsoft Word
      Ribbon template, and WPS Office add-in.
 
