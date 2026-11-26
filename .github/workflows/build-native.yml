@@ -66,12 +66,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
-          name: eqntide-native-preview-${{ matrix.target }}
+          name: eqntide-${{ matrix.target }}
           if-no-files-found: error
           path: |
-            dist/*/*/*.zip
             dist/*/*/*.tar.gz
             dist/*/*/*.deb
             dist/*/*/*.rpm
             dist/*/*/*.exe
-            dist/*/*/README-*.txt

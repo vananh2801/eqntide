@@ -5,7 +5,7 @@
 # 2. Push tag:
 #    - `vX.Y.Z` (no hyphen)  -> stable release (`prerelease: false`, updates Latest)
 #    - `vX.Y.Z-beta.1` (`-`) -> pre-release (`prerelease: true`, skips Latest)
-name: Native preview release
+name: Release
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: eqntide-native-preview-*
+          pattern: eqntide-*
           path: dist
           merge-multiple: true
       - name: Publish release assets
@@ -37,9 +37,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: false
           files: |
-            dist/*/*/*.zip
             dist/*/*/*.tar.gz
             dist/*/*/*.deb
             dist/*/*/*.rpm
             dist/*/*/*.exe
-            dist/*/*/README-*.txt

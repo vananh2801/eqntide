@@ -36,6 +36,7 @@ class NativeIntegration(unittest.TestCase):
             self.assertIn("eqntide-desktop.exe", (stage / "register-uri.ps1").read_text())
             self.assertIn("EQNTIDE_DESKTOP_BIN=", (stage / "start-server.bat").read_text())
             installer = (pack.ROOT / "scripts/installer.nsi").read_text()
+            self.assertIn(r'OutFile "${PACKAGE_DIR}\eqntide-${APP_VERSION}-windows-${APP_ARCH}-setup.exe"', installer)
             for path in re.findall(r'^\s*File(?: /r)? "\$\{PACKAGE_DIR\}\\windows-stage\\([^"]+)"', installer, re.M):
                 path = path.replace("\\", "/")
                 self.assertTrue(list(stage.glob(path)), path)
@@ -68,7 +69,7 @@ class NativeIntegration(unittest.TestCase):
             self.assertTrue((fonts_dir / "JetBrainsMono-2.304/JetBrainsMono-Regular.ttf").is_file())
             self.assertTrue((fonts_dir / "JetBrainsMono-2.304/OFL.txt").is_file())
 
-    def test_windows_repack_removes_stale_web_payload(self):
+    def test_windows_repack_stages_installer_only_and_removes_stale_web_payload(self):
         from unittest.mock import patch
         import shutil
         with tempfile.TemporaryDirectory() as tmp:
@@ -81,12 +82,14 @@ class NativeIntegration(unittest.TestCase):
             (stale / 'manifest.xml').write_text('obsolete')
             def populate(target, binary_dir, windows):
                 shutil.copytree(stage, target, dirs_exist_ok=True)
-            with patch.object(pack, 'populate', side_effect=populate), patch.object(sys, 'argv', ['package_native.py', '--target', 'x86_64-pc-windows-msvc', '--output', str(output)]):
+            with patch.object(pack, 'resolve_release_version', return_value=pack.VERSION), patch.object(pack, 'populate', side_effect=populate), patch.object(sys, 'argv', ['package_native.py', '--target', 'x86_64-pc-windows-msvc', '--output', str(output)]):
                 pack.main()
             self.assertFalse(stale.exists())
-            self.assertIn(f'!define APP_VERSION "{pack.VERSION}"', (version_dir / 'installer-config.nsh').read_text())
-            self.assertTrue((version_dir / 'README-WINDOWS.txt').exists())
-            self.assertTrue(list(version_dir.glob(f'*{pack.VERSION}*.zip')))
+            config = (version_dir / 'installer-config.nsh').read_text()
+            self.assertIn(f'!define APP_VERSION "{pack.VERSION}"', config)
+            self.assertIn('!define APP_ARCH "x64"', config)
+            self.assertFalse((version_dir / 'README-WINDOWS.txt').exists())
+            self.assertEqual(list(version_dir.glob('*.zip')), [])
             self.assertTrue((version_dir / 'windows-stage/word-template/EqnTide.dotm').exists())
             self.assertTrue((version_dir / 'windows-stage/wps-addin/main.js').exists())
 
@@ -99,19 +102,35 @@ class NativeIntegration(unittest.TestCase):
             output = base / 'custom output'
             def populate(target, binary_dir, windows):
                 shutil.copytree(fixture, target, dirs_exist_ok=True)
-            archives = []
-            for target, platform in [('x86_64-unknown-linux-gnu', 'linux'), ('x86_64-pc-windows-msvc', 'windows')]:
-                for version in ('1.2.3', '1.3.0'):
-                    with patch.object(pack, 'VERSION', version), patch.object(pack, 'populate', side_effect=populate), patch.object(sys, 'argv', ['package_native.py', '--target', target, '--output', str(output)]):
-                        pack.main()
-                    folder = output / platform / version
-                    extension = '*.zip' if platform == 'windows' else '*.tar.gz'
-                    archive = next(folder.glob(extension))
-                    self.assertIn(version, archive.name)
-                    archives.append((archive, archive.read_bytes()))
-            for archive, content in archives:
+            linux_archives = []
+            for version in ('1.2.3', '1.3.0', '1.3.0-beta.1'):
+                with patch.object(pack, 'VERSION', '1.3.0' if 'beta' in version else version), patch.object(pack, 'resolve_release_version', return_value=version), patch.object(pack, 'populate', side_effect=populate), patch.object(sys, 'argv', ['package_native.py', '--target', 'x86_64-unknown-linux-gnu', '--output', str(output)]):
+                    pack.main()
+                folder = output / 'linux' / version
+                archive = folder / f'eqntide-{version}-linux-x64.tar.gz'
+                self.assertTrue(archive.is_file(), archive)
+                linux_archives.append((archive, archive.read_bytes()))
+
+                with patch.object(pack, 'VERSION', '1.3.0' if 'beta' in version else version), patch.object(pack, 'resolve_release_version', return_value=version), patch.object(pack, 'populate', side_effect=populate), patch.object(sys, 'argv', ['package_native.py', '--target', 'x86_64-pc-windows-msvc', '--output', str(output)]):
+                    pack.main()
+                win_folder = output / 'windows' / version
+                self.assertIn(f'!define APP_VERSION "{version}"', (win_folder / 'installer-config.nsh').read_text())
+                self.assertEqual(list(win_folder.glob('*.zip')), [])
+            for archive, content in linux_archives:
                 self.assertEqual(archive.read_bytes(), content)
             self.assertFalse((output / 'windows-stage').exists())
+
+    def test_resolve_release_version_handles_tags_and_fallbacks(self):
+        self.assertEqual(pack.resolve_release_version('1.2.3', 'v1.2.3-beta.1'), '1.2.3-beta.1')
+        self.assertEqual(pack.resolve_release_version('1.2.3', 'V1.2.3-rc.2'), '1.2.3-rc.2')
+        self.assertEqual(pack.resolve_release_version('1.2.3', 'v1.2.3'), '1.2.3')
+        self.assertEqual(pack.resolve_release_version('1.2.3', 'v1.2.4-beta.1'), '1.2.3')
+        self.assertEqual(pack.resolve_release_version('1.2.3', 'main'), '1.2.3')
+        self.assertEqual(pack.resolve_release_version('1.2.3', 'v1.2.3-'), '1.2.3')
+        self.assertEqual(pack.resolve_release_version('1.2.3', 'v1.2.3-beta+meta'), '1.2.3')
+        self.assertEqual(pack.deb_package_version('1.2.3', '1.2.3-beta.1'), '1.2.3~beta.1')
+        self.assertEqual(pack.rpm_version_release('1.2.3', '1.2.3-beta.1'), ('1.2.3', '0.beta.1'))
+        self.assertEqual(pack.rpm_version_release('1.2.3', '1.2.3'), ('1.2.3', '1'))
 
     def test_validate_versions_rejects_prerelease_and_manifest_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,6 +224,7 @@ class LinuxMigration(unittest.TestCase):
             pack.linux_tree(source, tree)
             alias = (tree / 'usr/share/applications/EqnTide.desktop').read_text()
             self.assertIn('Exec=/usr/bin/eqntide-desktop %u', alias)
+            self.assertIn('Name=EqnTide\n', alias)
             self.assertIn('NoDisplay=true', alias)
             self.assertTrue((tree / 'usr/bin/eqntide-cli').exists())
 
@@ -255,7 +275,7 @@ class SessionAddins(unittest.TestCase):
                 self.assertEqual(kwargs['group'], 1001)
                 self.assertEqual(kwargs['env']['HOME'], tmp)
 
-    def test_deb_configure_hook_and_session_fallback_are_packaged(self):
+    def test_deb_and_rpm_naming_prerelease_and_migration_metadata(self):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'out'
@@ -266,6 +286,14 @@ class SessionAddins(unittest.TestCase):
             def inspect_deb(args, **kwargs):
                 self.assertEqual(args[0], 'dpkg-deb')
                 tree = Path(args[-2])
+                out_deb = Path(args[-1])
+                self.assertEqual(out_deb.name, f'eqntide-{pack.VERSION}-beta.1-linux-x64.deb')
+                control_text = (tree / 'DEBIAN/control').read_text()
+                self.assertIn('Package: eqntide\n', control_text)
+                self.assertIn(f'Version: {pack.VERSION}~beta.1\n', control_text)
+                self.assertIn('Conflicts: eqn-tide, eqntide-native-preview\n', control_text)
+                self.assertIn('Replaces: eqn-tide, eqntide-native-preview\n', control_text)
+                self.assertIn('Provides: eqn-tide, eqntide-native-preview\n', control_text)
                 hook = tree / 'DEBIAN/postinst'
                 self.assertTrue(hook.stat().st_mode & 0o111)
                 self.assertIn('"$1" = configure', hook.read_text())
@@ -278,8 +306,25 @@ class SessionAddins(unittest.TestCase):
                 self.assertTrue((tree / 'etc/xdg/autostart/eqntide-addins.desktop').exists())
                 self.assertTrue((tree / 'usr/lib/eqntide/scripts/install-session-addins.py').exists())
             original = subprocess.run
-            with patch.object(pack, 'populate', side_effect=populate), patch.object(subprocess, 'run_original', original, create=True), patch.object(pack.subprocess, 'run', side_effect=inspect_deb), patch.object(sys, 'argv', ['package_native.py', '--target', 'x86_64-unknown-linux-gnu', '--format', 'deb', '--output', str(output)]):
+            with patch.object(pack, 'resolve_release_version', return_value=f'{pack.VERSION}-beta.1'), patch.object(pack, 'populate', side_effect=populate), patch.object(subprocess, 'run_original', original, create=True), patch.object(pack.subprocess, 'run', side_effect=inspect_deb), patch.object(sys, 'argv', ['package_native.py', '--target', 'x86_64-unknown-linux-gnu', '--format', 'deb', '--output', str(output)]):
                 pack.main()
+
+            def inspect_rpm(args, **kwargs):
+                self.assertEqual(args[0], 'rpmbuild')
+                spec_path = Path(args[-1])
+                spec_text = spec_path.read_text()
+                self.assertIn('Name: eqntide\n', spec_text)
+                self.assertIn(f'Version: {pack.VERSION}\n', spec_text)
+                self.assertIn('Release: 0.beta.1\n', spec_text)
+                self.assertIn('Provides: eqntide-native-preview = %{version}-%{release}\n', spec_text)
+                self.assertIn('Obsoletes: eqntide-native-preview\n', spec_text)
+                top_dir = spec_path.parents[1]
+                built = top_dir / 'RPMS/x86_64/eqntide-1.0.0-0.beta.1.x86_64.rpm'
+                built.parent.mkdir(parents=True, exist_ok=True)
+                built.write_bytes(b'fake-rpm')
+            with patch.object(pack, 'resolve_release_version', return_value=f'{pack.VERSION}-beta.1'), patch.object(pack, 'populate', side_effect=populate), patch.object(pack.subprocess, 'run', side_effect=inspect_rpm), patch.object(sys, 'argv', ['package_native.py', '--target', 'x86_64-unknown-linux-gnu', '--format', 'rpm', '--output', str(output)]):
+                pack.main()
+            self.assertTrue((output / f'linux/{pack.VERSION}-beta.1/eqntide-{pack.VERSION}-beta.1-linux-x64.rpm').is_file())
 
     def test_service_enable_reuse_and_cleanup_in_isolated_home(self):
         import os

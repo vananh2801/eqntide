@@ -8,7 +8,7 @@
 !include "${PACKAGE_DIR}\installer-config.nsh"
 
 Name "EqnTide"
-OutFile "${PACKAGE_DIR}\EqnTide-${APP_VERSION}-Setup.exe"
+OutFile "${PACKAGE_DIR}\eqntide-${APP_VERSION}-windows-${APP_ARCH}-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\EqnTide"
 RequestExecutionLevel user
 

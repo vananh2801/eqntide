@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Package already-built native binaries; never builds or uploads a release."""
 import argparse
+import os
 from pathlib import Path
 import re
 import shutil
@@ -36,19 +37,86 @@ def validate_versions(package_version, root=ROOT):
         )
 
 
+def _is_valid_prerelease_suffix(suffix):
+    return bool(suffix) and all(
+        bool(ident) and bool(re.fullmatch(r"[0-9A-Za-z-]+", ident))
+        for ident in suffix.split(".")
+    )
+
+
+def _git_exact_tag(root=ROOT):
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--exact-match", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def resolve_release_version(crate_version=VERSION, raw_tag=None, root=ROOT):
+    if raw_tag is None:
+        raw_tag = (
+            os.environ.get("EQNTIDE_BUILD_TAG", "").strip()
+            or os.environ.get("GITHUB_REF_NAME", "").strip()
+            or _git_exact_tag(root=root)
+        )
+    candidate = raw_tag.strip()
+    if candidate.startswith(("v", "V")):
+        candidate = candidate[1:]
+    if "-" in candidate:
+        core, suffix = candidate.split("-", 1)
+        if core == crate_version and _is_valid_prerelease_suffix(suffix):
+            return f"{core}-{suffix}"
+    return crate_version
+
+
+def arch_label_for_target(target):
+    if target.startswith("x86_64"):
+        return "x64"
+    if target.startswith("aarch64"):
+        return "arm64"
+    raise RuntimeError(f"Unsupported target architecture: '{target}'.")
+
+
+def deb_package_version(crate_version, release_version):
+    if release_version == crate_version:
+        return crate_version
+    _, suffix = release_version.split("-", 1)
+    sanitized_suffix = suffix.replace("-", ".")
+    return f"{crate_version}~{sanitized_suffix}"
+
+
+def rpm_version_release(crate_version, release_version):
+    if release_version == crate_version:
+        return crate_version, "1"
+    _, suffix = release_version.split("-", 1)
+    sanitized_suffix = suffix.replace("-", ".")
+    return crate_version, f"0.{sanitized_suffix}"
+
+
 def output_directory(root, target, version=VERSION):
     platform = "windows" if "windows" in target else "linux"
     return root / platform / version
 
 
-def windows_installer_config(output):
-    (output / "installer-config.nsh").write_text(f'!define APP_VERSION "{VERSION}"\n')
+def windows_installer_config(output, release_version=VERSION, arch_label="x64"):
+    (output / "installer-config.nsh").write_text(
+        f'!define APP_VERSION "{release_version}"\n!define APP_ARCH "{arch_label}"\n',
+        encoding="utf-8",
+    )
 
 
 def desktop_entry(executable):
     return f"""[Desktop Entry]
 Type=Application
-Name=EqnTide Native Preview
+Name=EqnTide
 Comment=Equation editor and DOCX converter
 Exec={executable} %u
 Icon=eqntide
@@ -154,75 +222,86 @@ X-GNOME-Autostart-enabled=true
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target")
-    parser.add_argument("--print-version", action="store_true", help="Print the package version from Cargo.toml and exit")
+    parser.add_argument("--print-version", action="store_true", help="Print the resolved release version and exit")
     parser.add_argument("--profile", default="release")
     parser.add_argument("--format", choices=("portable", "deb", "rpm", "all"), default="portable")
     parser.add_argument("--output", type=Path, default=ROOT / "dist", help="Output root; packages go under <root>/<platform>/<version>/")
     args = parser.parse_args()
     validate_versions(VERSION)
+    release_version = resolve_release_version(VERSION)
     if args.print_version:
-        print(VERSION)
+        print(release_version)
         return
     if not args.target:
         parser.error("--target is required when packaging")
     if not any(platform in args.target for platform in ("linux", "windows")):
         parser.error("Only Linux and Windows packaging is supported; macOS support is temporarily disabled (no test hardware).")
     windows = "windows" in args.target
+    arch_label = arch_label_for_target(args.target)
     binary_dir = ROOT / "target" / args.target / args.profile
     if not binary_dir.exists():
         binary_dir = ROOT / "target" / args.profile
-    args.output = output_directory(args.output, args.target, VERSION)
+    args.output = output_directory(args.output, args.target, release_version)
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="eqntide-package-") as temp:
         temp = Path(temp)
-        label = f"eqntide-native-preview-{VERSION}-{args.target}"
+        platform_label = "windows" if windows else "linux"
+        label = f"eqntide-{release_version}-{platform_label}-{arch_label}"
         stage = temp / label
         stage.mkdir()
         populate(stage, binary_dir, windows)
+        if windows:
+            windows_stage = args.output / "windows-stage"
+            if windows_stage.exists():
+                shutil.rmtree(windows_stage)
+            shutil.copytree(stage, windows_stage)
+            windows_installer_config(args.output, release_version, arch_label)
+            print(windows_stage)
+            return
         if args.format in ("portable", "all"):
-            if windows:
-                archive = args.output / (label + ".zip")
-                with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as file:
-                    for path in stage.rglob("*"):
-                        if path.is_file():
-                            file.write(path, path.relative_to(temp))
-                windows_stage = args.output / "windows-stage"
-                if windows_stage.exists():
-                    shutil.rmtree(windows_stage)
-                shutil.copytree(stage, windows_stage)
-                windows_installer_config(args.output)
-                shutil.copy2(ROOT / "docs/WINDOWS-INSTALLATION.txt", args.output / "README-WINDOWS.txt")
-            else:
-                archive = args.output / (label + ".tar.gz")
-                with tarfile.open(archive, "w:gz") as file:
-                    file.add(stage, arcname=label)
+            archive = args.output / (label + ".tar.gz")
+            with tarfile.open(archive, "w:gz") as file:
+                file.add(stage, arcname=label)
             print(archive)
-        if args.format in ("deb", "all") and "linux" in args.target:
+        if args.format in ("deb", "all"):
             tree = temp / "deb"
             linux_tree(stage, tree)
             control = tree / "DEBIAN"
             control.mkdir()
-            arch = "amd64" if args.target.startswith("x86_64") else "arm64"
-            (control / "control").write_text(f"Package: eqntide-native-preview\nVersion: {VERSION}\nArchitecture: {arch}\nMaintainer: EqnTide contributors\nConflicts: eqn-tide\nReplaces: eqn-tide\nProvides: eqn-tide\nDepends: libc6, libgcc-s1, libgl1, libx11-6, libxcb1, libxkbcommon0, libwayland-client0, libdbus-1-3, xdg-desktop-portal, zenity, python3\nDescription: EqnTide native Rust equation editor (preview)\n")
+            deb_arch = "amd64" if args.target.startswith("x86_64") else "arm64"
+            deb_ver = deb_package_version(VERSION, release_version)
+            (control / "control").write_text(
+                f"Package: eqntide\nVersion: {deb_ver}\nArchitecture: {deb_arch}\nMaintainer: EqnTide contributors\n"
+                "Conflicts: eqn-tide, eqntide-native-preview\n"
+                "Replaces: eqn-tide, eqntide-native-preview\n"
+                "Provides: eqn-tide, eqntide-native-preview\n"
+                "Depends: libc6, libgcc-s1, libgl1, libx11-6, libxcb1, libxkbcommon0, libwayland-client0, libdbus-1-3, xdg-desktop-portal, zenity, python3\n"
+                "Description: EqnTide native Rust equation editor and DOCX converter\n"
+            )
             (control / "postinst").write_text('#!/bin/sh\nset -e\nif [ "$1" = configure ]; then\n' + SESSION_POSTINSTALL + 'fi\nexit 0\n')
             (control / "postinst").chmod(0o755)
             (control / "prerm").write_text('#!/bin/sh\ncase "$1" in remove|deconfigure)\n/usr/bin/python3 /usr/lib/eqntide/scripts/install-session-addins.py --package-remove || true\n;;\nesac\nexit 0\n')
             (control / "prerm").chmod(0o755)
-            subprocess.run(["dpkg-deb", "--build", "--root-owner-group", str(tree), str(args.output / f"eqntide-native-preview_{VERSION}_{arch}.deb")], check=True)
-        if args.format in ("rpm", "all") and "linux" in args.target:
+            deb_output = args.output / f"{label}.deb"
+            subprocess.run(["dpkg-deb", "--build", "--root-owner-group", str(tree), str(deb_output)], check=True)
+            print(deb_output)
+        if args.format in ("rpm", "all"):
             tree = temp / "rpm-tree"
             linux_tree(stage, tree)
             top = temp / "rpmbuild"
             for name in ("BUILD", "BUILDROOT", "RPMS", "SOURCES", "SPECS", "SRPMS"):
                 (top / name).mkdir(parents=True)
+            rpm_ver, rpm_rel = rpm_version_release(VERSION, release_version)
             spec = top / "SPECS/eqntide.spec"
-            spec.write_text(f"""Name: eqntide-native-preview
-Version: {VERSION}
-Release: 1
-Summary: Native Rust equation editor (preview)
+            spec.write_text(f"""Name: eqntide
+Version: {rpm_ver}
+Release: {rpm_rel}
+Summary: Native Rust equation editor and DOCX converter
 License: MIT
 Provides: eqn-tide = %{{version}}-%{{release}}
+Provides: eqntide-native-preview = %{{version}}-%{{release}}
 Obsoletes: eqn-tide <= %{{version}}-%{{release}}
+Obsoletes: eqntide-native-preview
 Requires: libX11.so.6()(64bit), libxcb.so.1()(64bit), libxkbcommon.so.0()(64bit), libwayland-client.so.0()(64bit), libwayland-cursor.so.0()(64bit), libwayland-egl.so.1()(64bit), libGL.so.1()(64bit), libdbus-1.so.3()(64bit), xdg-desktop-portal, zenity, python3
 # Keep ELF dependency generation enabled for libc/libgcc ABI requirements.
 # SONAME capabilities also cover dynamically loaded UI libraries regardless
@@ -248,8 +327,12 @@ fi
 /usr/share/icons/hicolor/128x128/apps/eqntide.png
 """)
             subprocess.run(["rpmbuild", "-bb", "--define", f"_topdir {top}", "--define", "_build_id_links none", str(spec)], check=True)
-            for path in (top / "RPMS").rglob("*.rpm"):
-                shutil.copy2(path, args.output / path.name)
+            rpm_output = args.output / f"{label}.rpm"
+            built_rpms = list((top / "RPMS").rglob("*.rpm"))
+            if not built_rpms:
+                raise RuntimeError("rpmbuild completed without producing an .rpm package")
+            shutil.copy2(built_rpms[0], rpm_output)
+            print(rpm_output)
 
 
 if __name__ == "__main__":
