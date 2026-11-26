@@ -2,6 +2,7 @@
 """Package already-built native binaries; never builds or uploads a release."""
 import argparse
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -10,11 +11,29 @@ import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
+WORKSPACE_MANIFESTS = ("Cargo.toml", "desktop/Cargo.toml", "crates/eqntide-editor/Cargo.toml")
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
 
 # Both package managers run this as root; the helper drops privileges first.
 SESSION_POSTINSTALL = """/usr/bin/python3 /usr/lib/eqntide/scripts/install-session-addins.py --package-install || true
 """
+
+
+def validate_versions(package_version, root=ROOT):
+    if not re.fullmatch(r"\d+\.\d+\.\d+", package_version):
+        raise RuntimeError(
+            f"Package version '{package_version}' must use clean X.Y.Z format "
+            "(keep pre-release suffixes like '-beta.1' on the git tag only, not in Cargo.toml)."
+        )
+    manifest_versions = {
+        rel: tomllib.loads((root / rel).read_text(encoding="utf-8"))["package"]["version"]
+        for rel in WORKSPACE_MANIFESTS
+    }
+    if len(set(manifest_versions.values())) != 1:
+        details = ", ".join(f"{rel}={ver}" for rel, ver in manifest_versions.items())
+        raise RuntimeError(
+            f"Workspace Cargo.toml versions must match before packaging ({details})."
+        )
 
 
 def output_directory(root, target, version=VERSION):
@@ -50,7 +69,13 @@ def populate(stage, binary_dir, windows):
 
     suffix = ".exe" if windows else ""
     for name in ("eqntide-cli", "eqntide-desktop"):
-        shutil.copy2(binary_dir / (name + suffix), stage / (name + suffix))
+        binary = binary_dir / (name + suffix)
+        if not binary.is_file():
+            raise FileNotFoundError(
+                f"Missing built binary '{binary}'. Build the full workspace first "
+                "(e.g. `cargo build --workspace --release --locked`)."
+            )
+        shutil.copy2(binary, stage / (name + suffix))
     shutil.copytree(ROOT / "wps-addin", stage / "wps-addin")
     (stage / "word-template").mkdir()
     shutil.copy2(ROOT / "word-template/EqnTide.dotm", stage / "word-template/EqnTide.dotm")
@@ -134,6 +159,7 @@ def main():
     parser.add_argument("--format", choices=("portable", "deb", "rpm", "all"), default="portable")
     parser.add_argument("--output", type=Path, default=ROOT / "dist", help="Output root; packages go under <root>/<platform>/<version>/")
     args = parser.parse_args()
+    validate_versions(VERSION)
     if args.print_version:
         print(VERSION)
         return

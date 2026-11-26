@@ -1,3 +1,10 @@
+# Release checklist:
+# 1. Bump matching `X.Y.Z` versions across `Cargo.toml`, `desktop/Cargo.toml`,
+#    and `crates/eqntide-editor/Cargo.toml` (keep `Cargo.toml` without `-beta`
+#    suffixes so `.deb`/`.rpm` packaging and desktop SemVer checks remain valid).
+# 2. Push tag:
+#    - `vX.Y.Z` (no hyphen)  -> stable release (`prerelease: false`, updates Latest)
+#    - `vX.Y.Z-beta.1` (`-`) -> pre-release (`prerelease: true`, skips Latest)
 name: Native preview release
 
 on:
@@ -24,10 +31,10 @@ jobs:
           pattern: eqntide-native-preview-*
           path: dist
           merge-multiple: true
-      - name: Publish preview assets
+      - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: false
           files: |
             dist/*/*/*.zip

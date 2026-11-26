@@ -113,6 +113,28 @@ class NativeIntegration(unittest.TestCase):
                 self.assertEqual(archive.read_bytes(), content)
             self.assertFalse((output / 'windows-stage').exists())
 
+    def test_validate_versions_rejects_prerelease_and_manifest_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_root = Path(tmp)
+            for rel in pack.WORKSPACE_MANIFESTS:
+                manifest = fake_root / rel
+                manifest.parent.mkdir(parents=True, exist_ok=True)
+                manifest.write_text('[package]\nname = "demo"\nversion = "0.12.0"\n', encoding='utf-8')
+            pack.validate_versions('0.12.0', root=fake_root)
+
+            with self.assertRaises(RuntimeError):
+                pack.validate_versions('0.12.0-beta.1', root=fake_root)
+
+            (fake_root / 'desktop/Cargo.toml').write_text('[package]\nname = "eqntide-desktop"\nversion = "0.11.0"\n', encoding='utf-8')
+            with self.assertRaises(RuntimeError):
+                pack.validate_versions('0.12.0', root=fake_root)
+
+    def test_repo_skills_follow_agent_skills_spec(self):
+        for skill_name in ('eqntide-release', 'eqntide-precommit'):
+            skill_path = ROOT / f'.agents/skills/{skill_name}/SKILL.md'
+            text = skill_path.read_text(encoding='utf-8')
+            self.assertTrue(text.startswith(f'---\nname: {skill_name}\ndescription: '), skill_path)
+
     @unittest.skipIf(sys.platform == 'win32', 'Linux systemd installer')
     def test_portable_service_resolves_bundled_executables(self):
         if sys.platform != 'linux':
