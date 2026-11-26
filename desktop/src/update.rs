@@ -167,7 +167,7 @@ fn select_windows_setup_url(payload: &serde_json::Value) -> Option<String> {
     assets.iter().find_map(|asset| {
         let name = asset["name"].as_str()?;
         let url = asset["browser_download_url"].as_str()?;
-        if name.ends_with("-Setup.exe") && is_trusted_release_url(url) {
+        if name.ends_with("-setup.exe") && is_trusted_release_url(url) {
             Some(url.to_string())
         } else {
             None
@@ -189,16 +189,12 @@ mod tests {
             "html_url": format!("https://github.com/vananh2801/eqntide/releases/tag/{tag}"),
             "assets": [
                 {
-                    "name": "eqntide-native-preview-0.12.0-x86_64-pc-windows-msvc.zip",
-                    "browser_download_url": "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/eqntide-native-preview-0.12.0-x86_64-pc-windows-msvc.zip"
+                    "name": "eqntide-0.12.0-windows-x64-setup.exe",
+                    "browser_download_url": "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/eqntide-0.12.0-windows-x64-setup.exe"
                 },
                 {
-                    "name": "EqnTide-0.12.0-Setup.exe",
-                    "browser_download_url": "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/EqnTide-0.12.0-Setup.exe"
-                },
-                {
-                    "name": "eqntide-native-preview_0.12.0_amd64.deb",
-                    "browser_download_url": "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/eqntide-native-preview_0.12.0_amd64.deb"
+                    "name": "eqntide-0.12.0-linux-x64.deb",
+                    "browser_download_url": "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/eqntide-0.12.0-linux-x64.deb"
                 }
             ]
         })
@@ -213,7 +209,7 @@ mod tests {
             UpdateCheckOutcome::Available(UpdateRelease {
                 version: "0.12.0".into(),
                 release_url: "https://github.com/vananh2801/eqntide/releases/tag/v0.12.0".into(),
-                download_url: "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/EqnTide-0.12.0-Setup.exe".into(),
+                download_url: "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/eqntide-0.12.0-windows-x64-setup.exe".into(),
             })
         );
 
@@ -257,7 +253,7 @@ mod tests {
             UpdateCheckOutcome::Available(UpdateRelease {
                 version: "0.12.0".into(),
                 release_url: "https://github.com/vananh2801/eqntide/releases/tag/v0.12.0".into(),
-                download_url: "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/EqnTide-0.12.0-Setup.exe".into(),
+                download_url: "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/eqntide-0.12.0-windows-x64-setup.exe".into(),
             })
         );
 
@@ -306,8 +302,8 @@ mod tests {
             "prerelease": false,
             "html_url": "https://github.com/vananh2801/eqntide/releases/tag/v0.12.0",
             "assets": [{
-                "name": "EqnTide-0.12.0-Setup.exe",
-                "browser_download_url": "https://evil.example.com/EqnTide-0.12.0-Setup.exe"
+                "name": "eqntide-0.12.0-windows-x64-setup.exe",
+                "browser_download_url": "https://evil.example.com/eqntide-0.12.0-windows-x64-setup.exe"
             }]
         });
         let outcome = evaluate_release_payload(&bad_asset, "0.11.0", true).unwrap();

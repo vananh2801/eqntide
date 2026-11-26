@@ -56,7 +56,7 @@ fn update_check_events_ignore_stale_sequences_and_deduplicate_in_flight() {
         version: "0.12.0".into(),
         release_url: "https://github.com/vananh2801/eqntide/releases/tag/v0.12.0".into(),
         download_url:
-            "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/EqnTide-0.12.0-Setup.exe"
+            "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/eqntide-0.12.0-windows-x64-setup.exe"
                 .into(),
     };
     app.tx
@@ -118,7 +118,7 @@ fn about_update_states_render_expected_controls_and_open_validated_url() {
         version: "0.12.0".into(),
         release_url: "https://github.com/vananh2801/eqntide/releases/tag/v0.12.0".into(),
         download_url:
-            "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/EqnTide-0.12.0-Setup.exe"
+            "https://github.com/vananh2801/eqntide/releases/download/v0.12.0/eqntide-0.12.0-windows-x64-setup.exe"
                 .into(),
     };
     app.update_state = UpdateState::Available(release.clone());
