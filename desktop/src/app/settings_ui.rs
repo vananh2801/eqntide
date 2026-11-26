@@ -34,9 +34,14 @@ impl App {
         )
     }
 
-    /// Resolves the [`CanvasPalette`] for the requested mode and active adaptive accent seed.
+    /// Resolves the [`CanvasPalette`] for the requested mode, active background state, canvas opacity, and accent seed.
     pub(super) fn active_canvas_palette(&self, dark_mode: bool) -> CanvasPalette {
-        CanvasPalette::for_mode_with_accent(dark_mode, self.active_accent_seed())
+        CanvasPalette::for_mode_with_background_and_accent(
+            dark_mode,
+            self.is_image_background_active(),
+            self.canvas_opacity,
+            self.active_accent_seed(),
+        )
     }
 
     /// Returns the CPU background bitmap and scrim parameters for [`crate::software_painter::SoftwarePainter`].
@@ -79,6 +84,7 @@ impl App {
         self.background_mode = settings.background_mode;
         self.background_image = settings.background_image.clone();
         self.background_opacity = settings.background_opacity;
+        self.canvas_opacity = settings.canvas_opacity;
         self.background_accent_enabled = settings.background_accent_enabled;
         self.background_accent = settings.background_accent;
         self.background_texture = None;
@@ -541,7 +547,29 @@ impl App {
             });
             let tokens = self.theme_tokens(ui);
             ui.add_space(theme::SPACE_XS);
-            self.draw_overlay_opacity_row(ui, tokens, has_active_image_bg);
+            if draw_opacity_slider_row(
+                ui,
+                tokens,
+                has_active_image_bg,
+                "Overlay opacity",
+                &mut self.background_opacity,
+                settings::BACKGROUND_OPACITY_RANGE,
+            ) {
+                self.persisted.background_opacity = self.background_opacity;
+                self.settings_dirty = true;
+            }
+            ui.add_space(theme::SPACE_XS);
+            if draw_opacity_slider_row(
+                ui,
+                tokens,
+                has_active_image_bg,
+                "Canvas opacity",
+                &mut self.canvas_opacity,
+                settings::CANVAS_OPACITY_RANGE,
+            ) {
+                self.persisted.canvas_opacity = self.canvas_opacity;
+                self.settings_dirty = true;
+            }
         });
     }
 
@@ -591,78 +619,75 @@ impl App {
             );
         }
     }
+}
 
-    fn draw_overlay_opacity_row(&mut self, ui: &mut egui::Ui, tokens: ThemeTokens, enabled: bool) {
-        ui.add_enabled_ui(enabled, |ui| {
-            if !enabled {
-                // Keep slider handle fills opaque so the trailing fill never shows through.
-                ui.set_opacity(1.0);
-            }
-            let label_width = 108.0;
-            let label_color = if enabled {
-                tokens.text_muted
-            } else {
-                tokens.text_disabled
-            };
-            ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_size_before_wrap().x, theme::BUTTON_HEIGHT),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(label_width, theme::BUTTON_HEIGHT),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.label(egui::RichText::new("Overlay opacity").color(label_color));
-                        },
-                    );
-                    let slider_changed = ui
-                        .scope(|ui| {
-                            ui.spacing_mut().slider_width = 220.0;
-                            let visuals = ui.visuals_mut();
-                            if enabled {
-                                let handle_stroke = Stroke::new(1.0, tokens.accent);
-                                visuals.widgets.inactive.bg_fill = tokens.border;
-                                visuals.widgets.inactive.fg_stroke = handle_stroke;
-                                visuals.widgets.hovered.fg_stroke = handle_stroke;
-                                visuals.widgets.active.fg_stroke = handle_stroke;
-                                visuals.selection.bg_fill = tokens.accent;
-                            } else {
-                                let opaque_tokens = ThemeTokens::for_mode(tokens.dark_mode);
-                                let disabled_accent = tokens.disabled_accent();
-                                let handle_stroke = Stroke::new(1.0, disabled_accent);
-                                visuals.widgets.noninteractive.bg_fill = opaque_tokens.panel_bg;
-                                visuals.widgets.noninteractive.weak_bg_fill =
-                                    opaque_tokens.panel_bg;
-                                visuals.widgets.noninteractive.bg_stroke = handle_stroke;
-                                visuals.widgets.noninteractive.fg_stroke = handle_stroke;
-                                visuals.widgets.inactive.bg_fill =
-                                    opaque_tokens.control_disabled_bg;
-                                visuals.widgets.inactive.fg_stroke = handle_stroke;
-                                visuals.selection.bg_fill = disabled_accent;
-                            }
-                            ui.add(
-                                egui::Slider::new(
-                                    &mut self.background_opacity,
-                                    settings::BACKGROUND_OPACITY_RANGE,
-                                )
+fn draw_opacity_slider_row(
+    ui: &mut egui::Ui,
+    tokens: ThemeTokens,
+    enabled: bool,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+) -> bool {
+    let mut changed = false;
+    ui.add_enabled_ui(enabled, |ui| {
+        if !enabled {
+            // Keep slider handle fills opaque so the trailing fill never shows through.
+            ui.set_opacity(1.0);
+        }
+        let label_width = 108.0;
+        let label_color = if enabled {
+            tokens.text_muted
+        } else {
+            tokens.text_disabled
+        };
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_size_before_wrap().x, theme::BUTTON_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.allocate_ui_with_layout(
+                    Vec2::new(label_width, theme::BUTTON_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.label(egui::RichText::new(label).color(label_color));
+                    },
+                );
+                changed = ui
+                    .scope(|ui| {
+                        ui.spacing_mut().slider_width = 220.0;
+                        let visuals = ui.visuals_mut();
+                        if enabled {
+                            let handle_stroke = Stroke::new(1.0, tokens.accent);
+                            visuals.widgets.inactive.bg_fill = tokens.border;
+                            visuals.widgets.inactive.fg_stroke = handle_stroke;
+                            visuals.widgets.hovered.fg_stroke = handle_stroke;
+                            visuals.widgets.active.fg_stroke = handle_stroke;
+                            visuals.selection.bg_fill = tokens.accent;
+                        } else {
+                            let opaque_tokens = ThemeTokens::for_mode(tokens.dark_mode);
+                            let disabled_accent = tokens.disabled_accent();
+                            let handle_stroke = Stroke::new(1.0, disabled_accent);
+                            visuals.widgets.noninteractive.bg_fill = opaque_tokens.panel_bg;
+                            visuals.widgets.noninteractive.weak_bg_fill = opaque_tokens.panel_bg;
+                            visuals.widgets.noninteractive.bg_stroke = handle_stroke;
+                            visuals.widgets.noninteractive.fg_stroke = handle_stroke;
+                            visuals.widgets.inactive.bg_fill = opaque_tokens.control_disabled_bg;
+                            visuals.widgets.inactive.fg_stroke = handle_stroke;
+                            visuals.selection.bg_fill = disabled_accent;
+                        }
+                        ui.add(
+                            egui::Slider::new(value, range)
                                 .step_by(0.01)
                                 .show_value(false)
                                 .trailing_fill(true)
                                 .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 }),
-                            )
-                            .changed()
-                        })
-                        .inner;
-                    if slider_changed {
-                        self.persisted.background_opacity = self.background_opacity;
-                        self.settings_dirty = true;
-                    }
-                    ui.label(
-                        egui::RichText::new(format!("{:.0}%", self.background_opacity * 100.0))
-                            .color(label_color),
-                    );
-                },
-            );
-        });
-    }
+                        )
+                        .changed()
+                    })
+                    .inner;
+                ui.label(egui::RichText::new(format!("{:.0}%", *value * 100.0)).color(label_color));
+            },
+        );
+    });
+    changed
 }

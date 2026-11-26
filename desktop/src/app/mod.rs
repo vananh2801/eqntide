@@ -286,6 +286,8 @@ pub struct App {
     pub(super) background_image: Option<String>,
     /// Opacity (`0.0..=1.0`) of the frosted UI panels/scrim over the background.
     pub(super) background_opacity: f32,
+    /// Opacity (`0.0..=1.0`) of the Equation Canvas and LaTeX source surfaces over the background.
+    pub(super) canvas_opacity: f32,
     /// Whether adaptive accent derivation from the background image is enabled.
     pub(super) background_accent_enabled: bool,
     /// Dominant chromatic RGB accent seed extracted from the saved background image.
@@ -524,6 +526,7 @@ impl App {
             background_mode: BackgroundMode::Solid,
             background_image: None,
             background_opacity: settings::DEFAULT_BACKGROUND_OPACITY,
+            canvas_opacity: settings::DEFAULT_CANVAS_OPACITY,
             background_accent_enabled: true,
             background_accent: None,
             applied_accent_seed: None,

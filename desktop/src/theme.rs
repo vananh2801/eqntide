@@ -29,6 +29,7 @@ pub(crate) const COMPACT_BUTTON_HEIGHT: f32 = 24.0;
 
 const AYU_DARK_TEXT_INK: Color32 = Color32::from_rgb(13, 16, 22);
 const MAX_BACKGROUND_SCRIM_ALPHA: f32 = 0.65;
+const MIN_SURFACE_ALPHA: f32 = 0.38;
 
 /// Semantic UI color tokens for chrome, panels, controls, selection, and errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,25 +169,10 @@ impl ThemeTokens {
     /// `panel_bg` and `card_bg` scale across `0.38..=1.00` (becoming completely opaque at `100%`),
     /// while `app_bg` stays transparent so open backdrop regions keep revealing the wallpaper and scrim.
     pub(crate) fn with_background_opacity(mut self, overlay_opacity: f32) -> Self {
-        let opacity = if overlay_opacity.is_finite() {
-            overlay_opacity.clamp(0.0, 1.0)
-        } else {
-            0.70
-        };
-        let surface_alpha = ((0.38 + 0.62 * opacity) * 255.0).round() as u8;
+        let surface_alpha = surface_alpha_for_opacity(overlay_opacity, 0.70);
         self.app_bg = Color32::TRANSPARENT;
-        self.panel_bg = Color32::from_rgba_unmultiplied(
-            self.panel_bg.r(),
-            self.panel_bg.g(),
-            self.panel_bg.b(),
-            surface_alpha,
-        );
-        self.card_bg = Color32::from_rgba_unmultiplied(
-            self.card_bg.r(),
-            self.card_bg.g(),
-            self.card_bg.b(),
-            surface_alpha,
-        );
+        self.panel_bg = with_unmultiplied_alpha(self.panel_bg, surface_alpha);
+        self.card_bg = with_unmultiplied_alpha(self.card_bg, surface_alpha);
         self
     }
 
@@ -438,6 +424,28 @@ impl CanvasPalette {
             scroll_track,
         }
     }
+
+    /// Resolve canvas colors for the current mode, custom background state, canvas opacity, and accent seed.
+    pub(crate) fn for_mode_with_background_and_accent(
+        dark_mode: bool,
+        has_background: bool,
+        canvas_opacity: f32,
+        accent_seed: Option<[u8; 3]>,
+    ) -> Self {
+        let base = Self::for_mode_with_accent(dark_mode, accent_seed);
+        if has_background {
+            base.with_canvas_opacity(canvas_opacity)
+        } else {
+            base
+        }
+    }
+
+    /// Apply translucent canvas surface fill (`0.38..=1.00`) over a custom background image.
+    pub(crate) fn with_canvas_opacity(mut self, canvas_opacity: f32) -> Self {
+        let surface_alpha = surface_alpha_for_opacity(canvas_opacity, 1.0);
+        self.bg = with_unmultiplied_alpha(self.bg, surface_alpha);
+        self
+    }
 }
 
 /// Convert an sRGB color triplet into `(hue_deg, saturation, lightness)`.
@@ -477,6 +485,20 @@ struct DerivedAccentRoles {
     selected_hover_bg: Color32,
     selected_border: Color32,
     selected_fg: Color32,
+}
+
+fn surface_alpha_for_opacity(raw_opacity: f32, default_opacity: f32) -> u8 {
+    let opacity = if raw_opacity.is_finite() {
+        raw_opacity.clamp(0.0, 1.0)
+    } else {
+        default_opacity
+    };
+    ((MIN_SURFACE_ALPHA + (1.0 - MIN_SURFACE_ALPHA) * opacity) * 255.0).round() as u8
+}
+
+fn with_unmultiplied_alpha(color: Color32, alpha: u8) -> Color32 {
+    let [r, g, b, _] = color.to_srgba_unmultiplied();
+    Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
 fn derive_ui_accent_roles(dark_mode: bool, seed: [u8; 3], panel_bg: Color32) -> DerivedAccentRoles {
@@ -810,5 +832,33 @@ mod tests {
         assert_ne!(cyan_light.caret, light_pal.caret);
         assert!(contrast_ratio(cyan_dark.caret, cyan_dark.bg) >= 3.0);
         assert!(contrast_ratio(cyan_light.caret, cyan_light.bg) >= 3.0);
+    }
+
+    #[test]
+    fn canvas_palette_opacity_scales_surface_alpha_and_stays_opaque_without_background() {
+        for dark in [false, true] {
+            let base = CanvasPalette::for_mode(dark);
+            let solid = CanvasPalette::for_mode_with_background_and_accent(dark, false, 0.0, None);
+            assert_eq!(solid, base);
+            assert_eq!(solid.bg.a(), 255);
+
+            let full = CanvasPalette::for_mode_with_background_and_accent(dark, true, 1.0, None);
+            assert_eq!(full, base);
+            assert_eq!(full.bg.a(), 255);
+
+            let non_finite =
+                CanvasPalette::for_mode_with_background_and_accent(dark, true, f32::NAN, None);
+            assert_eq!(non_finite, base);
+
+            let half = CanvasPalette::for_mode_with_background_and_accent(dark, true, 0.5, None);
+            let expected_half = ((0.38_f32 + 0.62_f32 * 0.5_f32) * 255.0_f32).round() as u8;
+            assert_eq!(half.bg.a(), expected_half);
+            assert_eq!(half.border, base.border);
+            assert_eq!(half.ink, base.ink);
+
+            let zero = CanvasPalette::for_mode_with_background_and_accent(dark, true, 0.0, None);
+            let expected_zero = (0.38_f32 * 255.0_f32).round() as u8;
+            assert_eq!(zero.bg.a(), expected_zero);
+        }
     }
 }

@@ -345,8 +345,6 @@ impl App {
 
     /// Paints an empty structural slot as an unfilled dashed box with light corner rounding.
     pub(super) fn paint_placeholder(painter: &egui::Painter, rect: Rect, pal: CanvasPalette) {
-        // Cover only the synthetic square; the formula texture and hit regions stay unchanged.
-        painter.rect_filled(rect.expand(0.5), 0.0, pal.bg);
         let rect = rect.shrink(1.0);
         let radius = theme::CANVAS_OVERLAY_CORNER_RADIUS;
         if pal.placeholder_bg.a() > 0 {

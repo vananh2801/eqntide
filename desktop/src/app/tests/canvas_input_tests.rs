@@ -2621,3 +2621,76 @@ fn command_popup_selected_suggestion_uses_active_selection_tokens() {
         }
     }
 }
+
+#[test]
+fn translucent_canvas_renders_placeholders_without_opaque_cover_or_baked_square() {
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    let bg_img = egui::ColorImage::filled([32, 32], Color32::from_rgb(50, 90, 140));
+    app.background_texture =
+        Some(ctx.load_texture("bg-ph-test", bg_img, egui::TextureOptions::LINEAR));
+    app.background_mode = crate::settings::BackgroundMode::Image;
+    app.canvas_opacity = 0.25;
+    app.load_math("<math><mfrac><mrow/><mrow/></mfrac></math>", None, None);
+    app.sync_render(&ctx);
+
+    let rendered = app
+        .rendered
+        .as_ref()
+        .expect("rendered fraction placeholders");
+    assert_eq!(rendered.placeholders.len(), 2);
+    let img_w = rendered.image.width();
+    let img_h = rendered.image.height();
+    let scale_x = img_w as f32 / rendered.preview.preview.width_pt;
+    let scale_y = img_h as f32 / rendered.preview.preview.height_pt;
+    for slot in &rendered.placeholders {
+        let min_x = ((slot.x * scale_x).floor().max(0.0) as usize).min(img_w);
+        let max_x = ((slot.x + slot.width) * scale_x)
+            .ceil()
+            .clamp(0.0, img_w as f32) as usize;
+        let min_y = ((slot.y * scale_y).floor().max(0.0) as usize).min(img_h);
+        let max_y = ((slot.y + slot.height) * scale_y)
+            .ceil()
+            .clamp(0.0, img_h as f32) as usize;
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                assert_eq!(
+                    rendered.image.pixels[y * img_w + x].a(),
+                    0,
+                    "placeholder slot pixel ({x}, {y}) must be cleared from alpha texture"
+                );
+            }
+        }
+    }
+
+    for (theme, dark) in [(egui::Theme::Light, false), (egui::Theme::Dark, true)] {
+        ctx.set_theme(theme);
+        let pal = app.active_canvas_palette(dark);
+        assert!(pal.bg.a() < 255);
+
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 300.0))),
+                ..Default::default()
+            },
+            |ui| {
+                app.draw_canvas(ui);
+            },
+        );
+        output.textures_delta.clear();
+
+        let pal_bg_rects: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape) if rect_shape.fill == pal.bg => Some(rect_shape),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            pal_bg_rects.len(),
+            1,
+            "only the outer canvas Frame should fill with pal.bg (no placeholder cover rects)"
+        );
+    }
+}

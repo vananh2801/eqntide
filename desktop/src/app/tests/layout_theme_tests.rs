@@ -2240,3 +2240,72 @@ fn footer_radios_hover_borders_and_drag_value_focus_reflect_active_accent() {
         }
     }
 }
+
+#[test]
+fn canvas_opacity_updates_equation_canvas_and_latex_box_without_affecting_solid_mode() {
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app();
+    let img = egui::ColorImage::filled([32, 32], Color32::from_rgb(40, 120, 210));
+    app.background_texture =
+        Some(ctx.load_texture("bg-canvas-op", img, egui::TextureOptions::LINEAR));
+    app.background_mode = BackgroundMode::Image;
+    app.background_opacity = 0.70;
+
+    for (theme, dark) in [(egui::Theme::Light, false), (egui::Theme::Dark, true)] {
+        ctx.set_theme(theme);
+
+        // 100% default keeps Equation Canvas and LaTeX box opaque.
+        app.canvas_opacity = 1.0;
+        let full_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let latex_rect = ctx
+            .read_response(egui::Id::unique("latex-source"))
+            .unwrap()
+            .rect;
+        let full_pal = app.active_canvas_palette(dark);
+        assert_eq!(full_pal.bg.a(), 255);
+        assert!(full_out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == full_pal.bg && rect_shape.stroke.color == full_pal.border
+        )));
+        assert!(full_out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Rect(rect_shape) if rect_shape.fill == full_pal.bg && rect_shape.rect == latex_rect
+        )));
+
+        // Lowering canvas_opacity scales both surfaces across 0.38..=1.00 independently of panel_bg.
+        for opacity in [0.5_f32, 0.0_f32] {
+            app.canvas_opacity = opacity;
+            let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+            let pal = app.active_canvas_palette(dark);
+            let expected_alpha = ((0.38_f32 + 0.62_f32 * opacity) * 255.0_f32).round() as u8;
+            assert_eq!(pal.bg.a(), expected_alpha);
+            assert!(out.shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.fill == pal.bg && rect_shape.stroke.color == pal.border
+            )));
+            assert!(out.shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::Rect(rect_shape) if rect_shape.fill == pal.bg && rect_shape.rect == latex_rect
+            )));
+        }
+
+        // Switching to Solid mode keeps both surfaces 100% opaque even if canvas_opacity < 1.0.
+        app.background_mode = BackgroundMode::Solid;
+        let solid_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let solid_pal = app.active_canvas_palette(dark);
+        assert_eq!(solid_pal.bg.a(), 255);
+        assert!(solid_out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == solid_pal.bg && rect_shape.stroke.color == solid_pal.border
+        )));
+        assert!(solid_out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Rect(rect_shape) if rect_shape.fill == solid_pal.bg && rect_shape.rect == latex_rect
+        )));
+        app.background_mode = BackgroundMode::Image;
+    }
+}

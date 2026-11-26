@@ -35,6 +35,10 @@ pub(crate) const MAX_RECENT_PALETTE: usize = 24;
 pub(crate) const DEFAULT_BACKGROUND_OPACITY: f32 = 0.70;
 /// Allowed range for the background overlay opacity.
 pub(crate) const BACKGROUND_OPACITY_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+/// Default opacity for the Equation Canvas and LaTeX source box over a custom background image.
+pub(crate) const DEFAULT_CANVAS_OPACITY: f32 = 1.0;
+/// Allowed range for the Equation Canvas and LaTeX source box opacity.
+pub(crate) const CANVAS_OPACITY_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 /// Maximum edge length (in pixels) retained when importing a custom background image.
 pub(crate) const MAX_BACKGROUND_EDGE: u32 = 2560;
 const MANAGED_BACKGROUND_PREFIX: &str = "app-background-";
@@ -143,6 +147,8 @@ pub(crate) struct Settings {
     pub(crate) background_mode: BackgroundMode,
     pub(crate) background_image: Option<String>,
     pub(crate) background_opacity: f32,
+    /// Opacity applied to Equation Canvas and LaTeX source surfaces over a custom background image.
+    pub(crate) canvas_opacity: f32,
     /// Whether UI and canvas accents adapt to the imported background image seed.
     pub(crate) background_accent_enabled: bool,
     /// Cached RGB accent seed extracted from the managed background image.
@@ -164,6 +170,7 @@ impl Default for Settings {
             background_mode: BackgroundMode::Solid,
             background_image: None,
             background_opacity: DEFAULT_BACKGROUND_OPACITY,
+            canvas_opacity: DEFAULT_CANVAS_OPACITY,
             background_accent_enabled: true,
             background_accent: None,
             startup_focus: StartupFocus::Canvas,
@@ -188,6 +195,7 @@ impl<'de> Deserialize<'de> for Settings {
             background_mode: Option<BackgroundMode>,
             background_image: Option<String>,
             background_opacity: f32,
+            canvas_opacity: f32,
             background_accent_enabled: bool,
             background_accent: Option<[u8; 3]>,
             startup_focus: StartupFocus,
@@ -208,6 +216,7 @@ impl<'de> Deserialize<'de> for Settings {
                     background_mode: None,
                     background_image: defaults.background_image,
                     background_opacity: defaults.background_opacity,
+                    canvas_opacity: defaults.canvas_opacity,
                     background_accent_enabled: defaults.background_accent_enabled,
                     background_accent: defaults.background_accent,
                     startup_focus: defaults.startup_focus,
@@ -243,6 +252,7 @@ impl<'de> Deserialize<'de> for Settings {
             background_mode,
             background_image: sanitized_bg,
             background_opacity: raw.background_opacity,
+            canvas_opacity: raw.canvas_opacity,
             background_accent_enabled: raw.background_accent_enabled,
             background_accent: raw.background_accent,
             startup_focus: raw.startup_focus,
@@ -328,6 +338,12 @@ impl Settings {
             )
         } else {
             DEFAULT_BACKGROUND_OPACITY
+        };
+        self.canvas_opacity = if self.canvas_opacity.is_finite() {
+            self.canvas_opacity
+                .clamp(*CANVAS_OPACITY_RANGE.start(), *CANVAS_OPACITY_RANGE.end())
+        } else {
+            DEFAULT_CANVAS_OPACITY
         };
     }
 
@@ -703,6 +719,7 @@ mod tests {
             background_mode: BackgroundMode::Image,
             background_image: Some("../escape.png".into()),
             background_opacity: 1.5,
+            canvas_opacity: 1.8,
             background_accent_enabled: false,
             background_accent: Some([40, 140, 220]),
             startup_focus: StartupFocus::Latex,
@@ -727,6 +744,7 @@ mod tests {
         assert_eq!(raw.background_accent, None);
         assert!(!raw.background_accent_enabled);
         assert_eq!(raw.background_opacity, 1.0);
+        assert_eq!(raw.canvas_opacity, 1.0);
         assert_eq!(raw.font_pt, *FONT_PT_RANGE.end());
         assert_eq!(raw.target, "omml");
         assert_eq!(raw.category, palette::DEFAULT_GROUP);
@@ -741,17 +759,20 @@ mod tests {
             zoom: f32::NAN,
             font_pt: f32::INFINITY,
             background_opacity: f32::NAN,
+            canvas_opacity: f32::NEG_INFINITY,
             ..Settings::default()
         }
         .sanitized();
         assert_eq!(non_finite.zoom, DEFAULT_ZOOM);
         assert_eq!(non_finite.font_pt, DEFAULT_FONT_PT);
         assert_eq!(non_finite.background_opacity, DEFAULT_BACKGROUND_OPACITY);
+        assert_eq!(non_finite.canvas_opacity, DEFAULT_CANVAS_OPACITY);
 
         let snapped_font = Settings {
             font_pt: 13.3,
             zoom: 0.5,
             background_opacity: -0.2,
+            canvas_opacity: -0.4,
             background_image: Some("nested/bg.png".into()),
             ..Settings::default()
         }
@@ -759,6 +780,7 @@ mod tests {
         assert_eq!(snapped_font.font_pt, 13.5);
         assert_eq!(snapped_font.zoom, *ZOOM_RANGE.start());
         assert_eq!(snapped_font.background_opacity, 0.0);
+        assert_eq!(snapped_font.canvas_opacity, 0.0);
         assert_eq!(snapped_font.background_image, None);
         assert_eq!(snapped_font.background_mode, BackgroundMode::Solid);
     }
@@ -800,6 +822,7 @@ mod tests {
             Some("app-background-legacy.png")
         );
         assert!(loaded_bg.background_accent_enabled);
+        assert_eq!(loaded_bg.canvas_opacity, DEFAULT_CANVAS_OPACITY);
 
         let solid_with_saved = dir.path().join("solid_with_saved.json");
         std::fs::write(
@@ -820,6 +843,7 @@ mod tests {
         );
         assert!(!loaded_solid.background_accent_enabled);
         assert_eq!(loaded_solid.background_accent, Some([52, 168, 235]));
+        assert_eq!(loaded_solid.canvas_opacity, DEFAULT_CANVAS_OPACITY);
     }
 
     #[test]
@@ -833,6 +857,7 @@ mod tests {
             background_mode: BackgroundMode::Image,
             background_image: Some("app-background-123.png".into()),
             background_opacity: 0.55,
+            canvas_opacity: 0.62,
             background_accent_enabled: false,
             background_accent: Some([44, 152, 224]),
             startup_focus: StartupFocus::Latex,
@@ -875,6 +900,7 @@ mod tests {
         let loaded = Settings::load_from_path(&path);
         assert_eq!(loaded.zoom, 2.5);
         assert!((loaded.background_opacity - 0.42).abs() < 1e-6);
+        assert_eq!(loaded.canvas_opacity, 1.0);
         assert_eq!(loaded.startup_focus, StartupFocus::Canvas);
     }
 

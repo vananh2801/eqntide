@@ -10,6 +10,7 @@ fn with_settings_path_restores_all_persisted_preferences() {
     let saved = Settings {
         zoom: 3.0,
         theme: ThemeMode::Dark,
+        canvas_opacity: 0.65,
         startup_focus: StartupFocus::Latex,
         font_pt: 18.5,
         target: "mathtype".into(),
@@ -29,6 +30,7 @@ fn with_settings_path_restores_all_persisted_preferences() {
     let ctx = egui::Context::default();
     let restored = super::helpers::app().with_settings_path(path, Some(&ctx));
     assert_eq!(restored.zoom, 3.0);
+    assert!((restored.canvas_opacity - 0.65).abs() < 1e-6);
     assert_eq!(ctx.theme(), egui::Theme::Dark);
     assert_eq!(restored.startup_focus, StartupFocus::Latex);
     assert_eq!(restored.font_pt, 18.5);
@@ -960,16 +962,30 @@ fn settings_app_background_controls_persist_opacity_and_clear_managed_file() {
         settings::resolve_managed_background_path(&settings_path, &managed_name).unwrap();
     assert!(managed_path.exists());
 
-    // Adjust opacity via Settings UI / persisted state.
+    // Adjust overlay and canvas opacity via Settings UI / persisted state.
+    assert_eq!(app.canvas_opacity, settings::DEFAULT_CANVAS_OPACITY);
     app.background_opacity = 0.45;
     app.persisted.background_opacity = 0.45;
+    app.canvas_opacity = 0.62;
+    app.persisted.canvas_opacity = 0.62;
     app.settings_dirty = true;
-    let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let out = run_ui_pass_sized(&ctx, &mut app, Vec2::new(MIN_WINDOW_SIZE[0], 900.0));
     let on_disk = Settings::load_from_path(&settings_path);
     assert!((on_disk.background_opacity - 0.45).abs() < 1e-6);
+    assert!((on_disk.canvas_opacity - 0.62).abs() < 1e-6);
     assert!(find_text_center(&out, |text| text == "App background").x > 0.0);
-    assert!(find_text_center(&out, |text| text == "Overlay opacity").x > 0.0);
+    let overlay_pos = find_text_center(&out, |text| text == "Overlay opacity");
+    let canvas_pos = find_text_center(&out, |text| text == "Canvas opacity");
+    assert!(overlay_pos.x > 0.0);
+    assert!(canvas_pos.x > 0.0);
+    assert!(
+        canvas_pos.y > overlay_pos.y,
+        "Canvas opacity ({}) should render below Overlay opacity ({})",
+        canvas_pos.y,
+        overlay_pos.y
+    );
     assert!(find_text_center(&out, |text| text == "45%").x > 0.0);
+    assert!(find_text_center(&out, |text| text == "62%").x > 0.0);
 
     // No filename or status text is rendered beside the thumbnail.
     assert!(!out.shapes.iter().any(|clipped| match &clipped.shape {
@@ -1030,7 +1046,12 @@ fn settings_app_background_controls_persist_opacity_and_clear_managed_file() {
 
     // Click "Clear" button in Settings.
     let clear_pos = find_text_center(&out, |text| text == "Clear");
-    let _ = run_ui_pass_frame(&ctx, &mut app, click_events(clear_pos));
+    let _ = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        Vec2::new(MIN_WINDOW_SIZE[0], 900.0),
+        click_events(clear_pos),
+    );
     assert_eq!(app.background_image, None);
     assert!(app.background_texture.is_none());
     assert!(!managed_path.exists());
@@ -1183,6 +1204,40 @@ fn settings_background_mode_toggle_is_non_destructive_and_gates_accent_checkbox(
     assert_eq!(disabled_handle.0.a(), 255);
     assert_eq!(disabled_handle.1.color, solid_tokens.disabled_accent());
 
+    // Disabled Canvas opacity slider handle also stays 100% opaque below Overlay opacity.
+    let canvas_opacity_pos = find_text_center(&solid_out, |text| text == "Canvas opacity");
+    assert!(canvas_opacity_pos.y > opacity_y);
+    let disabled_canvas_handle = solid_out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape)
+                if (rect_shape.rect.center().y - canvas_opacity_pos.y).abs() <= 2.0
+                    && (rect_shape.rect.width() - rect_shape.rect.height()).abs() <= 0.5
+                    && rect_shape.rect.height() >= 10.0
+                    && rect_shape.rect.height() <= 18.0 =>
+            {
+                Some((rect_shape.fill, rect_shape.stroke, rect_shape.rect.center()))
+            }
+            _ => None,
+        })
+        .expect("disabled Canvas opacity slider handle");
+    assert_eq!(disabled_canvas_handle.0.a(), 255);
+    assert_eq!(
+        disabled_canvas_handle.1.color,
+        solid_tokens.disabled_accent()
+    );
+    let _ = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        tall,
+        click_events(Pos2::new(
+            disabled_canvas_handle.2.x - 40.0,
+            canvas_opacity_pos.y,
+        )),
+    );
+    assert_eq!(app.canvas_opacity, settings::DEFAULT_CANVAS_OPACITY);
+
     let saved_solid = Settings::load_from_path(&settings_path);
     assert_eq!(saved_solid.background_mode, BackgroundMode::Solid);
     assert_eq!(
@@ -1199,6 +1254,59 @@ fn settings_background_mode_toggle_is_non_destructive_and_gates_accent_checkbox(
     // Switch back to Image via Settings button: immediately restores image + extracted accent.
     let img_btn_pos = find_text_center(&solid_out, |text| text == "Image");
     let back_to_img_out = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(img_btn_pos));
+    // Dragging/clicking the enabled Canvas opacity slider updates state and writes to disk.
+    let canvas_row_y = find_text_center(&back_to_img_out, |text| text == "Canvas opacity").y;
+    let enabled_canvas_handle = back_to_img_out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape)
+                if (rect_shape.rect.center().y - canvas_row_y).abs() <= 2.0
+                    && (rect_shape.rect.width() - rect_shape.rect.height()).abs() <= 0.5
+                    && rect_shape.rect.height() >= 10.0
+                    && rect_shape.rect.height() <= 18.0 =>
+            {
+                Some(rect_shape.rect.center())
+            }
+            _ => None,
+        })
+        .expect("enabled Canvas opacity slider handle");
+    let drag_end = Pos2::new(enabled_canvas_handle.x - 80.0, canvas_row_y);
+    let _ = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        tall,
+        vec![
+            egui::Event::PointerMoved(enabled_canvas_handle),
+            egui::Event::PointerButton {
+                pos: enabled_canvas_handle,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let _ = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        tall,
+        vec![egui::Event::PointerMoved(drag_end)],
+    );
+    let _ = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        tall,
+        vec![egui::Event::PointerButton {
+            pos: drag_end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    assert!(app.canvas_opacity < 0.95);
+    assert!(
+        (Settings::load_from_path(&settings_path).canvas_opacity - app.canvas_opacity).abs() < 1e-6
+    );
     assert_eq!(app.background_mode, BackgroundMode::Image);
     assert_eq!(app.active_accent_seed(), Some(extracted_seed));
     assert!(app.software_background(&egui::Visuals::dark()).is_some());

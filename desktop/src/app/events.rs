@@ -381,8 +381,8 @@ impl App {
         };
         let result = eqntide::render::render_interactive_alpha_scaled(&math, font, raster_scale)
             .map_err(|err| err.to_string())
-            .map(|(mask, preview)| {
-                let placeholders = preview
+            .map(|(mut mask, preview)| {
+                let placeholders: Vec<_> = preview
                     .regions
                     .iter()
                     .filter(|region| {
@@ -396,6 +396,7 @@ impl App {
                     })
                     .cloned()
                     .collect();
+                clear_placeholder_alpha(&mut mask, &preview.preview, &placeholders);
                 let pixels = mask
                     .alpha
                     .into_iter()
@@ -420,6 +421,36 @@ impl App {
         if !self.render_busy && self.requested_key != self.render_key {
             self.request_render(ctx);
             self.process_events(ctx);
+        }
+    }
+}
+
+fn clear_placeholder_alpha(
+    mask: &mut eqntide::render::AlphaMask,
+    preview: &eqntide::render::Preview,
+    placeholders: &[eqntide::render::HitRegion],
+) {
+    let width = mask.width as usize;
+    let height = mask.height as usize;
+    if width == 0 || height == 0 || preview.width_pt <= 0.0 || preview.height_pt <= 0.0 {
+        return;
+    }
+    let scale_x = width as f32 / preview.width_pt;
+    let scale_y = height as f32 / preview.height_pt;
+    for slot in placeholders {
+        let min_x = ((slot.x * scale_x).floor().max(0.0) as usize).min(width);
+        let max_x = ((slot.x + slot.width) * scale_x)
+            .ceil()
+            .clamp(0.0, width as f32) as usize;
+        let min_y = ((slot.y * scale_y).floor().max(0.0) as usize).min(height);
+        let max_y = ((slot.y + slot.height) * scale_y)
+            .ceil()
+            .clamp(0.0, height as f32) as usize;
+        if min_x < max_x && min_y < max_y {
+            for y in min_y..max_y {
+                let row_start = y * width;
+                mask.alpha[row_start + min_x..row_start + max_x].fill(0);
+            }
         }
     }
 }
