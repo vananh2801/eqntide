@@ -3,7 +3,7 @@ target/
 **/gen/
 node_modules/
 dist/
-skills/
+/skills/
 *.exe
 *.zip
 word-template/tmp_build/
