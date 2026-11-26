@@ -11,6 +11,7 @@ mod runtime;
 mod settings;
 mod software_painter;
 mod theme;
+mod update;
 mod wgpu_runner;
 
 use eqntide::bridge::{DesktopWindowRequest, ServerHandle};
@@ -82,6 +83,7 @@ pub enum Event {
         Result<eqntide::bridge::ConvertDocumentResponse, String>,
     ),
     BatchDone,
+    UpdateCheck(u64, Result<update::UpdateCheckOutcome, String>),
 }
 
 /// Returns the per-user log file path inside the EqnTide data directory, creating it if needed.

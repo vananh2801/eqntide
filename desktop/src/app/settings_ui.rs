@@ -4,6 +4,7 @@ use super::{App, MatrixDialog, UI_ICON_SIZE};
 use crate::{
     settings::{self, BackgroundMode, Settings, StartupFocus, ThemeMode, ZOOM_RANGE},
     theme::{self, CanvasPalette, ThemeTokens},
+    update::{self, UpdateState},
     Event,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
@@ -435,7 +436,7 @@ impl App {
             });
     }
 
-    /// Renders the About tab showing version, logo, author, license, and repository link.
+    /// Renders the About tab showing version, logo, author, license, repository link, and manual updates.
     pub(super) fn draw_about_tab(&mut self, ui: &mut egui::Ui) {
         let tokens = self.theme_tokens(ui);
         self.draw_back_to_editor_button(ui);
@@ -527,6 +528,10 @@ impl App {
                             ui.hyperlink(env!("CARGO_PKG_REPOSITORY"));
                             ui.end_row();
                         });
+                    ui.add_space(theme::SPACE_XL);
+                    ui.separator();
+                    ui.add_space(theme::SPACE_MD);
+                    self.draw_about_updates(ui, tokens);
                 });
             });
     }
@@ -700,6 +705,90 @@ impl App {
         let scrim = ThemeTokens::background_scrim(dark_mode, self.background_opacity);
         if scrim.a() > 0 {
             bg_painter.rect_filled(viewport, 0.0, scrim);
+        }
+    }
+
+    fn draw_about_updates(&mut self, ui: &mut egui::Ui, tokens: ThemeTokens) {
+        ui.strong("Updates");
+        ui.add_space(theme::SPACE_XS);
+        match self.update_state.clone() {
+            UpdateState::Idle => {
+                if Self::standard_button(ui, "Check for updates").clicked() {
+                    self.start_update_check();
+                }
+            }
+            UpdateState::Checking => {
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(false, |ui| Self::standard_button(ui, "Check for updates"));
+                    ui.label(egui::RichText::new("Checking for updates…").color(tokens.text_muted));
+                });
+            }
+            UpdateState::UpToDate => {
+                ui.horizontal(|ui| {
+                    if Self::standard_button(ui, "Check again").clicked() {
+                        self.start_update_check();
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "EqnTide {} is up to date.",
+                            env!("CARGO_PKG_VERSION")
+                        ))
+                        .color(tokens.text_muted),
+                    );
+                });
+            }
+            UpdateState::Available(release) => {
+                ui.label(
+                    egui::RichText::new(format!("Update available: v{}", release.version))
+                        .strong()
+                        .color(tokens.accent),
+                );
+                ui.add_space(theme::SPACE_XS);
+                ui.horizontal(|ui| {
+                    let button_label = if cfg!(target_os = "windows")
+                        && release.download_url != release.release_url
+                    {
+                        format!("Download v{}", release.version)
+                    } else {
+                        format!("Open release v{}", release.version)
+                    };
+                    if Self::primary_button_with(ui, tokens, true, |ui| {
+                        ui.add(
+                            egui::Button::new(button_label)
+                                .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+                        )
+                    })
+                    .clicked()
+                        && update::is_trusted_release_url(&release.download_url)
+                    {
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab(release.download_url.clone()));
+                    }
+                    if release.download_url != release.release_url
+                        && Self::standard_button(ui, "Release notes").clicked()
+                        && update::is_trusted_release_url(&release.release_url)
+                    {
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab(release.release_url.clone()));
+                    }
+                    if Self::standard_button(ui, "Check again").clicked() {
+                        self.start_update_check();
+                    }
+                });
+            }
+            UpdateState::Error(err) => {
+                ui.label(egui::RichText::new(err).small().color(tokens.error_fg));
+                ui.add_space(theme::SPACE_XS);
+                ui.horizontal(|ui| {
+                    if Self::standard_button(ui, "Retry").clicked() {
+                        self.start_update_check();
+                    }
+                    if Self::standard_button(ui, "Open Releases").clicked() {
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab(update::GITHUB_RELEASES_PAGE_URL));
+                    }
+                });
+            }
         }
     }
 

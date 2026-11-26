@@ -93,7 +93,7 @@ Start `eqntide-desktop` or `eqntide-cli --server` before opening an add-in:
   journalctl --user -u eqntide.service -n 50 --no-pager
   ```
 - **Windows bridge logs:** Stored under `%LOCALAPPDATA%\EqnTide\logs`. Run `scripts\install-bridge-startup.ps1` to repair login startup (or `-Uninstall` to remove it).
-- **Privacy:** All conversion and UI sessions run locally on `127.0.0.1`; no cloud service or telemetry is used.
+- **Privacy:** All conversion and UI sessions run locally on `127.0.0.1`; no background cloud service or telemetry is used. Clicking **Check for updates** in **About** performs an on-demand HTTPS lookup against GitHub Releases.
 
 ---
 
@@ -118,8 +118,6 @@ Start `eqntide-desktop` or `eqntide-cli --server` before opening an add-in:
 ---
 
 ## CLI & Library Usage
-
-### CLI (`eqntide-cli`)
 
 ```bash
 # Forward: OMML -> MathType (writes <input>_mathtype.docx or <dir>_mathtype/)
@@ -215,6 +213,8 @@ makensis "/DPACKAGE_DIR=$((Resolve-Path "dist/windows/$version").Path)" scripts/
 ```
 
 GitHub Actions (`.github/workflows/ci.yml`, `build-native.yml`, `release.yml`) runs workspace tests, `clippy`, `cargo-deny`, JS/PowerShell/Python checks, and packages Linux/Windows artifacts on PRs to `main`, manual dispatch, or `v*` tags. On Linux with `cargo-xwin` and NSIS configured, you can also cross-build Windows binaries with `cargo xwin build --workspace --release --locked --target x86_64-pc-windows-msvc`.
+
+> **Release versioning & tags:** Before tagging a release, keep clean `X.Y.Z` versions synchronized across `Cargo.toml`, `desktop/Cargo.toml`, and `crates/eqntide-editor/Cargo.toml` (never add pre-release suffixes like `-beta.1` inside `Cargo.toml`, as `.deb`/`.rpm` packaging and desktop SemVer checks expect `X.Y.Z`). Clean tags (`vX.Y.Z`) publish as **Latest** stable releases (`prerelease: false`), while hyphenated tags (`vX.Y.Z-beta.1`, `vX.Y.Z-rc.1`) automatically publish as pre-releases (`prerelease: true`).
 
 ---
 

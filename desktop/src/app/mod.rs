@@ -1,4 +1,4 @@
-//! Native desktop application state, frame orchestration, and main window chrome.
+//! Native Rust desktop application state, frame orchestration, and main window chrome.
 //!
 //! # Lifecycle & Async Event Flow
 //!
@@ -12,7 +12,7 @@
 //!  EventSender<Event> ──► Receiver<Event> (tx / rx)
 //!        │                     ▲
 //!        ▼                     │ Launch, Window, Bridge, Render, Latex,
-//!  App::draw_ui(ui)            │ Session, Finished, Paths, Background*, Batch*
+//!  App::draw_ui(ui)            │ Session, Finished, Paths, Background*, Batch*, UpdateCheck
 //!    ├── process_events() ─────┘
 //!    ├── take_save_shortcut() / close guard
 //!    ├── sync_render() ──────► eqntide::render::render_interactive_alpha_scaled
@@ -20,7 +20,7 @@
 //!    │                           ├── draw_editor()       (palette + canvas + latex + keyboard)
 //!    │                           ├── draw_batch_tab()    (folder tree / batch worker progress)
 //!    │                           ├── draw_settings_tab() (zoom, theme, background, canvas presets)
-//!    │                           └── draw_about_tab()
+//!    │                           └── draw_about_tab()    (version, links, manual update check)
 //!    ├── draw_dialogs() / draw_matrix_dialog()
 //!    ├── request_latex_parse() ──► debounced background parse -> Event::Latex
 //!    └── drain_before_close() / flush_settings()
@@ -41,6 +41,7 @@ use crate::{
     palette, runtime,
     settings::{self, BackgroundMode, Settings, StartupFocus},
     theme::{self, ThemeTokens},
+    update::UpdateState,
     Event, Rendered,
 };
 use eframe::egui::{self, Rect, Stroke, Vec2};
@@ -213,6 +214,10 @@ pub struct App {
     pub(super) recent_palette: Vec<&'static str>,
     /// Cached application logo texture for the About view.
     pub(super) logo_texture: Option<egui::TextureHandle>,
+    /// Current state of the manual About-tab GitHub Release update check.
+    pub(super) update_state: UpdateState,
+    /// Monotonic sequence ID discarding stale background update check responses.
+    pub(super) update_check_seq: u64,
     /// Transient informational or error message displayed in the status bar.
     pub(super) status: String,
     /// Cached compatibility warning `(render_key, latex_gen, target, message)`.
@@ -482,6 +487,8 @@ impl App {
             gpu_profile: GpuProfile::Native,
             last_enforced_viewport: None,
             logo_texture: None,
+            update_state: UpdateState::Idle,
+            update_check_seq: 0,
             status: String::new(),
             texture: None,
             rendered: None,

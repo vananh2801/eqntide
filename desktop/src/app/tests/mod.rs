@@ -3,3 +3,4 @@ mod canvas_input_tests;
 mod helpers;
 mod layout_theme_tests;
 mod session_tests;
+mod update_tests;

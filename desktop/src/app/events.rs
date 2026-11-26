@@ -1,7 +1,11 @@
 //! Background event draining, debounced LaTeX parsing, and async raster render sync.
 
 use super::{App, GpuProfile, Intent, PLACEHOLDER_ATTR};
-use crate::{batch, commands, Event, Rendered};
+use crate::{
+    batch, commands,
+    update::{self, UpdateCheckOutcome, UpdateState},
+    Event, Rendered,
+};
 use eframe::egui::{self, Color32, Vec2};
 use eqntide::MathNode;
 use eqntide_editor::Editor;
@@ -230,8 +234,29 @@ impl App {
                     }
                     .into();
                 }
+                Event::UpdateCheck(seq, result) => {
+                    if seq == self.update_check_seq {
+                        self.update_state = match result {
+                            Ok(UpdateCheckOutcome::UpToDate) => UpdateState::UpToDate,
+                            Ok(UpdateCheckOutcome::Available(release)) => {
+                                UpdateState::Available(release)
+                            }
+                            Err(err) => UpdateState::Error(err),
+                        };
+                    }
+                }
             }
         }
+    }
+
+    /// Starts a manual GitHub Release check off-thread unless one is already in flight.
+    pub(super) fn start_update_check(&mut self) {
+        if matches!(self.update_state, UpdateState::Checking) {
+            return;
+        }
+        self.update_check_seq = self.update_check_seq.wrapping_add(1);
+        self.update_state = UpdateState::Checking;
+        update::spawn_update_check(self.tx.clone(), self.update_check_seq);
     }
 
     /// Pops a ready debounced LaTeX parse job when the typing deadline has elapsed.
