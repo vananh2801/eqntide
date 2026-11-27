@@ -4,7 +4,7 @@
   "icon_width": 40,
   "icon_height": 26,
   "scale": 2,
-  "atlas_sha256": "35abf7e0cc3e488a33545940ce9d908a41677ae2683d9ec8dc90155246d7dfd1",
+  "atlas_sha256": "70904f6888d4537d6dacc58f226fc06b9e6a094a41a387d0e4f0ec8033926231",
   "entries": [
     {
       "id": "symbol-leq",
@@ -1822,7 +1822,7 @@
       "y": 450,
       "w": 80,
       "h": 52,
-      "svg_sha256": "9e0b2ff8259cc6badbf2406e5356e365197ac863387fd99b1fe3794b63ab95ae"
+      "svg_sha256": "02f7f073f326fda8209d759b4ff7c323da3bf0be0e6bc4cf693198ccb0ec9283"
     },
     {
       "id": "symbol-ointctrclockwise",
@@ -1831,7 +1831,7 @@
       "y": 450,
       "w": 80,
       "h": 52,
-      "svg_sha256": "2c7ca1bd9e7b2e7300603b568551b0354aa31a8d2d2b6749ec1b4fe696dcafae"
+      "svg_sha256": "9b896363b1f41b7fc5bb5955c191585eba02ec2f9728951dc811bd5f47944c8d"
     },
     {
       "id": "symbol-prod",
@@ -3388,7 +3388,7 @@
       "y": 842,
       "w": 80,
       "h": 52,
-      "svg_sha256": "cf1d50b18433fdbe9c82f18fbc59b618387eca1861c086ad422deaa28f5d876c"
+      "svg_sha256": "c3c262ced2881f6b198a62e47a35cda5d5148ceb313dd7562a7ab9e8b636b296"
     },
     {
       "id": "Integrals-varointclockwise-stack-lower",
@@ -3397,7 +3397,7 @@
       "y": 842,
       "w": 80,
       "h": 52,
-      "svg_sha256": "0ec0c8557444d2246401d1a7ec6925adc45e5403fa463918ea4bb118254df109"
+      "svg_sha256": "77d616adc5319cf79dbd67e10c9de31c13eb9cb899c8e9c922273a7b5d6bbf5e"
     },
     {
       "id": "Integrals-ointctrclockwise-side-lower",
@@ -3406,7 +3406,7 @@
       "y": 842,
       "w": 80,
       "h": 52,
-      "svg_sha256": "c4278a5622f7c2bc3024c15f59ab9a7965f7146a6a9ced3ac613422fe1285099"
+      "svg_sha256": "d33fec688da5fe56cbc6f6ceec5e240fb8e847366ad3599fd3b1a2d4dc46ca47"
     },
     {
       "id": "Integrals-ointctrclockwise-stack-lower",
@@ -3415,7 +3415,7 @@
       "y": 842,
       "w": 80,
       "h": 52,
-      "svg_sha256": "41fd055ea6926c6b9e53aa216787685868bb61ce475745635ac0e330bce66a6a"
+      "svg_sha256": "c634a5c604ba1ba409679e26f93aa1a90a519c2590eaad37f3335a32cd9cb602"
     },
     {
       "id": "Integrals-int-differential",

@@ -192,6 +192,7 @@ pub struct Fonts {
     math: FontRef<'static>,
     constants: MathConstants,
     radical_info: RadicalInfo,
+    integral_assembly: Option<RadicalAssembly>,
     ssty_map: HashMap<u16, (u16, u16)>,
 }
 
@@ -277,7 +278,8 @@ pub fn fonts() -> &'static Fonts {
             MathConstants::default()
         };
 
-        let radical_info = metadata::radical_info(&math_face);
+        let radical_info = metadata::vertical_glyph_info(&math_face, '√');
+        let integral_assembly = metadata::vertical_glyph_info(&math_face, '∫').assembly;
         let ssty_map = metadata::ssty_map(&math_face);
 
         Fonts {
@@ -287,6 +289,7 @@ pub fn fonts() -> &'static Fonts {
             math: math_face,
             constants,
             radical_info,
+            integral_assembly,
             ssty_map,
         }
     })
@@ -307,6 +310,11 @@ impl Fonts {
     /// Access radical variants and assembly information for `\u{221A}`.
     pub fn radical_info(&self) -> &RadicalInfo {
         &self.radical_info
+    }
+
+    /// Access the vertical OpenType MATH assembly for the integral stem.
+    pub(super) fn integral_assembly(&self) -> Option<&RadicalAssembly> {
+        self.integral_assembly.as_ref()
     }
 
     /// Access optical size alternates map extracted from OpenType GSUB `ssty` feature.

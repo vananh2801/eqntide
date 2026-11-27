@@ -126,3 +126,11 @@ The palette SHALL use the full available width for the tile viewport and omit sc
 - **WHEN** all tiles in the active category fit within the available palette width, including after a resize or category switch
 - **THEN** the tile viewport uses the full width and the horizontal offset is zero
 - **AND** dragging or using the mouse wheel over the palette leaves its position unchanged
+
+### Requirement: Directional contour integral icons match their commands
+The Integrals palette SHALL depict the correct loop direction in each standalone and limit-bearing clockwise and anticlockwise contour integral icon. Each tile SHALL insert the template indicated by its icon and label.
+
+#### Scenario: Direction is legible across all six variants
+- **WHEN** the Integrals palette displays the standalone, side-lower, and stacked-lower forms of `\varointclockwise` and `\ointctrclockwise`
+- **THEN** each clockwise icon shows clockwise travel and each anticlockwise icon shows anticlockwise travel, with the arrowheads discernible from the stems at the displayed `40x26` size
+- **AND** activating a tile inserts the corresponding directional operator with the limit placement shown on the tile

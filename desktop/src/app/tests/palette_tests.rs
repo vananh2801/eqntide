@@ -69,6 +69,46 @@ fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
 }
 
 #[test]
+fn directional_integral_tiles_insert_the_operator_and_limit_their_icon_depicts() {
+    let width = MIN_WINDOW_SIZE[0];
+    for (command, glyph) in [(r"\varointclockwise", "∲"), (r"\ointctrclockwise", "∳")] {
+        for (suffix, limit_tag) in [
+            ("", None),
+            (r"\nolimits_{#?} #?", Some("msub")),
+            (r"\limits_{#?} #?", Some("munder")),
+        ] {
+            let source = format!("{command}{suffix}");
+            let ctx = egui::Context::default();
+            let mut app = super::helpers::app();
+            app.category = "Integrals".into();
+            let output = frame(&ctx, &mut app, width, vec![]);
+            let (icon, clip) = tile(&output, &app, &source);
+            assert!(clip.contains(icon.center()));
+            let _ = frame(&ctx, &mut app, width, click_events(icon.center()));
+
+            let math = app.editor.math();
+            let entry = &math.children[0];
+            let operator = if let Some(tag) = limit_tag {
+                let script = if entry.tag == "mrow" {
+                    &entry.children[0]
+                } else {
+                    entry
+                };
+                assert_eq!(script.tag, tag, "{source}");
+                &script.children[0]
+            } else {
+                entry
+            };
+            assert_eq!(
+                (operator.tag.as_str(), operator.text.as_str()),
+                ("mo", glyph)
+            );
+            assert_eq!(app.recent_palette, [source.as_str()]);
+        }
+    }
+}
+
+#[test]
 fn palette_fills_columns_in_catalog_and_recent_order() {
     let ctx = egui::Context::default();
     let mut app = super::helpers::app();

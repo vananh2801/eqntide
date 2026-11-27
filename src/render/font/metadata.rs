@@ -9,9 +9,9 @@ use skrifa::Tag;
 
 use super::{RadicalAssembly, RadicalInfo, RadicalPart};
 
-/// Extract radical variants and their vertical assembly recipe from MATH.
-pub(super) fn radical_info(math_face: &FontRef<'static>) -> RadicalInfo {
-    let Some(glyph_id) = skrifa::charmap::Charmap::new(math_face).map('\u{221A}') else {
+/// Extract a glyph's vertical size variants and assembly recipe from MATH.
+pub(super) fn vertical_glyph_info(math_face: &FontRef<'static>, ch: char) -> RadicalInfo {
+    let Some(glyph_id) = skrifa::charmap::Charmap::new(math_face).map(ch) else {
         return RadicalInfo {
             variants: Vec::new(),
             assembly: None,

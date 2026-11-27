@@ -257,10 +257,20 @@ def draw_integral(cx: float, cy: float, h: float, sw: float = STROKE_MAIN, count
         out.append(
             f'<ellipse cx="{fmt(cx)}" cy="{fmt(cy)}" rx="{fmt(rx)}" ry="{fmt(ry)}" stroke-width="{fmt(min(sw, 1.35))}" />'
         )
-        if loop == "cw":
-            out.append(svg_path(f"M{fmt(cx + 0.8)} {fmt(cy - ry - 1.1)} L{fmt(cx - 0.7)} {fmt(cy - ry)} L{fmt(cx + 0.8)} {fmt(cy - ry + 1.1)}", sw=1.15))
-        elif loop == "ccw":
-            out.append(svg_path(f"M{fmt(cx - 0.8)} {fmt(cy - ry - 1.1)} L{fmt(cx + 0.7)} {fmt(cy - ry)} L{fmt(cx - 0.8)} {fmt(cy - ry + 1.1)}", sw=1.15))
+        if loop in ("cw", "ccw"):
+            # Clockwise travel points down at the right edge of the loop.
+            direction = 1.0 if loop == "cw" else -1.0
+            arrow_x = cx + rx
+            wings_y = cy - direction * 1.3
+            tip_y = cy + direction * 0.7
+            out.append(
+                svg_path(
+                    f"M{fmt(arrow_x - 1.05)} {fmt(wings_y)} "
+                    f"L{fmt(arrow_x)} {fmt(tip_y)} "
+                    f"L{fmt(arrow_x + 1.05)} {fmt(wings_y)}",
+                    sw=1.15,
+                )
+            )
     return out
 
 
