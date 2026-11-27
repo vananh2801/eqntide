@@ -66,6 +66,37 @@ pub struct UiGroup {
     pub catalog_groups: &'static [&'static str],
 }
 
+/// Visual subgroup of palette items partitioned into intra-subgroup column runs.
+///
+/// Each run starts at row 0 of a fresh column inside the same subgroup and wraps
+/// at the ribbon's three-row limit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaletteSubgroup {
+    /// Column runs packed left to right within the subgroup.
+    pub runs: Vec<Vec<&'static PaletteItem>>,
+}
+
+impl PaletteSubgroup {
+    fn single(items: Vec<&'static PaletteItem>) -> Self {
+        Self { runs: vec![items] }
+    }
+
+    /// Returns `true` when every column run in the subgroup is empty.
+    pub fn is_empty(&self) -> bool {
+        self.runs.iter().all(Vec::is_empty)
+    }
+
+    /// Returns the total item count across all column runs in the subgroup.
+    pub fn len(&self) -> usize {
+        self.runs.iter().map(Vec::len).sum()
+    }
+
+    /// Iterates over all items across the subgroup's column runs in display order.
+    pub fn iter(&self) -> impl Iterator<Item = &'static PaletteItem> + '_ {
+        self.runs.iter().flat_map(|run| run.iter().copied())
+    }
+}
+
 /// Ordered sidebar categories displayed in the desktop editor.
 pub const UI_GROUPS: &[UiGroup] = &[
     UiGroup {
@@ -173,10 +204,12 @@ pub fn group_contains(ui_group_id: &str, catalog_group: &str) -> bool {
         || ui_group_id == catalog_group
 }
 
-/// Collects the palette items belonging to `ui_group_id` (or MRU items for `Recent`).
-pub fn items_for_ui_group(ui_group_id: &str, recent: &[&'static str]) -> Vec<&'static PaletteItem> {
+/// Collects the palette items belonging to `ui_group_id` grouped into visual subgroups.
+///
+/// `Recent` returns a single continuous subgroup so MRU items pack without column breaks.
+pub fn subgroups_for_ui_group(ui_group_id: &str, recent: &[&'static str]) -> Vec<PaletteSubgroup> {
     if ui_group_id == RECENT_GROUP {
-        return recent
+        let items: Vec<_> = recent
             .iter()
             .filter_map(|&source| {
                 PALETTE
@@ -184,148 +217,259 @@ pub fn items_for_ui_group(ui_group_id: &str, recent: &[&'static str]) -> Vec<&'s
                     .find(|(_, _, item_source)| *item_source == source)
             })
             .collect();
+        return if items.is_empty() {
+            Vec::new()
+        } else {
+            vec![PaletteSubgroup::single(items)]
+        };
     }
-    let mut items = Vec::new();
+    let mut subgroups = Vec::new();
     if let Some(group) = ui_group(ui_group_id) {
         for &catalog_group in group.catalog_groups {
-            append_ordered_items(&mut items, catalog_group);
+            append_ordered_subgroups(&mut subgroups, catalog_group);
         }
     } else {
-        append_ordered_items(&mut items, ui_group_id);
+        append_ordered_subgroups(&mut subgroups, ui_group_id);
     }
-    items
+    subgroups
 }
 
-fn append_ordered_items(items: &mut Vec<&'static PaletteItem>, group: &str) {
+/// Collects the flattened palette items belonging to `ui_group_id` (or MRU items for `Recent`).
+pub fn items_for_ui_group(ui_group_id: &str, recent: &[&'static str]) -> Vec<&'static PaletteItem> {
+    subgroups_for_ui_group(ui_group_id, recent)
+        .iter()
+        .flat_map(PaletteSubgroup::iter)
+        .collect()
+}
+
+fn append_ordered_subgroups(subgroups: &mut Vec<PaletteSubgroup>, group: &str) {
     // The catalog emits ENTRIES and PALETTE in the same order.
-    let mut entries: Vec<_> = ENTRIES
+    let entries: Vec<_> = ENTRIES
         .iter()
         .zip(PALETTE)
         .filter(|(entry, _)| entry.group == group)
         .collect();
-    let order = palette_order(group);
-    if !order.is_empty() {
-        entries.sort_by_cached_key(|(entry, _)| {
-            let key = palette_order_key(group, entry.id);
-            order
-                .split_whitespace()
-                .position(|ordered| ordered == key)
-                .unwrap_or(usize::MAX)
-        });
+    let specs = palette_subgroups(group);
+    if specs.is_empty() {
+        if !entries.is_empty() {
+            subgroups.push(PaletteSubgroup::single(
+                entries.into_iter().map(|(_, item)| item).collect(),
+            ));
+        }
+        return;
     }
-    items.extend(entries.into_iter().map(|(_, item)| item));
+
+    let mut assigned = vec![false; entries.len()];
+    for &spec in specs {
+        let mut runs = Vec::new();
+        for run_spec in spec.split('|') {
+            let keys: Vec<_> = run_spec.split_whitespace().collect();
+            let mut run_entries: Vec<(usize, &'static PaletteItem)> = Vec::new();
+            for (idx, (entry, item)) in entries.iter().enumerate() {
+                if assigned[idx] {
+                    continue;
+                }
+                let key = palette_order_key(group, entry.id);
+                if let Some(position) = keys.iter().position(|&ordered| ordered == key) {
+                    assigned[idx] = true;
+                    run_entries.push((position, *item));
+                }
+            }
+            if !run_entries.is_empty() {
+                // Rust sort_by_key is stable, preserving catalog order for shared-key variants.
+                run_entries.sort_by_key(|(position, _)| *position);
+                runs.push(run_entries.into_iter().map(|(_, item)| item).collect());
+            }
+        }
+        if !runs.is_empty() {
+            subgroups.push(PaletteSubgroup { runs });
+        }
+    }
+
+    let remaining: Vec<_> = entries
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, (_, item))| (!assigned[idx]).then_some(item))
+        .collect();
+    if !remaining.is_empty() {
+        subgroups.push(PaletteSubgroup::single(remaining));
+    }
 }
 
 fn palette_order_key<'a>(group: &str, id: &'a str) -> &'a str {
     let key = id.split_once('-').map_or(id, |(_, key)| key);
-    if matches!(group, "Integrals" | "BigOperators") {
+    if matches!(group, "Sums" | "BigOperators") {
+        return key.split_once('-').map_or(key, |(family, _)| family);
+    }
+    if group == "Integrals" {
         return key.split_once('-').map_or(key, |(family, _)| family);
     }
     key
 }
 
-fn palette_order(group: &str) -> &'static str {
+fn palette_subgroups(group: &str) -> &'static [&'static str] {
     match group {
-        "Scripts" => "
-            sup sub subsup
-            pre-sup-post-none pre-sub-post-none pre-both-post-none
-            pre-sup-post-sup pre-sub-post-sup pre-both-post-sup
-            pre-sup-post-sub pre-sub-post-sub pre-both-post-sub
-            pre-sup-post-both pre-sub-post-both pre-both-post-both
-            overset underset overunderset",
-        "Fractions" => "
-            frac tfrac dfrac
-            linear small-linear sfrac
-            sqrt small-root root
-            root-fraction binom long-division long-division-quotient",
-        "Fences" => "
-            paren-both paren-left paren-right
-            bracket-both bracket-left bracket-right
-            double-bracket-both double-bracket-left double-bracket-right
-            brace-both brace-left brace-right
-            angle-both angle-left angle-right
-            bar-both bar-left bar-right
-            norm-both norm-left norm-right
-            floor-both floor-left floor-right
-            ceiling-both ceiling-left ceiling-right
-            bracket-paren paren-bracket bracket-left-left bracket-right-right bracket-open-open
-            bra ket bra-ket evaluation
-            cases-two cases-three system-brace-two system-brace-three system-bracket-two system-bracket-three",
-        "Integrals" => "int iint iiint oint oiint oiiint varointclockwise ointctrclockwise definite",
-        "BigOperators" => "prod coprod bigcup bigcap bigvee bigwedge bigoplus bigotimes bigodot",
-        "Matrices" => "
-            plain-1x2 plain-1x3 plain-1x4
-            plain-2x1 plain-3x1 plain-4x1
-            plain-2x2 plain-3x3 plain-4x4
-            plain-2x3 plain-3x2
-            pmatrix2 pmatrix3 bmatrix2 bmatrix3 Bmatrix2 Bmatrix3
-            vmatrix2 vmatrix3 Vmatrix2 Vmatrix3
-            dots-row dots-column dots-matrix aligned gathered",
-        "Boxes" => "
-            box roundedbox
-            top-left top-right bottom-left bottom-right
-            top-bottom-left top-bottom-right top-left-right bottom-left-right",
-        "Embellishments" => "
-            dot ddot underdot underddot dddot ddddot
-            tilde undertilde hat check breve mathring vec
-            overleftharpoon underleftharpoon overrightharpoon underrightharpoon
-            prime double-prime triple-prime left-prime back-prime
-            cancel bcancel xcancel strike-horizontal",
-        "Bars" => "
-            overline overline-label underline underline-label
-            doubleoverline doubleoverline-label doubleunderline doubleunderline-label
-            widehat widetilde wideparen underparen
-            overleftarrow overrightarrow overleftrightarrow
-            underleftarrow underrightarrow underleftrightarrow
-            overbrace overbrace-label underbrace underbrace-label
-            overbracket overbracket-label underbracket underbracket-label",
-        "Functions" => "
-            sin cos tan cot sec csc
-            arcsin arccos arctan arccot arcsec arccsc
-            sinh cosh tanh coth sech csch arsinh arcosh artanh arcoth
-            tg ctg cotg cosec
-            log ln lg exp
-            lim limsup liminf min max sup inf
-            det dim ker hom deg arg gcd lcm sgn mod Pr",
-        "Operators" => "
-            times cdot div pm mp ast circ bullet diamond
-            oplus otimes odot amalg dagger ddagger",
-        "Relations" => "
-            leq geq neq ll gg equiv nleq ngeq
-            prec succ preceq succeq triangleleft triangleright
-            sim approx simeq cong asymp propto
-            doteq triangleq estimates fallingdotseq risingdotseq parallel perp",
-        "Arrows" => "
-            rightarrow leftarrow leftrightarrow uparrow downarrow updownarrow
-            Rightarrow Leftarrow Leftrightarrow Uparrow Downarrow Updownarrow
-            longrightarrow longleftarrow longleftrightarrow Longrightarrow Longleftarrow Longleftrightarrow
-            nearrow searrow swarrow nwarrow neswarrow nwsearrow
-            mapsto hookrightarrow hookleftarrow curvearrowright curvearrowleft
-            rightleftarrows leftrightarrows rightleftharpoons leftrightharpoons
-            rightharpoonup leftharpoonup rightharpoondown leftharpoondown",
-        "Logic" => "
-            forall exists nexists neg land lor top bot
-            vdash dashv models therefore because backepsilon",
-        "Sets" => "
-            in notin ni notni
-            subset subseteq subsetneq nsubset nsubseteq supset supseteq supsetneq nsupseteq
-            cup cap setminus emptyset",
-        "Symbols" => "
-            number-set-N number-set-Z number-set-Q number-set-R number-set-C
-            partial nabla infty ell wp Re Im aleph hbar lambdabar imath jmath mho
-            angle measuredangle sphericalangle degree prime dprime trprime backprime
-            triangle square rectangle parallelogram bigcirc lozenge
-            script-A script-B script-N script-R script-S
-            fraktur-A fraktur-B fraktur-N fraktur-R fraktur-S",
-        "GreekLower" => "
-            alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota
-            kappa varkappa lambda mu nu xi omicron pi varpi rho varrho sigma varsigma
-            tau upsilon phi varphi chi psi omega",
-        "GreekUpper" => "
-            Alpha Beta Gamma Delta Epsilon Zeta Eta Theta varTheta Iota Kappa Lambda
-            Mu Nu Xi Omicron Pi Rho Sigma Tau Upsilon varUpsilon Phi Chi Psi Omega",
-        // Sums, labeled arrows, and spacing are already grouped in the catalog.
-        _ => "",
+        "Scripts" => &[
+            "sup sub subsup \
+             pre-sup-post-none pre-sub-post-none pre-both-post-none",
+            "pre-sup-post-sup pre-sub-post-sup pre-both-post-sup \
+             pre-sub-post-sub pre-sup-post-sub pre-both-post-sub \
+             pre-both-post-both pre-sub-post-both pre-sup-post-both",
+            "overset underset overunderset",
+        ],
+        "Fractions" => &[
+            "frac tfrac dfrac linear small-linear sfrac",
+            "sqrt root",
+            "long-division binom",
+        ],
+        "Fences" => &[
+            "paren-both paren-left paren-right \
+             bracket-both bracket-left bracket-right \
+             double-bracket-both double-bracket-left double-bracket-right \
+             brace-both brace-left brace-right \
+             angle-both angle-left angle-right \
+             bar-both bar-left bar-right \
+             norm-both norm-left norm-right \
+             floor-both floor-left floor-right \
+             ceiling-both ceiling-left ceiling-right",
+            "bracket-paren paren-bracket",
+            "bracket-left-left bracket-right-right bracket-open-open",
+            "bra ket bra-ket",
+            "evaluation",
+            "cases-two cases-three",
+            "system-brace-two system-brace-three",
+            "system-bracket-two system-bracket-three",
+        ],
+        "Integrals" => &[
+            "int",
+            "iint",
+            "iiint",
+            "oint oiint oiiint",
+            "varointclockwise ointctrclockwise",
+        ],
+        "Sums" => &["sum"],
+        "BigOperators" => &[
+            "prod",
+            "coprod",
+            "bigcup",
+            "bigcap",
+            "bigvee",
+            "bigwedge",
+            "bigoplus",
+            "bigotimes",
+            "bigodot",
+        ],
+        "Matrices" => &[
+            "plain-1x2 plain-1x3 plain-1x4 \
+             plain-2x1 plain-3x1 plain-4x1 \
+             plain-2x2 plain-3x3 plain-4x4",
+            "pmatrix2 pmatrix3",
+            "bmatrix2 bmatrix3",
+            "vmatrix2 vmatrix3",
+            "Vmatrix2 Vmatrix3",
+            "dots-row dots-column dots-matrix",
+        ],
+        "Boxes" => &[
+            "box roundedbox",
+            "top-left top-right | bottom-left bottom-right",
+            "top-bottom-left top-bottom-right | top-left-right bottom-left-right",
+        ],
+        "Embellishments" => &[
+            "dot ddot underdot underddot dddot ddddot",
+            "tilde undertilde hat check breve mathring",
+            "overleftharpoon underleftharpoon | overrightharpoon underrightharpoon",
+            "prime double-prime triple-prime left-prime back-prime",
+            "cancel bcancel xcancel strike-horizontal",
+        ],
+        "Bars" => &[
+            "overline overline-label",
+            "underline underline-label",
+            "doubleoverline doubleoverline-label",
+            "doubleunderline doubleunderline-label",
+            "widehat widetilde",
+            "wideparen underparen",
+            "overleftarrow overrightarrow overleftrightarrow \
+             underleftarrow underrightarrow underleftrightarrow",
+            "overbrace overbrace-label",
+            "underbrace underbrace-label",
+            "overbracket overbracket-label",
+            "underbracket underbracket-label",
+        ],
+        "Functions" => &[
+            "sin cos tan cot sec csc",
+            "arcsin arccos arctan arccot arcsec arccsc",
+            "sinh cosh tanh coth sech csch",
+            "log ln exp",
+            "lim limsup liminf min max sup inf",
+            "det dim ker hom deg arg gcd lcm sgn mod Pr",
+        ],
+        "Operators" => &[
+            "times cdot div pm mp ast circ bullet diamond",
+            "oplus otimes odot amalg dagger ddagger",
+        ],
+        "Relations" => &[
+            "leq geq neq ll gg equiv nleq ngeq",
+            "prec succ preceq succeq triangleleft triangleright",
+            "sim approx simeq cong asymp propto",
+            "doteq triangleq estimates fallingdotseq risingdotseq parallel perp",
+        ],
+        "Arrows" => &[
+            "rightarrow leftarrow leftrightarrow uparrow downarrow updownarrow",
+            "Rightarrow Leftarrow Leftrightarrow Uparrow Downarrow Updownarrow",
+            "longrightarrow longleftarrow longleftrightarrow Longrightarrow Longleftarrow Longleftrightarrow",
+            "nearrow searrow swarrow nwarrow neswarrow nwsearrow",
+            "mapsto hookrightarrow hookleftarrow curvearrowright curvearrowleft",
+            "rightleftarrows leftrightarrows",
+            "rightleftharpoons leftrightharpoons",
+            "rightharpoonup leftharpoonup",
+            "rightharpoondown leftharpoondown",
+        ],
+        "LabeledArrows" => &[
+            "rightarrow-top rightarrow-bottom rightarrow-both \
+             leftarrow-top leftarrow-bottom leftarrow-both \
+             leftrightarrow-top leftrightarrow-bottom leftrightarrow-both",
+            "Rightarrow-top Rightarrow-bottom Rightarrow-both \
+             Leftarrow-top Leftarrow-bottom Leftarrow-both \
+             Leftrightarrow-top Leftrightarrow-bottom Leftrightarrow-both",
+            "rightharpoonup-top rightharpoonup-bottom rightharpoonup-both \
+             leftharpoonup-top leftharpoonup-bottom leftharpoonup-both \
+             rightleftharpoons-top rightleftharpoons-bottom rightleftharpoons-both \
+             leftrightharpoons-top leftrightharpoons-bottom leftrightharpoons-both",
+            "mapsto-top mapsto-bottom mapsto-both \
+             rightleftarrows-top rightleftarrows-bottom rightleftarrows-both",
+        ],
+        "Logic" => &[
+            "forall exists nexists neg land lor top bot",
+            "vdash dashv models therefore because backepsilon",
+        ],
+        "Sets" => &[
+            "in notin",
+            "ni notni",
+            "subset subseteq subsetneq nsubset nsubseteq supset supseteq supsetneq nsupseteq",
+            "cup cap setminus emptyset",
+        ],
+        "Symbols" => &[
+            "number-set-N number-set-Z number-set-Q number-set-R number-set-C",
+            "partial nabla infty ell wp Re Im aleph hbar lambdabar imath jmath mho",
+            "angle measuredangle sphericalangle degree prime dprime trprime backprime",
+            "triangle square rectangle parallelogram bigcirc lozenge",
+            "script-A script-B script-N script-R script-S",
+            "fraktur-A fraktur-B fraktur-N fraktur-R fraktur-S",
+        ],
+        "Spaces" => &[
+            "ldots cdots vdots ddots iddots",
+            "space-0.083333 space-0.166667 space-0.222222 space-0.277778 space-1 space-2",
+        ],
+        "GreekLower" => &[
+            "alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota \
+             kappa varkappa lambda mu nu xi omicron pi varpi rho varrho sigma varsigma \
+             tau upsilon phi varphi chi psi omega",
+        ],
+        "GreekUpper" => &[
+            "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta varTheta Iota Kappa Lambda \
+             Mu Nu Xi Omicron Pi Rho Sigma Tau Upsilon varUpsilon Phi Chi Psi Omega",
+        ],
+        _ => &[],
     }
 }
 
@@ -337,20 +481,93 @@ mod tests {
     #[test]
     fn desktop_order_references_valid_unique_catalog_keys() {
         for &(group, _) in GROUPS {
+            let specs = palette_subgroups(group);
+            assert!(
+                !specs.is_empty(),
+                "expected explicit subgroup layout for catalog group {group}"
+            );
             let mut seen = std::collections::HashSet::new();
-            for key in palette_order(group).split_whitespace() {
+            for &spec in specs {
+                for run_spec in spec.split('|') {
+                    let mut keys = run_spec.split_whitespace().peekable();
+                    assert!(keys.peek().is_some(), "empty column run in {group}: {spec}");
+                    for key in keys {
+                        assert!(
+                            seen.insert(key),
+                            "duplicate palette order key {group}/{key}"
+                        );
+                        assert!(
+                            ENTRIES.iter().any(|entry| {
+                                entry.group == group && palette_order_key(group, entry.id) == key
+                            }),
+                            "unknown palette order key {group}/{key}"
+                        );
+                    }
+                }
+            }
+            for entry in ENTRIES.iter().filter(|entry| entry.group == group) {
+                let key = palette_order_key(group, entry.id);
                 assert!(
-                    seen.insert(key),
-                    "duplicate palette order key {group}/{key}"
-                );
-                assert!(
-                    ENTRIES.iter().any(|entry| {
-                        entry.group == group && palette_order_key(group, entry.id) == key
-                    }),
-                    "unknown palette order key {group}/{key}"
+                    seen.contains(key),
+                    "catalog entry {group}/{} (key {key}) missing from palette_subgroups",
+                    entry.id
                 );
             }
         }
+    }
+
+    #[test]
+    fn structured_subgroups_keep_families_and_pairs_intact() {
+        let fractions = subgroups_for_ui_group("Fractions", &[]);
+        let fraction_sizes: Vec<_> = fractions.iter().map(PaletteSubgroup::len).collect();
+        assert_eq!(fraction_sizes, vec![6, 2, 2]);
+
+        let scripts = subgroups_for_ui_group("Scripts", &[]);
+        let script_sizes: Vec<_> = scripts.iter().map(PaletteSubgroup::len).collect();
+        assert_eq!(script_sizes, vec![6, 9, 3]);
+
+        let sums_and_big_ops = subgroups_for_ui_group("SumsAndBigOps", &[]);
+        assert_eq!(sums_and_big_ops.len(), 10);
+        assert!(sums_and_big_ops.iter().all(|group| group.len() == 5));
+
+        let integrals = subgroups_for_ui_group("Integrals", &[]);
+        let integral_sizes: Vec<_> = integrals.iter().map(PaletteSubgroup::len).collect();
+        assert_eq!(integral_sizes, vec![5, 5, 5, 9, 6]);
+
+        let matrices = subgroups_for_ui_group("MatricesAndBoxes", &[]);
+        let matrix_sizes: Vec<_> = matrices.iter().map(PaletteSubgroup::len).collect();
+        assert_eq!(matrix_sizes, vec![9, 2, 2, 2, 2, 3, 2, 4, 4]);
+        let box_runs: Vec<Vec<usize>> = matrices[6..]
+            .iter()
+            .map(|subgroup| subgroup.runs.iter().map(Vec::len).collect())
+            .collect();
+        assert_eq!(box_runs, vec![vec![2], vec![2, 2], vec![2, 2]]);
+
+        let bars = subgroups_for_ui_group("AccentsAndBars", &[]);
+        let bar_sizes: Vec<_> = bars.iter().map(PaletteSubgroup::len).collect();
+        assert_eq!(
+            bar_sizes,
+            vec![6, 6, 4, 5, 4, 2, 2, 2, 2, 2, 2, 6, 2, 2, 2, 2]
+        );
+        let harpoon_runs: Vec<usize> = bars[2].runs.iter().map(Vec::len).collect();
+        assert_eq!(harpoon_runs, vec![2, 2]);
+
+        let functions = subgroups_for_ui_group("Functions", &[]);
+        let function_sizes: Vec<_> = functions.iter().map(PaletteSubgroup::len).collect();
+        assert_eq!(function_sizes, vec![6, 6, 6, 3, 7, 11]);
+    }
+
+    #[test]
+    fn recent_subgroups_preserve_single_continuous_mru_group() {
+        assert!(subgroups_for_ui_group(RECENT_GROUP, &[]).is_empty());
+        let recent = [r"\frac{#?}{#?}", r"\alpha", r"\sum", r"\prod"];
+        let subgroups = subgroups_for_ui_group(RECENT_GROUP, &recent);
+        assert_eq!(subgroups.len(), 1);
+        assert_eq!(
+            subgroups[0].iter().map(|item| item.2).collect::<Vec<_>>(),
+            recent
+        );
+        assert_eq!(items_for_ui_group(RECENT_GROUP, &recent).len(), 4);
     }
 
     #[test]
@@ -358,8 +575,8 @@ mod tests {
         let scripts = items_for_ui_group("Scripts", &[]);
         let labels: Vec<_> = scripts.iter().map(|item| item.1).collect();
         assert_eq!(
-            &labels[..9],
-            &[
+            labels,
+            vec![
                 "Superscript",
                 "Subscript",
                 "Subscript and superscript",
@@ -369,6 +586,15 @@ mod tests {
                 "Left superscript & right superscript",
                 "Left subscript & right superscript",
                 "Left sub/superscript & right superscript",
+                "Left subscript & right subscript",
+                "Left superscript & right subscript",
+                "Left sub/superscript & right subscript",
+                "Left sub/superscript & right sub/superscript",
+                "Left subscript & right sub/superscript",
+                "Left superscript & right sub/superscript",
+                "Overscript label",
+                "Underscript label",
+                "Overscript and underscript label",
             ]
         );
     }

@@ -72,9 +72,9 @@ pub(crate) const DEFAULT_PALETTE_SHORTCUTS: &[(&str, ShortcutChord)] = &[
         r"\lim_{#? \to #?}",
         ShortcutChord::cmd_shift(ShortcutKey::L),
     ),
-    (r"\int #? \, d#?", ShortcutChord::cmd(ShortcutKey::I)),
+    (r"\int", ShortcutChord::cmd(ShortcutKey::I)),
     (
-        r"\int\limits_{#?}^{#?} #? \, d#?",
+        r"\int\limits_{#?}^{#?} #?",
         ShortcutChord::cmd_shift(ShortcutKey::I),
     ),
     (
@@ -843,18 +843,18 @@ mod tests {
         let mut map = ShortcutMap::default_map();
         let frac = palette::canonical_source(r"\frac{#?}{#?}").unwrap();
         let sqrt = palette::canonical_source(r"\sqrt{#?}").unwrap();
-        let vec_src = palette::canonical_source(r"\vec{#?}").unwrap();
+        let overarrow_src = palette::canonical_source(r"\overrightarrow{#?}").unwrap();
 
         assert_eq!(
-            map.check_assignment(vec_src, ShortcutChord::cmd(ShortcutKey::S)),
+            map.check_assignment(overarrow_src, ShortcutChord::cmd(ShortcutKey::S)),
             Err(ShortcutConflict::System("Save equation"))
         );
         assert_eq!(
-            map.check_assignment(vec_src, ShortcutChord::cmd_shift(ShortcutKey::Z)),
+            map.check_assignment(overarrow_src, ShortcutChord::cmd_shift(ShortcutKey::Z)),
             Err(ShortcutConflict::System("Redo"))
         );
         assert_eq!(
-            map.check_assignment(vec_src, ShortcutChord::cmd(ShortcutKey::F)),
+            map.check_assignment(overarrow_src, ShortcutChord::cmd(ShortcutKey::F)),
             Err(ShortcutConflict::Palette(frac))
         );
         // Re-assigning the same chord on its current owner is conflict-free.
@@ -876,9 +876,9 @@ mod tests {
         assert!(!map.is_default());
 
         // Replace moves chord to target and clears previous owner.
-        map.replace_binding(vec_src, ShortcutChord::cmd(ShortcutKey::F));
+        map.replace_binding(overarrow_src, ShortcutChord::cmd(ShortcutKey::F));
         assert_eq!(
-            map.binding_for(vec_src),
+            map.binding_for(overarrow_src),
             Some(ShortcutChord::cmd(ShortcutKey::F))
         );
         assert_eq!(map.binding_for(sqrt), None);

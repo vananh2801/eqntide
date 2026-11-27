@@ -597,7 +597,7 @@ fn palette_icons_use_theme_contrast_and_physical_dpi() {
         let texture_ids = app.palette_texture_ids();
         assert_eq!(texture_ids.len(), 1);
         let atlas = app.palette_atlas.as_ref().expect("shared palette atlas");
-        assert_eq!(atlas.texture.size(), [2016, 1288]);
+        assert_eq!(atlas.texture.size(), [2016, 1232]);
         let tinted_match = output.shapes.iter().any(|clipped| match &clipped.shape {
             egui::Shape::Rect(rect_shape) => rect_shape.brush.as_ref().is_some_and(|brush| {
                 texture_ids.contains(&brush.fill_texture_id) && rect_shape.fill == expected_tint
@@ -975,7 +975,11 @@ fn palette_scrolls_horizontally_with_either_wheel_axis() {
 
         let atlas = app.palette_atlas.as_ref().expect("shared palette atlas");
         let palette_tex = atlas.texture.id();
-        let tracked_item = palette::items_for_ui_group(category, &[])[12].2;
+        let category_items = palette::items_for_ui_group(category, &[]);
+        let tracked_item = category_items
+            .get(12)
+            .unwrap_or_else(|| category_items.last().expect("palette items"))
+            .2;
         let tracked_uv = atlas.entries[tracked_item].uv;
         let tile_x = |shapes: &[egui::epaint::ClippedShape]| -> f32 {
             shapes
@@ -1309,9 +1313,10 @@ fn button_height_tiers_align_footer_tabs_and_compact_controls() {
     app.category = "MatricesAndBoxes".into();
     let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
 
-    let button_rect_around = |label: &str| -> Rect {
-        let pos = find_text_center(&out, |text| text == label);
-        out.shapes
+    let button_rect_in = |frame: &egui::FullOutput, label: &str| -> Rect {
+        let pos = find_text_center(frame, |text| text == label);
+        frame
+            .shapes
             .iter()
             .find_map(|clipped| match &clipped.shape {
                 egui::Shape::Rect(rect_shape)
@@ -1326,11 +1331,11 @@ fn button_height_tiers_align_footer_tabs_and_compact_controls() {
             .unwrap_or_else(|| panic!("missing button rect for {label}"))
     };
 
-    let icon_button_rect = |icon_name: &str| -> Rect {
+    let icon_button_rect = |frame: &egui::FullOutput, app: &App, icon_name: &str| -> Rect {
         let tex = app
             .ui_icon_texture_id(icon_name)
             .unwrap_or_else(|| panic!("missing icon texture {icon_name}"));
-        let pos = out
+        let pos = frame
             .shapes
             .iter()
             .find_map(|clipped| match &clipped.shape {
@@ -1345,7 +1350,8 @@ fn button_height_tiers_align_footer_tabs_and_compact_controls() {
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing painted icon {icon_name}"));
-        out.shapes
+        frame
+            .shapes
             .iter()
             .find_map(|clipped| match &clipped.shape {
                 egui::Shape::Rect(rect_shape)
@@ -1361,32 +1367,60 @@ fn button_height_tiers_align_footer_tabs_and_compact_controls() {
     };
 
     // Footer standard buttons and DragValue share BUTTON_HEIGHT (30px).
-    let save_rect = button_rect_around("Save MathML");
-    let undo_rect = icon_button_rect("arrow-back-up");
-    let redo_rect = icon_button_rect("arrow-forward-up");
+    let save_rect = button_rect_in(&out, "Save MathML");
+    let undo_rect = icon_button_rect(&out, &app, "arrow-back-up");
+    let redo_rect = icon_button_rect(&out, &app, "arrow-forward-up");
     assert!((save_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
     assert!((undo_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
     assert!((redo_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
 
     // Sidebar navigation tabs share SIDEBAR_TAB_HEIGHT (34px).
     for tab_label in ["Batch DOCX", "Settings", "About"] {
-        let tab_rect = button_rect_around(tab_label);
+        let tab_rect = button_rect_in(&out, tab_label);
         assert!((tab_rect.height() - theme::SIDEBAR_TAB_HEIGHT).abs() <= 0.5);
     }
 
-    // Custom Matrix palette button uses Tabler "dots" icon in a 46x32 button and opens MatrixDialog.
-    let dots_rect = icon_button_rect("dots");
-    assert!((dots_rect.width() - PALETTE_BUTTON_SIZE.x).abs() <= 0.5);
-    assert!((dots_rect.height() - PALETTE_BUTTON_SIZE.y).abs() <= 0.5);
+    // Scroll the overflowing MatricesAndBoxes palette to expose the trailing matrix tool block.
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(Pos2::new(360.0, 48.0)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -10_000.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let mut dots_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    for _ in 0..3 {
+        dots_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    }
+
+    // Matrix row/col controls sit in a 2x2 grid below Custom matrix inside the trailing tool block.
+    for matrix_label in ["+ row", "− row", "+ col", "− col"] {
+        let rect = button_rect_in(&dots_out, matrix_label);
+        assert!(
+            (rect.height() - super::super::palette_ribbon::MATRIX_ACTION_BUTTON_HEIGHT).abs()
+                <= 0.5
+        );
+    }
+
+    // Custom Matrix button sits on top of the trailing tool block (larger than the 4 action buttons) and opens MatrixDialog.
+    let dots_rect = icon_button_rect(&dots_out, &app, "dots");
+    assert!(
+        (dots_rect.width() - super::super::palette_ribbon::MATRIX_TOOL_BLOCK_WIDTH).abs() <= 0.5
+    );
+    assert!(
+        (dots_rect.height() - super::super::palette_ribbon::MATRIX_CUSTOM_BUTTON_HEIGHT).abs()
+            <= 0.5
+    );
     assert!(app.matrix_dialog.is_none());
     let _ = run_ui_pass_frame(&ctx, &mut app, click_events(dots_rect.center()));
     assert!(app.matrix_dialog.is_some());
-
-    // Compact matrix controls share COMPACT_BUTTON_HEIGHT (24px).
-    for matrix_label in ["+ row", "− row", "+ col", "− col"] {
-        let rect = button_rect_around(matrix_label);
-        assert!((rect.height() - theme::COMPACT_BUTTON_HEIGHT).abs() <= 0.5);
-    }
 }
 
 #[test]

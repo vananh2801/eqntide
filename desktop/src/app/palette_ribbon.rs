@@ -4,15 +4,27 @@ use super::{
     App, MatrixDialog, CONTENT_PADDING, PALETTE_BUTTON_SIZE, PALETTE_GAP, PALETTE_HEIGHT,
     PALETTE_ROWS, UI_ICON_SIZE,
 };
-use crate::palette;
-use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
+use crate::{palette, theme};
+use eframe::egui::{self, Color32, Rect, Vec2};
 
 const PALETTE_COLUMN_STRIDE: f32 = PALETTE_BUTTON_SIZE.x + PALETTE_GAP;
+const PALETTE_SUBGROUP_GAP: f32 = theme::SPACE_LG;
+pub(super) const MATRIX_CUSTOM_BUTTON_HEIGHT: f32 = 40.0;
+pub(super) const MATRIX_ACTION_BUTTON_HEIGHT: f32 = 28.0;
+const MATRIX_ACTION_BUTTON_WIDTH: f32 = 50.0;
+pub(super) const MATRIX_TOOL_BLOCK_WIDTH: f32 = MATRIX_ACTION_BUTTON_WIDTH * 2.0 + PALETTE_GAP;
+
+const MATRIX_ACTIONS: [(&str, bool, bool); 4] = [
+    ("+ row", false, true),
+    ("− row", false, false),
+    ("+ col", true, true),
+    ("− col", true, false),
+];
 
 impl App {
     /// Renders the fixed-height, three-row palette ribbon.
     pub(super) fn draw_palette(&mut self, ui: &mut egui::Ui) {
-        let items = palette::items_for_ui_group(&self.category, &self.recent_palette);
+        let subgroups = palette::subgroups_for_ui_group(&self.category, &self.recent_palette);
         let has_matrix_tools = palette::group_contains(&self.category, "Matrices");
         egui::Panel::top("templates-panel")
             .exact_size(PALETTE_HEIGHT)
@@ -23,7 +35,7 @@ impl App {
             .show_separator_line(false)
             .show(ui, |ui| {
                 ui.add_enabled_ui(!self.draft_dirty, |ui| {
-                    self.draw_palette_grid(ui, &items, has_matrix_tools);
+                    self.draw_palette_grid(ui, &subgroups, has_matrix_tools);
                 });
             });
     }
@@ -31,13 +43,11 @@ impl App {
     fn draw_palette_grid(
         &mut self,
         ui: &mut egui::Ui,
-        items: &[&palette::PaletteItem],
+        subgroups: &[palette::PaletteSubgroup],
         has_matrix_tools: bool,
     ) {
         let (_, viewport) = ui.allocate_space(ui.available_size());
-        let columns = (items.len() + usize::from(has_matrix_tools)).div_ceil(PALETTE_ROWS);
-        let grid_width = (columns as f32 * PALETTE_COLUMN_STRIDE - PALETTE_GAP).max(0.0);
-        if self.category == palette::RECENT_GROUP && items.is_empty() {
+        if self.category == palette::RECENT_GROUP && subgroups.is_empty() {
             let mut message_ui = ui.new_child(egui::UiBuilder::new().max_rect(viewport).layout(
                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
             ));
@@ -47,6 +57,7 @@ impl App {
             return;
         }
 
+        let layout = build_palette_layout(subgroups, has_matrix_tools);
         let mut grid_ui = ui.new_child(egui::UiBuilder::new().id_salt("tiles").max_rect(viewport));
         grid_ui.shrink_clip_rect(viewport);
         let style = grid_ui.style_mut();
@@ -63,7 +74,7 @@ impl App {
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL);
-        let max_offset = (grid_width - viewport.width()).max(0.0);
+        let max_offset = (layout.grid_width - viewport.width()).max(0.0);
         let initial_offset = egui::scroll_area::State::load(ui.ctx(), scroll_id)
             .map_or(0.0, |state| state.clamped_offset().x.min(max_offset));
         let offset = if max_offset > 0.0 {
@@ -75,19 +86,15 @@ impl App {
         let output = scroll_area
             .horizontal_scroll_offset(offset)
             .show(&mut grid_ui, |ui| {
-                ui.set_min_size(Vec2::new(grid_width, viewport.height()));
+                ui.set_min_size(Vec2::new(layout.grid_width, viewport.height()));
                 ui.spacing_mut().button_padding = Vec2::splat(3.0);
                 self.ensure_palette_atlas(ui.ctx());
                 let icon_color = self.theme_tokens(ui).icon_tint(false, ui.is_enabled());
                 let origin = ui.max_rect().min;
-                for (index, &&(_, label, source)) in items.iter().enumerate() {
-                    if self.draw_palette_tile(
-                        ui,
-                        palette_tile_rect(origin, index),
-                        label,
-                        source,
-                        icon_color,
-                    ) {
+                for placement in &layout.tiles {
+                    let &(_, label, source) = placement.item;
+                    let rect = Rect::from_min_size(origin + placement.offset, PALETTE_BUTTON_SIZE);
+                    if self.draw_palette_tile(ui, rect, label, source, icon_color) {
                         self.command_input = None;
                         self.latex_groups.clear();
                         self.expects_latex_group = false;
@@ -96,24 +103,64 @@ impl App {
                         self.pending_focus_restore = Some(self.active_editor_focus);
                     }
                 }
-                if has_matrix_tools {
-                    let rect = palette_tile_rect(origin, items.len());
-                    let icon = self.ui_icon(ui.ctx(), "dots", UI_ICON_SIZE, icon_color);
-                    if labeled_palette_button(ui, rect, egui::Button::new(icon), "Custom matrix")
-                        .on_hover_text("Custom matrix")
-                        .clicked()
-                    {
-                        self.dismiss_command_input();
-                        self.matrix_dialog = Some(MatrixDialog::default());
-                        ui.memory_mut(|mem| {
-                            mem.surrender_focus(Self::editor_focus_id(self.active_editor_focus))
-                        });
-                    }
+                if let Some(matrix_tools) = &layout.matrix_tools {
+                    self.draw_matrix_tools(ui, origin, matrix_tools, icon_color);
                 }
             });
         if initial_offset != offset || output.state.clamped_offset().x != offset {
             ui.ctx().request_repaint();
         }
+    }
+
+    fn draw_matrix_tools(
+        &mut self,
+        ui: &mut egui::Ui,
+        origin: egui::Pos2,
+        matrix_tools: &MatrixToolsLayout,
+        icon_color: Color32,
+    ) {
+        let custom_rect = matrix_tools.custom_rect.translate(origin.to_vec2());
+        let icon = self.ui_icon(ui.ctx(), "dots", UI_ICON_SIZE, icon_color);
+        let custom_response = ui
+            .scope(|ui| {
+                ui.spacing_mut().button_padding = Vec2::new(theme::SPACE_SM, 2.0);
+                labeled_palette_button(
+                    ui,
+                    custom_rect,
+                    egui::Button::image_and_text(icon, "Custom"),
+                    "Custom matrix",
+                )
+            })
+            .inner;
+        if custom_response.on_hover_text("Custom matrix").clicked() {
+            self.dismiss_command_input();
+            self.matrix_dialog = Some(MatrixDialog::default());
+            ui.memory_mut(|mem| {
+                mem.surrender_focus(Self::editor_focus_id(self.active_editor_focus))
+            });
+        }
+
+        ui.scope(|ui| {
+            ui.spacing_mut().button_padding = Vec2::new(theme::SPACE_XS, 2.0);
+            for (action_rect, (label, column, grow)) in
+                matrix_tools.action_rects.iter().zip(MATRIX_ACTIONS)
+            {
+                let rect = action_rect.translate(origin.to_vec2());
+                if labeled_palette_button(ui, rect, egui::Button::new(label), label).clicked() {
+                    let changed = if grow {
+                        self.editor.grow_matrix(column)
+                    } else {
+                        self.editor.shrink_matrix(column)
+                    };
+                    if changed {
+                        self.mark_canvas_changed();
+                    } else {
+                        self.status = "Place the caret inside a matrix first.".into();
+                    }
+                    self.pending_focus_restore = Some(self.active_editor_focus);
+                }
+            }
+        });
     }
 
     fn draw_palette_tile(
@@ -157,15 +204,94 @@ struct PaletteDrag {
     active: bool,
 }
 
-fn palette_tile_rect(origin: Pos2, index: usize) -> Rect {
-    let column = (index / PALETTE_ROWS) as f32;
-    let row = (index % PALETTE_ROWS) as f32;
-    let position = origin
-        + Vec2::new(
-            column * PALETTE_COLUMN_STRIDE,
-            row * (PALETTE_BUTTON_SIZE.y + PALETTE_GAP),
+struct PaletteTilePlacement {
+    item: &'static palette::PaletteItem,
+    offset: Vec2,
+}
+
+struct MatrixToolsLayout {
+    custom_rect: Rect,
+    action_rects: [Rect; 4],
+}
+
+struct PaletteLayout {
+    tiles: Vec<PaletteTilePlacement>,
+    matrix_tools: Option<MatrixToolsLayout>,
+    grid_width: f32,
+}
+
+fn build_palette_layout(
+    subgroups: &[palette::PaletteSubgroup],
+    has_matrix_tools: bool,
+) -> PaletteLayout {
+    let row_stride = PALETTE_BUTTON_SIZE.y + PALETTE_GAP;
+    let total_items = subgroups.iter().map(palette::PaletteSubgroup::len).sum();
+    let mut tiles = Vec::with_capacity(total_items);
+    let mut cursor_x = 0.0;
+    let mut has_placed_group = false;
+
+    for subgroup in subgroups {
+        if subgroup.is_empty() {
+            continue;
+        }
+        if has_placed_group {
+            cursor_x += PALETTE_SUBGROUP_GAP;
+        }
+        has_placed_group = true;
+        let mut has_placed_run = false;
+        for run in &subgroup.runs {
+            if run.is_empty() {
+                continue;
+            }
+            if has_placed_run {
+                cursor_x += PALETTE_GAP;
+            }
+            has_placed_run = true;
+            let run_columns = run.len().div_ceil(PALETTE_ROWS);
+            for (item_index, &item) in run.iter().enumerate() {
+                let column = (item_index / PALETTE_ROWS) as f32;
+                let row = (item_index % PALETTE_ROWS) as f32;
+                tiles.push(PaletteTilePlacement {
+                    item,
+                    offset: Vec2::new(cursor_x + column * PALETTE_COLUMN_STRIDE, row * row_stride),
+                });
+            }
+            cursor_x += (run_columns - 1) as f32 * PALETTE_COLUMN_STRIDE + PALETTE_BUTTON_SIZE.x;
+        }
+    }
+
+    let matrix_tools = if has_matrix_tools {
+        if has_placed_group {
+            cursor_x += PALETTE_SUBGROUP_GAP;
+        }
+        let custom_rect = Rect::from_min_size(
+            egui::Pos2::new(cursor_x, 0.0),
+            Vec2::new(MATRIX_TOOL_BLOCK_WIDTH, MATRIX_CUSTOM_BUTTON_HEIGHT),
         );
-    Rect::from_min_size(position, PALETTE_BUTTON_SIZE)
+        let row2_y = MATRIX_CUSTOM_BUTTON_HEIGHT + PALETTE_GAP;
+        let row3_y = row2_y + MATRIX_ACTION_BUTTON_HEIGHT + PALETTE_GAP;
+        let col2_x = cursor_x + MATRIX_ACTION_BUTTON_WIDTH + PALETTE_GAP;
+        let action_size = Vec2::new(MATRIX_ACTION_BUTTON_WIDTH, MATRIX_ACTION_BUTTON_HEIGHT);
+        let action_rects = [
+            Rect::from_min_size(egui::Pos2::new(cursor_x, row2_y), action_size),
+            Rect::from_min_size(egui::Pos2::new(col2_x, row2_y), action_size),
+            Rect::from_min_size(egui::Pos2::new(cursor_x, row3_y), action_size),
+            Rect::from_min_size(egui::Pos2::new(col2_x, row3_y), action_size),
+        ];
+        cursor_x += MATRIX_TOOL_BLOCK_WIDTH;
+        Some(MatrixToolsLayout {
+            custom_rect,
+            action_rects,
+        })
+    } else {
+        None
+    };
+
+    PaletteLayout {
+        tiles,
+        matrix_tools,
+        grid_width: cursor_x,
+    }
 }
 
 fn labeled_palette_button(

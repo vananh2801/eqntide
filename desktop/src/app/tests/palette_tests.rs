@@ -59,6 +59,37 @@ fn ui_icon_rects(output: &egui::FullOutput, app: &App, name: &str) -> Vec<Rect> 
         .collect()
 }
 
+fn button_rect_at(output: &egui::FullOutput, pos: egui::Pos2) -> Rect {
+    output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(shape)
+                if shape.brush.is_none()
+                    && shape.rect.contains(pos)
+                    && shape.rect.height() <= 45.0 =>
+            {
+                Some(shape.rect)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing button rect at {pos:?}"))
+}
+
+fn text_button_rect(output: &egui::FullOutput, label: &str) -> Rect {
+    let pos = output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text_shape) if text_shape.galley.text() == label => {
+                Some(text_shape.pos + text_shape.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing button label {label}"));
+    button_rect_at(output, pos)
+}
+
 fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
     egui::Event::PointerButton {
         pos,
@@ -131,20 +162,231 @@ fn palette_fills_columns_in_catalog_and_recent_order() {
         let out = frame(&ctx, &mut app, width, vec![]);
         check_first_four(&out, &app, std::array::from_fn(|index| items[index].2));
     }
-    let out = frame(&ctx, &mut app, MIN_WINDOW_SIZE[0], vec![]);
-    let origin = tile(&out, &app, items[0].2).0.center();
-    let index = items.len();
-    let custom_matrix = ui_icon_rects(&out, &app, "dots")[0].center();
-    assert_eq!(
-        custom_matrix - origin,
-        Vec2::new(
-            (index / 3) as f32 * (PALETTE_BUTTON_SIZE.x + PALETTE_GAP),
-            (index % 3) as f32 * (PALETTE_BUTTON_SIZE.y + PALETTE_GAP)
-        )
+    let out = frame(&ctx, &mut app, 1400.0, vec![]);
+    let origin = button_rect_at(&out, tile(&out, &app, items[0].2).0.center());
+    let last_tile = button_rect_at(
+        &out,
+        tile(&out, &app, items.last().expect("matrix items").2)
+            .0
+            .center(),
     );
+    let custom_matrix = button_rect_at(&out, ui_icon_rects(&out, &app, "dots")[0].center());
+    assert_eq!(custom_matrix.top(), origin.top());
+    assert_eq!(custom_matrix.left() - last_tile.right(), theme::SPACE_LG);
+    assert!(custom_matrix.height() > PALETTE_BUTTON_SIZE.y);
+
+    let plus_row = text_button_rect(&out, "+ row");
+    let minus_row = text_button_rect(&out, "− row");
+    let plus_col = text_button_rect(&out, "+ col");
+    let minus_col = text_button_rect(&out, "− col");
+    assert_eq!(plus_row.left(), custom_matrix.left());
+    assert_eq!(plus_row.top() - custom_matrix.bottom(), PALETTE_GAP);
+    assert_eq!(minus_row.top(), plus_row.top());
+    assert_eq!(minus_row.right(), custom_matrix.right());
+    assert_eq!(plus_col.left(), custom_matrix.left());
+    assert_eq!(plus_col.top() - plus_row.bottom(), PALETTE_GAP);
+    assert_eq!(minus_col.top(), plus_col.top());
+    assert_eq!(minus_col.right(), custom_matrix.right());
+    assert!(custom_matrix.height() > plus_row.height());
+
     app.category = palette::RECENT_GROUP.into();
     let out = frame(&ctx, &mut app, MIN_WINDOW_SIZE[0], vec![]);
     check_first_four(&out, &app, recent);
+}
+
+#[test]
+fn matrix_tool_block_edits_active_matrix_from_trailing_palette_column() {
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    app.category = "MatricesAndBoxes".into();
+    let width = 1400.0;
+    let out = frame(&ctx, &mut app, width, vec![]);
+    let two_by_two = tile(
+        &out,
+        &app,
+        r"\begin{matrix} #? & #? \\ #? & #? \end{matrix}",
+    )
+    .0
+    .center();
+    let _ = frame(&ctx, &mut app, width, click_events(two_by_two));
+    assert_eq!(app.editor.math().children[0].children.len(), 2);
+
+    let plus_row = text_button_rect(&out, "+ row").center();
+    let _ = frame(&ctx, &mut app, width, click_events(plus_row));
+    assert_eq!(app.editor.math().children[0].children.len(), 3);
+
+    let minus_col = text_button_rect(&out, "− col").center();
+    let _ = frame(&ctx, &mut app, width, click_events(minus_col));
+    assert_eq!(app.editor.math().children[0].children[0].children.len(), 1);
+}
+
+#[test]
+fn subgroup_column_breaks_align_five_item_families_and_two_item_pairs() {
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    let row_stride = PALETTE_BUTTON_SIZE.y + PALETTE_GAP;
+    let column_stride = PALETTE_BUTTON_SIZE.x + PALETTE_GAP;
+    let subgroup_stride = PALETTE_BUTTON_SIZE.x + theme::SPACE_LG;
+
+    app.category = "Fractions".into();
+    let frac_out = frame(&ctx, &mut app, MIN_WINDOW_SIZE[0], vec![]);
+    let frac = tile(&frac_out, &app, r"\frac{#?}{#?}").0.center();
+    let linear = tile(&frac_out, &app, r"{#?}/{#?}").0.center();
+    let sqrt = tile(&frac_out, &app, r"\sqrt{#?}").0.center();
+    let root = tile(&frac_out, &app, r"\sqrt[#?]{#?}").0.center();
+    let long_div = tile(&frac_out, &app, r"\enclose{longdiv}{#?}").0.center();
+    let binom = tile(&frac_out, &app, r"\binom{#?}{#?}").0.center();
+    assert_eq!(linear - frac, Vec2::new(column_stride, 0.0));
+    assert_eq!(sqrt.y, frac.y);
+    assert_eq!(sqrt.x - linear.x, subgroup_stride);
+    assert_eq!(root - sqrt, Vec2::new(0.0, row_stride));
+    assert_eq!(long_div.y, frac.y);
+    assert_eq!(long_div.x - sqrt.x, subgroup_stride);
+    assert_eq!(binom - long_div, Vec2::new(0.0, row_stride));
+
+    app.category = "Scripts".into();
+    let scripts_out = frame(&ctx, &mut app, MIN_WINDOW_SIZE[0], vec![]);
+    let sup = tile(&scripts_out, &app, "^{#?}").0.center();
+    let pre_sup = tile(&scripts_out, &app, r"\prescript{#?}{}{#?}").0.center();
+    let pre_sup_post_sup = tile(&scripts_out, &app, r"\prescript{#?}{}{#?}^{#?}")
+        .0
+        .center();
+    let pre_sub_post_sub = tile(&scripts_out, &app, r"\prescript{}{#?}{#?}_{#?}")
+        .0
+        .center();
+    let pre_sup_post_sub = tile(&scripts_out, &app, r"\prescript{#?}{}{#?}_{#?}")
+        .0
+        .center();
+    let pre_both_post_both = tile(&scripts_out, &app, r"\prescript{#?}{#?}{#?}_{#?}^{#?}")
+        .0
+        .center();
+    let pre_sup_post_both = tile(&scripts_out, &app, r"\prescript{#?}{}{#?}_{#?}^{#?}")
+        .0
+        .center();
+    let overset = tile(&scripts_out, &app, r"\overset{#?}{#?}").0.center();
+    assert_eq!(pre_sup - sup, Vec2::new(column_stride, 0.0));
+    assert_eq!(pre_sup_post_sup.y, sup.y);
+    assert_eq!(pre_sup_post_sup.x - pre_sup.x, subgroup_stride);
+    assert_eq!(
+        pre_sub_post_sub - pre_sup_post_sup,
+        Vec2::new(column_stride, 0.0)
+    );
+    assert_eq!(
+        pre_sup_post_sub - pre_sub_post_sub,
+        Vec2::new(0.0, row_stride)
+    );
+    assert_eq!(
+        pre_both_post_both - pre_sub_post_sub,
+        Vec2::new(column_stride, 0.0)
+    );
+    assert_eq!(
+        pre_sup_post_both - pre_both_post_both,
+        Vec2::new(0.0, 2.0 * row_stride)
+    );
+    assert_eq!(overset.y, sup.y);
+    assert_eq!(overset.x - pre_both_post_both.x, subgroup_stride);
+
+    app.category = "SumsAndBigOps".into();
+    let width = 1600.0;
+    let sums_out = frame(&ctx, &mut app, width, vec![]);
+    let sum = tile(&sums_out, &app, r"\sum").0.center();
+    let sum_side_lower = tile(&sums_out, &app, r"\sum\nolimits_{#?} #?").0.center();
+    let sum_side_both = tile(&sums_out, &app, r"\sum\nolimits_{#?}^{#?} #?")
+        .0
+        .center();
+    let sum_stack_lower = tile(&sums_out, &app, r"\sum\limits_{#?} #?").0.center();
+    let sum_stack_both = tile(&sums_out, &app, r"\sum\limits_{#?}^{#?} #?")
+        .0
+        .center();
+    let prod = tile(&sums_out, &app, r"\prod").0.center();
+    let coprod = tile(&sums_out, &app, r"\coprod").0.center();
+
+    assert_eq!(sum_side_lower - sum, Vec2::new(0.0, row_stride));
+    assert_eq!(sum_side_both - sum, Vec2::new(0.0, 2.0 * row_stride));
+    assert_eq!(sum_stack_lower - sum, Vec2::new(column_stride, 0.0));
+    assert_eq!(sum_stack_both - sum, Vec2::new(column_stride, row_stride));
+    assert_eq!(prod.y, sum.y);
+    assert_eq!(prod.x - sum_stack_lower.x, subgroup_stride);
+    assert_eq!(coprod.y, sum.y);
+    assert_eq!(coprod.x - prod.x, column_stride + subgroup_stride);
+
+    let scrolled_end = scroll_to_palette_end(&ctx, &mut app, 240.0);
+    let (last_bigodot, clip) = tile(&scrolled_end, &app, r"\bigodot\limits_{#?}^{#?} #?");
+    assert!(clip.contains_rect(last_bigodot));
+    assert!(clip.right() - last_bigodot.right() <= 6.0);
+
+    app.category = "MatricesAndBoxes".into();
+    let boxes_out = frame(&ctx, &mut app, 1400.0, vec![]);
+    let full_box = tile(&boxes_out, &app, r"\enclose{box}{#?}").0.center();
+    let rounded_box = tile(&boxes_out, &app, r"\enclose{roundedbox}{#?}")
+        .0
+        .center();
+    let top_left = tile(&boxes_out, &app, r"\enclose{top left}{#?}").0.center();
+    let top_right = tile(&boxes_out, &app, r"\enclose{top right}{#?}")
+        .0
+        .center();
+    let bottom_left = tile(&boxes_out, &app, r"\enclose{bottom left}{#?}")
+        .0
+        .center();
+    let bottom_right = tile(&boxes_out, &app, r"\enclose{bottom right}{#?}")
+        .0
+        .center();
+    let open_right = tile(&boxes_out, &app, r"\enclose{top bottom left}{#?}")
+        .0
+        .center();
+    let open_left = tile(&boxes_out, &app, r"\enclose{top bottom right}{#?}")
+        .0
+        .center();
+    let open_bottom = tile(&boxes_out, &app, r"\enclose{top left right}{#?}")
+        .0
+        .center();
+    let open_top = tile(&boxes_out, &app, r"\enclose{bottom left right}{#?}")
+        .0
+        .center();
+    assert_eq!(rounded_box - full_box, Vec2::new(0.0, row_stride));
+    assert_eq!(top_left - full_box, Vec2::new(subgroup_stride, 0.0));
+    assert_eq!(top_right - top_left, Vec2::new(0.0, row_stride));
+    assert_eq!(bottom_left - top_left, Vec2::new(column_stride, 0.0));
+    assert_eq!(bottom_right - bottom_left, Vec2::new(0.0, row_stride));
+    assert_eq!(open_right - bottom_left, Vec2::new(subgroup_stride, 0.0));
+    assert_eq!(open_left - open_right, Vec2::new(0.0, row_stride));
+    assert_eq!(open_bottom - open_right, Vec2::new(column_stride, 0.0));
+    assert_eq!(open_top - open_bottom, Vec2::new(0.0, row_stride));
+
+    app.category = "AccentsAndBars".into();
+    let bars_out = frame(&ctx, &mut app, 2400.0, vec![]);
+    let check_tile = tile(&bars_out, &app, r"\check{#?}").0.center();
+    let over_left_harpoon = tile(&bars_out, &app, r"\overleftharpoon{#?}").0.center();
+    let under_left_harpoon = tile(&bars_out, &app, r"\underleftharpoon{#?}").0.center();
+    let over_right_harpoon = tile(&bars_out, &app, r"\overrightharpoon{#?}").0.center();
+    let under_right_harpoon = tile(&bars_out, &app, r"\underrightharpoon{#?}").0.center();
+    let prime = tile(&bars_out, &app, "{#?}'").0.center();
+    assert_eq!(
+        over_left_harpoon - check_tile,
+        Vec2::new(subgroup_stride, 0.0)
+    );
+    assert_eq!(
+        under_left_harpoon - over_left_harpoon,
+        Vec2::new(0.0, row_stride)
+    );
+    assert_eq!(
+        over_right_harpoon - over_left_harpoon,
+        Vec2::new(column_stride, 0.0)
+    );
+    assert_eq!(
+        under_right_harpoon - over_right_harpoon,
+        Vec2::new(0.0, row_stride)
+    );
+    assert_eq!(prime - over_right_harpoon, Vec2::new(subgroup_stride, 0.0));
+
+    let overline = tile(&bars_out, &app, r"\overline{#?}").0.center();
+    let overline_label = tile(&bars_out, &app, r"\overset{#?}{\overline{#?}}")
+        .0
+        .center();
+    let underline = tile(&bars_out, &app, r"\underline{#?}").0.center();
+    assert_eq!(overline_label - overline, Vec2::new(0.0, row_stride));
+    assert_eq!(underline.y, overline.y);
+    assert_eq!(underline.x - overline.x, subgroup_stride);
 }
 
 #[test]

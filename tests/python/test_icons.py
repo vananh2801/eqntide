@@ -34,7 +34,7 @@ class RenderedIconsTests(unittest.TestCase):
     def test_palette_svgs_and_atlas_match_catalog(self):
         self.assertEqual(generate_palette_icons.check_all(), 0)
         entries = generate_palette_icons.parse_catalog()
-        self.assertEqual(len(entries), 547)
+        self.assertEqual(len(entries), 526)
         svg_files = list(generate_palette_icons.SVG_OUT_DIR.glob("*.svg"))
         self.assertEqual(len(svg_files), len(entries))
         self.assertEqual(len({p.name.lower() for p in svg_files}), len(entries))

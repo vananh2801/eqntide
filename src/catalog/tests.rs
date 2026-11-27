@@ -44,7 +44,7 @@ fn catalog_has_unique_ids_and_twenty_one_nonempty_groups() {
         assert!(GROUPS.iter().any(|(g, _)| *g == e.group), "{}", e.id);
     }
     let function_count = ENTRIES.iter().filter(|e| e.group == "Functions").count();
-    assert_eq!(function_count, 48);
+    assert_eq!(function_count, 39);
     assert!(!ENTRIES
         .iter()
         .any(|e| e.group == "Scripts"
@@ -75,6 +75,16 @@ fn commands_catalog_includes_style_and_operator_commands() {
         "operatorname",
         "textstyle",
         "displaystyle",
+        "vec",
+        "lg",
+        "tg",
+        "ctg",
+        "cotg",
+        "cosec",
+        "arsinh",
+        "arcosh",
+        "artanh",
+        "arcoth",
     ] {
         let entry = COMMANDS
             .iter()
@@ -86,6 +96,11 @@ fn commands_catalog_includes_style_and_operator_commands() {
             entry.2
         );
     }
+    assert!(attaches_to_previous(r"\vec{#?}"));
+    let vec_math = crate::service::parse_latex_to_mathml(r"\vec{x}").unwrap();
+    assert_eq!(vec_math.to_latex(), r"\vec{x}");
+    assert!(!roundtrip_mtef(&vec_math).children.is_empty());
+    assert!(!roundtrip_omml(&vec_math).children.is_empty());
 }
 
 #[test]

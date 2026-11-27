@@ -2,7 +2,6 @@
 
 use super::{App, CONTENT_PADDING, LATEX_INPUT_HEIGHT, LATEX_PANEL_HEIGHT};
 use crate::{
-    palette,
     settings::StartupFocus,
     theme::{self, CanvasPalette},
 };
@@ -27,31 +26,6 @@ impl App {
             .show(ui, |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 ui.add_enabled_ui(!self.draft_dirty, |ui| {
-                    if palette::group_contains(&self.category, "Matrices") {
-                        ui.horizontal(|ui| {
-                            for (label, column, grow) in [
-                                ("+ row", false, true),
-                                ("− row", false, false),
-                                ("+ col", true, true),
-                                ("− col", true, false),
-                            ] {
-                                if Self::compact_button(ui, label).clicked() {
-                                    let changed = if grow {
-                                        self.editor.grow_matrix(column)
-                                    } else {
-                                        self.editor.shrink_matrix(column)
-                                    };
-                                    if changed {
-                                        self.mark_canvas_changed();
-                                    } else {
-                                        self.status =
-                                            "Place the caret inside a matrix first.".into();
-                                    }
-                                    self.pending_focus_restore = Some(self.active_editor_focus);
-                                }
-                            }
-                        });
-                    }
                     self.draw_canvas(ui);
                 });
             });

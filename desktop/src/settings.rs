@@ -736,7 +736,7 @@ mod tests {
     fn sanitize_clamps_values_deduplicates_recent_and_falls_back_safely() {
         let mut palette_shortcuts = BTreeMap::new();
         palette_shortcuts.insert(r"\frac{#?}{#?}".into(), Some("Ctrl+Shift+F".into()));
-        palette_shortcuts.insert(r"\vec{#?}".into(), Some("Ctrl+Alt+V".into()));
+        palette_shortcuts.insert(r"\overrightarrow{#?}".into(), Some("Ctrl+Alt+V".into()));
         palette_shortcuts.insert(r"\not_in_palette".into(), Some("Ctrl+K".into()));
         palette_shortcuts.insert(r"\binom{#?}{#?}".into(), Some("S".into()));
         palette_shortcuts.insert(r"\alpha".into(), Some("Ctrl+S".into()));
@@ -912,7 +912,7 @@ mod tests {
             recent_palette: vec![r"\frac{#?}{#?}".into(), r"\alpha".into()],
             palette_shortcuts: BTreeMap::from([
                 (r"\frac{#?}{#?}".into(), None),
-                (r"\vec{#?}".into(), Some("Ctrl+Alt+V".into())),
+                (r"\overrightarrow{#?}".into(), Some("Ctrl+Alt+V".into())),
             ]),
             batch_target: 2,
             batch_overwrite: true,
@@ -941,7 +941,7 @@ mod tests {
                     "\\frac{#?}{#?}": null,
                     "\\sqrt{#?}": "Ctrl+F",
                     "\\unknown": "Ctrl+Q",
-                    "\\vec{#?}": "F4",
+                    "\\overrightarrow{#?}": "F4",
                     "\\binom{#?}{#?}": "f4",
                     "\\alpha": "Ctrl+Z",
                     "\\beta": "K"
@@ -959,12 +959,12 @@ mod tests {
             map.binding_for(r"\sqrt{#?}"),
             shortcuts::ShortcutChord::parse("Ctrl+F")
         );
-        // One of \binom or \vec wins F4 (BTreeMap visits \binom first); the duplicate drops.
+        // One of \binom or \overrightarrow wins F4 (BTreeMap visits \binom first); the duplicate drops.
         assert_eq!(
             map.source_for(shortcuts::ShortcutChord::parse("F4").unwrap()),
             Some(r"\binom{#?}{#?}")
         );
-        assert_eq!(map.binding_for(r"\vec{#?}"), None);
+        assert_eq!(map.binding_for(r"\overrightarrow{#?}"), None);
         // System-reserved and bare keys are rejected.
         assert_eq!(map.binding_for(r"\alpha"), None);
         assert_eq!(map.binding_for(r"\beta"), None);

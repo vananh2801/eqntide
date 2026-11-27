@@ -458,9 +458,9 @@ def build_fractions(tid: str) -> tuple[list[str], list[TextPlacement]]:
         ], []
     if tid == "small-linear":
         return [
-            slot_c(12.5, CY, 7.2, 7.2),
-            svg_path("M22.2 6.8 L17.8 19.2", sw=1.45),
-            slot_c(27.5, CY, 7.2, 7.2),
+            slot_c(13.2, 8.4, 6.4, 5.0),
+            svg_path("M22.6 5.8 L17.4 20.2", sw=1.45),
+            slot_c(26.8, 17.6, 6.4, 5.0),
         ], []
     if tid == "sqrt":
         return [
@@ -473,30 +473,10 @@ def build_fractions(tid: str) -> tuple[list[str], list[TextPlacement]]:
             svg_path("M6.5 14.8 H9.5 L13.5 21.8 L18.5 4.5 H34.5"),
             slot_c(26.0, 14.5, 10.5, 10.5),
         ], []
-    if tid == "root-fraction":
-        return [
-            svg_path("M5.5 14.2 H8.5 L12.5 22 L17.5 3.5 H34.5"),
-            slot_c(26.0, 8.2, 7.6, 5.0),
-            svg_path("M19.5 13.5 H32.5", sw=1.45),
-            slot_c(26.0, 18.8, 7.6, 5.0),
-        ], []
-    if tid == "small-root":
-        return [
-            svg_path("M7 14.2 H9.8 L13.2 20.8 L17.6 5.2 H33"),
-            slot_c(25.2, 9.2, 6.6, 4.4),
-            svg_path("M19.8 13.8 H30.6", sw=1.35),
-            slot_c(25.2, 18.2, 6.6, 4.4),
-        ], []
     if tid == "long-division":
         return [
             svg_path("M10.5 21 C13 17.5 13 9.5 10.5 6.5 H31"),
             slot_c(21.5, 14.5, 11.5, 9.5),
-        ], []
-    if tid == "long-division-quotient":
-        return [
-            slot_c(21.5, 5.0, 9.5, 5.2),
-            svg_path("M10.5 22.8 C13 19.5 13 12.5 10.5 10 H31"),
-            slot_c(21.5, 16.8, 10.5, 8.2),
         ], []
     raise ValueError(tid)
 
@@ -623,7 +603,6 @@ def build_fences(tid: str) -> tuple[list[str], list[TextPlacement]]:
 
 
 def build_integrals_and_big_ops(group: str, tid: str) -> tuple[list[str], list[TextPlacement]]:
-    d_key = reg_text("d-letter", "d", family="STIX Two Text", base_size=14.0)
     # Standalone symbols
     int_map = {
         "int": (1, ""),
@@ -638,18 +617,6 @@ def build_integrals_and_big_ops(group: str, tid: str) -> tuple[list[str], list[T
     if group == "Integrals" and tid in int_map:
         cnt, lp = int_map[tid]
         return draw_integral(CX, CY, 19.0, count=cnt, loop=lp), []
-
-    if tid == "int-differential":
-        els = draw_integral(8.5, CY, 18.0) + [slot_c(16.5, CY, 7.2, 8.5), slot_c(32.0, CY, 7.0, 8.5)]
-        return els, [TextPlacement(d_key, 25.0, CY + 0.5, 5.5, 11.0)]
-    if tid == "definite-differential":
-        els = draw_integral(8.2, CY, 12.5, sw=1.55) + [
-            slot_c(8.2, 3.6, 5.2, 4.2, sw=1.05),
-            slot_c(8.2, 22.4, 5.2, 4.2, sw=1.05),
-            slot_c(17.2, CY, 6.8, 8.0),
-            slot_c(32.5, CY, 6.6, 8.0),
-        ]
-        return els, [TextPlacement(d_key, 25.5, CY + 0.5, 5.5, 10.5)]
 
     big_ops = ("sum", "prod", "coprod", "bigcap", "bigcup", "bigwedge", "bigvee", "bigotimes", "bigoplus", "bigodot")
     if tid in big_ops:
@@ -735,8 +702,6 @@ def build_matrices(tid: str) -> tuple[list[str], list[TextPlacement]]:
         "plain-3x1": (3, 1),
         "plain-2x2": (2, 2),
         "plain-3x3": (3, 3),
-        "plain-2x3": (2, 3),
-        "plain-3x2": (3, 2),
         "plain-1x4": (1, 4),
         "plain-4x1": (4, 1),
         "plain-4x4": (4, 4),
@@ -749,8 +714,6 @@ def build_matrices(tid: str) -> tuple[list[str], list[TextPlacement]]:
         "pmatrix3": (3, 3, "paren"),
         "bmatrix2": (2, 2, "bracket"),
         "bmatrix3": (3, 3, "bracket"),
-        "Bmatrix2": (2, 2, "brace"),
-        "Bmatrix3": (3, 3, "brace"),
         "vmatrix2": (2, 2, "bar"),
         "vmatrix3": (3, 3, "bar"),
         "Vmatrix2": (2, 2, "norm"),
@@ -789,15 +752,6 @@ def build_matrices(tid: str) -> tuple[list[str], list[TextPlacement]]:
         for k in (-2.5, 0.0, 2.5):
             els.append(svg_dot(CX + k, CY + k, 0.75))
         return els, []
-    if tid == "aligned":
-        els = []
-        for ry in (7.8, 18.2):
-            els.append(slot_c(11.0, ry, 7.5, 6.2))
-            els.append(svg_path(f"M17.5 {fmt(ry - 1.3)} H22.5 M17.5 {fmt(ry + 1.3)} H22.5", sw=1.35))
-            els.append(slot_c(29.0, ry, 7.5, 6.2))
-        return els, []
-    if tid == "gathered":
-        return [slot_c(CX, 7.8, 13.0, 6.4), slot_c(CX, 18.2, 13.0, 6.4)], []
     raise ValueError(tid)
 
 
@@ -856,8 +810,6 @@ def build_embellishments(tid: str) -> tuple[list[str], list[TextPlacement]]:
         return [slot_c(CX, 15.2, 12.0, 10.5), svg_path("M15.0 4.6 Q20 8.5 25.0 4.6")], []
     if tid == "mathring":
         return [slot_c(CX, 15.5, 12.0, 10.2), svg_circle(CX, 5.5, 1.8, sw=1.45)], []
-    if tid == "vec":
-        return [slot_c(CX, 15.2, 12.0, 10.5)] + draw_arrow_shape("rightarrow", CX, 5.8, 13.0, sw=1.5), []
     if tid == "overleftharpoon":
         return [slot_c(CX, 15.2, 12.0, 10.5)] + draw_arrow_shape("leftharpoonup", CX, 6.2, 13.0, sw=1.5), []
     if tid == "overrightharpoon":
@@ -1288,8 +1240,8 @@ def build_symbols(tid: str, glyph: str | None) -> tuple[list[str], list[TextPlac
         "nabla": lambda: [svg_path("M13 7 H27 L20 20 Z")],
         "triangle": lambda: [svg_path("M20 6 L27 19 H13 Z")],
         "angle": lambda: [svg_path("M26.5 7 L13.5 19 H26.5")],
-        "measuredangle": lambda: [svg_path("M26.5 7 L13.5 19 H26.5"), svg_path("M19 19 A5.5 5.5 0 0 0 17.4 15.2", sw=1.35)],
-        "sphericalangle": lambda: [svg_path("M26.5 7 L13.5 19 H26.5"), svg_path("M19 19 A5.5 5.5 0 0 0 15.5 13.8", sw=1.35)],
+        "measuredangle": lambda: [svg_path("M26.5 7 L13.5 19 H26.5"), svg_path("M20.0 20.5 A6.6 6.6 0 0 0 17.1 13.5", sw=1.45)],
+        "sphericalangle": lambda: [svg_path("M26.5 6.5 L12.5 13 L26.5 19.5"), svg_path("M19.0 8.1 A8.2 8.2 0 0 1 19.0 17.9", sw=1.45)],
         "square": lambda: ['<rect x="13.5" y="6.5" width="13" height="13" rx="1.2" />'],
         "rectangle": lambda: ['<rect x="10.5" y="8" width="19" height="10" rx="1.2" />'],
         "parallelogram": lambda: [svg_path("M13 8 H29 L27 18 H11 Z")],
