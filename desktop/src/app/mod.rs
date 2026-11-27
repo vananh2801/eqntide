@@ -32,6 +32,7 @@ mod canvas;
 mod dialogs;
 mod events;
 mod keyboard;
+mod palette_ribbon;
 mod palette_ui;
 mod session;
 mod settings_ui;
@@ -65,10 +66,12 @@ const FOOTER_CONTROL_HEIGHT: f32 = theme::BUTTON_HEIGHT;
 pub(crate) const MIN_WINDOW_SIZE: [f32; 2] = [1056.0, 560.0];
 pub(super) const PALETTE_BUTTON_SIZE: Vec2 = Vec2::new(46.0, 32.0);
 pub(super) const PALETTE_GAP: f32 = theme::SPACE_XS;
+const PALETTE_ROWS: usize = 3;
 const SIDEBAR_CATEGORY_ICON_SIZE: f32 = 22.0;
 pub(super) const UI_ICON_SIZE: f32 = 16.0;
-pub(super) const PALETTE_HEIGHT: f32 =
-    3.0 * PALETTE_BUTTON_SIZE.y + 2.0 * PALETTE_GAP + CONTENT_PADDING as f32;
+pub(super) const PALETTE_HEIGHT: f32 = PALETTE_ROWS as f32 * PALETTE_BUTTON_SIZE.y
+    + (PALETTE_ROWS - 1) as f32 * PALETTE_GAP
+    + CONTENT_PADDING as f32;
 pub(super) const LATEX_PANEL_HEIGHT: f32 = 88.0;
 pub(super) const LATEX_INPUT_HEIGHT: f32 = LATEX_PANEL_HEIGHT - CONTENT_PADDING as f32;
 pub(super) const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";

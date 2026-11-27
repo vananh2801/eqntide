@@ -1,5 +1,6 @@
 //! Native palette backed by the shared conversion catalog.
 
+use eqntide::catalog::ENTRIES;
 #[allow(unused_imports)]
 pub use eqntide::catalog::{
     attaches_to_previous, matrix, preview_template, template, GROUPS, PALETTE,
@@ -184,27 +185,193 @@ pub fn items_for_ui_group(ui_group_id: &str, recent: &[&'static str]) -> Vec<&'s
             })
             .collect();
     }
+    let mut items = Vec::new();
     if let Some(group) = ui_group(ui_group_id) {
-        let mut items = Vec::new();
         for &catalog_group in group.catalog_groups {
-            items.extend(
-                PALETTE
-                    .iter()
-                    .filter(|(item_group, _, _)| *item_group == catalog_group),
-            );
+            append_ordered_items(&mut items, catalog_group);
         }
-        return items;
+    } else {
+        append_ordered_items(&mut items, ui_group_id);
     }
-    PALETTE
+    items
+}
+
+fn append_ordered_items(items: &mut Vec<&'static PaletteItem>, group: &str) {
+    // The catalog emits ENTRIES and PALETTE in the same order.
+    let mut entries: Vec<_> = ENTRIES
         .iter()
-        .filter(|(item_group, _, _)| *item_group == ui_group_id)
-        .collect()
+        .zip(PALETTE)
+        .filter(|(entry, _)| entry.group == group)
+        .collect();
+    let order = palette_order(group);
+    if !order.is_empty() {
+        entries.sort_by_cached_key(|(entry, _)| {
+            let key = palette_order_key(group, entry.id);
+            order
+                .split_whitespace()
+                .position(|ordered| ordered == key)
+                .unwrap_or(usize::MAX)
+        });
+    }
+    items.extend(entries.into_iter().map(|(_, item)| item));
+}
+
+fn palette_order_key<'a>(group: &str, id: &'a str) -> &'a str {
+    let key = id.split_once('-').map_or(id, |(_, key)| key);
+    if matches!(group, "Integrals" | "BigOperators") {
+        return key.split_once('-').map_or(key, |(family, _)| family);
+    }
+    key
+}
+
+fn palette_order(group: &str) -> &'static str {
+    match group {
+        "Scripts" => "
+            sup sub subsup
+            pre-sup-post-none pre-sub-post-none pre-both-post-none
+            pre-sup-post-sup pre-sub-post-sup pre-both-post-sup
+            pre-sup-post-sub pre-sub-post-sub pre-both-post-sub
+            pre-sup-post-both pre-sub-post-both pre-both-post-both
+            overset underset overunderset",
+        "Fractions" => "
+            frac tfrac dfrac
+            linear small-linear sfrac
+            sqrt small-root root
+            root-fraction binom long-division long-division-quotient",
+        "Fences" => "
+            paren-both paren-left paren-right
+            bracket-both bracket-left bracket-right
+            double-bracket-both double-bracket-left double-bracket-right
+            brace-both brace-left brace-right
+            angle-both angle-left angle-right
+            bar-both bar-left bar-right
+            norm-both norm-left norm-right
+            floor-both floor-left floor-right
+            ceiling-both ceiling-left ceiling-right
+            bracket-paren paren-bracket bracket-left-left bracket-right-right bracket-open-open
+            bra ket bra-ket evaluation
+            cases-two cases-three system-brace-two system-brace-three system-bracket-two system-bracket-three",
+        "Integrals" => "int iint iiint oint oiint oiiint varointclockwise ointctrclockwise definite",
+        "BigOperators" => "prod coprod bigcup bigcap bigvee bigwedge bigoplus bigotimes bigodot",
+        "Matrices" => "
+            plain-1x2 plain-1x3 plain-1x4
+            plain-2x1 plain-3x1 plain-4x1
+            plain-2x2 plain-3x3 plain-4x4
+            plain-2x3 plain-3x2
+            pmatrix2 pmatrix3 bmatrix2 bmatrix3 Bmatrix2 Bmatrix3
+            vmatrix2 vmatrix3 Vmatrix2 Vmatrix3
+            dots-row dots-column dots-matrix aligned gathered",
+        "Boxes" => "
+            box roundedbox
+            top-left top-right bottom-left bottom-right
+            top-bottom-left top-bottom-right top-left-right bottom-left-right",
+        "Embellishments" => "
+            dot ddot underdot underddot dddot ddddot
+            tilde undertilde hat check breve mathring vec
+            overleftharpoon underleftharpoon overrightharpoon underrightharpoon
+            prime double-prime triple-prime left-prime back-prime
+            cancel bcancel xcancel strike-horizontal",
+        "Bars" => "
+            overline overline-label underline underline-label
+            doubleoverline doubleoverline-label doubleunderline doubleunderline-label
+            widehat widetilde wideparen underparen
+            overleftarrow overrightarrow overleftrightarrow
+            underleftarrow underrightarrow underleftrightarrow
+            overbrace overbrace-label underbrace underbrace-label
+            overbracket overbracket-label underbracket underbracket-label",
+        "Functions" => "
+            sin cos tan cot sec csc
+            arcsin arccos arctan arccot arcsec arccsc
+            sinh cosh tanh coth sech csch arsinh arcosh artanh arcoth
+            tg ctg cotg cosec
+            log ln lg exp
+            lim limsup liminf min max sup inf
+            det dim ker hom deg arg gcd lcm sgn mod Pr",
+        "Operators" => "
+            times cdot div pm mp ast circ bullet diamond
+            oplus otimes odot amalg dagger ddagger",
+        "Relations" => "
+            leq geq neq ll gg equiv nleq ngeq
+            prec succ preceq succeq triangleleft triangleright
+            sim approx simeq cong asymp propto
+            doteq triangleq estimates fallingdotseq risingdotseq parallel perp",
+        "Arrows" => "
+            rightarrow leftarrow leftrightarrow uparrow downarrow updownarrow
+            Rightarrow Leftarrow Leftrightarrow Uparrow Downarrow Updownarrow
+            longrightarrow longleftarrow longleftrightarrow Longrightarrow Longleftarrow Longleftrightarrow
+            nearrow searrow swarrow nwarrow neswarrow nwsearrow
+            mapsto hookrightarrow hookleftarrow curvearrowright curvearrowleft
+            rightleftarrows leftrightarrows rightleftharpoons leftrightharpoons
+            rightharpoonup leftharpoonup rightharpoondown leftharpoondown",
+        "Logic" => "
+            forall exists nexists neg land lor top bot
+            vdash dashv models therefore because backepsilon",
+        "Sets" => "
+            in notin ni notni
+            subset subseteq subsetneq nsubset nsubseteq supset supseteq supsetneq nsupseteq
+            cup cap setminus emptyset",
+        "Symbols" => "
+            number-set-N number-set-Z number-set-Q number-set-R number-set-C
+            partial nabla infty ell wp Re Im aleph hbar lambdabar imath jmath mho
+            angle measuredangle sphericalangle degree prime dprime trprime backprime
+            triangle square rectangle parallelogram bigcirc lozenge
+            script-A script-B script-N script-R script-S
+            fraktur-A fraktur-B fraktur-N fraktur-R fraktur-S",
+        "GreekLower" => "
+            alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota
+            kappa varkappa lambda mu nu xi omicron pi varpi rho varrho sigma varsigma
+            tau upsilon phi varphi chi psi omega",
+        "GreekUpper" => "
+            Alpha Beta Gamma Delta Epsilon Zeta Eta Theta varTheta Iota Kappa Lambda
+            Mu Nu Xi Omicron Pi Rho Sigma Tau Upsilon varUpsilon Phi Chi Psi Omega",
+        // Sums, labeled arrows, and spacing are already grouped in the catalog.
+        _ => "",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use eqntide::MathNode;
+
+    #[test]
+    fn desktop_order_references_valid_unique_catalog_keys() {
+        for &(group, _) in GROUPS {
+            let mut seen = std::collections::HashSet::new();
+            for key in palette_order(group).split_whitespace() {
+                assert!(
+                    seen.insert(key),
+                    "duplicate palette order key {group}/{key}"
+                );
+                assert!(
+                    ENTRIES.iter().any(|entry| {
+                        entry.group == group && palette_order_key(group, entry.id) == key
+                    }),
+                    "unknown palette order key {group}/{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scripts_group_aligns_matching_positions_across_columns() {
+        let scripts = items_for_ui_group("Scripts", &[]);
+        let labels: Vec<_> = scripts.iter().map(|item| item.1).collect();
+        assert_eq!(
+            &labels[..9],
+            &[
+                "Superscript",
+                "Subscript",
+                "Subscript and superscript",
+                "Left superscript",
+                "Left subscript",
+                "Left sub/superscript",
+                "Left superscript & right superscript",
+                "Left subscript & right superscript",
+                "Left sub/superscript & right superscript",
+            ]
+        );
+    }
 
     #[test]
     fn every_existing_palette_button_has_a_native_template() {

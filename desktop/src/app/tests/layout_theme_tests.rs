@@ -910,7 +910,7 @@ fn recent_palette_tracks_mru_without_duplicates_and_renders() {
 }
 
 #[test]
-fn palette_scrolls_horizontally_on_vertical_mouse_wheel() {
+fn palette_scrolls_horizontally_with_either_wheel_axis() {
     fn run_wheel_case(category: &str, wheel_delta: Vec2, expected_overflow: bool, dpi: f32) {
         let ctx = egui::Context::default();
         ThemeTokens::apply_style(&ctx);
@@ -973,39 +973,31 @@ fn palette_scrolls_horizontally_on_vertical_mouse_wheel() {
             settle_out.textures_delta.clear();
         }
 
-        let palette_tex = app
-            .palette_atlas
-            .as_ref()
-            .expect("shared palette atlas")
-            .texture
-            .id();
-        let first_x = |shapes: &[egui::epaint::ClippedShape]| -> f32 {
+        let atlas = app.palette_atlas.as_ref().expect("shared palette atlas");
+        let palette_tex = atlas.texture.id();
+        let tracked_item = palette::items_for_ui_group(category, &[])[12].2;
+        let tracked_uv = atlas.entries[tracked_item].uv;
+        let tile_x = |shapes: &[egui::epaint::ClippedShape]| -> f32 {
             shapes
                 .iter()
-                .filter_map(|clipped| match &clipped.shape {
+                .find_map(|clipped| match &clipped.shape {
                     egui::Shape::Rect(rect_shape)
-                        if rect_shape
-                            .brush
-                            .as_ref()
-                            .is_some_and(|brush| brush.fill_texture_id == palette_tex) =>
+                        if rect_shape.brush.as_ref().is_some_and(|brush| {
+                            brush.fill_texture_id == palette_tex && brush.uv == tracked_uv
+                        }) =>
                     {
                         Some(rect_shape.rect.left())
                     }
                     _ => None,
                 })
-                .fold(f32::INFINITY, f32::min)
+                .expect("tracked palette tile")
         };
-        let initial_x = first_x(&out.shapes);
-        let final_x = first_x(&settle_out.shapes);
+        let initial_x = tile_x(&out.shapes);
+        let final_x = tile_x(&settle_out.shapes);
         let palette = app.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
         let tracks = scroll_tracks(&settle_out, palette.scroll_track, 6.0);
+        assert!(tracks.is_empty(), "the palette never shows a scrollbar");
         if expected_overflow {
-            let [track] = tracks.as_slice() else {
-                panic!("expected one palette track at DPI {dpi}: {tracks:?}");
-            };
-            assert!(scroll_tracks(&settle_out, palette.scroll_inactive, 6.0)
-                .iter()
-                .any(|handle| track.contains_rect(*handle)));
             let mut rows = Vec::new();
             for clipped in &settle_out.shapes {
                 let egui::Shape::Rect(shape) = &clipped.shape else {
@@ -1016,7 +1008,6 @@ fn palette_scrolls_horizontally_on_vertical_mouse_wheel() {
                     .as_ref()
                     .is_some_and(|brush| brush.fill_texture_id == palette_tex)
                 {
-                    assert!(shape.rect.bottom() <= track.top());
                     assert!(shape.rect.bottom() <= clipped.clip_rect.bottom());
                     rows.push(shape.rect.center().y.round() as i32);
                 }
@@ -1029,7 +1020,6 @@ fn palette_scrolls_horizontally_on_vertical_mouse_wheel() {
                 "expected overflowing category {category} to pan left (scroll right) with {wheel_delta:?}: {initial_x} -> {final_x}"
             );
         } else {
-            assert!(tracks.is_empty());
             assert!(
                 (final_x - initial_x).abs() < 1.0,
                 "expected non-overflowing category {category} to stay stationary with {wheel_delta:?}: {initial_x} -> {final_x}"
