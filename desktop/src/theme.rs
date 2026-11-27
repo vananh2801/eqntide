@@ -197,6 +197,27 @@ impl ThemeTokens {
         blend_rgb(self.accent, base_card, 0.58)
     }
 
+    /// Return a soft-accent level-bar fill color that preserves `text_primary` contrast across states.
+    pub(crate) fn soft_accent_fill(self, hovered: bool, enabled: bool) -> Color32 {
+        if !enabled {
+            return blend_rgb(self.control_disabled_bg, self.disabled_accent(), 0.20);
+        }
+        let base = if hovered {
+            self.control_hover_bg
+        } else {
+            self.control_bg
+        };
+        let mut weight = if hovered { 0.30 } else { 0.24 };
+        for _ in 0..8 {
+            let candidate = blend_rgb(base, self.accent, weight);
+            if contrast_ratio(self.text_primary, candidate) >= 4.5 {
+                return candidate;
+            }
+            weight *= 0.85;
+        }
+        blend_rgb(base, self.accent, 0.12)
+    }
+
     /// Build a `StyleModifier` for `ComboBox` popups so dropdown menus contrast cleanly against cards.
     pub(crate) fn combo_popup_style(self) -> egui::style::StyleModifier {
         let popup_fill = self.control_bg;
@@ -739,6 +760,14 @@ mod tests {
                 assert!(contrast_ratio(tokens.primary_fg, tokens.primary_bg) >= 4.5);
                 assert!(contrast_ratio(tokens.selected_fg, tokens.selected_bg) >= 4.5);
                 assert!(contrast_ratio(tokens.accent, tokens.panel_bg) >= 3.0);
+                let idle_fill = tokens.soft_accent_fill(false, true);
+                let hover_fill = tokens.soft_accent_fill(true, true);
+                let disabled_fill = tokens.soft_accent_fill(false, false);
+                assert!(contrast_ratio(tokens.text_primary, idle_fill) >= 4.5);
+                assert!(contrast_ratio(tokens.text_primary, hover_fill) >= 4.5);
+                assert_ne!(idle_fill, tokens.control_bg);
+                assert_ne!(hover_fill, tokens.control_hover_bg);
+                assert_ne!(disabled_fill, tokens.control_disabled_bg);
             }
             assert!(relative_luminance(dark.accent) > relative_luminance(light.accent));
         }

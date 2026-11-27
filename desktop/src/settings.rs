@@ -291,7 +291,8 @@ impl Settings {
     /// Clamp numeric settings, normalize palette selections, and drop unsafe paths in place.
     pub(crate) fn sanitize(&mut self) {
         self.zoom = if self.zoom.is_finite() {
-            self.zoom.clamp(*ZOOM_RANGE.start(), *ZOOM_RANGE.end())
+            let clamped = self.zoom.clamp(*ZOOM_RANGE.start(), *ZOOM_RANGE.end());
+            (clamped * 100.0).round() / 100.0
         } else {
             DEFAULT_ZOOM
         };
@@ -820,6 +821,13 @@ mod tests {
         assert_eq!(snapped_font.canvas_opacity, 0.0);
         assert_eq!(snapped_font.background_image, None);
         assert_eq!(snapped_font.background_mode, BackgroundMode::Solid);
+
+        let snapped_zoom = Settings {
+            zoom: 2.346,
+            ..Settings::default()
+        }
+        .sanitized();
+        assert_eq!(snapped_zoom.zoom, 2.35);
     }
 
     #[test]

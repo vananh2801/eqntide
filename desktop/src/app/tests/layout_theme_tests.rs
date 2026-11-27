@@ -38,7 +38,14 @@ fn fixed_layout_keeps_save_and_source_visible_across_sizes_and_themes() {
                     } else {
                         "Save MathML"
                     };
-                    for text in [label, "source-marker", "MathType", "OMML", "Font size"] {
+                    for text in [
+                        label,
+                        "source-marker",
+                        "MathType",
+                        "OMML",
+                        "Font size",
+                        "Zoom",
+                    ] {
                         let shape = output
                             .shapes
                             .iter()
@@ -694,25 +701,19 @@ fn sidebar_settings_and_about_tabs_work_and_toggle_theme() {
         .iter()
         .any(|clipped| matches!(&clipped.shape,
         egui::Shape::Text(text_shape) if text_shape.galley.text() == "Theme")));
-    // Zoom slider rail in Light mode contrasts against card_bg (not white-on-white).
-    let pct_pos = find_text_center(&after_light, |text| text == "200%");
+    assert!(!has_rendered_text(&after_light, "Canvas zoom"));
+    assert!(!has_rendered_text(&after_light, "Reset (200%)"));
+    // Opacity slider tracks in Light mode contrast against card_bg (not white-on-white).
+    let overlay_pos = find_text_center(&after_light, |text| text == "Overlay opacity");
     assert!(after_light
         .shapes
         .iter()
         .any(|clipped| matches!(&clipped.shape,
         egui::Shape::Rect(rect_shape)
-            if (rect_shape.rect.center().y - pct_pos.y).abs() < 12.0
+            if (rect_shape.rect.center().y - overlay_pos.y).abs() < 12.0
                 && rect_shape.rect.width() >= 150.0
                 && rect_shape.rect.height() <= 24.0
-                && rect_shape.fill == light_tokens.border)));
-    assert!(after_light
-        .shapes
-        .iter()
-        .any(|clipped| matches!(&clipped.shape,
-        egui::Shape::Rect(rect_shape)
-            if (rect_shape.rect.center().y - pct_pos.y).abs() < 12.0
-                && rect_shape.rect.height() <= 24.0
-                && rect_shape.fill == light_tokens.accent)));
+                && rect_shape.fill == light_tokens.control_disabled_bg)));
 }
 
 #[test]
@@ -2481,5 +2482,157 @@ fn primary_and_standard_buttons_render_distinct_focus_borders_in_light_and_dark_
                         && rect_shape.stroke.color == tokens.accent
             )
         }));
+    }
+}
+
+#[test]
+fn footer_font_and_zoom_render_soft_accent_left_fill_and_adjust_on_wheel() {
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let dark_mode = theme == egui::Theme::Dark;
+        let tokens = ThemeTokens::for_mode(dark_mode);
+        let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        let mut app = super::helpers::app().with_settings_path(path.clone(), Some(&ctx));
+        ctx.set_theme(theme);
+        app.font_pt = 39.0; // midpoint of 6.0..=72.0 (50%)
+        app.zoom = 2.75; // midpoint of 1.5..=4.0 (50%)
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+
+        let font_pos = find_text_center(&out, |text| text == "39.0");
+        let zoom_pos = find_text_center(&out, |text| text == "275%");
+        let find_track_and_fill =
+            |frame: &egui::FullOutput, pos: Pos2, track_color: Color32, fill_color: Color32| {
+                let track = frame
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::Shape::Rect(rect_shape)
+                            if rect_shape.fill == track_color
+                                && rect_shape.rect.contains(pos)
+                                && (rect_shape.rect.height() - theme::BUTTON_HEIGHT).abs()
+                                    <= 0.5 =>
+                        {
+                            Some(rect_shape.rect)
+                        }
+                        _ => None,
+                    })
+                    .expect("missing level control track");
+                let fill = frame
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::Shape::Rect(rect_shape)
+                            if rect_shape.fill == fill_color
+                                && (rect_shape.rect.left() - track.left()).abs() <= 0.5
+                                && (rect_shape.rect.center().y - track.center().y).abs() <= 0.5
+                                && (rect_shape.rect.height() - track.height()).abs() <= 0.5 =>
+                        {
+                            Some(rect_shape.rect)
+                        }
+                        _ => None,
+                    })
+                    .expect("missing level control left fill");
+                (track, fill)
+            };
+
+        let idle_fill_color = tokens.soft_accent_fill(false, true);
+        let (font_track, font_fill) =
+            find_track_and_fill(&out, font_pos, tokens.control_bg, idle_fill_color);
+        let (zoom_track, zoom_fill) =
+            find_track_and_fill(&out, zoom_pos, tokens.control_bg, idle_fill_color);
+        assert!((font_fill.width() - font_track.width() * 0.5).abs() <= 1.0);
+        assert!((zoom_fill.width() - zoom_track.width() * 0.5).abs() <= 1.0);
+        assert!((font_track.center().y - zoom_track.center().y).abs() <= 0.5);
+
+        // Hovering updates both track and left soft-accent fill; wheeling steps by 1pt / 10%.
+        let wheel_up_font = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(font_pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(app.font_pt, 40.0);
+        assert_eq!(Settings::load_from_path(&path).font_pt, 40.0);
+        let hover_fill_color = tokens.soft_accent_fill(true, true);
+        let _ = find_track_and_fill(
+            &wheel_up_font,
+            font_pos,
+            tokens.control_hover_bg,
+            hover_fill_color,
+        );
+
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(zoom_pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, -1.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        // 2.75 stepped down by 10% (0.1) snaps onto the 10% grid at 2.7 (270%).
+        assert_eq!(app.zoom, 2.7);
+        assert_eq!(Settings::load_from_path(&path).zoom, 2.7);
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(zoom_pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, -1.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(app.zoom, 2.6);
+        assert_eq!(Settings::load_from_path(&path).zoom, 2.6);
+
+        // Editor focus remains on Equation canvas after wheeling without clicking.
+        assert!(ctx.memory(|mem| mem.has_focus(egui::Id::unique("equation-canvas"))));
+
+        // Disabling via draft_dirty suppresses wheel stepping and renders disabled track/fill.
+        app.draft_dirty = true;
+        let disabled_out = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(zoom_pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(app.zoom, 2.6);
+        let disabled_fill_color = tokens.soft_accent_fill(false, false);
+        let _ = find_track_and_fill(
+            &disabled_out,
+            zoom_pos,
+            tokens.control_disabled_bg,
+            disabled_fill_color,
+        );
     }
 }

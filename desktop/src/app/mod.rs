@@ -19,7 +19,7 @@
 //!    ├── draw_shell(ui) ─────► draw_status_bar / draw_sidebar / draw_footer / tab:
 //!    │                           ├── draw_editor()       (palette + canvas + latex + keyboard)
 //!    │                           ├── draw_batch_tab()    (folder tree / batch worker progress)
-//!    │                           ├── draw_settings_tab() (zoom, theme, background, canvas presets)
+//!    │                           ├── draw_settings_tab() (theme, background, startup focus, shortcuts)
 //!    │                           └── draw_about_tab()    (version, links, manual update check)
 //!    ├── draw_dialogs() / draw_matrix_dialog()
 //!    ├── request_latex_parse() ──► debounced background parse -> Event::Latex
@@ -60,6 +60,7 @@ use std::{
 
 pub(super) const CONTENT_PADDING: i8 = theme::SPACE_MD as i8;
 const FONT_SIZE_CONTROL_WIDTH: f32 = 96.0;
+const ZOOM_CONTROL_WIDTH: f32 = 96.0;
 const FOOTER_CONTROL_HEIGHT: f32 = theme::BUTTON_HEIGHT;
 pub(crate) const MIN_WINDOW_SIZE: [f32; 2] = [1056.0, 560.0];
 pub(super) const PALETTE_BUTTON_SIZE: Vec2 = Vec2::new(46.0, 32.0);
@@ -847,7 +848,7 @@ impl App {
         }
     }
 
-    /// Renders the bottom action bar with target format radio buttons, font size, undo/redo, and save.
+    /// Renders the bottom action bar with target format radio buttons, font size, zoom, undo/redo, and save.
     pub(super) fn draw_footer(&mut self, ui: &mut egui::Ui) {
         let tokens = self.theme_tokens(ui);
         ui.add_enabled_ui(
@@ -887,37 +888,85 @@ impl App {
                         }
                         Self::draw_section_separator(ui, tokens);
                         ui.label(caption("Font size"));
-                        let drag_resp = ui
-                            .scope(|ui| {
-                                ui.style_mut().explanation_tooltips = false;
+                        let (font_resp, font_wheel_changed) = Self::draw_level_drag_value(
+                            ui,
+                            tokens,
+                            "footer-font-size",
+                            f64::from(4.0 / FONT_SIZE_CONTROL_WIDTH),
+                            1.0,
+                            settings::FONT_PT_RANGE,
+                            &mut self.font_pt,
+                            "Click and drag left/right, or scroll to adjust",
+                            |ui, font_pt, speed| {
                                 ui.add(
                                     egui::DragValue::from_get_set(|value| {
                                         if let Some(value) = value {
-                                            self.font_pt = ((value * 2.0).round() / 2.0) as f32;
+                                            *font_pt = value.round() as f32;
                                         }
-                                        f64::from(self.font_pt)
+                                        f64::from(*font_pt)
                                     })
                                     .range(settings::FONT_PT_RANGE)
                                     .min_size(Vec2::new(
                                         FONT_SIZE_CONTROL_WIDTH,
                                         FOOTER_CONTROL_HEIGHT,
                                     ))
-                                    // A quarter of the control's width changes the size by 1 pt.
-                                    .speed(4.0 / FONT_SIZE_CONTROL_WIDTH)
+                                    .speed(speed)
                                     .max_decimals(1)
                                     .suffix(" pt"),
                                 )
-                                .on_hover_text("Click and drag left/right to adjust")
-                            })
-                            .inner;
-                        if drag_resp.changed() {
+                            },
+                        );
+                        if font_resp.changed() || font_wheel_changed {
                             self.render_key += 1;
                             self.persisted.font_pt = self.font_pt;
                             self.settings_dirty = true;
                         }
-                        if drag_resp.drag_stopped() && !drag_resp.has_focus() {
+                        if font_resp.drag_stopped() && !font_resp.has_focus() {
                             self.pending_focus_restore = Some(self.active_editor_focus);
                         }
+                        ui.label(caption("Zoom"));
+                        let (zoom_resp, zoom_wheel_changed) = Self::draw_level_drag_value(
+                            ui,
+                            tokens,
+                            "footer-zoom",
+                            f64::from(1.0 / ZOOM_CONTROL_WIDTH),
+                            10.0,
+                            settings::ZOOM_RANGE,
+                            &mut self.zoom,
+                            "Click and drag left/right, or scroll to adjust",
+                            |ui, zoom, speed| {
+                                ui.add(
+                                    egui::DragValue::from_get_set(|value| {
+                                        if let Some(value) = value {
+                                            *zoom = ((value * 10.0).round() / 10.0) as f32;
+                                        }
+                                        f64::from(*zoom)
+                                    })
+                                    .range(settings::ZOOM_RANGE)
+                                    .min_size(Vec2::new(ZOOM_CONTROL_WIDTH, FOOTER_CONTROL_HEIGHT))
+                                    .speed(speed)
+                                    .custom_formatter(|value, _| {
+                                        format!("{:.0}%", (value * 100.0).round())
+                                    })
+                                    .custom_parser(|text| {
+                                        text.trim()
+                                            .trim_end_matches('%')
+                                            .trim()
+                                            .parse::<f64>()
+                                            .ok()
+                                            .map(|pct| pct / 100.0)
+                                    }),
+                                )
+                            },
+                        );
+                        if zoom_resp.changed() || zoom_wheel_changed {
+                            self.persisted.zoom = self.zoom;
+                            self.settings_dirty = true;
+                        }
+                        if zoom_resp.drag_stopped() && !zoom_resp.has_focus() {
+                            self.pending_focus_restore = Some(self.active_editor_focus);
+                        }
+                        Self::draw_section_separator(ui, tokens);
                         let history_tint = self.theme_tokens(ui).icon_tint(false, ui.is_enabled());
                         let undo_img =
                             self.ui_icon(ui.ctx(), "arrow-back-up", UI_ICON_SIZE, history_tint);
@@ -960,6 +1009,138 @@ impl App {
                 });
             },
         );
+    }
+
+    /// Renders a Krita-style left-filled `DragValue` supporting hover mouse-wheel stepping.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_level_drag_value(
+        ui: &mut egui::Ui,
+        tokens: ThemeTokens,
+        id_salt: &str,
+        speed: f64,
+        steps_per_unit: f64,
+        range: std::ops::RangeInclusive<f32>,
+        value: &mut f32,
+        hover_text: &str,
+        add_drag: impl FnOnce(&mut egui::Ui, &mut f32, f64) -> egui::Response,
+    ) -> (egui::Response, bool) {
+        let enabled = ui.is_enabled();
+        let mut wheel_changed = false;
+        let response = ui
+            .push_id(id_salt, |ui| {
+                if !enabled {
+                    ui.set_opacity(1.0);
+                }
+                ui.style_mut().explanation_tooltips = false;
+                let meta_id = ui.scope_id().with("level-meta");
+                if enabled {
+                    if let Some((widget_id, widget_rect)) = ui
+                        .ctx()
+                        .data(|data| data.get_temp::<(egui::Id, Rect)>(meta_id))
+                    {
+                        let editing_text = ui.memory(|mem| mem.has_focus(widget_id));
+                        if !editing_text && ui.rect_contains_pointer(widget_rect) {
+                            let wheel_y: f32 = ui.ctx().input(|input| {
+                                input
+                                    .raw
+                                    .events
+                                    .iter()
+                                    .filter_map(|event| match event {
+                                        egui::Event::MouseWheel { delta, .. } => Some(delta.y),
+                                        _ => None,
+                                    })
+                                    .sum()
+                            });
+                            if wheel_y.abs() > f32::EPSILON {
+                                let step = 1.0 / steps_per_unit;
+                                let next = f64::from(*value) + f64::from(wheel_y.signum()) * step;
+                                let snapped =
+                                    ((next * steps_per_unit).round() / steps_per_unit) as f32;
+                                *value = snapped.clamp(*range.start(), *range.end());
+                                wheel_changed = true;
+                                ui.ctx().input_mut(|input| {
+                                    input.smooth_scroll_delta.y = 0.0;
+                                });
+                            }
+                        }
+                    }
+                }
+
+                let track_idx = ui.painter().add(egui::Shape::Noop);
+                let fill_idx = ui.painter().add(egui::Shape::Noop);
+                {
+                    let visuals = ui.visuals_mut();
+                    let widgets = &mut visuals.widgets;
+                    widgets.noninteractive.bg_fill = egui::Color32::TRANSPARENT;
+                    widgets.noninteractive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                    widgets.noninteractive.fg_stroke.color = tokens.text_disabled;
+                    widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
+                    widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                    widgets.hovered.bg_fill = egui::Color32::TRANSPARENT;
+                    widgets.hovered.weak_bg_fill = egui::Color32::TRANSPARENT;
+                    widgets.active.bg_fill = egui::Color32::TRANSPARENT;
+                    widgets.active.weak_bg_fill = egui::Color32::TRANSPARENT;
+                    visuals.extreme_bg_color = tokens.control_bg;
+                }
+
+                let drag_resp = add_drag(ui, value, speed).on_hover_text(hover_text);
+                let rect = drag_resp.rect;
+                let hovered = enabled && drag_resp.hovered();
+                let fraction = if *range.end() > *range.start() {
+                    ((*value - *range.start()) / (*range.end() - *range.start())).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let track_fill = if !enabled {
+                    tokens.control_disabled_bg
+                } else if hovered {
+                    tokens.control_hover_bg
+                } else {
+                    tokens.control_bg
+                };
+                ui.painter().set(
+                    track_idx,
+                    egui::Shape::rect_filled(rect, theme::CONTROL_CORNER_RADIUS, track_fill),
+                );
+                let fill_width = rect.width() * fraction;
+                if fill_width > 0.5 {
+                    let radius = theme::RADIUS_CONTROL;
+                    let radius_f = f32::from(radius);
+                    let vertical_inset = if fill_width < radius_f {
+                        let dx = radius_f - fill_width;
+                        radius_f - (radius_f * radius_f - dx * dx).max(0.0).sqrt()
+                    } else {
+                        0.0
+                    };
+                    let fill_rect = Rect::from_min_max(
+                        egui::Pos2::new(rect.left(), rect.top() + vertical_inset),
+                        egui::Pos2::new(rect.left() + fill_width, rect.bottom() - vertical_inset),
+                    );
+                    let corner_radius = if fraction >= 0.999 {
+                        theme::CONTROL_CORNER_RADIUS
+                    } else {
+                        egui::CornerRadius {
+                            nw: radius,
+                            sw: radius,
+                            ne: 0,
+                            se: 0,
+                        }
+                    };
+                    ui.painter().set(
+                        fill_idx,
+                        egui::Shape::rect_filled(
+                            fill_rect,
+                            corner_radius,
+                            tokens.soft_accent_fill(hovered, enabled),
+                        ),
+                    );
+                }
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(meta_id, (drag_resp.id, rect)));
+                drag_resp
+            })
+            .inner;
+        (response, wheel_changed)
     }
 
     /// Renders a section separator line using the active theme border token without adding borders to disabled widgets.

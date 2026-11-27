@@ -201,37 +201,16 @@ fn user_ui_edits_persist_atomically_and_coalesce_pointer_drag() {
     let dragged_font = app.font_pt;
     assert_eq!(Settings::load_from_path(&path).font_pt, dragged_font);
 
-    // 5. Open Settings tab, adjust zoom and toggle theme.
-    let settings_pos = find_text_center(&out, |text| text == "Settings");
-    run_ui_pass_frame(&ctx, &mut app, click_events(settings_pos));
-    assert_eq!(app.tab, 2);
-    let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
-
-    // Drag zoom slider right while pointer is down, then release.
-    let pct_pos = find_text_center(&out, |text| text == "200%");
-    let slider_center = out
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect_shape)
-                if (rect_shape.rect.center().y - pct_pos.y).abs() < 12.0
-                    && rect_shape.rect.width() >= 150.0
-                    && rect_shape.rect.width() <= 260.0
-                    && rect_shape.rect.height() <= 24.0 =>
-            {
-                Some(rect_shape.rect.center())
-            }
-            _ => None,
-        })
-        .unwrap_or(pct_pos);
-    let slider_drag_end = Pos2::new(slider_center.x + 60.0, slider_center.y);
+    // 5. Drag footer Zoom DragValue while pointer is down, then release.
+    let zoom_pos = find_text_center(&out, |text| text == "200%");
+    let zoom_drag_end = Pos2::new(zoom_pos.x + 60.0, zoom_pos.y);
     run_ui_pass_frame(
         &ctx,
         &mut app,
         vec![
-            egui::Event::PointerMoved(slider_center),
+            egui::Event::PointerMoved(zoom_pos),
             egui::Event::PointerButton {
-                pos: slider_center,
+                pos: zoom_pos,
                 button: egui::PointerButton::Primary,
                 pressed: true,
                 modifiers: egui::Modifiers::NONE,
@@ -241,7 +220,7 @@ fn user_ui_edits_persist_atomically_and_coalesce_pointer_drag() {
     run_ui_pass_frame(
         &ctx,
         &mut app,
-        vec![egui::Event::PointerMoved(slider_drag_end)],
+        vec![egui::Event::PointerMoved(zoom_drag_end)],
     );
     assert!(app.settings_dirty);
     assert_eq!(Settings::load_from_path(&path).zoom, settings::DEFAULT_ZOOM);
@@ -249,7 +228,7 @@ fn user_ui_edits_persist_atomically_and_coalesce_pointer_drag() {
         &ctx,
         &mut app,
         vec![egui::Event::PointerButton {
-            pos: slider_drag_end,
+            pos: zoom_drag_end,
             button: egui::PointerButton::Primary,
             pressed: false,
             modifiers: egui::Modifiers::NONE,
@@ -260,7 +239,11 @@ fn user_ui_edits_persist_atomically_and_coalesce_pointer_drag() {
     assert!((dragged_zoom - settings::DEFAULT_ZOOM).abs() > 0.05);
     assert_eq!(Settings::load_from_path(&path).zoom, dragged_zoom);
 
-    // Select Light theme (Dark -> Light).
+    // Open Settings tab and toggle theme (Dark -> Light).
+    let settings_pos = find_text_center(&out, |text| text == "Settings");
+    run_ui_pass_frame(&ctx, &mut app, click_events(settings_pos));
+    assert_eq!(app.tab, 2);
+    let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
     let light_pos = find_text_center(&out, |text| text == "Light");
     let out = run_ui_pass_frame(&ctx, &mut app, click_events(light_pos));
     assert_eq!(ctx.theme(), egui::Theme::Light);
@@ -300,13 +283,29 @@ fn user_ui_edits_persist_atomically_and_coalesce_pointer_drag() {
     assert!(reloaded.batch_overwrite);
     assert_eq!(reloaded.batch_target, 1);
 
-    // 8. Verify "Reset (200%)" persists default zoom back to disk.
-    reloaded.tab = 2;
+    // 8. Verify hover wheel over footer Zoom adjusts by 10% and persists immediately.
+    reloaded.tab = 0;
     let out = run_ui_pass_frame(&fresh_ctx, &mut reloaded, vec![]);
-    let reset_pos = find_text_center(&out, |text| text == "Reset (200%)");
-    run_ui_pass_frame(&fresh_ctx, &mut reloaded, click_events(reset_pos));
-    assert_eq!(reloaded.zoom, settings::DEFAULT_ZOOM);
-    assert_eq!(Settings::load_from_path(&path).zoom, settings::DEFAULT_ZOOM);
+    let reloaded_zoom_pos = find_text_center(&out, |text| {
+        text == format!("{:.0}%", (dragged_zoom * 100.0).round())
+    });
+    let _ = run_ui_pass_frame(
+        &fresh_ctx,
+        &mut reloaded,
+        vec![
+            egui::Event::PointerMoved(reloaded_zoom_pos),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let expected_wheel_zoom = ((dragged_zoom + 0.1) * 10.0).round() / 10.0;
+    assert_eq!(reloaded.zoom, expected_wheel_zoom);
+    assert_eq!(Settings::load_from_path(&path).zoom, expected_wheel_zoom);
 }
 
 #[test]
@@ -390,17 +389,14 @@ fn settings_cards_span_full_central_panel_width() {
         let _ = run_ui_pass_sized(&ctx, &mut app, size);
         let out = run_ui_pass_sized(&ctx, &mut app, size);
         let expected_width = width - 2.0 * theme::SPACE_LG;
+        assert!(!has_rendered_text(&out, "Canvas zoom"));
+        assert!(!has_rendered_text(&out, "Reset (200%)"));
         let cards = card_rects_for_section_titles(
             &out,
             tokens,
-            &[
-                "Canvas zoom",
-                "Appearance",
-                "App background",
-                "Startup focus",
-            ],
+            &["Appearance", "App background", "Startup focus"],
         );
-        assert!(cards[2].top() > cards[1].bottom());
+        assert!(cards[1].top() > cards[0].bottom());
         for rect in cards {
             assert!(
                 rect.width() >= expected_width - 24.0 && rect.width() <= expected_width + 0.5,
@@ -418,7 +414,14 @@ fn settings_cards_span_full_central_panel_width() {
 }
 
 #[test]
-fn settings_zoom_row_aligns_vertically_and_matches_handle_border_to_accent() {
+fn settings_opacity_slider_matches_handle_border_to_accent() {
+    let dir = tempfile::tempdir().unwrap();
+    let bg_png = dir.path().join("bg.png");
+    let img = image::RgbaImage::from_pixel(32, 32, image::Rgba([120, 120, 120, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .save_with_format(&bg_png, image::ImageFormat::Png)
+        .unwrap();
+
     for theme in [egui::Theme::Light, egui::Theme::Dark] {
         let dark_mode = theme == egui::Theme::Dark;
         let tokens = ThemeTokens::for_mode(dark_mode);
@@ -426,39 +429,14 @@ fn settings_zoom_row_aligns_vertically_and_matches_handle_border_to_accent() {
         ThemeTokens::apply_style(&ctx);
         ctx.set_theme(theme);
         let mut app = super::helpers::app();
+        app.set_background_image_from_path(&bg_png, &ctx);
+        app.background_accent_enabled = false;
         app.tab = 2;
 
         let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
         let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
 
-        let pct_pos = find_text_center(&out, |text| text == "200%");
-        let reset_pos = find_text_center(&out, |text| text == "Reset (200%)");
-        let control_rect = |pos: Pos2, label: &str| {
-            out.shapes
-                .iter()
-                .find_map(|clipped| match &clipped.shape {
-                    egui::Shape::Rect(rect_shape)
-                        if rect_shape.brush.is_none()
-                            && rect_shape.rect.contains(pos)
-                            && rect_shape.rect.height() <= 40.0 =>
-                    {
-                        Some(rect_shape.rect)
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("missing rect for {label} in {theme:?}"))
-        };
-        let pct_rect = control_rect(pct_pos, "200%");
-        let reset_rect = control_rect(reset_pos, "Reset (200%)");
-        assert!((pct_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
-        assert!((reset_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
-        assert!(
-            (pct_rect.center().y - reset_rect.center().y).abs() <= 0.5,
-            "DragValue center {} != Reset center {} in {theme:?}",
-            pct_rect.center().y,
-            reset_rect.center().y
-        );
-
+        let overlay_label_pos = find_text_center(&out, |text| text == "Overlay opacity");
         let rail_rect = out
             .shapes
             .iter()
@@ -467,19 +445,14 @@ fn settings_zoom_row_aligns_vertically_and_matches_handle_border_to_accent() {
                     if rect_shape.fill == tokens.border
                         && rect_shape.rect.width() >= 150.0
                         && rect_shape.rect.height() <= 12.0
-                        && (rect_shape.rect.center().y - pct_rect.center().y).abs() < 12.0 =>
+                        && (rect_shape.rect.center().y - overlay_label_pos.y).abs() < 12.0 =>
                 {
                     Some(rect_shape.rect)
                 }
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("missing zoom slider rail in {theme:?}"));
-        assert!(
-            (rail_rect.center().y - pct_rect.center().y).abs() <= 0.5,
-            "Slider rail center {} != DragValue center {} in {theme:?}",
-            rail_rect.center().y,
-            pct_rect.center().y
-        );
+            .unwrap_or_else(|| panic!("missing overlay opacity rail in {theme:?}"));
+        assert!((rail_rect.center().y - overlay_label_pos.y).abs() <= 2.0);
 
         let find_handle = |frame: &egui::FullOutput, label: &str| {
             frame
@@ -499,14 +472,12 @@ fn settings_zoom_row_aligns_vertically_and_matches_handle_border_to_accent() {
                     }
                     _ => None,
                 })
-                .unwrap_or_else(|| panic!("missing zoom slider handle ({label}) in {theme:?}"))
+                .unwrap_or_else(|| panic!("missing slider handle ({label}) in {theme:?}"))
         };
 
         let (idle_handle, idle_stroke) = find_handle(&out, "idle");
         assert_eq!(idle_stroke.color, tokens.accent);
-        assert!((idle_handle.center().y - pct_rect.center().y).abs() <= 0.5);
 
-        // Hovered handle preserves accent border color.
         let hovered_out = run_ui_pass_frame(
             &ctx,
             &mut app,
@@ -515,7 +486,6 @@ fn settings_zoom_row_aligns_vertically_and_matches_handle_border_to_accent() {
         let (_, hovered_stroke) = find_handle(&hovered_out, "hovered");
         assert_eq!(hovered_stroke.color, tokens.accent);
 
-        // Active/dragged handle preserves accent border color.
         let active_out = run_ui_pass_frame(
             &ctx,
             &mut app,

@@ -2,7 +2,7 @@
 
 use super::App;
 use crate::{
-    settings::{self, BackgroundMode, Settings, StartupFocus, ThemeMode, ZOOM_RANGE},
+    settings::{self, BackgroundMode, Settings, StartupFocus, ThemeMode},
     theme::{self, CanvasPalette, ThemeTokens},
     Event,
 };
@@ -305,73 +305,13 @@ impl App {
         (viewport, uv)
     }
 
-    /// Renders the Settings tab covering canvas zoom, appearance, app background, and startup focus.
+    /// Renders the Settings tab covering appearance, app background, startup focus, and shortcuts.
     pub(super) fn draw_settings_tab(&mut self, ui: &mut egui::Ui) {
         let tokens = self.theme_tokens(ui);
         self.draw_back_to_editor_button(ui);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                Self::full_width_card(ui, tokens, |ui| {
-                    ui.label(egui::RichText::new("Canvas zoom").strong());
-                    ui.add_space(theme::SPACE_XS);
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_size_before_wrap().x, theme::BUTTON_HEIGHT),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            let slider_changed = ui
-                                .scope(|ui| {
-                                    ui.spacing_mut().slider_width = 220.0;
-                                    let visuals = ui.visuals_mut();
-                                    let handle_stroke = Stroke::new(1.0, tokens.accent);
-                                    visuals.widgets.inactive.bg_fill = tokens.border;
-                                    visuals.widgets.inactive.fg_stroke = handle_stroke;
-                                    visuals.widgets.hovered.fg_stroke = handle_stroke;
-                                    visuals.widgets.active.fg_stroke = handle_stroke;
-                                    visuals.selection.bg_fill = tokens.accent;
-                                    ui.add(
-                                        egui::Slider::new(&mut self.zoom, ZOOM_RANGE)
-                                            .show_value(false)
-                                            .trailing_fill(true)
-                                            .handle_shape(egui::style::HandleShape::Rect {
-                                                aspect_ratio: 1.0,
-                                            }),
-                                    )
-                                    .changed()
-                                })
-                                .inner;
-                            let value_changed = ui
-                                .add(
-                                    egui::DragValue::new(&mut self.zoom)
-                                        .range(ZOOM_RANGE)
-                                        .speed(0.01)
-                                        .min_size(Vec2::new(60.0, theme::BUTTON_HEIGHT))
-                                        .custom_formatter(|value, _| {
-                                            format!("{:.0}%", value * 100.0)
-                                        })
-                                        .custom_parser(|text| {
-                                            text.trim()
-                                                .trim_end_matches('%')
-                                                .trim()
-                                                .parse::<f64>()
-                                                .ok()
-                                                .map(|pct| pct / 100.0)
-                                        }),
-                                )
-                                .changed();
-                            if slider_changed || value_changed {
-                                self.persisted.zoom = self.zoom;
-                                self.settings_dirty = true;
-                            }
-                            if Self::standard_button(ui, "Reset (200%)").clicked() {
-                                self.zoom = settings::DEFAULT_ZOOM;
-                                self.persisted.zoom = self.zoom;
-                                self.settings_dirty = true;
-                            }
-                        },
-                    );
-                });
-                ui.add_space(theme::SPACE_MD);
                 Self::full_width_card(ui, tokens, |ui| {
                     ui.label(egui::RichText::new("Appearance").strong());
                     ui.add_space(theme::SPACE_XS);

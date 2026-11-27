@@ -194,3 +194,10 @@ pub(super) fn card_rects_for_section_titles(
         })
         .collect()
 }
+
+pub(super) fn has_rendered_text(output: &egui::FullOutput, needle: &str) -> bool {
+    output.shapes.iter().any(|clipped| match &clipped.shape {
+        egui::Shape::Text(text_shape) => text_shape.galley.text().contains(needle),
+        _ => false,
+    })
+}
