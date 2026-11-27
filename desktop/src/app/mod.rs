@@ -35,6 +35,7 @@ mod keyboard;
 mod palette_ui;
 mod session;
 mod settings_ui;
+mod shortcuts_ui;
 
 use crate::EventSender as Sender;
 use crate::{
@@ -42,6 +43,7 @@ use crate::{
     instance::Instance,
     palette, runtime,
     settings::{self, BackgroundMode, Settings, StartupFocus},
+    shortcuts::{ShortcutChord, ShortcutConflict, ShortcutMap},
     theme::{self, ThemeTokens},
     update::UpdateState,
     Event, Rendered,
@@ -96,6 +98,24 @@ impl Default for MatrixDialog {
             fence: "parentheses",
         }
     }
+}
+
+/// Category filter applied to the customizable palette shortcuts table in Settings.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum ShortcutCategoryFilter {
+    #[default]
+    All,
+    AssignedOnly,
+    Group(&'static str),
+}
+
+/// Modal confirmation state when assigning a palette shortcut collides with an existing binding.
+#[derive(Clone)]
+pub(super) struct ShortcutConflictDialog {
+    pub(super) target_source: &'static str,
+    pub(super) attempted_chord: ShortcutChord,
+    pub(super) target_previous: Option<ShortcutChord>,
+    pub(super) conflict: ShortcutConflict,
 }
 
 /// Pending window or session transition waiting on unsaved changes or active batch work.
@@ -318,6 +338,18 @@ pub struct App {
     pub(super) active_editor_focus: StartupFocus,
     /// One-shot focus restoration request consumed on the next editor frame.
     pub(super) pending_focus_restore: Option<StartupFocus>,
+    /// Resolved bidirectional table of customizable palette shortcuts.
+    pub(super) shortcuts: ShortcutMap,
+    /// Canonical `PALETTE` source currently recording a new shortcut in Settings, if any.
+    pub(super) shortcut_capture: Option<&'static str>,
+    /// Inline validation hint shown when an invalid key is pressed during shortcut capture.
+    pub(super) shortcut_capture_error: Option<String>,
+    /// Search query filtering the customizable palette shortcuts list in Settings.
+    pub(super) shortcut_search: String,
+    /// Active category/assignment filter for the customizable palette shortcuts list.
+    pub(super) shortcut_filter: ShortcutCategoryFilter,
+    /// Open shortcut conflict-resolution modal state, if any.
+    pub(super) shortcut_conflict: Option<ShortcutConflictDialog>,
 }
 
 impl App {
@@ -547,6 +579,12 @@ impl App {
             active_editor_focus: StartupFocus::Canvas,
             pending_focus_restore: Some(StartupFocus::Canvas),
             caret_blink: None,
+            shortcuts: ShortcutMap::default_map(),
+            shortcut_capture: None,
+            shortcut_capture_error: None,
+            shortcut_search: String::new(),
+            shortcut_filter: ShortcutCategoryFilter::default(),
+            shortcut_conflict: None,
         }
     }
 
@@ -555,7 +593,16 @@ impl App {
         let ctx = ui.ctx().clone();
         self.enforce_window_minimum_if_needed(&ctx);
         self.process_events(&ctx);
-        let save_requested = Self::take_save_shortcut(&ctx);
+        if self.tab != 2 || self.pending.is_some() || self.busy {
+            self.shortcut_capture = None;
+            self.shortcut_capture_error = None;
+        }
+        let save_requested = if self.shortcut_capture.is_some() || self.shortcut_conflict.is_some()
+        {
+            false
+        } else {
+            Self::take_save_shortcut(&ctx)
+        };
         if ctx.input(|input| input.viewport().close_requested()) && !self.allow_close {
             if !self.is_dirty()
                 && self.session.is_none()
@@ -576,6 +623,7 @@ impl App {
             self.finish_session(true);
         }
         self.draw_matrix_dialog(&ctx);
+        self.draw_shortcut_conflict_dialog(&ctx);
         self.sync_render(&ctx);
         self.draw_dialogs(&ctx);
         self.request_latex_parse(&ctx);
@@ -594,6 +642,7 @@ impl App {
             && !self.busy
             && self.pending.is_none()
             && self.matrix_dialog.is_none()
+            && self.shortcut_conflict.is_none()
             && ui.is_enabled()
             && ui.memory(|mem| mem.has_focus(egui::Id::unique("equation-canvas")))
             && !ui.input(|input| {
@@ -631,7 +680,10 @@ impl App {
                     .show_separator_line(false)
                     .show(ui, |ui| {
                         ui.add_enabled_ui(
-                            !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
+                            !self.busy
+                                && self.pending.is_none()
+                                && self.matrix_dialog.is_none()
+                                && self.shortcut_conflict.is_none(),
                             |ui| self.draw_sidebar(ui),
                         );
                     })
@@ -667,7 +719,10 @@ impl App {
             )
             .show(ui, |ui| {
                 ui.add_enabled_ui(
-                    !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
+                    !self.busy
+                        && self.pending.is_none()
+                        && self.matrix_dialog.is_none()
+                        && self.shortcut_conflict.is_none(),
                     |ui| match self.tab {
                         0 => self.draw_editor(ui),
                         1 => self.draw_batch_tab(ui),
@@ -796,7 +851,10 @@ impl App {
     pub(super) fn draw_footer(&mut self, ui: &mut egui::Ui) {
         let tokens = self.theme_tokens(ui);
         ui.add_enabled_ui(
-            !self.busy && self.pending.is_none() && self.matrix_dialog.is_none(),
+            !self.busy
+                && self.pending.is_none()
+                && self.matrix_dialog.is_none()
+                && self.shortcut_conflict.is_none(),
             |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = theme::SPACE_MD;

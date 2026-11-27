@@ -34,9 +34,9 @@ fn fixed_layout_keeps_save_and_source_visible_across_sizes_and_themes() {
                     );
                     output.textures_delta.clear();
                     let label = if office {
-                        "Save & Return to Document (Ctrl+S)"
+                        "Save & Return to Document"
                     } else {
-                        "Save MathML (Ctrl+S)"
+                        "Save MathML"
                     };
                     for text in [label, "source-marker", "MathType", "OMML", "Font size"] {
                         let shape = output
@@ -1008,7 +1008,7 @@ fn modern_theme_applies_zero_hover_expansion_radii_and_tinted_sidebar_selection(
                     && rect_shape.fill == tokens.selected_fg)));
 
         // Primary Save button uses primary_bg at rest, primary_hover_bg on hover without growing, and disabled fill when disabled.
-        let save_pos = find_text_center(&out, |text| text == "Save MathML (Ctrl+S)");
+        let save_pos = find_text_center(&out, |text| text == "Save MathML");
         let save_rest = out
             .shapes
             .iter()
@@ -1311,7 +1311,7 @@ fn button_height_tiers_align_footer_tabs_and_compact_controls() {
     };
 
     // Footer standard buttons and DragValue share BUTTON_HEIGHT (30px).
-    let save_rect = button_rect_around("Save MathML (Ctrl+S)");
+    let save_rect = button_rect_around("Save MathML");
     let undo_rect = icon_button_rect("arrow-back-up");
     let redo_rect = icon_button_rect("arrow-forward-up");
     assert!((save_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
@@ -1416,7 +1416,7 @@ fn multiline_latex_scrolls_within_bounds_without_canvas_overlap() {
     assert_eq!(latex_multi, latex_single);
     assert!(canvas_multi.bottom() + CONTENT_PADDING as f32 <= latex_multi.top() + 1.0);
 
-    let save_center = find_text_center(&out, |text| text == "Save MathML (Ctrl+S)");
+    let save_center = find_text_center(&out, |text| text == "Save MathML");
     assert!(latex_multi.bottom() < save_center.y);
 
     // Rendered LaTeX lines stay clipped inside the bounded ScrollArea, never leaking out.
@@ -1963,7 +1963,7 @@ fn adaptive_background_accent_propagates_to_controls_and_global_style() {
         );
         assert_eq!(style.visuals.selection.bg_fill, adaptive_tokens.selected_bg);
 
-        let save_pos = find_text_center(&out, |text| text == "Save MathML (Ctrl+S)");
+        let save_pos = find_text_center(&out, |text| text == "Save MathML");
         assert!(out.shapes.iter().any(|clipped| matches!(
             &clipped.shape,
             egui::Shape::Rect(rect_shape)

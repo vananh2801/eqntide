@@ -81,52 +81,35 @@ impl App {
                     ..
                 } => {
                     use egui::Key;
-                    if modifiers.command {
-                        match key {
-                            Key::Z => {
-                                if modifiers.shift {
-                                    self.editor.redo()
-                                } else {
-                                    self.editor.undo()
-                                }
-                            }
-                            Key::Y => self.editor.redo(),
-                            Key::A => self.editor.select_all(),
-                            Key::F => self.insert_template("\\frac{#?}{#?}"),
-                            Key::R => self.insert_template(if modifiers.shift {
-                                "\\sqrt[#?]{#?}"
-                            } else {
-                                "\\sqrt{#?}"
-                            }),
-                            Key::H => self.insert_template("^{#?}"),
-                            Key::L => self.insert_template(if modifiers.shift {
-                                "\\lim_{#? \\to #?}"
-                            } else {
-                                "_{#?}"
-                            }),
-                            Key::J => self.insert_template("_{#?}^{#?}"),
-                            Key::I => self.insert_template(if modifiers.shift {
-                                "\\int_{#?}^{#?} #? \\, d#?"
-                            } else {
-                                "\\int #? \\, d#?"
-                            }),
-                            Key::S if modifiers.shift => self.insert_template("\\sum_{#?}^{#?} #?"),
-                            Key::P if modifiers.shift => {
-                                self.insert_template("\\prod_{#?}^{#?} #?")
-                            }
-                            Key::M if modifiers.shift => self.insert_template(
-                                "\\begin{pmatrix} #? & #? \\\\ #? & #? \\end{pmatrix}",
-                            ),
-                            Key::C if modifiers.shift => self.insert_template(
-                                "\\begin{cases} #? & #? \\\\ #? & #? \\end{cases}",
-                            ),
-                            Key::Num9 => self.insert_template("\\left( #? \\right)"),
-                            Key::OpenBracket | Key::CloseBracket => {
-                                self.insert_template("\\left[ #? \\right]")
-                            }
-                            _ => {}
+                    if modifiers.command && !modifiers.alt && key == Key::Z {
+                        if modifiers.shift {
+                            self.editor.redo();
+                        } else {
+                            self.editor.undo();
                         }
-                    } else if self.ime.is_empty() {
+                    } else if modifiers.command
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == Key::Y
+                    {
+                        self.editor.redo();
+                    } else if modifiers.command
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == Key::A
+                    {
+                        self.editor.select_all();
+                    } else if let Some(source) =
+                        crate::shortcuts::ShortcutChord::from_egui_event(key, modifiers)
+                            .filter(|chord| chord.is_valid_palette_chord())
+                            .and_then(|chord| self.shortcuts.source_for(chord))
+                    {
+                        self.command_input = None;
+                        self.latex_groups.clear();
+                        self.expects_latex_group = false;
+                        self.record_recent_palette(source);
+                        self.insert_template(source);
+                    } else if !modifiers.command && self.ime.is_empty() {
                         match key {
                             Key::ArrowLeft => self.editor.move_caret(Move::Left, modifiers.shift),
                             Key::ArrowRight => self.editor.move_caret(Move::Right, modifiers.shift),

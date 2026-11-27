@@ -9,6 +9,7 @@ mod instance;
 mod palette;
 mod runtime;
 mod settings;
+mod shortcuts;
 mod software_painter;
 mod theme;
 mod update;

@@ -5,7 +5,7 @@
 //! safely to defaults. User-selected background images are downscaled and re-encoded as managed
 //! PNG files beside `settings.json` via temporary files so crashes never corrupt stored assets.
 
-use crate::{batch, palette, theme};
+use crate::{batch, palette, shortcuts, theme};
 use directories::ProjectDirs;
 use eframe::egui;
 use image::{
@@ -15,6 +15,7 @@ use image::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     io::Write,
     path::{Component, Path, PathBuf},
 };
@@ -158,6 +159,9 @@ pub(crate) struct Settings {
     pub(crate) target: String,
     pub(crate) category: String,
     pub(crate) recent_palette: Vec<String>,
+    /// Sparse overrides for customizable palette keyboard shortcuts (`source -> Some(chord) | None`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) palette_shortcuts: BTreeMap<String, Option<String>>,
     pub(crate) batch_target: usize,
     pub(crate) batch_overwrite: bool,
 }
@@ -178,6 +182,7 @@ impl Default for Settings {
             target: DEFAULT_TARGET.into(),
             category: palette::DEFAULT_GROUP.into(),
             recent_palette: Vec::new(),
+            palette_shortcuts: BTreeMap::new(),
             batch_target: 0,
             batch_overwrite: false,
         }
@@ -203,6 +208,8 @@ impl<'de> Deserialize<'de> for Settings {
             target: String,
             category: String,
             recent_palette: Vec<String>,
+            #[serde(deserialize_with = "deserialize_palette_shortcuts")]
+            palette_shortcuts: BTreeMap<String, Option<String>>,
             batch_target: usize,
             batch_overwrite: bool,
         }
@@ -224,6 +231,7 @@ impl<'de> Deserialize<'de> for Settings {
                     target: defaults.target,
                     category: defaults.category,
                     recent_palette: defaults.recent_palette,
+                    palette_shortcuts: defaults.palette_shortcuts,
                     batch_target: defaults.batch_target,
                     batch_overwrite: defaults.batch_overwrite,
                 }
@@ -260,6 +268,7 @@ impl<'de> Deserialize<'de> for Settings {
             target: raw.target,
             category: raw.category,
             recent_palette: raw.recent_palette,
+            palette_shortcuts: raw.palette_shortcuts,
             batch_target: raw.batch_target,
             batch_overwrite: raw.batch_overwrite,
         })
@@ -312,6 +321,8 @@ impl Settings {
             }
         }
         self.recent_palette = deduped.into_iter().map(str::to_owned).collect();
+
+        self.palette_shortcuts = shortcuts::sanitize_overrides(&self.palette_shortcuts);
 
         let valid_category = palette::ui_group(&self.category).is_some()
             && (self.category != palette::RECENT_GROUP || !self.recent_palette.is_empty());
@@ -674,6 +685,15 @@ where
     })
 }
 
+fn deserialize_palette_shortcuts<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<BTreeMap<String, Option<String>>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 fn config_parent_dir(settings_path: &Path) -> &Path {
     settings_path
         .parent()
@@ -713,6 +733,15 @@ mod tests {
 
     #[test]
     fn sanitize_clamps_values_deduplicates_recent_and_falls_back_safely() {
+        let mut palette_shortcuts = BTreeMap::new();
+        palette_shortcuts.insert(r"\frac{#?}{#?}".into(), Some("Ctrl+Shift+F".into()));
+        palette_shortcuts.insert(r"\vec{#?}".into(), Some("Ctrl+Alt+V".into()));
+        palette_shortcuts.insert(r"\not_in_palette".into(), Some("Ctrl+K".into()));
+        palette_shortcuts.insert(r"\binom{#?}{#?}".into(), Some("S".into()));
+        palette_shortcuts.insert(r"\alpha".into(), Some("Ctrl+S".into()));
+        palette_shortcuts.insert(r"\beta".into(), Some("Ctrl+Alt+V".into()));
+        palette_shortcuts.insert(r"\gamma".into(), None);
+
         let raw = Settings {
             zoom: 10.0,
             theme: ThemeMode::Dark,
@@ -732,6 +761,7 @@ mod tests {
                 r"\alpha".into(),
                 r"\frac{#?}{#?}".into(),
             ],
+            palette_shortcuts,
             batch_target: 99,
             batch_overwrite: true,
         }
@@ -751,6 +781,13 @@ mod tests {
         assert_eq!(
             raw.recent_palette,
             vec![r"\alpha".to_string(), r"\frac{#?}{#?}".to_string()]
+        );
+        assert_eq!(
+            raw.palette_shortcuts,
+            BTreeMap::from([
+                (r"\frac{#?}{#?}".to_owned(), Some("Ctrl+Shift+F".to_owned())),
+                (r"\beta".to_owned(), Some("Ctrl+Alt+V".to_owned())),
+            ])
         );
         assert_eq!(raw.batch_target, 0);
         assert!(raw.batch_overwrite);
@@ -865,6 +902,10 @@ mod tests {
             target: "mathtype".into(),
             category: palette::RECENT_GROUP.into(),
             recent_palette: vec![r"\frac{#?}{#?}".into(), r"\alpha".into()],
+            palette_shortcuts: BTreeMap::from([
+                (r"\frac{#?}{#?}".into(), None),
+                (r"\vec{#?}".into(), Some("Ctrl+Alt+V".into())),
+            ]),
             batch_target: 2,
             batch_overwrite: true,
         };
@@ -879,6 +920,46 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(entries, vec!["settings.json"]);
+    }
+
+    #[test]
+    fn palette_shortcuts_persist_explicit_null_and_sanitize_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "palette_shortcuts": {
+                    "\\frac{#?}{#?}": null,
+                    "\\sqrt{#?}": "Ctrl+F",
+                    "\\unknown": "Ctrl+Q",
+                    "\\vec{#?}": "F4",
+                    "\\binom{#?}{#?}": "f4",
+                    "\\alpha": "Ctrl+Z",
+                    "\\beta": "K"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = Settings::load_from_path(&path);
+        let map = shortcuts::ShortcutMap::from_overrides(&loaded.palette_shortcuts);
+        // Explicit null keeps \frac{#?}{#?} unassigned across restarts.
+        assert_eq!(map.binding_for(r"\frac{#?}{#?}"), None);
+        // \sqrt{#?} took Ctrl+F cleanly after \frac{#?}{#?} was cleared.
+        assert_eq!(
+            map.binding_for(r"\sqrt{#?}"),
+            shortcuts::ShortcutChord::parse("Ctrl+F")
+        );
+        // One of \binom or \vec wins F4 (BTreeMap visits \binom first); the duplicate drops.
+        assert_eq!(
+            map.source_for(shortcuts::ShortcutChord::parse("F4").unwrap()),
+            Some(r"\binom{#?}{#?}")
+        );
+        assert_eq!(map.binding_for(r"\vec{#?}"), None);
+        // System-reserved and bare keys are rejected.
+        assert_eq!(map.binding_for(r"\alpha"), None);
+        assert_eq!(map.binding_for(r"\beta"), None);
     }
 
     #[test]
@@ -902,6 +983,7 @@ mod tests {
         assert!((loaded.background_opacity - 0.42).abs() < 1e-6);
         assert_eq!(loaded.canvas_opacity, 1.0);
         assert_eq!(loaded.startup_focus, StartupFocus::Canvas);
+        assert!(loaded.palette_shortcuts.is_empty());
     }
 
     #[test]

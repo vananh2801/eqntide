@@ -77,7 +77,11 @@ impl App {
         self.sync_render(ui.ctx());
         // Keep the preview legible while editing an invalid/pending LaTeX draft,
         // but dim uniformly when disabled by a modal or blocking operation.
-        if self.busy || self.pending.is_some() || self.matrix_dialog.is_some() {
+        if self.busy
+            || self.pending.is_some()
+            || self.matrix_dialog.is_some()
+            || self.shortcut_conflict.is_some()
+        {
             ui.set_opacity(ui.visuals().disabled_alpha());
         } else {
             ui.set_opacity(1.0);

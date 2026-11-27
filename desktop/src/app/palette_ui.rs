@@ -59,6 +59,7 @@ impl App {
                             {
                                 let atlas = self.palette_atlas.as_ref();
                                 for (index, (_, label, source)) in items.iter().enumerate() {
+                                    let shortcut = self.shortcuts.binding_for(source);
                                     let response = if let Some((atlas, entry)) =
                                         atlas.and_then(|cached| {
                                             cached.entries.get(source).map(|entry| (cached, entry))
@@ -82,7 +83,11 @@ impl App {
                                     });
                                     if response
                                         .on_hover_ui(|ui| {
-                                            ui.label(*label);
+                                            if let Some(chord) = shortcut {
+                                                ui.label(format!("{} ({chord})", *label));
+                                            } else {
+                                                ui.label(*label);
+                                            }
                                             ui.weak(*source);
                                         })
                                         .clicked()

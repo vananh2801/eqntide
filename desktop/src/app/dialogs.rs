@@ -1,7 +1,10 @@
 //! Desktop matrix configuration and session confirmation dialogs.
 
 use super::{App, MatrixDialog};
-use crate::theme::{self, ThemeTokens};
+use crate::{
+    shortcuts::{self, ShortcutConflict},
+    theme::{self, ThemeTokens},
+};
 use eframe::egui::{self, Vec2};
 use std::sync::atomic::Ordering;
 
@@ -9,6 +12,7 @@ const MODAL_INNER_MARGIN: i8 = 20;
 const MODAL_BUTTON_PADDING: Vec2 = Vec2::new(14.0, 6.0);
 const MATRIX_MIN_INNER_WIDTH: f32 = 260.0;
 const MATRIX_COMBO_WIDTH: f32 = 156.0;
+const CONFLICT_MIN_INNER_WIDTH: f32 = 340.0;
 
 impl App {
     /// Inserts a custom matrix template into the editor and marks the canvas dirty.
@@ -180,6 +184,177 @@ impl App {
         }
     }
 
+    /// Renders the modal dialog for resolving a shortcut collision with a system or palette binding.
+    pub(super) fn draw_shortcut_conflict_dialog(&mut self, ctx: &egui::Context) {
+        let modal_id = egui::Id::unique("shortcut-conflict-dialog");
+        let Some(dialog) = self.shortcut_conflict.take() else {
+            clear_modal_focus_state(ctx, modal_id);
+            return;
+        };
+        if self.pending.is_some() || self.tab != 2 {
+            clear_modal_focus_state(ctx, modal_id);
+            return;
+        }
+
+        let previous_state = read_modal_focus_state(ctx, modal_id);
+        if handle_modal_escape(ctx, previous_state.as_ref(), true) {
+            clear_modal_focus_state(ctx, modal_id);
+            ctx.request_repaint();
+            return;
+        }
+        apply_modal_focus_navigation(ctx, previous_state.as_ref());
+
+        let tokens = ThemeTokens::for_mode_with_background_and_accent(
+            ctx.theme() == egui::Theme::Dark,
+            self.is_image_background_active(),
+            self.background_opacity,
+            self.active_accent_seed(),
+        );
+        let frame = modal_frame(&ctx.style_of(ctx.theme()));
+        let default_outer_width = CONFLICT_MIN_INNER_WIDTH + f32::from(MODAL_INNER_MARGIN) * 2.0;
+        let mut chosen_action = None;
+        let mut tab_ids = Vec::new();
+        let mut button_ids = Vec::new();
+        let mut default_id = None;
+
+        let response = egui::Modal::new(modal_id)
+            .frame(frame)
+            .area(egui::Modal::default_area(modal_id).default_width(default_outer_width))
+            .show(ctx, |ui| {
+                ui.set_min_width(CONFLICT_MIN_INNER_WIDTH);
+                ui.set_max_width(420.0);
+                let heading = match dialog.conflict {
+                    ShortcutConflict::System(_) => "Shortcut reserved",
+                    ShortcutConflict::Palette(_) => "Shortcut already in use",
+                };
+                ui.vertical_centered(|ui| {
+                    ui.heading(heading);
+                });
+                ui.add_space(theme::SPACE_MD);
+
+                let target_label = shortcuts::palette_label(dialog.target_source);
+                match dialog.conflict {
+                    ShortcutConflict::System(system_action) => {
+                        ui.label(format!(
+                            "{} is reserved for system command \"{}\".",
+                            dialog.attempted_chord, system_action
+                        ));
+                    }
+                    ShortcutConflict::Palette(existing_source) => {
+                        let existing_label = shortcuts::palette_label(existing_source);
+                        ui.label(format!(
+                            "{} is already assigned to {} ({}).",
+                            dialog.attempted_chord, existing_label, existing_source
+                        ));
+                        if let Some(previous_chord) = dialog.target_previous {
+                            ui.add_space(theme::SPACE_XS);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Replace clears {} from {}. Swap moves {} from {} to {}.",
+                                    existing_label,
+                                    dialog.attempted_chord,
+                                    previous_chord,
+                                    target_label,
+                                    existing_label
+                                ))
+                                .small()
+                                .color(tokens.text_muted),
+                            );
+                        }
+                    }
+                }
+
+                ui.add_space(theme::SPACE_LG);
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), theme::BUTTON_HEIGHT),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        ui.spacing_mut().button_padding = MODAL_BUTTON_PADDING;
+                        match dialog.conflict {
+                            ShortcutConflict::System(_) => {
+                                let cancel_resp =
+                                    Self::primary_button_with(ui, tokens, true, |ui| {
+                                        ui.add(
+                                            egui::Button::new("Cancel")
+                                                .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+                                        )
+                                    });
+                                let cancel_id = cancel_resp.id;
+                                tab_ids.push(cancel_id);
+                                button_ids.push(cancel_id);
+                                default_id = Some(cancel_id);
+                                if cancel_resp.clicked() {
+                                    chosen_action = Some(ConflictAction::Cancel);
+                                }
+                            }
+                            ShortcutConflict::Palette(existing_source) => {
+                                let cancel_resp = Self::standard_button(ui, "Cancel");
+                                let replace_resp =
+                                    Self::primary_button_with(ui, tokens, true, |ui| {
+                                        ui.add(
+                                            egui::Button::new("Replace")
+                                                .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
+                                        )
+                                    });
+                                let swap_id = if dialog.target_previous.is_some() {
+                                    let swap_resp = Self::standard_button(ui, "Swap");
+                                    if swap_resp.clicked() {
+                                        chosen_action = Some(ConflictAction::Swap(existing_source));
+                                    }
+                                    Some(swap_resp.id)
+                                } else {
+                                    None
+                                };
+                                if replace_resp.clicked() {
+                                    chosen_action = Some(ConflictAction::Replace);
+                                } else if cancel_resp.clicked() {
+                                    chosen_action = Some(ConflictAction::Cancel);
+                                }
+                                if let Some(id) = swap_id {
+                                    tab_ids.push(id);
+                                    button_ids.push(id);
+                                }
+                                tab_ids.extend([replace_resp.id, cancel_resp.id]);
+                                button_ids.extend([replace_resp.id, cancel_resp.id]);
+                                default_id = Some(replace_resp.id);
+                            }
+                        }
+                    },
+                );
+            });
+
+        match chosen_action {
+            Some(ConflictAction::Cancel) => {
+                clear_modal_focus_state(ctx, modal_id);
+                ctx.request_repaint();
+            }
+            Some(ConflictAction::Replace) => {
+                self.shortcuts
+                    .replace_binding(dialog.target_source, dialog.attempted_chord);
+                self.sync_shortcut_overrides();
+                clear_modal_focus_state(ctx, modal_id);
+                ctx.request_repaint();
+            }
+            Some(ConflictAction::Swap(existing_source)) => {
+                self.shortcuts
+                    .swap_bindings(dialog.target_source, existing_source);
+                self.sync_shortcut_overrides();
+                clear_modal_focus_state(ctx, modal_id);
+                ctx.request_repaint();
+            }
+            None => {
+                let next_state = ModalFocusState {
+                    layer_id: Some(response.response.layer_id),
+                    tab_ids,
+                    button_ids,
+                    default_id,
+                };
+                store_modal_focus_state(ctx, modal_id, previous_state.is_none(), next_state);
+                self.shortcut_conflict = Some(dialog);
+            }
+        }
+    }
+
     /// Renders unsaved-changes / active-batch confirmation modals or auto-cancels untouched sessions.
     pub(super) fn draw_dialogs(&mut self, ctx: &egui::Context) {
         let modal_id = egui::Id::unique("finish-equation-dialog");
@@ -295,6 +470,13 @@ impl App {
             store_modal_focus_state(ctx, modal_id, previous_state.is_none(), next_state);
         }
     }
+}
+
+/// User-selected outcome from the `Shortcut conflict` modal.
+enum ConflictAction {
+    Cancel,
+    Replace,
+    Swap(&'static str),
 }
 
 /// User-selected outcome from the `Finish current equation` confirmation modal.

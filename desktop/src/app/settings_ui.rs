@@ -94,6 +94,10 @@ impl App {
         self.startup_focus = settings.startup_focus;
         self.active_editor_focus = settings.startup_focus;
         self.pending_focus_restore = Some(settings.startup_focus);
+        self.shortcuts = crate::shortcuts::ShortcutMap::from_overrides(&settings.palette_shortcuts);
+        self.shortcut_capture = None;
+        self.shortcut_capture_error = None;
+        self.shortcut_conflict = None;
         self.persisted = settings;
         self.settings_dirty = false;
         if let Some(ctx) = egui_ctx {
@@ -420,6 +424,8 @@ impl App {
                         }
                     });
                 });
+                ui.add_space(theme::SPACE_MD);
+                self.draw_keyboard_shortcuts_card(ui, tokens);
             });
     }
 

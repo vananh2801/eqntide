@@ -288,13 +288,20 @@ impl App {
 
     /// Renders the Save action button in the footer and records clicks for post-widget handling.
     pub(super) fn draw_save_button(&mut self, ui: &mut egui::Ui) {
-        let label = if self.session.is_some() {
-            "Save & Return to Document (Ctrl+S)"
+        let (label, tooltip) = if self.session.is_some() {
+            (
+                "Save & Return to Document",
+                "Save & Return to Document (Ctrl+S)",
+            )
         } else {
-            "Save MathML (Ctrl+S)"
+            ("Save MathML", "Save MathML (Ctrl+S)")
         };
         let enabled = self.can_save() && !self.draft_dirty && self.command_input.is_none();
-        if self.primary_button(ui, enabled, label).clicked() {
+        if self
+            .primary_button(ui, enabled, label)
+            .on_hover_text(tooltip)
+            .clicked()
+        {
             self.save_clicked = true;
         }
     }
@@ -306,6 +313,7 @@ impl App {
             && self.pending.is_none()
             && !self.allow_close
             && self.matrix_dialog.is_none()
+            && self.shortcut_conflict.is_none()
     }
 
     /// Extracts `Ctrl/Cmd+S` before child widgets see it so saving runs after frame edits settle.
