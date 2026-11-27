@@ -246,12 +246,12 @@ impl App {
             if enabled {
                 widgets.inactive.bg_fill = tokens.primary_bg;
                 widgets.inactive.weak_bg_fill = tokens.primary_bg;
-                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.primary_bg);
+                widgets.inactive.bg_stroke = Stroke::NONE;
                 widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.primary_fg);
 
                 widgets.hovered.bg_fill = tokens.primary_hover_bg;
                 widgets.hovered.weak_bg_fill = tokens.primary_hover_bg;
-                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.primary_hover_bg);
+                widgets.hovered.bg_stroke = Stroke::NONE;
                 widgets.hovered.fg_stroke = Stroke::new(1.0, tokens.primary_fg);
 
                 let focus_border = if tokens.dark_mode {
@@ -266,11 +266,11 @@ impl App {
             } else {
                 widgets.noninteractive.bg_fill = tokens.control_bg;
                 widgets.noninteractive.weak_bg_fill = tokens.control_bg;
-                widgets.noninteractive.bg_stroke = Stroke::new(1.0, tokens.border);
+                widgets.noninteractive.bg_stroke = Stroke::NONE;
                 widgets.noninteractive.fg_stroke = Stroke::new(1.0, tokens.text_primary);
                 widgets.inactive.bg_fill = tokens.control_bg;
                 widgets.inactive.weak_bg_fill = tokens.control_bg;
-                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
+                widgets.inactive.bg_stroke = Stroke::NONE;
                 widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text_primary);
             }
             ui.add_enabled_ui(enabled, add_button).inner
@@ -357,17 +357,17 @@ impl App {
                 let widgets = &mut visuals.widgets;
                 widgets.inactive.bg_fill = tokens.selected_bg;
                 widgets.inactive.weak_bg_fill = tokens.selected_bg;
-                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.inactive.bg_stroke = Stroke::NONE;
                 widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.selected_fg);
 
                 widgets.hovered.bg_fill = tokens.selected_hover_bg;
                 widgets.hovered.weak_bg_fill = tokens.selected_hover_bg;
-                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.hovered.bg_stroke = Stroke::NONE;
                 widgets.hovered.fg_stroke = Stroke::new(1.0, tokens.selected_fg);
 
                 widgets.active.bg_fill = tokens.selected_hover_bg;
                 widgets.active.weak_bg_fill = tokens.selected_hover_bg;
-                widgets.active.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.active.bg_stroke = Stroke::NONE;
                 widgets.active.fg_stroke = Stroke::new(1.0, tokens.selected_fg);
             }
             add_contents(ui)
@@ -424,6 +424,11 @@ impl App {
                 widgets.active.bg_fill = tokens.selected_hover_bg;
                 widgets.active.bg_stroke = Stroke::new(1.0, tokens.selected_border);
                 widgets.active.fg_stroke = Stroke::new(1.5, tokens.selected_fg);
+            } else {
+                let widgets = &mut ui.visuals_mut().widgets;
+                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
+                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.border_hover);
+                widgets.active.bg_stroke = Stroke::new(1.0, tokens.accent);
             }
             let checkbox = if label.is_empty() {
                 egui::Checkbox::without_text(checked)
@@ -473,6 +478,16 @@ impl App {
                     widget_visuals.bg_stroke = Stroke::new(1.0, border_color);
                     widget_visuals.fg_stroke = Stroke::new(1.0, border_color);
                 }
+            } else if selected {
+                let widgets = &mut ui.visuals_mut().widgets;
+                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+                widgets.active.bg_stroke = Stroke::new(1.0, tokens.selected_border);
+            } else {
+                let widgets = &mut ui.visuals_mut().widgets;
+                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
+                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.border_hover);
+                widgets.active.bg_stroke = Stroke::new(1.0, tokens.accent);
             }
             ui.radio_value(current_value, alternative, caption)
         })

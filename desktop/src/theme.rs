@@ -71,14 +71,14 @@ impl ThemeTokens {
         let mut tokens = if dark_mode {
             Self {
                 dark_mode: true,
-                app_bg: AYU_DARK_TEXT_INK,
-                panel_bg: Color32::from_rgb(31, 33, 39),
-                card_bg: Color32::from_rgb(37, 40, 48),
+                app_bg: Color32::from_rgb(21, 24, 32),
+                panel_bg: Color32::from_rgb(29, 32, 40),
+                card_bg: Color32::from_rgb(36, 40, 50),
                 extreme_bg: Color32::from_rgb(9, 12, 16),
-                control_bg: Color32::from_rgb(37, 40, 48),
-                control_hover_bg: Color32::from_rgb(45, 47, 52),
-                control_active_bg: Color32::from_rgb(62, 64, 67),
-                control_disabled_bg: Color32::from_rgb(27, 29, 34),
+                control_bg: Color32::from_rgb(47, 52, 64),
+                control_hover_bg: Color32::from_rgb(59, 65, 80),
+                control_active_bg: Color32::from_rgb(71, 78, 96),
+                control_disabled_bg: Color32::from_rgb(25, 28, 36),
                 border: Color32::from_rgb(63, 64, 67),
                 border_hover: Color32::from_rgb(92, 95, 102),
                 text_primary: Color32::from_rgb(220, 218, 210),
@@ -98,14 +98,14 @@ impl ThemeTokens {
         } else {
             Self {
                 dark_mode: false,
-                app_bg: Color32::from_rgb(228, 230, 232),
-                panel_bg: Color32::from_rgb(236, 236, 237),
-                card_bg: Color32::from_rgb(252, 252, 252),
+                app_bg: Color32::from_rgb(226, 228, 231),
+                panel_bg: Color32::from_rgb(235, 236, 238),
+                card_bg: Color32::from_rgb(244, 245, 247),
                 extreme_bg: Color32::WHITE,
-                control_bg: Color32::from_rgb(252, 252, 252),
-                control_hover_bg: Color32::from_rgb(223, 224, 225),
-                control_active_bg: Color32::from_rgb(207, 208, 210),
-                control_disabled_bg: Color32::from_rgb(229, 230, 231),
+                control_bg: Color32::WHITE,
+                control_hover_bg: Color32::from_rgb(216, 219, 224),
+                control_active_bg: Color32::from_rgb(200, 204, 211),
+                control_disabled_bg: Color32::from_rgb(231, 233, 236),
                 border: Color32::from_rgb(207, 209, 210),
                 border_hover: Color32::from_rgb(154, 158, 162),
                 text_primary: Color32::from_rgb(46, 50, 56),
@@ -197,21 +197,21 @@ impl ThemeTokens {
         blend_rgb(self.accent, base_card, 0.58)
     }
 
-    /// Return a subtly accent-tinted hover border for interactive chrome without altering neutral tree lines.
-    pub(crate) fn control_hover_border(self) -> Color32 {
-        blend_rgb(
-            self.border_hover,
-            self.accent,
-            if self.dark_mode { 0.28 } else { 0.24 },
-        )
+    /// Build a `StyleModifier` for `ComboBox` popups so dropdown menus contrast cleanly against cards.
+    pub(crate) fn combo_popup_style(self) -> egui::style::StyleModifier {
+        let popup_fill = self.control_bg;
+        egui::style::StyleModifier::new(move |style| {
+            egui::containers::menu::menu_style(style);
+            style.visuals.window_fill = popup_fill;
+        })
     }
 
-    /// Build a card-styled `egui::Frame` using surface corners and inner spacing.
+    /// Build a borderless card-styled `egui::Frame` using surface corners and inner spacing.
     pub(crate) fn group_frame(self) -> egui::Frame {
         egui::Frame::new()
             .fill(self.card_bg)
             .corner_radius(SURFACE_CORNER_RADIUS)
-            .stroke(Stroke::new(1.0, self.border))
+            .stroke(Stroke::NONE)
             .inner_margin(SPACE_LG)
     }
 
@@ -238,12 +238,12 @@ impl ThemeTokens {
             egui_ctx.style_mut_of(theme, |style| {
                 let visuals = &mut style.visuals;
                 visuals.selection.bg_fill = tokens.selected_bg;
-                visuals.selection.stroke = Stroke::new(1.0, tokens.selected_border);
+                visuals.selection.stroke = Stroke::new(1.0, tokens.accent);
                 visuals.hyperlink_color = tokens.accent;
                 visuals.text_cursor.stroke = Stroke::new(1.5, tokens.accent);
-                visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.control_hover_border());
+                visuals.widgets.hovered.bg_stroke = Stroke::NONE;
                 visuals.widgets.active.bg_stroke = Stroke::new(1.0, tokens.accent);
-                visuals.widgets.open.bg_stroke = Stroke::new(1.0, tokens.accent);
+                visuals.widgets.open.bg_stroke = Stroke::NONE;
             });
         }
     }
@@ -283,7 +283,7 @@ impl ThemeTokens {
                 visuals.faint_bg_color = tokens.app_bg;
                 visuals.extreme_bg_color = tokens.extreme_bg;
                 visuals.code_bg_color = tokens.app_bg;
-                visuals.window_stroke = Stroke::new(1.0, tokens.border);
+                visuals.window_stroke = Stroke::NONE;
                 visuals.window_corner_radius = SURFACE_CORNER_RADIUS;
                 visuals.menu_corner_radius = SURFACE_CORNER_RADIUS;
 
@@ -297,7 +297,7 @@ impl ThemeTokens {
                 visuals.popup_shadow = shadow;
 
                 visuals.selection.bg_fill = tokens.selected_bg;
-                visuals.selection.stroke = Stroke::new(1.0, tokens.selected_border);
+                visuals.selection.stroke = Stroke::new(1.0, tokens.accent);
                 visuals.hyperlink_color = tokens.accent;
                 visuals.error_fg_color = tokens.error_fg;
                 visuals.text_cursor.stroke = Stroke::new(1.5, tokens.accent);
@@ -306,17 +306,17 @@ impl ThemeTokens {
                 let widgets = &mut visuals.widgets;
                 widgets.noninteractive.bg_fill = tokens.panel_bg;
                 widgets.noninteractive.weak_bg_fill = tokens.panel_bg;
-                widgets.noninteractive.bg_stroke = Stroke::new(1.0, tokens.border);
+                widgets.noninteractive.bg_stroke = Stroke::NONE;
                 widgets.noninteractive.fg_stroke = Stroke::new(1.0, tokens.text_primary);
 
                 widgets.inactive.bg_fill = tokens.control_bg;
                 widgets.inactive.weak_bg_fill = tokens.control_bg;
-                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
+                widgets.inactive.bg_stroke = Stroke::NONE;
                 widgets.inactive.fg_stroke = Stroke::new(1.0, tokens.text_primary);
 
                 widgets.hovered.bg_fill = tokens.control_hover_bg;
                 widgets.hovered.weak_bg_fill = tokens.control_hover_bg;
-                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.control_hover_border());
+                widgets.hovered.bg_stroke = Stroke::NONE;
                 widgets.hovered.fg_stroke = Stroke::new(1.0, tokens.text_primary);
 
                 widgets.active.bg_fill = tokens.control_active_bg;
@@ -326,7 +326,7 @@ impl ThemeTokens {
 
                 widgets.open.bg_fill = tokens.control_hover_bg;
                 widgets.open.weak_bg_fill = tokens.control_hover_bg;
-                widgets.open.bg_stroke = Stroke::new(1.0, tokens.accent);
+                widgets.open.bg_stroke = Stroke::NONE;
                 widgets.open.fg_stroke = Stroke::new(1.0, tokens.text_primary);
 
                 for state in [
@@ -348,7 +348,6 @@ impl ThemeTokens {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CanvasPalette {
     pub(crate) bg: Color32,
-    pub(crate) border: Color32,
     pub(crate) ink: Color32,
     pub(crate) placeholder_bg: Color32,
     pub(crate) placeholder_stroke: Color32,
@@ -371,16 +370,11 @@ impl CanvasPalette {
 
     /// Resolve Ayu Light or Ayu Dark canvas colors with an optional adaptive RGB accent seed.
     pub(crate) fn for_mode_with_accent(dark_mode: bool, accent_seed: Option<[u8; 3]>) -> Self {
-        let (bg, border, ink) = if dark_mode {
-            (
-                AYU_DARK_TEXT_INK,
-                Color32::from_rgb(63, 64, 67),
-                Color32::from_rgb(214, 212, 204),
-            )
+        let (bg, ink) = if dark_mode {
+            (AYU_DARK_TEXT_INK, Color32::from_rgb(214, 212, 204))
         } else {
             (
                 Color32::from_rgb(252, 252, 252),
-                Color32::from_rgb(207, 209, 210),
                 Color32::from_rgb(53, 57, 62),
             )
         };
@@ -410,7 +404,6 @@ impl CanvasPalette {
 
         CanvasPalette {
             bg,
-            border,
             ink,
             placeholder_bg: Color32::TRANSPARENT,
             placeholder_stroke,
@@ -681,12 +674,17 @@ mod tests {
     fn theme_tokens_provide_accessible_contrast_in_light_and_dark_modes() {
         for dark in [false, true] {
             let tokens = ThemeTokens::for_mode(dark);
+            let canvas = CanvasPalette::for_mode(dark);
             assert_eq!(tokens.dark_mode, dark);
             assert!(contrast_ratio(tokens.text_primary, tokens.panel_bg) >= 7.0);
+            assert!(contrast_ratio(tokens.text_primary, tokens.card_bg) >= 7.0);
             assert!(contrast_ratio(tokens.text_primary, tokens.control_bg) >= 7.0);
             assert!(contrast_ratio(tokens.selected_fg, tokens.selected_bg) >= 4.5);
             assert!(contrast_ratio(tokens.primary_fg, tokens.primary_bg) >= 4.5);
             assert_ne!(tokens.app_bg, tokens.panel_bg);
+            assert_ne!(tokens.panel_bg, tokens.card_bg);
+            assert_ne!(tokens.card_bg, tokens.control_bg);
+            assert_ne!(tokens.app_bg, canvas.bg);
             let disabled = tokens.disabled_accent();
             assert_eq!(disabled.a(), 255);
             assert_ne!(disabled, tokens.accent);
@@ -767,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_style_configures_radii_cursor_and_zero_hover_expansion() {
+    fn apply_style_configures_radii_cursor_borderless_chrome_and_zero_hover_expansion() {
         let ctx = egui::Context::default();
         ThemeTokens::apply_style_with_accent(&ctx, Some([56, 189, 248]));
 
@@ -786,16 +784,22 @@ mod tests {
             assert_eq!(style.drag_value_text_style, egui::TextStyle::Button);
             assert_eq!(style.visuals.window_corner_radius, SURFACE_CORNER_RADIUS);
             assert_eq!(style.visuals.menu_corner_radius, SURFACE_CORNER_RADIUS);
+            assert_eq!(style.visuals.window_stroke, Stroke::NONE);
             assert_eq!(style.visuals.hyperlink_color, expected.accent);
             assert_eq!(style.visuals.selection.bg_fill, expected.selected_bg);
             assert_eq!(
-                style.visuals.widgets.hovered.bg_stroke.color,
-                expected.control_hover_border()
+                style.visuals.selection.stroke,
+                Stroke::new(1.0, expected.accent)
             );
-            assert_ne!(
-                style.visuals.widgets.hovered.bg_stroke.color,
-                expected.border_hover
+            assert_eq!(style.visuals.widgets.noninteractive.bg_stroke, Stroke::NONE);
+            assert_eq!(style.visuals.widgets.inactive.bg_stroke, Stroke::NONE);
+            assert_eq!(style.visuals.widgets.hovered.bg_stroke, Stroke::NONE);
+            assert_eq!(style.visuals.widgets.open.bg_stroke, Stroke::NONE);
+            assert_eq!(
+                style.visuals.widgets.active.bg_stroke,
+                Stroke::new(1.0, expected.accent)
             );
+            assert_eq!(expected.group_frame().stroke, Stroke::NONE);
             assert_eq!(
                 style.visuals.interact_cursor,
                 Some(egui::CursorIcon::PointingHand)
@@ -853,7 +857,6 @@ mod tests {
             let half = CanvasPalette::for_mode_with_background_and_accent(dark, true, 0.5, None);
             let expected_half = ((0.38_f32 + 0.62_f32 * 0.5_f32) * 255.0_f32).round() as u8;
             assert_eq!(half.bg.a(), expected_half);
-            assert_eq!(half.border, base.border);
             assert_eq!(half.ink, base.ink);
 
             let zero = CanvasPalette::for_mode_with_background_and_accent(dark, true, 0.0, None);

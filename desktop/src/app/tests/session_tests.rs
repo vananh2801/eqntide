@@ -815,7 +815,9 @@ fn finish_equation_modal_centers_over_backdrop_and_ignores_outside_clicks() {
             egui::Shape::Rect(rect_shape)
                 if rect_shape.rect.width() < max_width
                     && rect_shape.rect.width() < 500.0
-                    && rect_shape.stroke.width > 0.0
+                    && rect_shape.blur_width == 0.0
+                    && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                    && rect_shape.stroke == Stroke::NONE
                     && rect_shape.rect.contains(heading)
                     && rect_shape.rect.contains(button) =>
             {

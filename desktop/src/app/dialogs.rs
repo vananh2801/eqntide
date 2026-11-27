@@ -92,6 +92,7 @@ impl App {
                                 "right" => "Right",
                                 _ => "Center",
                             })
+                            .popup_style(tokens.combo_popup_style())
                             .show_ui(ui, |ui| {
                                 for (value, label) in
                                     [("left", "Left"), ("center", "Center"), ("right", "Right")]
@@ -124,6 +125,7 @@ impl App {
                                     .find(|(value, _)| *value == settings.fence)
                                     .map_or("Parentheses ( )", |&(_, label)| label),
                             )
+                            .popup_style(tokens.combo_popup_style())
                             .show_ui(ui, |ui| {
                                 for &(value, label) in FENCES {
                                     let selected = settings.fence == value;

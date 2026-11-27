@@ -610,19 +610,16 @@ impl App {
         self.sync_accent_style(ui.ctx());
         self.paint_app_background(ui);
         let tokens = self.theme_tokens(ui);
-        egui::Panel::bottom("app-status")
-            .exact_size(32.0)
-            .frame(
-                egui::Frame::NONE
-                    .fill(tokens.panel_bg)
-                    .stroke(Stroke::new(1.0, tokens.border))
-                    .inner_margin(egui::Margin::symmetric(
-                        theme::SPACE_LG as i8,
-                        theme::SPACE_XS as i8,
-                    )),
-            )
-            .show_separator_line(false)
-            .show(ui, |ui| self.draw_status_bar(ui));
+        let status_rect =
+            egui::Panel::bottom("app-status")
+                .exact_size(32.0)
+                .frame(egui::Frame::NONE.fill(tokens.panel_bg).inner_margin(
+                    egui::Margin::symmetric(theme::SPACE_LG as i8, theme::SPACE_XS as i8),
+                ))
+                .show_separator_line(false)
+                .show(ui, |ui| self.draw_status_bar(ui))
+                .response
+                .rect;
         let sidebar_rect = if self.tab == 0 {
             Some(
                 egui::Panel::left("app-sidebar")
@@ -681,6 +678,11 @@ impl App {
                 );
             });
         let divider_stroke = Stroke::new(1.0, tokens.border);
+        ui.painter().hline(
+            status_rect.x_range(),
+            status_rect.min.y + 0.5,
+            divider_stroke,
+        );
         if let Some(rect) = sidebar_rect {
             ui.painter()
                 .vline(rect.max.x - 0.5, rect.y_range(), divider_stroke);
@@ -825,7 +827,7 @@ impl App {
                         if mt_resp.clicked() || omml_resp.clicked() {
                             self.pending_focus_restore = Some(self.active_editor_focus);
                         }
-                        ui.separator();
+                        Self::draw_section_separator(ui, tokens);
                         ui.label(caption("Font size"));
                         let drag_resp = ui
                             .scope(|ui| {
@@ -900,6 +902,14 @@ impl App {
                 });
             },
         );
+    }
+
+    /// Renders a section separator line using the active theme border token without adding borders to disabled widgets.
+    pub(super) fn draw_section_separator(ui: &mut egui::Ui, tokens: ThemeTokens) {
+        let prev_stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = Stroke::new(1.0, tokens.border);
+        ui.separator();
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = prev_stroke;
     }
 
     /// Renders the bottom status strip showing bridge state, queued sessions, errors, and warnings.

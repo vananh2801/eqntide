@@ -2,7 +2,7 @@
 
 use super::{App, Intent};
 use crate::{commands, palette, theme};
-use eframe::egui::{self, Color32, Pos2, Stroke};
+use eframe::egui::{self, Color32, Pos2};
 use eqntide_editor::{Caret, Move};
 
 impl App {
@@ -407,18 +407,10 @@ impl App {
                         state.store(ui.ctx(), cmd_id);
                         input.sync_cursor = false;
                     }
-                    let box_focused = has_input_focus || input.needs_focus;
                     let box_resp = egui::Frame::new()
-                        .fill(Color32::TRANSPARENT)
+                        .fill(tokens.control_bg)
                         .corner_radius(theme::CONTROL_CORNER_RADIUS)
-                        .stroke(Stroke::new(
-                            1.0,
-                            if box_focused {
-                                tokens.accent
-                            } else {
-                                tokens.border
-                            },
-                        ))
+                        .stroke(egui::Stroke::NONE)
                         .inner_margin(egui::Margin::symmetric(8, 5))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {

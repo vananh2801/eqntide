@@ -69,7 +69,7 @@ impl App {
                         });
                     });
                     ui.add_space(theme::SPACE_XL);
-                    ui.separator();
+                    Self::draw_section_separator(ui, tokens);
                     ui.add_space(theme::SPACE_MD);
                     egui::Grid::new("about-info")
                         .num_columns(2)
@@ -97,7 +97,7 @@ impl App {
                             ui.end_row();
                         });
                     ui.add_space(theme::SPACE_XL);
-                    ui.separator();
+                    Self::draw_section_separator(ui, tokens);
                     ui.add_space(theme::SPACE_MD);
                     self.draw_about_updates(ui, tokens);
                 });

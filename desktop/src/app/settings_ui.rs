@@ -584,16 +584,13 @@ impl App {
         if !ui.is_rect_visible(thumb_rect) {
             return;
         }
-        ui.painter().rect(
+        ui.painter().rect_filled(
             thumb_rect,
             theme::CONTROL_CORNER_RADIUS,
             tokens.control_disabled_bg,
-            Stroke::new(1.0, tokens.border),
-            egui::StrokeKind::Inside,
         );
         if let Some(tex) = &self.background_texture {
-            let inner = thumb_rect.shrink(1.0);
-            let (dest, uv) = Self::background_image_layout(inner, tex.size_vec2());
+            let (dest, uv) = Self::background_image_layout(thumb_rect, tex.size_vec2());
             let thumb_tint = if self.background_mode == BackgroundMode::Image {
                 Color32::WHITE
             } else {
@@ -608,15 +605,9 @@ impl App {
                 let scrim = ThemeTokens::background_scrim(is_dark, self.background_opacity);
                 if scrim.a() > 0 {
                     ui.painter()
-                        .rect_filled(inner, theme::CONTROL_CORNER_RADIUS, scrim);
+                        .rect_filled(thumb_rect, theme::CONTROL_CORNER_RADIUS, scrim);
                 }
             }
-            ui.painter().rect_stroke(
-                thumb_rect,
-                theme::CONTROL_CORNER_RADIUS,
-                Stroke::new(1.0, tokens.border),
-                egui::StrokeKind::Inside,
-            );
         }
     }
 }

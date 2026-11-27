@@ -70,7 +70,7 @@ impl App {
                 }
             });
             ui.add_space(theme::SPACE_XS);
-            ui.separator();
+            Self::draw_section_separator(ui, tokens);
             ui.add_space(theme::SPACE_XS);
             ui.label(
                 egui::RichText::new("Options & Actions")
@@ -82,6 +82,7 @@ impl App {
                     let before_batch_target = self.batch_target;
                     egui::ComboBox::from_id_salt("batch-target")
                         .selected_text(batch::TARGETS[self.batch_target].1)
+                        .popup_style(tokens.combo_popup_style())
                         .show_ui(ui, |ui| {
                             for (index, (_, label)) in batch::TARGETS.iter().enumerate() {
                                 let selected = self.batch_target == index;
@@ -359,13 +360,7 @@ impl App {
             return;
         }
         let painter = ui.painter();
-        painter.rect(
-            rect,
-            theme::CONTROL_CORNER_RADIUS,
-            tokens.extreme_bg,
-            Stroke::new(1.0, tokens.border),
-            egui::StrokeKind::Inside,
-        );
+        painter.rect_filled(rect, theme::CONTROL_CORNER_RADIUS, tokens.extreme_bg);
         let mut fill_rect = None;
         if clamped > 0.0 {
             let min_fill = (2.0 * f32::from(theme::RADIUS_CONTROL)).min(rect.width());

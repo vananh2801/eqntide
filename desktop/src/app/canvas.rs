@@ -88,7 +88,7 @@ impl App {
         egui::Frame::new()
             .fill(pal.bg)
             .corner_radius(theme::SURFACE_CORNER_RADIUS)
-            .stroke(Stroke::new(1.0, pal.border))
+            .stroke(Stroke::NONE)
             .inner_margin(theme::SPACE_LG)
             .show(ui, |ui| {
                 self.configure_canvas_scroll_style(ui, pal);
@@ -305,12 +305,6 @@ impl App {
                     })
                     .inner
             });
-        ui.painter().rect_stroke(
-            frame_resp.response.rect,
-            theme::CONTROL_CORNER_RADIUS,
-            Stroke::new(1.0, pal.border),
-            egui::StrokeKind::Inside,
-        );
         if frame_resp.inner.changed() {
             self.mark_source_changed(Instant::now());
         }

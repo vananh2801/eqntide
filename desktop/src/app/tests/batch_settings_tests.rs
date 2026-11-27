@@ -1201,6 +1201,13 @@ fn settings_background_mode_toggle_is_non_destructive_and_gates_accent_checkbox(
         })
         .expect("disabled Overlay opacity slider handle");
     let solid_tokens = ThemeTokens::for_mode(ctx.theme() == egui::Theme::Dark);
+    assert!(solid_out.shapes.iter().any(|clipped| matches!(
+        &clipped.shape,
+        egui::Shape::Rect(rect_shape)
+            if (rect_shape.rect.width() - 72.0).abs() <= 0.5
+                && (rect_shape.rect.height() - 48.0).abs() <= 0.5
+                && rect_shape.stroke == Stroke::NONE
+    )));
     assert_eq!(disabled_handle.0.a(), 255);
     assert_eq!(disabled_handle.1.color, solid_tokens.disabled_accent());
 
@@ -1466,7 +1473,7 @@ fn batch_progress_bar_combobox_and_checkboxes_use_active_accent() {
                 egui::Shape::Rect(rect_shape) => {
                     rect_shape.rect.contains(zero_center)
                         && rect_shape.fill == expected.extreme_bg
-                        && rect_shape.stroke.color == expected.border
+                        && rect_shape.stroke == Stroke::NONE
                 }
                 _ => false,
             }));
@@ -1549,10 +1556,29 @@ fn batch_progress_bar_combobox_and_checkboxes_use_active_accent() {
                 egui::Shape::Rect(rect_shape) => {
                     rect_shape.rect.contains(selected_item.1)
                         && rect_shape.fill == expected.selected_bg
-                        && rect_shape.stroke.color == expected.selected_border
+                        && rect_shape.stroke == Stroke::NONE
                 }
                 _ => false,
             }));
+            fn has_popup_container(shape: &egui::Shape, point: Pos2, fill: Color32) -> bool {
+                match shape {
+                    egui::Shape::Rect(rect_shape) => {
+                        rect_shape.rect.contains(point)
+                            && rect_shape.rect.height() > 30.0
+                            && rect_shape.fill == fill
+                            && rect_shape.stroke == Stroke::NONE
+                    }
+                    egui::Shape::Vec(shapes) => shapes
+                        .iter()
+                        .any(|child| has_popup_container(child, point, fill)),
+                    _ => false,
+                }
+            }
+            assert!(popup_out.shapes.iter().any(|clipped| has_popup_container(
+                &clipped.shape,
+                selected_item.1,
+                expected.control_bg
+            )));
             // Close ComboBox popup before next pass.
             let _ = run_frame(
                 &mut app,

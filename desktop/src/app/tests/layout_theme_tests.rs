@@ -69,7 +69,7 @@ fn fixed_layout_keeps_save_and_source_visible_across_sizes_and_themes() {
                             for painted in &output.shapes {
                                 if let egui::Shape::Rect(frame) = &painted.shape {
                                     if frame.fill == pal.bg
-                                        && frame.stroke.color == pal.border
+                                        && frame.stroke == Stroke::NONE
                                         && frame.corner_radius == theme::SURFACE_CORNER_RADIUS
                                         && frame.rect.width() > 100.0
                                     {
@@ -476,7 +476,8 @@ fn canvas_scrolls_only_for_formula_overflow_across_dpi_changes() {
                     .find_map(|clipped| match &clipped.shape {
                         egui::Shape::Rect(rect_shape)
                             if rect_shape.fill == pal.bg
-                                && rect_shape.stroke.color == pal.border =>
+                                && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                                && rect_shape.stroke == Stroke::NONE =>
                         {
                             Some(rect_shape)
                         }
@@ -683,7 +684,7 @@ fn sidebar_settings_and_about_tabs_work_and_toggle_theme() {
         egui::Shape::Rect(rect_shape)
             if rect_shape.rect.contains(light_btn_pos)
                 && (rect_shape.fill == light_tokens.selected_bg || rect_shape.fill == light_tokens.selected_hover_bg)
-                && rect_shape.stroke.color == light_tokens.selected_border)));
+                && rect_shape.stroke == Stroke::NONE)));
     assert!(!after_light.shapes.iter().any(|clipped| matches!(&clipped.shape,
         egui::Shape::Rect(rect_shape)
             if rect_shape.rect.contains(dark_btn_pos)
@@ -1000,7 +1001,7 @@ fn modern_theme_applies_zero_hover_expansion_radii_and_tinted_sidebar_selection(
             .ui_icon_texture_id(palette::ui_group("Fractions").unwrap().icons[0])
             .expect("Fractions sidebar texture");
         assert!(out.shapes.iter().any(|clipped| matches!(&clipped.shape,
-            egui::Shape::Rect(rect_shape) if rect_shape.fill == tokens.selected_bg && rect_shape.stroke.color == tokens.selected_border)));
+            egui::Shape::Rect(rect_shape) if rect_shape.fill == tokens.selected_bg && rect_shape.stroke == Stroke::NONE)));
         assert!(out.shapes.iter().any(|clipped| matches!(&clipped.shape,
             egui::Shape::Rect(rect_shape)
                 if rect_shape.brush.as_ref().is_some_and(|brush| brush.fill_texture_id == fractions_tex)
@@ -1122,7 +1123,9 @@ fn ayu_canvas_surfaces_adapt_by_theme_and_hide_preset_pickers_in_settings() {
     assert!(dark_out.shapes.iter().any(|clipped| matches!(
         &clipped.shape,
         egui::Shape::Rect(rect_shape)
-            if rect_shape.fill == ayu_dark_pal.bg && rect_shape.stroke.color == ayu_dark_pal.border
+            if rect_shape.fill == ayu_dark_pal.bg
+                && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                && rect_shape.stroke == Stroke::NONE
     )));
     assert!(dark_out.shapes.iter().any(|clipped| matches!(
         &clipped.shape,
@@ -1137,7 +1140,9 @@ fn ayu_canvas_surfaces_adapt_by_theme_and_hide_preset_pickers_in_settings() {
     assert!(light_out.shapes.iter().any(|clipped| matches!(
         &clipped.shape,
         egui::Shape::Rect(rect_shape)
-            if rect_shape.fill == ayu_light_pal.bg && rect_shape.stroke.color == ayu_light_pal.border
+            if rect_shape.fill == ayu_light_pal.bg
+                && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                && rect_shape.stroke == Stroke::NONE
     )));
     assert!(light_out.shapes.iter().any(|clipped| matches!(
         &clipped.shape,
@@ -1362,8 +1367,9 @@ fn multiline_latex_scrolls_within_bounds_without_canvas_overlap() {
             .iter()
             .find_map(|clipped| match &clipped.shape {
                 egui::Shape::Rect(rect_shape)
-                    if rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS
-                        && rect_shape.stroke == Stroke::new(1.0, pal.border)
+                    if rect_shape.fill == pal.bg
+                        && rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS
+                        && rect_shape.stroke == Stroke::NONE
                         && rect_shape.rect.width() > 300.0 =>
                 {
                     Some(rect_shape.rect)
@@ -1383,13 +1389,13 @@ fn multiline_latex_scrolls_within_bounds_without_canvas_overlap() {
     assert!(!out.shapes.iter().any(|clipped| matches!(&clipped.shape,
         egui::Shape::Rect(rect_shape) if latex_single.contains_rect(rect_shape.rect) && rect_shape.fill == pal.scroll_track)));
 
-    // Clicking inside the LaTeX box focuses it without adding a bright focus border.
+    // Clicking inside the LaTeX box focuses it without adding a focus or outer border.
     let out = run_ui_pass_frame(&ctx, &mut app, click_events(latex_single.center()));
     assert!(ctx.memory(|mem| mem.has_focus(latex_id)));
     assert!(!out.shapes.iter().any(|clipped| matches!(&clipped.shape,
         egui::Shape::Rect(rect_shape) if rect_shape.rect == latex_single && rect_shape.stroke.color == pal.caret)));
     assert!(out.shapes.iter().any(|clipped| matches!(&clipped.shape,
-        egui::Shape::Rect(rect_shape) if rect_shape.rect == latex_single && rect_shape.stroke.color == pal.border)));
+        egui::Shape::Rect(rect_shape) if rect_shape.rect == latex_single && rect_shape.fill == pal.bg && rect_shape.stroke == Stroke::NONE)));
 
     // Pressing Enter repeatedly to produce many lines keeps the LaTeX box bounded and scrollable.
     let mut events = Vec::new();
@@ -1608,10 +1614,13 @@ fn panel_dividers_draw_over_opaque_fills_and_clear_color_matches_theme() {
     ctx.set_theme(egui::Theme::Light);
     let out = run_ui_pass_sized(&ctx, &mut app, Vec2::new(1100.0, 650.0));
 
-    // Both CentralPanel (app_bg) and app-footer (panel_bg) meet flush with no 1px gap.
+    // CentralPanel (app_bg) and app-footer / app-status (panel_bg) meet flush while divider lines draw over opaque fills.
     let mut central_max_y = None;
     let mut footer_min_y = None;
+    let mut status_min_y = None;
+    let mut status_stroke = None;
     let mut central_idx = None;
+    let mut status_divider_idx = None;
     let mut footer_divider_idx = None;
     let mut sidebar_divider_idx = None;
     for (idx, clipped) in out.shapes.iter().enumerate() {
@@ -1628,11 +1637,25 @@ fn panel_dividers_draw_over_opaque_fills_and_clear_color_matches_theme() {
             {
                 footer_min_y = Some(rect_shape.rect.min.y);
             }
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == light_tokens.panel_bg
+                    && (rect_shape.rect.height() - 32.0).abs() < 0.01
+                    && rect_shape.rect.width() > 800.0 =>
+            {
+                status_min_y = Some(rect_shape.rect.min.y);
+                status_stroke = Some(rect_shape.stroke);
+            }
             egui::Shape::LineSegment { points, stroke }
                 if stroke.color == light_tokens.border && stroke.width == 1.0 =>
             {
                 if (points[0].y - points[1].y).abs() < 0.01 && (points[1].x - points[0].x) > 800.0 {
-                    footer_divider_idx = Some(idx);
+                    if status_min_y
+                        .is_some_and(|status_y| (points[0].y - (status_y + 0.5)).abs() < 0.5)
+                    {
+                        status_divider_idx = Some(idx);
+                    } else {
+                        footer_divider_idx = Some(idx);
+                    }
                 } else if (points[0].x - points[1].x).abs() < 0.01
                     && (points[1].y - points[0].y) > 500.0
                 {
@@ -1645,7 +1668,9 @@ fn panel_dividers_draw_over_opaque_fills_and_clear_color_matches_theme() {
     let central_max_y = central_max_y.expect("central panel fill");
     let footer_min_y = footer_min_y.expect("footer panel fill");
     assert!((central_max_y - footer_min_y).abs() < 0.01);
+    assert_eq!(status_stroke, Some(Stroke::NONE));
     let central_idx = central_idx.expect("central panel index");
+    assert!(status_divider_idx.expect("status divider") > central_idx);
     assert!(footer_divider_idx.expect("footer divider") > central_idx);
     assert!(sidebar_divider_idx.expect("sidebar divider") > central_idx);
 }
@@ -1949,7 +1974,7 @@ fn adaptive_background_accent_propagates_to_controls_and_global_style() {
             &clipped.shape,
             egui::Shape::Rect(rect_shape)
                 if rect_shape.fill == adaptive_tokens.selected_bg
-                    && rect_shape.stroke.color == adaptive_tokens.selected_border
+                    && rect_shape.stroke == Stroke::NONE
         )));
 
         app.background_mode = BackgroundMode::Solid;
@@ -2132,9 +2157,7 @@ fn footer_radios_hover_borders_and_drag_value_focus_reflect_active_accent() {
             assert_eq!(dis_omml_circles[0].stroke.color, expected.border);
             app.draft_dirty = false;
 
-            // 3. Hovered non-selected control border uses control_hover_border() while Batch tree lines stay neutral border_hover.
-            let hover_expected = expected.control_hover_border();
-            assert_ne!(hover_expected, expected.border_hover);
+            // 3. Hovered non-selected control stays borderless with control_hover_bg while Batch tree lines stay neutral border_hover.
             let batch_pos = find_text_center(&editor_out, |text| text == "Batch DOCX");
             let hover_out = run_frame(&mut app, vec![egui::Event::PointerMoved(batch_pos)]);
             assert!(
@@ -2142,17 +2165,20 @@ fn footer_radios_hover_borders_and_drag_value_focus_reflect_active_accent() {
                     egui::Shape::Rect(rect_shape) => {
                         rect_shape.rect.contains(batch_pos)
                             && rect_shape.rect.height() <= 40.0
-                            && rect_shape.stroke.color == hover_expected
+                            && rect_shape.fill == expected.control_hover_bg
+                            && rect_shape.stroke == Stroke::NONE
                     }
                     _ => false,
                 }),
-                "hovered standard control must use control_hover_border() in {theme:?}/{mode:?}"
+                "hovered standard control must stay borderless with control_hover_bg in {theme:?}/{mode:?}"
             );
             let _ = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
 
             app.tab = 1;
+            app.batch_selection_mode = batch::BatchSelectionMode::FolderTree;
             let _ = run_frame(&mut app, vec![]);
             let batch_out = run_frame(&mut app, vec![]);
+            let expected_row_divider = expected.border.gamma_multiply(0.85);
             let tree_lines: Vec<_> = batch_out
                 .shapes
                 .iter()
@@ -2166,9 +2192,27 @@ fn footer_radios_hover_borders_and_drag_value_focus_reflect_active_accent() {
                 })
                 .collect();
             assert!(!tree_lines.is_empty());
-            assert!(tree_lines
-                .iter()
-                .all(|col| *col == expected.border_hover && *col != hover_expected));
+            assert!(tree_lines.iter().all(|col| *col == expected.border_hover));
+            assert!(batch_out.shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::LineSegment { stroke, .. }
+                    if (stroke.width - 1.0).abs() <= 0.05 && stroke.color == expected_row_divider
+            )));
+            assert!(batch_out.shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.fill == expected.card_bg
+                        && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                        && rect_shape.stroke == Stroke::NONE
+            )));
+            app.batch_selection_mode = batch::BatchSelectionMode::FlatList;
+            let flat_out = run_frame(&mut app, vec![]);
+            assert!(flat_out.shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::LineSegment { stroke, .. }
+                    if (stroke.width - 1.0).abs() <= 0.05 && stroke.color == expected_row_divider
+            )));
+            app.batch_selection_mode = batch::BatchSelectionMode::FolderTree;
 
             // 4. Footer DragValue enters edit focus with active accent stroke and updates when mode changes.
             app.tab = 0;
@@ -2267,7 +2311,9 @@ fn canvas_opacity_updates_equation_canvas_and_latex_box_without_affecting_solid_
         assert!(full_out.shapes.iter().any(|clipped| matches!(
             &clipped.shape,
             egui::Shape::Rect(rect_shape)
-                if rect_shape.fill == full_pal.bg && rect_shape.stroke.color == full_pal.border
+                if rect_shape.fill == full_pal.bg
+                    && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                    && rect_shape.stroke == Stroke::NONE
         )));
         assert!(full_out.shapes.iter().any(|clipped| matches!(
             &clipped.shape,
@@ -2284,7 +2330,9 @@ fn canvas_opacity_updates_equation_canvas_and_latex_box_without_affecting_solid_
             assert!(out.shapes.iter().any(|clipped| matches!(
                 &clipped.shape,
                 egui::Shape::Rect(rect_shape)
-                    if rect_shape.fill == pal.bg && rect_shape.stroke.color == pal.border
+                    if rect_shape.fill == pal.bg
+                        && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                        && rect_shape.stroke == Stroke::NONE
             )));
             assert!(out.shapes.iter().any(|clipped| matches!(
                 &clipped.shape,
@@ -2300,7 +2348,9 @@ fn canvas_opacity_updates_equation_canvas_and_latex_box_without_affecting_solid_
         assert!(solid_out.shapes.iter().any(|clipped| matches!(
             &clipped.shape,
             egui::Shape::Rect(rect_shape)
-                if rect_shape.fill == solid_pal.bg && rect_shape.stroke.color == solid_pal.border
+                if rect_shape.fill == solid_pal.bg
+                    && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                    && rect_shape.stroke == Stroke::NONE
         )));
         assert!(solid_out.shapes.iter().any(|clipped| matches!(
             &clipped.shape,
@@ -2327,7 +2377,7 @@ fn equation_canvas_dims_behind_modals_but_stays_opaque_for_draft_dirty() {
                 egui::Shape::Rect(rect_shape)
                     if rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
                         && rect_shape.fill == pal.bg
-                        && rect_shape.stroke.color == pal.border
+                        && rect_shape.stroke == Stroke::NONE
             )
         })
     };
@@ -2335,16 +2385,13 @@ fn equation_canvas_dims_behind_modals_but_stays_opaque_for_draft_dirty() {
         let dimmed_bg = pal
             .bg
             .gamma_multiply(ctx.style_of(egui::Theme::Dark).visuals.disabled_alpha());
-        let dimmed_border = pal
-            .border
-            .gamma_multiply(ctx.style_of(egui::Theme::Dark).visuals.disabled_alpha());
         output.shapes.iter().any(|clipped| {
             matches!(
                 &clipped.shape,
                 egui::Shape::Rect(rect_shape)
                     if rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
                         && rect_shape.fill == dimmed_bg
-                        && rect_shape.stroke.color == dimmed_border
+                        && rect_shape.stroke == Stroke::NONE
             )
         })
     };
@@ -2393,7 +2440,7 @@ fn primary_and_standard_buttons_render_distinct_focus_borders_in_light_and_dark_
                 &clipped.shape,
                 egui::Shape::Rect(rect_shape)
                     if rect_shape.fill == tokens.primary_bg
-                        && rect_shape.stroke.color == tokens.primary_bg
+                        && rect_shape.stroke == Stroke::NONE
             )
         }));
 

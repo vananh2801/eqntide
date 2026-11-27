@@ -2374,21 +2374,22 @@ fn command_popup_backslash_prefix_aligns_with_input_and_uses_active_accent() {
         }
     }
 
-    fn has_accent_border(
+    fn has_borderless_input_box(
         shape: &egui::Shape,
-        accent: Color32,
+        control_bg: Color32,
         prefix_center: Pos2,
         input_center: Pos2,
     ) -> bool {
         match shape {
             egui::Shape::Rect(rect_shape) => {
-                rect_shape.stroke.color == accent
+                rect_shape.fill == control_bg
+                    && rect_shape.stroke == Stroke::NONE
                     && rect_shape.rect.contains(prefix_center)
                     && rect_shape.rect.contains(input_center)
             }
-            egui::Shape::Vec(shapes) => shapes
-                .iter()
-                .any(|child| has_accent_border(child, accent, prefix_center, input_center)),
+            egui::Shape::Vec(shapes) => shapes.iter().any(|child| {
+                has_borderless_input_box(child, control_bg, prefix_center, input_center)
+            }),
             _ => false,
         }
     }
@@ -2472,13 +2473,13 @@ fn command_popup_backslash_prefix_aligns_with_input_and_uses_active_accent() {
                 input_rect.center().y
             );
             assert!(
-                out.shapes.iter().any(|clipped| has_accent_border(
+                out.shapes.iter().any(|clipped| has_borderless_input_box(
                     &clipped.shape,
-                    expected_tokens.accent,
+                    expected_tokens.control_bg,
                     prefix_rect.center(),
                     input_rect.center()
                 )),
-                "focused popup border must use active accent color"
+                "command popup input box must render borderless with control_bg surface"
             );
         }
     }
@@ -2520,7 +2521,7 @@ fn command_popup_selected_suggestion_uses_active_selection_tokens() {
             egui::Shape::Rect(rect_shape) => {
                 rect_shape.rect.contains(point)
                     && rect_shape.fill == expected.selected_bg
-                    && rect_shape.stroke.color == expected.selected_border
+                    && rect_shape.stroke == Stroke::NONE
             }
             egui::Shape::Vec(shapes) => shapes
                 .iter()
@@ -2736,7 +2737,9 @@ fn custom_matrix_dialog_ignores_backdrop_clicks_and_supports_keyboard_navigation
                 egui::Shape::Rect(rect_shape)
                     if rect_shape.rect.width() < max_width
                         && rect_shape.rect.width() < 500.0
-                        && rect_shape.stroke.width > 0.0
+                        && rect_shape.blur_width == 0.0
+                        && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                        && rect_shape.stroke == Stroke::NONE
                         && rect_shape.rect.contains(heading)
                         && rect_shape.rect.contains(button) =>
                 {
