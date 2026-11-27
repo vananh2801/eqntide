@@ -1,0 +1,20 @@
+## MODIFIED Requirements
+
+### Requirement: Ayu Light and Dark theme palette
+The desktop application SHALL style both Light and Dark modes using Zed Editor–inspired Ayu neutral surfaces—bright off-white surfaces in Light mode stepping progressively deeper across window backdrop (`app_bg`), panels (`panel_bg`), cards (`card_bg`), and interactive controls (`control_bg`, `control_hover_bg`, `control_active_bg`, as well as tinted `selected_bg` / `selected_hover_bg`) so cards are darker than `app_bg` and both unselected and selected controls sit darker than surrounding surfaces while deepening across idle, hover, and active states, and deep warm charcoal/obsidian surfaces in Dark mode where interactive controls render brighter than surrounding surfaces (`app_bg`, `panel_bg`, `card_bg`) so `app_bg`, `panel_bg`, `card_bg`, and `control_bg` remain visually distinct without surface/control borders—paired with readable foreground contrast and an Ayu signature amber/orange default accent color across selections (including inline `\command` popup suggestions and `ComboBox` selected rows), keyboard focus rings on modal action buttons and text-editing cursors, sliders, checkboxes, footer radio buttons, hyperlinks, primary actions, and the Batch DOCX progress bar, while keeping Batch folder tree connector lines (`border_hover`), Batch row dividers, and checkbox/radio captions neutral.
+
+#### Scenario: Light and Dark modes apply layered neutral surfaces and legible contrast
+- **WHEN** the desktop application renders in either Light mode or Dark mode with the default solid theme
+- **THEN** window backgrounds (`app_bg`), panels (`panel_bg`), cards (`card_bg`), Equation Canvas / LaTeX surfaces (`pal.bg`), and interactive controls (`control_bg`, `selected_bg`) use distinct layered Ayu neutral tones with high-contrast text and icons and the Ayu amber/orange accent without requiring 1px surface or control borders, with Light-mode surfaces stepping darker from `app_bg` -> `panel_bg` -> `card_bg` -> `control_bg` / `selected_bg` (deepening on hover/active) and Dark-mode controls brighter than surrounding dark surfaces (brightening on hover/active)
+
+#### Scenario: Inline canvas command popup aligns leading backslash and highlights selected suggestions with active accent
+- **WHEN** the user types `\` on the Equation Canvas to open the inline command entry popup and navigates candidate suggestions
+- **THEN** the leading `\` prefix is vertically centered with the adjacent command text input, the input box uses a distinct borderless surface fill (`control_bg` or `extreme_bg`), the `\` prefix uses the active theme accent color, and the active suggestion row renders with `selected_bg` and `selected_fg` without an outer popup or selection border
+
+#### Scenario: Batch progress bar and dropdown selections use active accent with crisp contrast
+- **WHEN** the Batch DOCX view displays a conversion progress bar (at `0%` or partial progress) or the user opens a `ComboBox` dropdown (`batch-target`, `matrix-alignment`, `matrix-fence`)
+- **THEN** the progress bar renders borderless with no partial fill stub at `0%` and fills progress with `primary_bg` using split-contrast `primary_fg` text over the filled region and `text_primary` text over the unfilled track, while selected `ComboBox` rows use `selected_bg` and `selected_fg` without a border stroke
+
+#### Scenario: Checkboxes, footer radios, hover borders, and DragValue focus reflect active accent without tinting excluded frames
+- **WHEN** interactive controls render across **Editor**, **Batch DOCX**, and **Settings** in enabled, disabled, hovered, or focused states
+- **THEN** checked/indeterminate checkboxes and selected footer radio buttons tint their box/circle indicators with the active accent when enabled and opaque `control_disabled_bg` + `disabled_accent()` when disabled while keeping labels/captions neutral; hovered buttons transition to `control_hover_bg` without a border stroke; focused footer `DragValue` edits indicate active focus without adding idle borders; and Batch folder tree connector lines (`border_hover`) remain neutral

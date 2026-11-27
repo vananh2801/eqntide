@@ -98,14 +98,14 @@ impl ThemeTokens {
         } else {
             Self {
                 dark_mode: false,
-                app_bg: Color32::from_rgb(226, 228, 231),
-                panel_bg: Color32::from_rgb(235, 236, 238),
-                card_bg: Color32::from_rgb(244, 245, 247),
+                app_bg: Color32::from_rgb(245, 245, 246),
+                panel_bg: Color32::from_rgb(237, 237, 239),
+                card_bg: Color32::from_rgb(229, 230, 232),
                 extreme_bg: Color32::WHITE,
-                control_bg: Color32::WHITE,
-                control_hover_bg: Color32::from_rgb(216, 219, 224),
-                control_active_bg: Color32::from_rgb(200, 204, 211),
-                control_disabled_bg: Color32::from_rgb(231, 233, 236),
+                control_bg: Color32::from_rgb(214, 216, 220),
+                control_hover_bg: Color32::from_rgb(199, 202, 207),
+                control_active_bg: Color32::from_rgb(183, 187, 193),
+                control_disabled_bg: Color32::from_rgb(224, 226, 229),
                 border: Color32::from_rgb(207, 209, 210),
                 border_hover: Color32::from_rgb(154, 158, 162),
                 text_primary: Color32::from_rgb(46, 50, 56),
@@ -116,10 +116,10 @@ impl ThemeTokens {
                 primary_hover_bg: Color32::from_rgb(154, 74, 3),
                 primary_active_bg: Color32::from_rgb(132, 62, 2),
                 primary_fg: Color32::WHITE,
-                selected_bg: Color32::from_rgb(251, 238, 219),
-                selected_hover_bg: Color32::from_rgb(246, 226, 196),
+                selected_bg: Color32::from_rgb(236, 212, 182),
+                selected_hover_bg: Color32::from_rgb(226, 196, 160),
                 selected_border: Color32::from_rgb(186, 94, 6),
-                selected_fg: Color32::from_rgb(134, 66, 3),
+                selected_fg: Color32::from_rgb(118, 52, 0),
                 error_fg: Color32::from_rgb(204, 58, 58),
             }
         };
@@ -554,9 +554,9 @@ fn derive_ui_accent_roles(dark_mode: bool, seed: [u8; 3], panel_bg: Color32) -> 
         let primary_hover_bg = hsl_to_color32(hue, sat, (primary_lum - 0.05).max(0.12));
         let primary_active_bg = hsl_to_color32(hue, sat, (primary_lum - 0.10).max(0.08));
 
-        let selected_bg = hsl_to_color32(hue, (sat * 0.78).clamp(0.45, 0.75), 0.91);
-        let selected_hover_bg = hsl_to_color32(hue, (sat * 0.80).clamp(0.48, 0.78), 0.86);
-        let mut fg_lum = 0.30_f32;
+        let selected_bg = hsl_to_color32(hue, (sat * 0.60).clamp(0.32, 0.55), 0.82);
+        let selected_hover_bg = hsl_to_color32(hue, (sat * 0.64).clamp(0.36, 0.60), 0.76);
+        let mut fg_lum = 0.24_f32;
         let mut selected_fg = hsl_to_color32(hue, sat, fg_lum);
         while contrast_ratio(selected_fg, selected_bg) < 5.0 && fg_lum > 0.14 {
             fg_lum -= 0.02;
@@ -695,6 +695,30 @@ mod tests {
         let dark = ThemeTokens::for_mode(true);
         assert!(light.accent.r() > light.accent.g() && light.accent.g() >= light.accent.b());
         assert!(dark.accent.r() > dark.accent.g() && dark.accent.g() > dark.accent.b());
+
+        // Light-mode surfaces step darker from app_bg -> panel_bg -> card_bg -> controls;
+        // Dark-mode controls stay brighter than surfaces and brighten on hover/active.
+        assert!(relative_luminance(light.app_bg) > relative_luminance(light.panel_bg));
+        assert!(relative_luminance(light.panel_bg) > relative_luminance(light.card_bg));
+        assert!(relative_luminance(light.card_bg) > relative_luminance(light.control_bg));
+        assert!(relative_luminance(light.card_bg) > relative_luminance(light.selected_bg));
+        assert!(
+            relative_luminance(light.selected_bg) > relative_luminance(light.selected_hover_bg)
+        );
+        assert!(relative_luminance(light.control_bg) > relative_luminance(light.control_hover_bg));
+        assert!(
+            relative_luminance(light.control_hover_bg)
+                > relative_luminance(light.control_active_bg)
+        );
+        assert!(relative_luminance(light.extreme_bg) > relative_luminance(light.card_bg));
+
+        assert!(relative_luminance(dark.control_bg) > relative_luminance(dark.card_bg));
+        assert!(relative_luminance(dark.card_bg) > relative_luminance(dark.panel_bg));
+        assert!(relative_luminance(dark.panel_bg) > relative_luminance(dark.app_bg));
+        assert!(relative_luminance(dark.control_hover_bg) > relative_luminance(dark.control_bg));
+        assert!(
+            relative_luminance(dark.control_active_bg) > relative_luminance(dark.control_hover_bg)
+        );
     }
 
     #[test]
