@@ -2,6 +2,8 @@
 
 A standalone, high-performance **bidirectional math equation converter and editor** for `.docx` documents between **OMML** (Word's native Office Math Markup Language), **MathType** (`Equation.DSMT4` / `Equation.3` OLE objects with EMF/WMF/PNG previews), and **LaTeX** — without requiring Microsoft Word, MathType, or Windows for conversion.
 
+![EqnTide Desktop Equation Editor in Ayu Light and Ayu Dark themes](screenshots/yarutheme.png)
+
 ---
 
 ## Features
