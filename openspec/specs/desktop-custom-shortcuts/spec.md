@@ -26,15 +26,19 @@ The desktop **Settings** tab SHALL render a full-width **Keyboard Shortcuts** ca
 - **THEN** the **Palette Shortcuts** list updates immediately inside the bounded scrollable container to show only matching palette items
 
 ### Requirement: Always-visible fixed-width solid scrollbar without button overlap
-The **Palette Shortcuts** scrollable list SHALL render an always-visible, fixed-width non-floating vertical scrollbar (`ScrollStyle::solid()`) that reserves dedicated right margin clear of row action controls and isolates vertical scroll boundaries.
+The **Palette Shortcuts** list SHALL show a fixed-width vertical scrollbar whenever its rows overflow. While visible, the scrollbar SHALL reserve dedicated space clear of the row action controls. The list SHALL isolate vertical scrolling at its boundaries.
 
 #### Scenario: Scrollbar stays visible at fixed width and never overlaps row buttons
-- **WHEN** the **Palette Shortcuts** list renders with the pointer outside or hovering over the scrollbar track
-- **THEN** the vertical scrollbar uses solid (`floating = false`) layout with constant `8.0px` width and full handle visibility without shrinking or expanding on hover, and preserves `10.0px` inner margin so the scrollbar never overlaps the shortcut capture button or clear (`×`) button
+- **WHEN** the **Palette Shortcuts** list overflows and the pointer is outside the list or hovering over the scrollbar
+- **THEN** the solid scrollbar remains visible at a constant width of 8 logical pixels with a 10-logical-pixel gap to the content, clear of the shortcut capture and clear (`×`) buttons
+
+#### Scenario: A filtered list that fits hides its scrollbar
+- **WHEN** a search or filter leaves rows that fit in the **Palette Shortcuts** list
+- **THEN** the scrollbar is hidden and the rows can use the space on the right
 
 #### Scenario: Scrolling past the top or bottom of the right list does not scroll Settings
-- **WHEN** the pointer is inside the right **Palette Shortcuts** container and the user scrolls up while already at the top or scrolls down while already at the bottom
-- **THEN** remaining vertical wheel delta is consumed (`smooth_scroll_delta.y = 0.0`) so scrolling never chains out to the enclosing **Settings** scroll container, while wheeling over the left `30%` column still scrolls **Settings**
+- **WHEN** the pointer is inside the right **Palette Shortcuts** container and the user scrolls up at the top or down at the bottom
+- **THEN** scrolling stays inside the list at its boundary, while wheeling over the left column still scrolls **Settings**
 
 ### Requirement: Simple default palette shortcut set
 The desktop application SHALL ship with a canonical default set of palette shortcuts mapped directly to exact `PALETTE` `source` templates and allow resetting all palette bindings back to that default set.

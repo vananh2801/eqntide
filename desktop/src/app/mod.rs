@@ -436,15 +436,6 @@ impl App {
                     if gpu_profile == GpuProfile::Software {
                         style.interaction.tooltip_delay = 0.8;
                     }
-                    style.spacing.scroll.dormant_handle_opacity =
-                        style.spacing.scroll.active_handle_opacity;
-                    style.spacing.scroll.interact_handle_opacity =
-                        style.spacing.scroll.active_handle_opacity;
-                    style.spacing.scroll.dormant_background_opacity =
-                        style.spacing.scroll.active_background_opacity;
-                    style.spacing.scroll.interact_background_opacity =
-                        style.spacing.scroll.active_background_opacity;
-                    style.spacing.scroll.floating_allocated_width = style.spacing.scroll.bar_width;
                 });
             }
             egui_ctx.tessellation_options_mut(|options| options.feathering = false);

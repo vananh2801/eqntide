@@ -27,9 +27,15 @@ pub(crate) const BUTTON_HEIGHT: f32 = 30.0;
 pub(crate) const SIDEBAR_TAB_HEIGHT: f32 = 34.0;
 pub(crate) const COMPACT_BUTTON_HEIGHT: f32 = 24.0;
 
+/// Gap between scrollbars and content in the editor and shortcut list.
+pub(crate) const CONTENT_SCROLLBAR_GAP: f32 = 10.0;
+/// Thickness of scrollbars in the editor, including the palette ribbon.
+pub(crate) const EDITOR_SCROLLBAR_WIDTH: f32 = 6.0;
+
 const AYU_DARK_TEXT_INK: Color32 = Color32::from_rgb(13, 16, 22);
 const MAX_BACKGROUND_SCRIM_ALPHA: f32 = 0.65;
 const MIN_SURFACE_ALPHA: f32 = 0.38;
+const SCROLLBAR_WIDTH: f32 = 8.0;
 
 /// Semantic UI color tokens for chrome, panels, controls, selection, and errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -294,6 +300,11 @@ impl ThemeTokens {
                 style.drag_value_text_style = egui::TextStyle::Button;
                 style.spacing.item_spacing = Vec2::splat(SPACE_MD);
                 style.spacing.button_padding = Vec2::new(10.0, 6.0);
+                style.spacing.scroll = egui::style::ScrollStyle {
+                    bar_width: SCROLLBAR_WIDTH,
+                    foreground_color: true,
+                    ..egui::style::ScrollStyle::solid()
+                };
                 style.interaction.show_tooltips_only_when_still = false;
                 style.interaction.tooltip_delay = 0.5;
 
@@ -411,12 +422,6 @@ impl CanvasPalette {
         } else {
             ui_tokens.primary_bg
         };
-        let scroll_inactive = blend_rgb(accent, bg, if dark_mode { 0.62 } else { 0.56 });
-        let scroll_track = if dark_mode {
-            blend_rgb(bg, Color32::BLACK, 0.15)
-        } else {
-            blend_rgb(bg, Color32::from_rgb(225, 228, 232), 0.45)
-        };
         let text_caret = if dark_mode {
             Color32::from_rgb(90, 193, 254)
         } else {
@@ -432,10 +437,14 @@ impl CanvasPalette {
             selection_bg,
             text_caret,
             ime_fg: ui_tokens.selected_fg,
-            scroll_inactive,
+            scroll_inactive: blend_rgb(
+                ui_tokens.text_primary,
+                ui_tokens.extreme_bg,
+                if dark_mode { 0.52 } else { 0.43 },
+            ),
             scroll_hover: accent,
             scroll_active: caret,
-            scroll_track,
+            scroll_track: ui_tokens.extreme_bg,
         }
     }
 
@@ -459,6 +468,14 @@ impl CanvasPalette {
         let surface_alpha = surface_alpha_for_opacity(canvas_opacity, 1.0);
         self.bg = with_unmultiplied_alpha(self.bg, surface_alpha);
         self
+    }
+
+    /// Apply the editor scrollbar colors to the scroll area's visuals.
+    pub(crate) fn apply_scrollbar_colors(self, visuals: &mut egui::Visuals) {
+        visuals.widgets.inactive.fg_stroke.color = self.scroll_inactive;
+        visuals.widgets.hovered.fg_stroke.color = self.scroll_hover;
+        visuals.widgets.active.fg_stroke.color = self.scroll_active;
+        visuals.extreme_bg_color = self.scroll_track;
     }
 }
 
@@ -835,6 +852,10 @@ mod tests {
                 Some(&egui::FontId::proportional(UI_FONT_SIZE))
             );
             assert_eq!(style.drag_value_text_style, egui::TextStyle::Button);
+            assert!(!style.spacing.scroll.floating);
+            assert_eq!(style.spacing.scroll.bar_width, SCROLLBAR_WIDTH);
+            assert!(style.spacing.scroll.foreground_color);
+            assert!(contrast_ratio(expected.text_primary, expected.extreme_bg) >= 3.0);
             assert_eq!(style.visuals.window_corner_radius, SURFACE_CORNER_RADIUS);
             assert_eq!(style.visuals.menu_corner_radius, SURFACE_CORNER_RADIUS);
             assert_eq!(style.visuals.window_stroke, Stroke::NONE);
@@ -879,6 +900,7 @@ mod tests {
         assert_eq!(dark_pal.bg, AYU_DARK_TEXT_INK);
         for pal in [light_pal, dark_pal] {
             assert!(contrast_ratio(pal.ink, pal.bg) >= 10.0);
+            assert!((3.0..=5.0).contains(&contrast_ratio(pal.scroll_inactive, pal.scroll_track)));
             assert_eq!(pal.placeholder_bg, Color32::TRANSPARENT);
             assert_ne!(pal.placeholder_bg, pal.bg);
         }

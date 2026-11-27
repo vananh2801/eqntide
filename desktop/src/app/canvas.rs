@@ -1,8 +1,6 @@
 //! Visual equation canvas painting, placeholder hit-testing, caret geometry, and LaTeX source box.
 
-use super::{
-    App, GpuProfile, CONTENT_PADDING, LATEX_INPUT_HEIGHT, LATEX_PANEL_HEIGHT, PALETTE_HEIGHT,
-};
+use super::{App, CONTENT_PADDING, LATEX_INPUT_HEIGHT, LATEX_PANEL_HEIGHT};
 use crate::{
     palette,
     settings::StartupFocus,
@@ -15,16 +13,7 @@ use std::time::{Duration, Instant};
 impl App {
     /// Renders the main editor workspace: top palette ribbon, equation canvas, and bottom LaTeX box.
     pub(super) fn draw_editor(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("templates-panel")
-            .exact_size(PALETTE_HEIGHT)
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
-                bottom: CONTENT_PADDING,
-                ..Default::default()
-            }))
-            .show_separator_line(false)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!self.draft_dirty, |ui| self.draw_palette(ui));
-            });
+        self.draw_palette(ui);
         egui::Panel::bottom("latex-panel")
             .exact_size(LATEX_PANEL_HEIGHT)
             .show_separator_line(false)
@@ -95,27 +84,38 @@ impl App {
             .stroke(Stroke::NONE)
             .inner_margin(theme::SPACE_LG)
             .show(ui, |ui| {
-                self.configure_canvas_scroll_style(ui, pal);
+                Self::configure_canvas_scroll_style(ui, pal);
 
-                egui::ScrollArea::both()
+                let size = self
+                    .rendered
+                    .as_ref()
+                    .map(|rendered| {
+                        Vec2::new(
+                            rendered.preview.preview.width_pt * scale,
+                            rendered.preview.preview.height_pt * scale,
+                        )
+                    })
+                    .unwrap_or(Vec2::new(60.0, 40.0));
+                let content_size = size + Vec2::new(12.0, 20.0);
+                let viewport_size =
+                    Vec2::new(ui.available_width(), ui.available_height().min(height));
+                let gutter = ui.spacing().scroll.allocated_width();
+                // Start with the full viewport so two existing gutters cannot keep each other open.
+                let overflows_x = content_size.x > viewport_size.x.ceil();
+                let overflows_y = content_size.y > viewport_size.y.ceil();
+                let scroll_x = overflows_x
+                    || (overflows_y && content_size.x > (viewport_size.x - gutter).ceil());
+                let scroll_y = overflows_y
+                    || (overflows_x && content_size.y > (viewport_size.y - gutter).ceil());
+                egui::ScrollArea::new([scroll_x, scroll_y])
                     .id_salt("formula-scroll")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .max_height(height)
-                    .min_scrolled_height(height)
+                    .min_scrolled_height(0.0)
                     .auto_shrink([false, false])
                     .show_viewport(ui, |ui, viewport| {
-                        let size = self
-                            .rendered
-                            .as_ref()
-                            .map(|rendered| {
-                                Vec2::new(
-                                    rendered.preview.preview.width_pt * scale,
-                                    rendered.preview.preview.height_pt * scale,
-                                )
-                            })
-                            .unwrap_or(Vec2::new(60.0, 40.0));
                         // Only the formula contributes to scrollable content. Filling the
                         // viewport via allocate_space can round past its width at fractional DPI.
-                        let content_size = size + Vec2::new(12.0, 20.0);
                         let (_, content_rect) = ui.allocate_space(content_size);
                         // Empty canvas space remains clickable without creating overflow.
                         let rect = Rect::from_min_size(
@@ -278,8 +278,7 @@ impl App {
             .fill(pal.bg)
             .corner_radius(theme::CONTROL_CORNER_RADIUS)
             .show(ui, |ui| {
-                self.configure_canvas_scroll_style(ui, pal);
-                ui.spacing_mut().scroll.floating_allocated_width = 0.0;
+                Self::configure_canvas_scroll_style(ui, pal);
                 ui.spacing_mut().scroll.bar_outer_margin = 4.0;
                 ui.visuals_mut().text_cursor.stroke = Stroke::new(1.5, pal.caret);
                 ui.visuals_mut().selection.bg_fill = pal.selection_bg;
@@ -314,36 +313,11 @@ impl App {
         }
     }
 
-    /// Applies theme scrollbar colors and platform-appropriate handle opacities for canvas panels.
-    pub(super) fn configure_canvas_scroll_style(&self, ui: &mut egui::Ui, pal: CanvasPalette) {
-        ui.visuals_mut().widgets.inactive.bg_fill = pal.scroll_inactive;
-        ui.visuals_mut().widgets.inactive.fg_stroke.color = pal.scroll_inactive;
-        ui.visuals_mut().widgets.hovered.bg_fill = pal.scroll_hover;
-        ui.visuals_mut().widgets.hovered.fg_stroke.color = pal.scroll_hover;
-        ui.visuals_mut().widgets.active.bg_fill = pal.scroll_active;
-        ui.visuals_mut().widgets.active.fg_stroke.color = pal.scroll_active;
-        ui.visuals_mut().extreme_bg_color = pal.scroll_track;
-
+    fn configure_canvas_scroll_style(ui: &mut egui::Ui, pal: CanvasPalette) {
         let scroll = &mut ui.spacing_mut().scroll;
-        if matches!(
-            self.gpu_profile,
-            GpuProfile::VirtualGpu | GpuProfile::Software
-        ) {
-            scroll.dormant_handle_opacity = 0.85;
-            scroll.active_handle_opacity = 0.85;
-            scroll.interact_handle_opacity = 0.85;
-            scroll.dormant_background_opacity = 0.6;
-            scroll.active_background_opacity = 0.6;
-            scroll.interact_background_opacity = 0.6;
-            scroll.floating_allocated_width = scroll.bar_width;
-        } else {
-            scroll.dormant_handle_opacity = 0.5;
-            scroll.active_handle_opacity = 0.85;
-            scroll.interact_handle_opacity = 1.0;
-            scroll.dormant_background_opacity = 0.3;
-            scroll.active_background_opacity = 0.6;
-            scroll.interact_background_opacity = 0.85;
-        }
+        scroll.bar_width = theme::EDITOR_SCROLLBAR_WIDTH;
+        scroll.bar_inner_margin = theme::CONTENT_SCROLLBAR_GAP;
+        pal.apply_scrollbar_colors(ui.visuals_mut());
     }
 
     /// Paints an empty structural slot as an unfilled dashed box with light corner rounding.

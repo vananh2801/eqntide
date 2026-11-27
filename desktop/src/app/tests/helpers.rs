@@ -168,6 +168,28 @@ pub(super) fn run_ui_pass_sized_events(
     output
 }
 
+pub(super) fn scroll_tracks(
+    output: &egui::FullOutput,
+    color: egui::Color32,
+    thickness: f32,
+) -> Vec<Rect> {
+    output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(shape)
+                if shape.fill == color
+                    && shape.corner_radius == theme::CONTROL_CORNER_RADIUS
+                    && ((shape.rect.width() - thickness).abs() < 0.5
+                        || (shape.rect.height() - thickness).abs() < 0.5) =>
+            {
+                Some(shape.rect)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 pub(super) fn card_rects_for_section_titles(
     output: &egui::FullOutput,
     tokens: ThemeTokens,

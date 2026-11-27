@@ -17,8 +17,6 @@ const SHORTCUT_COLUMN_GAP: f32 = theme::SPACE_XL;
 const SHORTCUT_LIST_INNER_MARGIN: egui::Margin = egui::Margin::same(16);
 const SHORTCUT_SCROLL_HEIGHT: f32 = 360.0;
 const SHORTCUT_ICON_SIZE: Vec2 = Vec2::new(44.0, 28.6);
-const SHORTCUT_SCROLLBAR_WIDTH: f32 = 8.0;
-const SHORTCUT_SCROLLBAR_INNER_MARGIN: f32 = 10.0;
 const SHORTCUT_CAPTURE_HINT: &str =
     "Press Ctrl, Alt, or F1–F12 to bind · Backspace clears · Esc cancels";
 
@@ -284,19 +282,12 @@ impl App {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.scope(|ui| {
-                    let mut scroll_style = egui::style::ScrollStyle::solid();
-                    scroll_style.bar_width = SHORTCUT_SCROLLBAR_WIDTH;
-                    scroll_style.bar_inner_margin = SHORTCUT_SCROLLBAR_INNER_MARGIN;
-                    scroll_style.bar_outer_margin = 0.0;
-                    ui.spacing_mut().scroll = scroll_style;
+                    ui.spacing_mut().scroll.bar_inner_margin = theme::CONTENT_SCROLLBAR_GAP;
                     egui::ScrollArea::vertical()
                         .id_salt("palette-shortcuts-scroll")
                         .min_scrolled_height(SHORTCUT_SCROLL_HEIGHT)
                         .max_height(SHORTCUT_SCROLL_HEIGHT)
                         .auto_shrink([false, true])
-                        .scroll_bar_visibility(
-                            egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
-                        )
                         .show_rows(ui, SHORTCUT_ROW_HEIGHT, rows.len(), |ui, row_range| {
                             ui.spacing_mut().item_spacing.y = theme::SPACE_XS;
                             for row in &rows[row_range] {

@@ -1,8 +1,8 @@
 //! Palette ribbon UI, pre-rasterized SVG sprite atlas loader, and shared button/card helpers.
 
 use super::{
-    tabler_icon_bytes, App, MatrixDialog, PaletteAtlas, PaletteAtlasEntry, PALETTE_BUTTON_SIZE,
-    PALETTE_GAP, UI_ICON_SIZE,
+    tabler_icon_bytes, App, MatrixDialog, PaletteAtlas, PaletteAtlasEntry, CONTENT_PADDING,
+    PALETTE_BUTTON_SIZE, PALETTE_GAP, PALETTE_HEIGHT, UI_ICON_SIZE,
 };
 use crate::{
     palette,
@@ -16,10 +16,48 @@ const PALETTE_ATLAS_PNG: &[u8] =
     include_bytes!("../../../assets/icons/generated/palette-atlas/atlas.png");
 
 impl App {
-    /// Renders the horizontal template/symbol palette grid for the active sidebar category.
+    /// Renders the palette ribbon, reserving extra height when its grid scrolls horizontally.
     pub(super) fn draw_palette(&mut self, ui: &mut egui::Ui) {
-        let height = ui.available_height();
         let items = palette::items_for_ui_group(&self.category, &self.recent_palette);
+        let has_matrix_tools = palette::group_contains(&self.category, "Matrices");
+        let item_count = items.len() + usize::from(has_matrix_tools);
+        let width = ui.available_width();
+        let tile_stride = PALETTE_BUTTON_SIZE.x + PALETTE_GAP;
+        let fitting_columns = ((width + PALETTE_GAP) / tile_stride).floor() as usize;
+        let columns = fitting_columns.max(item_count.div_ceil(3)).max(1);
+        let grid_width = columns.min(item_count) as f32 * tile_stride - PALETTE_GAP;
+        let scroll_style = egui::style::ScrollStyle {
+            bar_width: theme::EDITOR_SCROLLBAR_WIDTH,
+            ..ui.spacing().scroll
+        };
+        let scrollbar_height = if grid_width > width.ceil() {
+            scroll_style.allocated_width()
+        } else {
+            0.0
+        };
+        egui::Panel::top("templates-panel")
+            .exact_size(PALETTE_HEIGHT + scrollbar_height)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                bottom: CONTENT_PADDING,
+                ..Default::default()
+            }))
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!self.draft_dirty, |ui| {
+                    ui.spacing_mut().scroll = scroll_style;
+                    self.draw_palette_grid(ui, &items, columns, has_matrix_tools);
+                });
+            });
+    }
+
+    fn draw_palette_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        items: &[&palette::PaletteItem],
+        columns: usize,
+        has_matrix_tools: bool,
+    ) {
+        let height = ui.available_height();
         if self.category == palette::RECENT_GROUP && items.is_empty() {
             ui.allocate_ui_with_layout(
                 Vec2::new(ui.available_width(), height),
@@ -30,16 +68,11 @@ impl App {
             );
             return;
         }
-        let has_matrix_tools = palette::group_contains(&self.category, "Matrices");
-        let fitting_columns = ((ui.available_width() + PALETTE_GAP)
-            / (PALETTE_BUTTON_SIZE.x + PALETTE_GAP))
-            .floor() as usize;
-        // Native DPI/startup adjustments may briefly give us less than the minimum width.
-        // Keep three rows in that frame too, scrolling horizontally if necessary.
-        let item_count = items.len() + usize::from(has_matrix_tools);
-        let columns = fitting_columns.max(item_count.div_ceil(3)).max(1);
         ui.scope(|ui| {
-            ui.style_mut().always_scroll_the_only_direction = true;
+            let palette = self.active_canvas_palette(ui.visuals().dark_mode);
+            let style = ui.style_mut();
+            style.always_scroll_the_only_direction = true;
+            palette.apply_scrollbar_colors(&mut style.visuals);
             egui::ScrollArea::horizontal()
                 .id_salt(("palette", &self.category))
                 .vertical_scroll_offset(0.0)

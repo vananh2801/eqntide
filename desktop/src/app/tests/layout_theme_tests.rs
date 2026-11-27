@@ -424,6 +424,7 @@ fn startup_resize_corrects_undersized_native_and_wayland_viewports() {
 fn canvas_scrolls_only_for_formula_overflow_across_dpi_changes() {
     for dpi in [1.0, 1.25, 1.5, 2.0] {
         let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
         ctx.set_pixels_per_point(dpi);
         let mut app = super::helpers::app();
         let short = MathNode::with_children("math", vec![MathNode::leaf("mi", "x")]);
@@ -433,21 +434,29 @@ fn canvas_scrolls_only_for_formula_overflow_across_dpi_changes() {
             tall = MathNode::with_children("mfrac", vec![tall, MathNode::leaf("mi", "x")]);
         }
         let tall = MathNode::with_children("math", vec![tall]);
+        let both = MathNode::with_children("math", vec![long.clone(), tall.clone()]);
         let mut frame = 0;
-        // Returning to a short formula must remove overflow after either kind of scroll.
-        for (math, horizontal, vertical) in [
-            (&short, false, false),
-            (&long, true, false),
-            (&short, false, false),
-            (&tall, false, true),
-            (&short, false, false),
+        let mut full_size = Vec2::ZERO;
+        for (math, horizontal, vertical, near_fit) in [
+            (&short, false, false, false),
+            (&long, true, false, false),
+            (&short, false, false, false),
+            (&tall, false, true, false),
+            (&both, true, true, false),
+            (&short, false, false, true),
         ] {
+            let mut preview = eqntide::render::render_interactive(math, app.font_pt).unwrap();
+            if near_fit {
+                let scale = app.zoom * 96.0 / 72.0;
+                preview.preview.width_pt = (full_size.x - 12.0 - 4.0) / scale;
+                preview.preview.height_pt = (full_size.y - 20.0 - 4.0) / scale;
+            }
             app.rendered = Some(Rendered {
                 placeholders: vec![],
                 image: egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255]),
-                preview: eqntide::render::render_interactive(math, app.font_pt).unwrap(),
+                preview,
             });
-            for _ in 0..4 {
+            for pass in 0..4 {
                 let mut scroll = None;
                 let mut output = ctx.run_ui(
                     egui::RawInput {
@@ -462,6 +471,9 @@ fn canvas_scrolls_only_for_formula_overflow_across_dpi_changes() {
                 frame += 1;
                 output.textures_delta.clear();
                 let scroll = scroll.unwrap();
+                if pass != 3 {
+                    continue;
+                }
                 assert_eq!(
                     scroll.content_size.x > scroll.inner_rect.width(),
                     horizontal,
@@ -477,6 +489,22 @@ fn canvas_scrolls_only_for_formula_overflow_across_dpi_changes() {
                     scroll.inner_rect
                 );
                 let pal = app.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
+                let tracks = scroll_tracks(&output, pal.scroll_track, 6.0);
+                assert_eq!(
+                    tracks.len(),
+                    usize::from(horizontal) + usize::from(vertical)
+                );
+                for track in tracks {
+                    let gap = if track.width() > track.height() {
+                        track.top() - scroll.inner_rect.bottom()
+                    } else {
+                        track.left() - scroll.inner_rect.right()
+                    };
+                    assert!((gap - theme::CONTENT_SCROLLBAR_GAP).abs() < 0.5);
+                }
+                if !horizontal && !vertical {
+                    full_size = scroll.inner_rect.size();
+                }
                 let canvas = output
                     .shapes
                     .iter()
@@ -883,8 +911,10 @@ fn recent_palette_tracks_mru_without_duplicates_and_renders() {
 
 #[test]
 fn palette_scrolls_horizontally_on_vertical_mouse_wheel() {
-    fn run_wheel_case(category: &str, wheel_delta: Vec2, expected_overflow: bool) {
+    fn run_wheel_case(category: &str, wheel_delta: Vec2, expected_overflow: bool, dpi: f32) {
         let ctx = egui::Context::default();
+        ThemeTokens::apply_style(&ctx);
+        ctx.set_pixels_per_point(dpi);
         let mut app = super::helpers::app();
         app.category = category.into();
         let hover_pos = Pos2::new(360.0, 48.0);
@@ -967,12 +997,39 @@ fn palette_scrolls_horizontally_on_vertical_mouse_wheel() {
         };
         let initial_x = first_x(&out.shapes);
         let final_x = first_x(&settle_out.shapes);
+        let palette = app.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
+        let tracks = scroll_tracks(&settle_out, palette.scroll_track, 6.0);
         if expected_overflow {
+            let [track] = tracks.as_slice() else {
+                panic!("expected one palette track at DPI {dpi}: {tracks:?}");
+            };
+            assert!(scroll_tracks(&settle_out, palette.scroll_inactive, 6.0)
+                .iter()
+                .any(|handle| track.contains_rect(*handle)));
+            let mut rows = Vec::new();
+            for clipped in &settle_out.shapes {
+                let egui::Shape::Rect(shape) = &clipped.shape else {
+                    continue;
+                };
+                if shape
+                    .brush
+                    .as_ref()
+                    .is_some_and(|brush| brush.fill_texture_id == palette_tex)
+                {
+                    assert!(shape.rect.bottom() <= track.top());
+                    assert!(shape.rect.bottom() <= clipped.clip_rect.bottom());
+                    rows.push(shape.rect.center().y.round() as i32);
+                }
+            }
+            rows.sort_unstable();
+            rows.dedup();
+            assert_eq!(rows.len(), 3);
             assert!(
                 final_x < initial_x - 20.0,
                 "expected overflowing category {category} to pan left (scroll right) with {wheel_delta:?}: {initial_x} -> {final_x}"
             );
         } else {
+            assert!(tracks.is_empty());
             assert!(
                 (final_x - initial_x).abs() < 1.0,
                 "expected non-overflowing category {category} to stay stationary with {wheel_delta:?}: {initial_x} -> {final_x}"
@@ -980,9 +1037,11 @@ fn palette_scrolls_horizontally_on_vertical_mouse_wheel() {
         }
     }
 
-    run_wheel_case("LogicSetsSymbols", Vec2::new(0.0, -180.0), true);
-    run_wheel_case("LogicSetsSymbols", Vec2::new(-180.0, 0.0), true);
-    run_wheel_case("Fractions", Vec2::new(0.0, -180.0), false);
+    for dpi in [1.0, 1.25, 2.0] {
+        run_wheel_case("LogicSetsSymbols", Vec2::new(0.0, -180.0), true, dpi);
+        run_wheel_case("LogicSetsSymbols", Vec2::new(-180.0, 0.0), true, dpi);
+        run_wheel_case("Fractions", Vec2::new(0.0, -180.0), false, dpi);
+    }
 }
 
 #[test]
@@ -1411,6 +1470,9 @@ fn multiline_latex_scrolls_within_bounds_without_canvas_overlap() {
         });
     }
     run_ui_pass_frame(&ctx, &mut app, events);
+    for _ in 0..12 {
+        run_ui_pass_frame(&ctx, &mut app, vec![]);
+    }
     let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
     let (canvas_multi, latex_multi) = find_canvas_and_latex_frames(&out);
     assert_eq!(canvas_multi, canvas_single);
@@ -1438,6 +1500,103 @@ fn multiline_latex_scrolls_within_bounds_without_canvas_overlap() {
             clipped.clip_rect,
             latex_multi
         );
+    }
+    let track = scroll_tracks(&out, pal.scroll_track, 6.0)
+        .into_iter()
+        .find(|track| latex_multi.contains_rect(*track))
+        .expect("LaTeX scrollbar");
+    let text_edit = ctx.read_response(latex_id).unwrap().rect;
+    assert!((track.left() - text_edit.right() - theme::CONTENT_SCROLLBAR_GAP).abs() < 0.5);
+
+    run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        click_events(track.center_bottom() - Vec2::Y),
+    );
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let bottom = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert!(bottom.shapes.iter().any(|clipped| {
+        let egui::Shape::Text(text) = &clipped.shape else {
+            return false;
+        };
+        text.galley.text().contains("line8")
+            && text.galley.rows.iter().any(|row| {
+                row.text() == "line8"
+                    && clipped
+                        .clip_rect
+                        .contains_rect(row.rect().translate(text.pos.to_vec2()))
+            })
+    }));
+
+    app.latex.clear();
+    for _ in 0..12 {
+        run_ui_pass_frame(&ctx, &mut app, vec![]);
+    }
+    let cleared = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert!(scroll_tracks(&cleared, pal.scroll_track, 6.0).is_empty());
+    assert!(ctx.read_response(latex_id).unwrap().rect.right() > text_edit.right());
+}
+
+#[test]
+fn settings_and_about_scrollbars_keep_their_geometry_on_hover_and_drag() {
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        let tokens = ThemeTokens::for_mode(theme == egui::Theme::Dark);
+        for tab in [2, 3] {
+            let ctx = egui::Context::default();
+            ThemeTokens::apply_style(&ctx);
+            ctx.set_theme(theme);
+            ctx.style_mut_of(theme, |style| style.animation_time = 0.0);
+            let mut app = super::helpers::app();
+            app.tab = tab;
+            let size = Vec2::new(MIN_WINDOW_SIZE[0], 180.0);
+            for _ in 0..2 {
+                run_ui_pass_sized(&ctx, &mut app, size);
+            }
+            let idle = run_ui_pass_sized(&ctx, &mut app, size);
+            let track = scroll_tracks(&idle, tokens.extreme_bg, 8.0)
+                .into_iter()
+                .max_by(|first, second| first.right().total_cmp(&second.right()))
+                .expect("outer scrollbar");
+            let handle = scroll_tracks(&idle, tokens.text_primary, 8.0)
+                .into_iter()
+                .find(|handle| track.contains_rect(*handle))
+                .expect("idle handle");
+            let center = handle.center();
+            let hovered = run_ui_pass_sized_events(
+                &ctx,
+                &mut app,
+                size,
+                vec![egui::Event::PointerMoved(center)],
+            );
+            let hovered_tracks = scroll_tracks(&hovered, tokens.extreme_bg, 8.0);
+            assert!(
+                hovered_tracks.contains(&track),
+                "{theme:?} tab {tab}: {track:?} -> {hovered_tracks:?}"
+            );
+            assert!(scroll_tracks(&hovered, tokens.text_primary, 8.0).contains(&handle));
+
+            run_ui_pass_sized_events(
+                &ctx,
+                &mut app,
+                size,
+                vec![egui::Event::PointerButton {
+                    pos: center,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            let dragged = run_ui_pass_sized_events(
+                &ctx,
+                &mut app,
+                size,
+                vec![egui::Event::PointerMoved(center + Vec2::new(0.0, 20.0))],
+            );
+            assert!(scroll_tracks(&dragged, tokens.extreme_bg, 8.0).contains(&track));
+            assert!(scroll_tracks(&dragged, tokens.text_primary, 8.0)
+                .iter()
+                .any(|moved| track.contains_rect(*moved) && moved.top() > handle.top()));
+        }
     }
 }
 

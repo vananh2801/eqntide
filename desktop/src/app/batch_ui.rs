@@ -260,9 +260,7 @@ impl App {
             ui.set_min_size(Vec2::new(ui.available_width(), inner_h));
             ui.set_max_height(inner_h);
             ui.spacing_mut().item_spacing.y = 0.0;
-            let scroll = egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
+            let scroll = egui::ScrollArea::vertical().auto_shrink([false, false]);
             match self.batch_selection_mode {
                 batch::BatchSelectionMode::FlatList => {
                     scroll.show_rows(ui, row_height, self.files.len(), |ui, row_range| {

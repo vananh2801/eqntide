@@ -567,6 +567,42 @@ fn batch_cards_and_empty_state_span_full_central_panel_width() {
 }
 
 #[test]
+fn batch_folder_collapse_releases_the_scrollbar_gutter() {
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app();
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join("documents");
+    std::fs::create_dir(&folder).unwrap();
+    for index in 0..24 {
+        std::fs::write(folder.join(format!("document-{index}.docx")), []).unwrap();
+    }
+    app.tab = 1;
+    app.add_files(vec![folder.clone()]);
+    let track_color = ThemeTokens::for_mode(ctx.theme() == egui::Theme::Dark).extreme_bg;
+    for _ in 0..10 {
+        run_ui_pass_frame(&ctx, &mut app, vec![]);
+    }
+    let expanded = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert_eq!(scroll_tracks(&expanded, track_color, 8.0).len(), 1);
+
+    app.batch_collapsed_dirs
+        .insert(format!("root:{}", folder.display()));
+    for _ in 0..10 {
+        run_ui_pass_frame(&ctx, &mut app, vec![]);
+    }
+    let collapsed = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert!(scroll_tracks(&collapsed, track_color, 8.0).is_empty());
+
+    app.batch_selection_mode = batch::BatchSelectionMode::FlatList;
+    for _ in 0..10 {
+        run_ui_pass_frame(&ctx, &mut app, vec![]);
+    }
+    let flat = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert_eq!(scroll_tracks(&flat, track_color, 8.0).len(), 1);
+}
+
+#[test]
 fn batch_tab_discovers_nested_folder_docx_files_and_targets_output_dir() {
     use std::io::{Cursor, Write};
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));

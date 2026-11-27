@@ -318,7 +318,9 @@ fn settings_keyboard_shortcuts_card_filters_captures_clears_and_resets() {
     let mut app = super::helpers::app().with_settings_path(settings_path.clone(), Some(&ctx));
     app.tab = 2;
 
-    let _ = run_settings_frame(&ctx, &mut app, vec![]);
+    for _ in 0..10 {
+        run_settings_frame(&ctx, &mut app, vec![]);
+    }
     let out = run_settings_frame(&ctx, &mut app, vec![]);
 
     // Even at compact MIN_WINDOW_SIZE height, the scrollable palette shortcuts table keeps its full
@@ -567,15 +569,23 @@ fn settings_keyboard_shortcuts_card_filters_captures_clears_and_resets() {
     assert!(!has_rendered_text(&out, "Display fraction"));
     assert!(has_rendered_text(&out, r"\frac{#?}{#?}"));
     let clear_pos_unfiltered = find_text_center(&out, |text| text == "×");
+    let track = scroll_tracks(&out, tokens.extreme_bg, 8.0)
+        .into_iter()
+        .find(|track| list_frame_rect.contains_rect(*track))
+        .expect("scrollbar inside the overflowing list");
     assert!(
-        clear_pos_unfiltered.x + 14.0 <= list_frame_rect.right() - 28.0,
-        "clear [×] button should leave dedicated right margin for fixed scrollbar: clear_x={}, frame_right={}",
-        clear_pos_unfiltered.x,
-        list_frame_rect.right()
+        clear_pos_unfiltered.x + 14.0 <= track.left(),
+        "clear [×] button at {clear_pos_unfiltered:?} overlaps track {track:?}"
     );
 
     app.shortcut_filter = ShortcutCategoryFilter::All;
+    for _ in 0..10 {
+        run_settings_frame(&ctx, &mut app, vec![]);
+    }
     let filtered = run_settings_frame(&ctx, &mut app, vec![]);
+    assert!(scroll_tracks(&filtered, tokens.extreme_bg, 8.0)
+        .iter()
+        .all(|track| !list_frame_rect.contains_rect(*track)));
     assert!(has_rendered_text(&filtered, r"\binom{#?}{#?}"));
     assert!(!has_rendered_text(&filtered, r"\sqrt{#?}"));
 
