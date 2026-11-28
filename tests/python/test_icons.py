@@ -1,4 +1,4 @@
-"""Validate committed pre-rasterized Tabler icon PNGs, palette SVGs, and atlas sync."""
+"""Validate committed pre-rasterized Tabler icon PNGs, brand icons, palette SVGs, and atlas sync."""
 
 import json
 from pathlib import Path
@@ -10,12 +10,16 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
+import export_brand_icons  # noqa: E402
 import generate_palette_icons  # noqa: E402
 import package_native  # noqa: E402
 import render_icons  # noqa: E402
 
 
 class RenderedIconsTests(unittest.TestCase):
+    def test_brand_pngs_and_ico_are_valid(self):
+        self.assertEqual(export_brand_icons.check_all(), 0)
+
     def test_all_desktop_and_ribbon_pngs_exist_and_match_manifest(self):
         self.assertEqual(render_icons.check_all(), 0)
 
