@@ -152,10 +152,10 @@ eqntide-cli --server
 
 ### Rust Library (`eqntide`)
 
-Use the `v1.3.0` Git tag in your `Cargo.toml` dependencies:
+Use the `v1.3.1` Git tag in your `Cargo.toml` dependencies:
 
 ```toml
-eqntide = { git = "https://github.com/vananh2801/eqntide.git", tag = "v1.3.0" }
+eqntide = { git = "https://github.com/vananh2801/eqntide.git", tag = "v1.3.1" }
 ```
 
 Then call the conversion API from Rust:
