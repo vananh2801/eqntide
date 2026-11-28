@@ -1798,12 +1798,15 @@ fn panel_dividers_draw_over_opaque_fills_and_clear_color_matches_theme() {
     ctx.set_theme(egui::Theme::Light);
     let out = run_ui_pass_sized(&ctx, &mut app, Vec2::new(1100.0, 650.0));
 
-    // CentralPanel (app_bg) and app-footer / app-status (panel_bg) meet flush while divider lines draw over opaque fills.
+    // Palette panel, CentralPanel (app_bg), app-footer, and app-status meet flush while divider lines draw over opaque fills.
+    let mut central_min_y = None;
     let mut central_max_y = None;
+    let mut palette_rect = None;
     let mut footer_min_y = None;
     let mut status_min_y = None;
     let mut status_stroke = None;
     let mut central_idx = None;
+    let mut palette_divider_idx = None;
     let mut status_divider_idx = None;
     let mut footer_divider_idx = None;
     let mut sidebar_divider_idx = None;
@@ -1812,8 +1815,16 @@ fn panel_dividers_draw_over_opaque_fills_and_clear_color_matches_theme() {
             egui::Shape::Rect(rect_shape)
                 if rect_shape.fill == light_tokens.app_bg && rect_shape.rect.width() > 800.0 =>
             {
+                central_min_y = Some(rect_shape.rect.min.y);
                 central_max_y = Some(rect_shape.rect.max.y);
                 central_idx = Some(idx);
+            }
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == light_tokens.panel_bg
+                    && (rect_shape.rect.height() - PALETTE_HEIGHT).abs() < 0.01
+                    && rect_shape.rect.width() > 800.0 =>
+            {
+                palette_rect = Some(rect_shape.rect);
             }
             egui::Shape::Rect(rect_shape)
                 if rect_shape.fill == light_tokens.panel_bg
@@ -1837,6 +1848,10 @@ fn panel_dividers_draw_over_opaque_fills_and_clear_color_matches_theme() {
                         .is_some_and(|status_y| (points[0].y - (status_y + 0.5)).abs() < 0.5)
                     {
                         status_divider_idx = Some(idx);
+                    } else if palette_rect
+                        .is_some_and(|pal_rect| (points[0].y - (pal_rect.max.y - 0.5)).abs() < 0.5)
+                    {
+                        palette_divider_idx = Some(idx);
                     } else {
                         footer_divider_idx = Some(idx);
                     }
@@ -1849,11 +1864,15 @@ fn panel_dividers_draw_over_opaque_fills_and_clear_color_matches_theme() {
             _ => {}
         }
     }
+    let palette_rect = palette_rect.expect("palette panel fill");
+    let central_min_y = central_min_y.expect("central panel min y");
     let central_max_y = central_max_y.expect("central panel fill");
     let footer_min_y = footer_min_y.expect("footer panel fill");
+    assert!((palette_rect.max.y - central_min_y).abs() < 0.01);
     assert!((central_max_y - footer_min_y).abs() < 0.01);
     assert_eq!(status_stroke, Some(Stroke::NONE));
     let central_idx = central_idx.expect("central panel index");
+    assert!(palette_divider_idx.expect("palette divider") > central_idx);
     assert!(status_divider_idx.expect("status divider") > central_idx);
     assert!(footer_divider_idx.expect("footer divider") > central_idx);
     assert!(sidebar_divider_idx.expect("sidebar divider") > central_idx);
@@ -3278,4 +3297,167 @@ fn latex_box_ctrl_wheel_scales_font_size_independently_across_bounds() {
         })
         .expect("command popup prefix");
     assert_eq!(popup_font, egui::FontId::monospace(theme::UI_FONT_SIZE));
+}
+
+#[test]
+fn palette_panel_uses_panel_bg_with_overlay_opacity_and_bottom_divider() {
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app();
+    let img = egui::ColorImage::filled([32, 32], Color32::from_rgb(40, 120, 210));
+    app.background_texture =
+        Some(ctx.load_texture("bg-palette-panel", img, egui::TextureOptions::LINEAR));
+
+    // At minimum 1056x560 in Solid mode, palette panel sits at y=0..PALETTE_HEIGHT with 8px top/bottom
+    // padding and Equation Canvas begins 8px below the palette divider.
+    for (theme, dark) in [(egui::Theme::Light, false), (egui::Theme::Dark, true)] {
+        ctx.set_theme(theme);
+        app.background_mode = BackgroundMode::Solid;
+        let out = run_ui_pass_sized(&ctx, &mut app, Vec2::from(MIN_WINDOW_SIZE));
+        let tokens = ThemeTokens::for_mode(dark);
+        let pal = app.active_canvas_palette(dark);
+
+        let palette_rect = out
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.fill == tokens.panel_bg
+                        && (rect_shape.rect.height() - PALETTE_HEIGHT).abs() < 0.01
+                        && rect_shape.rect.width() > 800.0 =>
+                {
+                    Some(rect_shape.rect)
+                }
+                _ => None,
+            })
+            .expect("top palette chrome panel fill");
+        assert!((palette_rect.top() - 0.0).abs() <= 0.5);
+
+        let canvas_rect = out
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.fill == pal.bg
+                        && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                        && rect_shape.rect.width() > 500.0 =>
+                {
+                    Some(rect_shape.rect)
+                }
+                _ => None,
+            })
+            .expect("equation canvas frame");
+        assert!(
+            (canvas_rect.top() - palette_rect.bottom() - CONTENT_PADDING as f32).abs() <= 1.0,
+            "expected 8px clearance below palette divider: palette={palette_rect:?}, canvas={canvas_rect:?}"
+        );
+        let latex_frame_rect = out
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.fill == pal.bg
+                        && rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS
+                        && (rect_shape.rect.height() - LATEX_INPUT_HEIGHT).abs() <= 1.0 =>
+                {
+                    Some(rect_shape.rect)
+                }
+                _ => None,
+            })
+            .expect("latex frame rect");
+        let footer_rect = out
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.fill == tokens.panel_bg
+                        && (rect_shape.rect.height() - 56.0).abs() < 0.01 =>
+                {
+                    Some(rect_shape.rect)
+                }
+                _ => None,
+            })
+            .expect("footer panel rect");
+        let canvas_to_latex_gap = latex_frame_rect.top() - canvas_rect.bottom();
+        let latex_to_footer_gap = footer_rect.top() - latex_frame_rect.bottom();
+        assert!(
+            (canvas_to_latex_gap - latex_to_footer_gap).abs() <= 0.5
+                && (canvas_to_latex_gap - CONTENT_PADDING as f32).abs() <= 0.5,
+            "expected equal 8px gaps around LaTeX box: canvas_to_latex={canvas_to_latex_gap}, latex_to_footer={latex_to_footer_gap}"
+        );
+
+        let atlas_tex = app
+            .palette_atlas
+            .as_ref()
+            .expect("palette atlas")
+            .texture
+            .id();
+        let tile_bounds = out
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape
+                        .brush
+                        .as_ref()
+                        .is_some_and(|brush| brush.fill_texture_id == atlas_tex) =>
+                {
+                    Some(rect_shape.rect)
+                }
+                _ => None,
+            })
+            .fold(Rect::NOTHING, |acc, rect| acc.union(rect));
+        assert!(tile_bounds.is_positive());
+        assert!(
+            tile_bounds.top() - palette_rect.top() >= CONTENT_PADDING as f32 - 0.5,
+            "palette tiles need top padding inside chrome panel"
+        );
+        assert!(
+            palette_rect.bottom() - tile_bounds.bottom() >= CONTENT_PADDING as f32 - 0.5,
+            "palette tiles need bottom padding inside chrome panel"
+        );
+
+        assert!(out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::LineSegment { points, stroke }
+                if stroke.color == tokens.border
+                    && (points[0].y - points[1].y).abs() < 0.01
+                    && (points[0].y - (palette_rect.max.y - 0.5)).abs() < 0.5
+                    && (points[0].x - palette_rect.min.x).abs() < 0.5
+                    && (points[1].x - palette_rect.max.x).abs() < 0.5
+        )));
+
+        // Typing an incomplete LaTeX draft disables tiles without dimming the palette panel chrome fill.
+        app.draft_dirty = true;
+        let draft_out = run_ui_pass_sized(&ctx, &mut app, Vec2::from(MIN_WINDOW_SIZE));
+        assert!(draft_out.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == tokens.panel_bg
+                    && (rect_shape.rect.height() - PALETTE_HEIGHT).abs() < 0.01
+                    && rect_shape.rect.width() > 800.0
+        )));
+        app.draft_dirty = false;
+
+        // In Image mode, palette panel_bg scales translucency with Overlay opacity just like sidebar/footer.
+        app.background_mode = BackgroundMode::Image;
+        for opacity in [0.0_f32, 0.70_f32, 1.0_f32] {
+            app.background_opacity = opacity;
+            let image_out = run_ui_pass_sized(&ctx, &mut app, Vec2::from(MIN_WINDOW_SIZE));
+            let expected_panel_bg =
+                ThemeTokens::for_mode_with_background_and_accent(dark, true, opacity, None)
+                    .panel_bg;
+            assert!(
+                image_out.shapes.iter().any(|clipped| matches!(
+                    &clipped.shape,
+                    egui::Shape::Rect(rect_shape)
+                        if rect_shape.fill == expected_panel_bg
+                            && (rect_shape.rect.height() - PALETTE_HEIGHT).abs() < 0.01
+                            && rect_shape.rect.width() > 800.0
+                )),
+                "palette panel must track Overlay opacity={opacity}"
+            );
+        }
+        app.background_mode = BackgroundMode::Solid;
+    }
 }

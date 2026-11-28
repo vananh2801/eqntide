@@ -1,9 +1,6 @@
 //! Three-row symbol and template palette with horizontal navigation.
 
-use super::{
-    App, MatrixDialog, CONTENT_PADDING, PALETTE_BUTTON_SIZE, PALETTE_GAP, PALETTE_HEIGHT,
-    PALETTE_ROWS, UI_ICON_SIZE,
-};
+use super::{App, MatrixDialog, PALETTE_BUTTON_SIZE, PALETTE_GAP, PALETTE_ROWS, UI_ICON_SIZE};
 use crate::{palette, theme};
 use eframe::egui::{self, Color32, Rect, Vec2};
 
@@ -22,22 +19,13 @@ const MATRIX_ACTIONS: [(&str, bool, bool); 4] = [
 ];
 
 impl App {
-    /// Renders the fixed-height, three-row palette ribbon.
+    /// Renders the fixed-height, three-row palette ribbon inside the top chrome panel.
     pub(super) fn draw_palette(&mut self, ui: &mut egui::Ui) {
         let subgroups = palette::subgroups_for_ui_group(&self.category, &self.recent_palette);
         let has_matrix_tools = palette::group_contains(&self.category, "Matrices");
-        egui::Panel::top("templates-panel")
-            .exact_size(PALETTE_HEIGHT)
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
-                bottom: CONTENT_PADDING,
-                ..Default::default()
-            }))
-            .show_separator_line(false)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!self.draft_dirty, |ui| {
-                    self.draw_palette_grid(ui, &subgroups, has_matrix_tools);
-                });
-            });
+        ui.add_enabled_ui(!self.draft_dirty, |ui| {
+            self.draw_palette_grid(ui, &subgroups, has_matrix_tools);
+        });
     }
 
     fn draw_palette_grid(

@@ -71,7 +71,7 @@ const SIDEBAR_CATEGORY_ICON_SIZE: f32 = 22.0;
 pub(super) const UI_ICON_SIZE: f32 = 16.0;
 pub(super) const PALETTE_HEIGHT: f32 = PALETTE_ROWS as f32 * PALETTE_BUTTON_SIZE.y
     + (PALETTE_ROWS - 1) as f32 * PALETTE_GAP
-    + CONTENT_PADDING as f32;
+    + 2.0 * CONTENT_PADDING as f32;
 pub(super) const LATEX_PANEL_HEIGHT: f32 = 88.0;
 pub(super) const LATEX_INPUT_HEIGHT: f32 = LATEX_PANEL_HEIGHT - CONTENT_PADDING as f32;
 pub(super) const PLACEHOLDER_ATTR: &str = "data-eqntide-placeholder";
@@ -634,7 +634,7 @@ impl App {
         }
     }
 
-    /// Renders the window chrome (status bar, sidebar, footer) and active tab content.
+    /// Renders the window chrome (status bar, sidebar, palette ribbon, footer) and active tab content.
     pub(super) fn draw_shell(&mut self, ui: &mut egui::Ui) {
         self.save_clicked = false;
         self.keyboard_handled = false;
@@ -709,6 +709,29 @@ impl App {
         } else {
             None
         };
+        let palette_rect = if self.tab == 0 {
+            Some(
+                egui::Panel::top("templates-panel")
+                    .exact_size(PALETTE_HEIGHT)
+                    .frame(egui::Frame::NONE.fill(tokens.panel_bg).inner_margin(
+                        egui::Margin::symmetric(theme::SPACE_LG as i8, CONTENT_PADDING),
+                    ))
+                    .show_separator_line(false)
+                    .show(ui, |ui| {
+                        ui.add_enabled_ui(
+                            !self.busy
+                                && self.pending.is_none()
+                                && self.matrix_dialog.is_none()
+                                && self.shortcut_conflict.is_none(),
+                            |ui| self.draw_palette(ui),
+                        );
+                    })
+                    .response
+                    .rect,
+            )
+        } else {
+            None
+        };
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
@@ -742,6 +765,10 @@ impl App {
         if let Some(rect) = sidebar_rect {
             ui.painter()
                 .vline(rect.max.x - 0.5, rect.y_range(), divider_stroke);
+        }
+        if let Some(rect) = palette_rect {
+            ui.painter()
+                .hline(rect.x_range(), rect.max.y - 0.5, divider_stroke);
         }
         if let Some(rect) = footer_rect {
             ui.painter()

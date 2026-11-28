@@ -10,9 +10,8 @@ use eqntide_editor::Caret;
 use std::time::{Duration, Instant};
 
 impl App {
-    /// Renders the main editor workspace: top palette ribbon, equation canvas, and bottom LaTeX box.
+    /// Renders the central editor workspace: equation canvas and bottom LaTeX source box.
     pub(super) fn draw_editor(&mut self, ui: &mut egui::Ui) {
-        self.draw_palette(ui);
         egui::Panel::bottom("latex-panel")
             .exact_size(LATEX_PANEL_HEIGHT)
             .show_separator_line(false)
@@ -49,7 +48,7 @@ impl App {
         } else {
             ui.set_opacity(1.0);
         }
-        let height = (ui.available_height() - 26.0).max(12.0);
+        let height = (ui.available_height() - 2.0 * theme::SPACE_LG).max(12.0);
         let pal = self.active_canvas_palette(ui.visuals().dark_mode);
         egui::Frame::new()
             .fill(pal.bg)

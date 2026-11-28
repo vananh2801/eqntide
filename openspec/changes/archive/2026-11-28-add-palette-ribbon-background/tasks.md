@@ -1,0 +1,11 @@
+# Tasks
+
+## 1. Promote Palette Ribbon to Chrome Top Panel
+
+- [x] 1.1 Update palette height constants in `desktop/src/app/mod.rs` and `desktop/src/app/palette_ribbon.rs` (`PALETTE_HEIGHT = 120.0` covering 3 rows plus `8px` top and bottom `CONTENT_PADDING`), mount `templates-panel` as a `Panel::top` in `App::draw_shell` (after `app-sidebar` and `app-footer` when `self.tab == 0`) with `tokens.panel_bg` and `Margin::symmetric(theme::SPACE_LG as i8, CONTENT_PADDING)`, and remove `self.draw_palette(ui)` from `App::draw_editor` in `desktop/src/app/canvas.rs`. Also update `App::draw_canvas` to subtract `2.0 * theme::SPACE_LG` (`24px`) instead of `26px` so the canvas-to-LaTeX gap equals the `8px` LaTeX-to-footer padding. Verify `cargo check -p eqntide-desktop` succeeds and `App::draw_canvas` shrinks proportionally at `1056x560` to preserve `8px` clearance below the palette panel.
+- [x] 1.2 Paint the `1px` `tokens.border` horizontal divider along `palette_rect.max.y - 0.5` across `palette_rect.x_range()` in `App::draw_shell`, preserve separate modal/busy (`add_enabled_ui`) and `draft_dirty` disabled gating around `draw_palette_grid` without dimming `panel_bg` during `draft_dirty`, and verify in `desktop/src/app/tests/layout_theme_tests.rs` that the palette panel fills with `panel_bg`, paints the bottom divider, and aligns its tile viewport horizontally with Equation Canvas and LaTeX source.
+
+## 2. Layout, Background Opacity, and Pre-Commit Verification
+
+- [x] 2.1 Update `fixed_layout_keeps_save_and_source_visible_across_sizes_and_themes` and add layout/theme tests in `desktop/src/app/tests/layout_theme_tests.rs` covering `8px` palette padding and reduced Equation Canvas top clearance at `1056x560`, Solid vs. Image mode `panel_bg` alpha scaling across **Overlay opacity** (`0%`, `70%`, `100%`), and preserved palette tile drag/wheel scrolling; verify with `cargo test -p eqntide-desktop layout_theme_tests`.
+- [x] 2.2 Run full workspace pre-commit checks (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --all-targets --locked`, and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`) and confirm zero warnings or failures.
