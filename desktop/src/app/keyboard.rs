@@ -1,11 +1,39 @@
 //! Keyboard shortcut handling, canvas text/IME input, and inline LaTeX command popup.
 
-use super::{App, Intent};
+use super::{App, Intent, StartupFocus};
 use crate::{commands, palette, theme};
 use eframe::egui::{self, Color32, Pos2};
 use eqntide_editor::{Caret, Move};
 
 impl App {
+    /// Strips `Ctrl+H`, `Ctrl+K`, `Ctrl+U`, and `Ctrl+W` key presses before `egui::TextEdit`
+    /// handles them as Emacs/Readline deletions when focus is outside the Equation Canvas.
+    pub(super) fn suppress_text_edit_readline_chords(&self, ctx: &egui::Context) {
+        if self.shortcut_capture.is_some() {
+            return;
+        }
+        let canvas_focused =
+            ctx.memory(|mem| mem.has_focus(Self::editor_focus_id(StartupFocus::Canvas)));
+        let command_input_focused = self.command_input.is_some()
+            && ctx.memory(|mem| mem.has_focus(egui::Id::unique("canvas-command-input")));
+        if canvas_focused && !command_input_focused {
+            return;
+        }
+        ctx.input_mut(|input| {
+            input.events.retain(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::H | egui::Key::K | egui::Key::U | egui::Key::W,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if modifiers.ctrl || (!cfg!(target_os = "macos") && modifiers.command)
+                )
+            });
+        });
+    }
+
     /// Processes keyboard, clipboard, IME, and text events while the equation canvas is focused.
     pub(super) fn handle_canvas_keyboard(&mut self, ui: &mut egui::Ui) {
         let events = ui.input(|input| input.events.clone());

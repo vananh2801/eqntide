@@ -832,9 +832,45 @@ mod tests {
             assert!(!parsed.is_valid_palette_chord(), "{bare} must be rejected");
         }
 
-        // Unsupported or malformed strings fail to parse.
-        for malformed in ["", "Ctrl+", "Ctrl+Ctrl+F", "Ctrl+UnknownKey", "Ctrl+Tab"] {
+        // Unsupported, malformed, or preserved editing/navigation strings fail to parse.
+        for malformed in [
+            "",
+            "Ctrl+",
+            "Ctrl+Ctrl+F",
+            "Ctrl+UnknownKey",
+            "Ctrl+Tab",
+            "Tab",
+            "Shift+Tab",
+            "Enter",
+            "Space",
+            "Esc",
+            "Ctrl+ArrowLeft",
+            "Ctrl+ArrowRight",
+            "Ctrl+Backspace",
+            "Ctrl+Delete",
+            "Ctrl+Home",
+            "Ctrl+End",
+            "Ctrl+Insert",
+            "Shift+Insert",
+            "Shift+Delete",
+        ] {
             assert_eq!(ShortcutChord::parse(malformed), None, "{malformed}");
+        }
+
+        let mut raw_overrides = BTreeMap::new();
+        let binom = palette::canonical_source(r"\binom{#?}{#?}").unwrap();
+        for reserved_raw in [
+            "Ctrl+ArrowLeft",
+            "Ctrl+Backspace",
+            "Ctrl+Home",
+            "Ctrl+Insert",
+            "Shift+Insert",
+            "Shift+Delete",
+            "Tab",
+        ] {
+            raw_overrides.insert(binom.to_owned(), Some(reserved_raw.to_owned()));
+            let loaded = ShortcutMap::from_overrides(&raw_overrides);
+            assert_eq!(loaded.binding_for(binom), None, "{reserved_raw}");
         }
     }
 

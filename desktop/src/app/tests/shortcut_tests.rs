@@ -872,3 +872,402 @@ fn shortcut_conflict_modal_supports_system_cancel_replace_swap_and_keyboard_navi
         );
     }
 }
+
+#[test]
+fn global_egui_zoom_and_quit_shortcuts_are_disabled_and_rebindable() {
+    let direct_ctx = egui::Context::default();
+    App::configure_egui_options(&direct_ctx);
+    direct_ctx.options(|opts| {
+        assert!(!opts.zoom_with_keyboard);
+        assert!(opts.quit_shortcuts.is_empty());
+    });
+
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    app.editor.insert_text("x");
+    app.mark_canvas_changed();
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    ctx.options(|opts| {
+        assert!(!opts.zoom_with_keyboard);
+        assert!(opts.quit_shortcuts.is_empty());
+    });
+
+    let ctrl_key = |key: egui::Key, shift: bool, alt: bool| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            ctrl: true,
+            command: true,
+            shift,
+            alt,
+            ..Default::default()
+        },
+    };
+
+    for (key, shift, alt) in [
+        (egui::Key::Minus, false, false),
+        (egui::Key::Minus, true, false),
+        (egui::Key::Minus, false, true),
+        (egui::Key::Plus, false, false),
+        (egui::Key::Plus, true, false),
+        (egui::Key::Equals, false, false),
+        (egui::Key::Equals, true, false),
+        (egui::Key::Num0, false, false),
+        (egui::Key::Num0, false, true),
+    ] {
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![ctrl_key(key, shift, alt)]);
+        assert!(
+            (ctx.zoom_factor() - 1.0).abs() < f32::EPSILON,
+            "UI zoom_factor changed after {key:?} (shift={shift}, alt={alt})"
+        );
+    }
+
+    for (shift, alt) in [(false, false), (true, false), (false, true)] {
+        let out = run_ui_pass_frame(&ctx, &mut app, vec![ctrl_key(egui::Key::Q, shift, alt)]);
+        assert!(
+            out.viewport_output
+                .values()
+                .all(|viewport| !viewport.commands.contains(&egui::ViewportCommand::Close)),
+            "Ctrl+Q (shift={shift}, alt={alt}) must not emit ViewportCommand::Close"
+        );
+        assert!(app.pending.is_none());
+        assert!(!app.allow_close);
+    }
+
+    // Custom bindings on Ctrl+Minus, Ctrl+Equals, and Ctrl+Q execute on focused Equation Canvas.
+    app.shortcuts
+        .replace_binding(r"\alpha", ShortcutChord::cmd(ShortcutKey::Minus));
+    app.shortcuts
+        .replace_binding(r"\beta", ShortcutChord::cmd(ShortcutKey::Equals));
+    app.shortcuts
+        .replace_binding(r"\gamma", ShortcutChord::cmd(ShortcutKey::Q));
+
+    for (key, expected_source) in [
+        (egui::Key::Minus, r"\alpha"),
+        (egui::Key::Equals, r"\beta"),
+        (egui::Key::Q, r"\gamma"),
+    ] {
+        let out = run_ui_pass_frame(&ctx, &mut app, vec![ctrl_key(key, false, false)]);
+        assert!((ctx.zoom_factor() - 1.0).abs() < f32::EPSILON);
+        assert!(out
+            .viewport_output
+            .values()
+            .all(|viewport| !viewport.commands.contains(&egui::ViewportCommand::Close)));
+        assert_eq!(app.recent_palette.first().copied(), Some(expected_source));
+    }
+
+    // Ctrl+Minus, Ctrl+Equals, and Ctrl+Q can still be recorded in Settings.
+    let capture_ctx = egui::Context::default();
+    let mut capture_app = super::helpers::app();
+    capture_app.tab = 2;
+    capture_app.shortcut_search = "Binomial".into();
+    let _ = run_settings_frame(&capture_ctx, &mut capture_app, vec![]);
+    for (key, expected_key) in [
+        (egui::Key::Minus, ShortcutKey::Minus),
+        (egui::Key::Equals, ShortcutKey::Equals),
+        (egui::Key::Q, ShortcutKey::Q),
+    ] {
+        let out = run_settings_frame(&capture_ctx, &mut capture_app, vec![]);
+        let btn_label = capture_app
+            .shortcuts
+            .binding_for(r"\binom{#?}{#?}")
+            .map_or_else(|| "Set shortcut".to_owned(), |chord| chord.to_string());
+        let btn_pos = find_text_center(&out, |text| text == btn_label);
+        let _ = run_settings_frame(&capture_ctx, &mut capture_app, click_events(btn_pos));
+        assert_eq!(capture_app.shortcut_capture, Some(r"\binom{#?}{#?}"));
+        let rec_out = run_settings_frame(
+            &capture_ctx,
+            &mut capture_app,
+            vec![ctrl_key(key, false, false)],
+        );
+        assert!(rec_out
+            .viewport_output
+            .values()
+            .all(|viewport| !viewport.commands.contains(&egui::ViewportCommand::Close)));
+        assert!((capture_ctx.zoom_factor() - 1.0).abs() < f32::EPSILON);
+        assert_eq!(
+            capture_app.shortcuts.binding_for(r"\binom{#?}{#?}"),
+            Some(ShortcutChord::cmd(expected_key))
+        );
+    }
+}
+
+#[test]
+fn text_edit_readline_chords_suppressed_outside_canvas_but_allowed_on_canvas_and_capture() {
+    let ctrl_letter = |key: egui::Key| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        },
+    };
+    let ctrl_key = |key: egui::Key| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        },
+    };
+
+    // 1. LaTeX source: Ctrl+H/K/U/W leave text & cursor unchanged; Ctrl+ArrowLeft & Ctrl+Backspace still work.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        let latex_id = App::editor_focus_id(StartupFocus::Latex);
+        app.latex = "alpha beta".into();
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        ctx.memory_mut(|mem| mem.request_focus(latex_id));
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        assert!(ctx.memory(|mem| mem.has_focus(latex_id)));
+
+        let mut state = egui::TextEdit::load_state(&ctx, latex_id).expect("latex text state");
+        let mid_cursor = egui::text::CCursor::new(5);
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(mid_cursor)));
+        state.store(&ctx, latex_id);
+
+        for key in [egui::Key::H, egui::Key::K, egui::Key::U, egui::Key::W] {
+            let _ = run_ui_pass_frame(&ctx, &mut app, vec![ctrl_letter(key)]);
+            assert_eq!(app.latex, "alpha beta", "Ctrl+{key:?} mutated LaTeX source");
+            let cursor_after = egui::TextEdit::load_state(&ctx, latex_id)
+                .and_then(|loaded| loaded.cursor.char_range())
+                .map(|range| usize::from(range.primary.index));
+            assert_eq!(
+                cursor_after,
+                Some(5),
+                "Ctrl+{key:?} altered LaTeX source cursor"
+            );
+        }
+
+        // Standard editing: Ctrl+ArrowLeft moves back over "alpha" (index 0), and Ctrl+Backspace deletes word.
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![ctrl_key(egui::Key::ArrowLeft)]);
+        let moved_cursor = egui::TextEdit::load_state(&ctx, latex_id)
+            .and_then(|loaded| loaded.cursor.char_range())
+            .map(|range| usize::from(range.primary.index));
+        assert_eq!(moved_cursor, Some(0));
+
+        let mut end_state = egui::TextEdit::load_state(&ctx, latex_id).expect("latex text state");
+        end_state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new("alpha beta".len()),
+            )));
+        end_state.store(&ctx, latex_id);
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![ctrl_key(egui::Key::Backspace)]);
+        assert_eq!(app.latex, "alpha ");
+    }
+
+    // 2. Settings shortcut_search: Ctrl+H/K/U/W leave query unchanged.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.tab = 2;
+        app.shortcut_search = "alpha beta".into();
+        let out = run_settings_frame(&ctx, &mut app, vec![]);
+        let search_pos = find_text_center(&out, |text| text == "alpha beta");
+        let _ = run_settings_frame(&ctx, &mut app, click_events(search_pos));
+        for key in [egui::Key::H, egui::Key::K, egui::Key::U, egui::Key::W] {
+            let _ = run_settings_frame(&ctx, &mut app, vec![ctrl_letter(key)]);
+            assert_eq!(
+                app.shortcut_search, "alpha beta",
+                "Ctrl+{key:?} mutated shortcut_search"
+            );
+        }
+    }
+
+    // 3. Inline \command popup input: Ctrl+H/K/U/W leave command buffer unchanged.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![egui::Event::Text(r"\alpha".into())]);
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let cmd_id = egui::Id::unique("canvas-command-input");
+        assert!(ctx.memory(|mem| mem.has_focus(cmd_id)));
+        assert_eq!(
+            app.command_input.as_ref().map(|cmd| cmd.name.as_str()),
+            Some("alpha")
+        );
+
+        let mut cmd_state = egui::TextEdit::load_state(&ctx, cmd_id).expect("cmd text state");
+        cmd_state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new(2),
+            )));
+        cmd_state.store(&ctx, cmd_id);
+
+        for key in [egui::Key::H, egui::Key::K, egui::Key::U, egui::Key::W] {
+            let _ = run_ui_pass_frame(&ctx, &mut app, vec![ctrl_letter(key)]);
+            assert_eq!(
+                app.command_input.as_ref().map(|cmd| cmd.name.as_str()),
+                Some("alpha"),
+                "Ctrl+{key:?} mutated inline command input"
+            );
+        }
+    }
+
+    // 4. Focused Equation Canvas still dispatches default Ctrl+H and custom Ctrl+K/U/W bindings.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.shortcuts
+            .replace_binding(r"\alpha", ShortcutChord::cmd(ShortcutKey::K));
+        app.shortcuts
+            .replace_binding(r"\beta", ShortcutChord::cmd(ShortcutKey::U));
+        app.shortcuts
+            .replace_binding(r"\gamma", ShortcutChord::cmd(ShortcutKey::W));
+
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![ctrl_letter(egui::Key::H)]);
+        assert_eq!(app.editor.math().children[0].tag, "msup");
+        assert_eq!(app.recent_palette.first().copied(), Some(r"^{#?}"));
+
+        for (key, expected_source) in [
+            (egui::Key::K, r"\alpha"),
+            (egui::Key::U, r"\beta"),
+            (egui::Key::W, r"\gamma"),
+        ] {
+            let _ = run_ui_pass_frame(&ctx, &mut app, vec![ctrl_letter(key)]);
+            assert_eq!(app.recent_palette.first().copied(), Some(expected_source));
+        }
+    }
+
+    // 5. Settings shortcut recorder still captures Ctrl+H, Ctrl+K, Ctrl+U, and Ctrl+W.
+    {
+        let ctx = egui::Context::default();
+        let mut app = super::helpers::app();
+        app.tab = 2;
+        app.shortcut_search = "Binomial".into();
+        let _ = run_settings_frame(&ctx, &mut app, vec![]);
+
+        for (key, expected_key) in [
+            (egui::Key::K, ShortcutKey::K),
+            (egui::Key::U, ShortcutKey::U),
+            (egui::Key::W, ShortcutKey::W),
+        ] {
+            let out = run_settings_frame(&ctx, &mut app, vec![]);
+            let btn_label = app
+                .shortcuts
+                .binding_for(r"\binom{#?}{#?}")
+                .map_or_else(|| "Set shortcut".to_owned(), |chord| chord.to_string());
+            let btn_pos = find_text_center(&out, |text| text == btn_label);
+            let _ = run_settings_frame(&ctx, &mut app, click_events(btn_pos));
+            assert_eq!(app.shortcut_capture, Some(r"\binom{#?}{#?}"));
+            let _ = run_settings_frame(&ctx, &mut app, vec![ctrl_letter(key)]);
+            assert_eq!(
+                app.shortcuts.binding_for(r"\binom{#?}{#?}"),
+                Some(ShortcutChord::cmd(expected_key))
+            );
+        }
+
+        // Ctrl+H triggers conflict modal against default Superscript binding instead of being suppressed.
+        let out = run_settings_frame(&ctx, &mut app, vec![]);
+        let btn_pos = find_text_center(&out, |text| text == "Ctrl+W");
+        let _ = run_settings_frame(&ctx, &mut app, click_events(btn_pos));
+        assert_eq!(app.shortcut_capture, Some(r"\binom{#?}{#?}"));
+        let _ = run_settings_frame(&ctx, &mut app, vec![ctrl_letter(egui::Key::H)]);
+        assert_eq!(app.shortcut_capture, None);
+        assert!(matches!(
+            app.shortcut_conflict.as_ref().map(|dialog| dialog.conflict),
+            Some(ShortcutConflict::Palette(r"^{#?}"))
+        ));
+    }
+}
+
+#[test]
+fn settings_recorder_rejects_preserved_editing_clipboard_and_navigation_shortcuts() {
+    let ctx = egui::Context::default();
+    let mut app = super::helpers::app();
+    app.tab = 2;
+    app.shortcut_search = "Binomial".into();
+
+    let out = run_settings_frame(&ctx, &mut app, vec![]);
+    let set_pos = find_text_center(&out, |text| text == "Set shortcut");
+    let _ = run_settings_frame(&ctx, &mut app, click_events(set_pos));
+    assert_eq!(app.shortcut_capture, Some(r"\binom{#?}{#?}"));
+
+    let key_event = |key: egui::Key, ctrl: bool, shift: bool| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            ctrl,
+            command: ctrl,
+            shift,
+            ..Default::default()
+        },
+    };
+
+    for (key, ctrl, shift) in [
+        (egui::Key::ArrowLeft, true, false),
+        (egui::Key::ArrowRight, true, false),
+        (egui::Key::Backspace, true, false),
+        (egui::Key::Delete, true, false),
+        (egui::Key::Home, true, false),
+        (egui::Key::End, true, false),
+        (egui::Key::Insert, true, false),
+        (egui::Key::Insert, false, true),
+        (egui::Key::Delete, false, true),
+        (egui::Key::Enter, false, false),
+        (egui::Key::Space, false, false),
+    ] {
+        let invalid_out = run_settings_frame(&ctx, &mut app, vec![key_event(key, ctrl, shift)]);
+        assert_eq!(app.shortcut_capture, Some(r"\binom{#?}{#?}"));
+        assert!(has_rendered_text(
+            &invalid_out,
+            "Reserved for text editing, clipboard, or navigation"
+        ));
+        assert_eq!(app.shortcuts.binding_for(r"\binom{#?}{#?}"), None);
+    }
+
+    for shift in [false, true] {
+        if app.shortcut_capture.is_none() {
+            let refresh_out = run_settings_frame(&ctx, &mut app, vec![]);
+            let fresh_pos = find_text_center(&refresh_out, |text| text == "Set shortcut");
+            let _ = run_settings_frame(&ctx, &mut app, click_events(fresh_pos));
+        }
+        let _ = run_settings_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(egui::Key::Tab, false, shift)],
+        );
+        assert_eq!(app.shortcuts.binding_for(r"\binom{#?}{#?}"), None);
+    }
+
+    for (clipboard_event, expected_label) in [
+        (egui::Event::Copy, "Copy"),
+        (egui::Event::Cut, "Cut"),
+        (egui::Event::Paste("x".into()), "Paste"),
+    ] {
+        if app.shortcut_capture.is_none() {
+            let refresh_out = run_settings_frame(&ctx, &mut app, vec![]);
+            let fresh_pos = find_text_center(&refresh_out, |text| text == "Set shortcut");
+            let _ = run_settings_frame(&ctx, &mut app, click_events(fresh_pos));
+        }
+        let _ = run_settings_frame(&ctx, &mut app, vec![clipboard_event]);
+        assert!(
+            matches!(
+                app.shortcut_conflict.as_ref().map(|dialog| dialog.conflict),
+                Some(ShortcutConflict::System(label)) if label == expected_label
+            ),
+            "expected System({expected_label}), got {:?}, capture={:?}",
+            app.shortcut_conflict.as_ref().map(|dialog| dialog.conflict),
+            app.shortcut_capture
+        );
+        assert_eq!(app.shortcuts.binding_for(r"\binom{#?}{#?}"), None);
+        app.shortcut_conflict = None;
+    }
+}

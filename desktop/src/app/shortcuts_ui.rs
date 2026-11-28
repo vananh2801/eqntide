@@ -19,6 +19,8 @@ const SHORTCUT_SCROLL_HEIGHT: f32 = 360.0;
 const SHORTCUT_ICON_SIZE: Vec2 = Vec2::new(44.0, 28.6);
 const SHORTCUT_CAPTURE_HINT: &str =
     "Press Ctrl, Alt, or F1–F12 to bind · Backspace clears · Esc cancels";
+const SHORTCUT_CAPTURE_RESERVED_HINT: &str =
+    "Reserved for text editing, clipboard, or navigation · Backspace clears · Esc cancels";
 
 impl App {
     /// Persists active palette shortcut overrides and triggers an immediate settings flush.
@@ -215,6 +217,8 @@ impl App {
                             } else {
                                 result = CaptureOutcome::Invalid;
                             }
+                        } else if is_reserved_editing_or_navigation_key(*key, *modifiers) {
+                            result = CaptureOutcome::Reserved;
                         } else {
                             result = CaptureOutcome::Invalid;
                         }
@@ -241,6 +245,9 @@ impl App {
             }
             CaptureOutcome::Invalid => {
                 self.shortcut_capture_error = Some(SHORTCUT_CAPTURE_HINT.into());
+            }
+            CaptureOutcome::Reserved => {
+                self.shortcut_capture_error = Some(SHORTCUT_CAPTURE_RESERVED_HINT.into());
             }
             CaptureOutcome::Chord(chord) => {
                 self.shortcut_capture = None;
@@ -472,6 +479,7 @@ enum CaptureOutcome {
     Cancel,
     Clear,
     Invalid,
+    Reserved,
     Chord(ShortcutChord),
 }
 
@@ -549,4 +557,22 @@ fn matches_query(query: &str, label: &str, source: &str, binding: Option<Shortcu
             .to_ascii_lowercase()
             .contains(query)
     })
+}
+
+fn is_reserved_editing_or_navigation_key(key: egui::Key, modifiers: egui::Modifiers) -> bool {
+    let has_modifier = modifiers.command || modifiers.ctrl || modifiers.alt || modifiers.shift;
+    match key {
+        egui::Key::Tab
+        | egui::Key::Enter
+        | egui::Key::Space
+        | egui::Key::Home
+        | egui::Key::End
+        | egui::Key::Insert => true,
+        egui::Key::Backspace | egui::Key::Delete => has_modifier,
+        egui::Key::ArrowLeft
+        | egui::Key::ArrowRight
+        | egui::Key::ArrowUp
+        | egui::Key::ArrowDown => modifiers.command || modifiers.ctrl || modifiers.alt,
+        _ => false,
+    }
 }

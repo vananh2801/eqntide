@@ -390,6 +390,7 @@ impl App {
     ) -> Self {
         egui_ctx.set_theme(egui::ThemePreference::System);
         ThemeTokens::apply_style(egui_ctx);
+        Self::configure_egui_options(egui_ctx);
         tx.attach(egui_ctx.clone());
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
@@ -589,12 +590,14 @@ impl App {
     /// Executes one full desktop frame: drains events, guards window close, paints the UI, and flushes state.
     pub(crate) fn draw_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        Self::configure_egui_options(&ctx);
         self.enforce_window_minimum_if_needed(&ctx);
         self.process_events(&ctx);
         if self.tab != 2 || self.pending.is_some() || self.busy {
             self.shortcut_capture = None;
             self.shortcut_capture_error = None;
         }
+        self.suppress_text_edit_readline_chords(&ctx);
         let save_requested = if self.shortcut_capture.is_some() || self.shortcut_conflict.is_some()
         {
             false
@@ -1285,6 +1288,14 @@ impl App {
         }
         self.last_enforced_viewport = Some(state);
         Self::enforce_window_minimum(ctx);
+    }
+
+    /// Disables built-in global `egui` UI zoom and quit shortcuts across all backends.
+    pub(super) fn configure_egui_options(ctx: &egui::Context) {
+        ctx.options_mut(|options| {
+            options.zoom_with_keyboard = false;
+            options.quit_shortcuts.clear();
+        });
     }
 
     pub(super) fn enforce_window_minimum(ctx: &egui::Context) {

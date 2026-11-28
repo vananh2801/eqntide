@@ -1,0 +1,20 @@
+# Tasks
+
+## 1. Disable global `egui` UI zoom and quit shortcuts
+
+- [x] 1.1 Add an idempotent `configure_egui_options(ctx: &egui::Context)` helper in `desktop/src/app/mod.rs` setting `options.zoom_with_keyboard = false` and `options.quit_shortcuts.clear()`, and call it from `App::new_with_state` and `App::draw_ui` so `wgpu`, `software`, `glow`, and headless `from_parts` tests share the same `egui::Options`; verify by inspecting `ctx.options(|opts| !opts.zoom_with_keyboard && opts.quit_shortcuts.is_empty())` after `App::new_with_state` and `App::draw_ui`.
+- [x] 1.2 Add regression tests in `desktop/src/app/tests/shortcut_tests.rs` verifying that `Ctrl+-`, `Ctrl++`, `Ctrl+=`, and `Ctrl+0` (including `Shift`/`Alt` variants) keep `ctx.zoom_factor() == 1.0`, `Ctrl+Q` / `Ctrl+Shift+Q` / `Ctrl+Alt+Q` emit no `ViewportCommand::Close`, bound `Ctrl+-`/`Ctrl+=`/`Ctrl+Q` execute on the focused Equation Canvas without UI zoom/close, and `Ctrl+-`/`Ctrl+=`/`Ctrl+Q` can still be recorded in Settings; verify `cargo test -p eqntide-desktop` passes for these tests.
+
+## 2. Suppress `egui::TextEdit` Emacs/Readline deletion chords outside Equation Canvas
+
+- [x] 2.1 Add a helper invoked at the start of `App::draw_ui()` (before `draw_shell()` and modals) in `desktop/src/app/mod.rs` (or `desktop/src/app/keyboard.rs`) that filters out `egui::Event::Key { key: Key::H | Key::K | Key::U | Key::W, pressed: true, modifiers, .. }` when `modifiers.ctrl` (or `modifiers.command` on non-macOS `ctrl`) is set, `self.shortcut_capture.is_none()`, and keyboard focus is not exclusively on the Equation Canvas (`!ctx.memory(|mem| mem.has_focus(Self::editor_focus_id(StartupFocus::Canvas)))` or `self.command_input.is_some()` with `canvas-command-input` focused); verify standard editing chords (`Ctrl+Arrow*`, `Ctrl+Backspace/Delete`, `Ctrl+Home/End`, multiline `Tab`, `Ctrl/Shift+Insert`, `Shift+Delete`) remain unfiltered.
+- [x] 2.2 Add regression tests in `desktop/src/app/tests/shortcut_tests.rs` verifying that `Ctrl+H`, `Ctrl+K`, `Ctrl+U`, and `Ctrl+W` leave text and selection unmodified in `LaTeX source`, Settings `shortcut_search`, and `canvas-command-input`, while `Ctrl+H` (and custom bindings on `Ctrl+K/U/W`) still dispatches palette templates on the focused Equation Canvas, Settings shortcut capture still records `Ctrl+H/K/U/W`, and standard editing chords (`Ctrl+Backspace`, `Ctrl+ArrowLeft`) still work in `LaTeX source`; verify `cargo test -p eqntide-desktop` passes for these tests.
+
+## 3. Reject preserved editing, clipboard, and navigation shortcuts in Settings
+
+- [x] 3.1 Update `process_shortcut_capture` in `desktop/src/app/shortcuts_ui.rs` so pressing reserved editing/clipboard/navigation keys (`Ctrl+Arrow*`, `Ctrl/Alt/Shift+Backspace|Delete`, `Home`, `End`, `Insert`, `Tab`, `Shift+Tab`, `Enter`, `Space`) shows an explicit reserved-key hint (`SHORTCUT_CAPTURE_RESERVED_HINT`) without binding, while preserving `SHORTCUT_CAPTURE_HINT` for bare `ArrowLeft` and `ShortcutConflict::System` for `Copy`/`Cut`/`Paste` events; verify by checking `process_shortcut_capture` behavior in unit tests.
+- [x] 3.2 Add unit and UI regression tests in `desktop/src/shortcuts.rs` and `desktop/src/app/tests/shortcut_tests.rs` verifying that `ShortcutChord::parse`, `ShortcutMap::from_overrides`, and the Settings recorder reject all Group 3 chords (`Ctrl+ArrowLeft`, `Ctrl+ArrowRight`, `Ctrl+Backspace`, `Ctrl+Delete`, `Ctrl+Home`, `Ctrl+End`, `Ctrl+Insert`, `Shift+Insert`, `Shift+Delete`, `Tab`, `Shift+Tab`, `Enter`, `Space`, `Esc`) without modifying bindings; verify `cargo test -p eqntide-desktop` passes.
+
+## 4. Workspace pre-commit verification
+
+- [x] 4.1 Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --all-targets --locked`, and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, and verify all four commands exit `0` with zero warnings, and validate `openspec validate "disable-hidden-egui-shortcuts" --strict`.
