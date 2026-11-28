@@ -11,8 +11,8 @@ publish = false
 [dependencies]
 eqntide = { path = ".." }
 eqntide-editor = { path = "../crates/eqntide-editor" }
-eframe = { version = "0.37", default-features = false, features = ["glow", "wgpu", "x11", "wayland", "accesskit", "default_fonts", "links"] }
-egui-winit = { version = "0.37", default-features = false, features = ["accesskit", "wayland", "x11", "links"] }
+eframe = { version = "0.37", default-features = false, features = ["glow", "wgpu", "x11", "wayland", "accesskit", "default_fonts", "links", "clipboard"] }
+egui-winit = { version = "0.37", default-features = false, features = ["accesskit", "wayland", "x11", "links", "clipboard"] }
 hdrshot-egui-backend = "0.2"
 softbuffer = "0.4"
 bytemuck = "1"
