@@ -35,6 +35,10 @@ static FONT_MATH: &[u8] =
 pub struct MathConstants {
     /// Height of the mathematical axis above the baseline (fraction of em).
     pub axis_height: f32,
+    /// Height above baseline for unflattened math accents (fraction of em).
+    pub accent_base_height: f32,
+    /// Minimum height for display-style large operators (fraction of em).
+    pub display_operator_min_height: f32,
     /// Default thickness of fraction rules (fraction of em).
     pub fraction_rule_thickness: f32,
     /// Numerator baseline shift up in display style (fraction of em).
@@ -53,6 +57,10 @@ pub struct MathConstants {
     pub fraction_den_display_style_gap_min: f32,
     /// Minimum gap between denominator top and fraction rule in text/script style (fraction of em).
     pub fraction_den_gap_min: f32,
+    /// Horizontal gap between numerator/denominator and slash in skewed fractions (fraction of em).
+    pub skewed_fraction_horizontal_gap: f32,
+    /// Vertical gap between numerator/denominator and slash in skewed fractions (fraction of em).
+    pub skewed_fraction_vertical_gap: f32,
     /// Scale factor for script level 1 (e.g. 0.70).
     pub script_percent_scale_down: f32,
     /// Scale factor for script level 2 (e.g. 0.55).
@@ -61,10 +69,42 @@ pub struct MathConstants {
     pub superscript_shift_up: f32,
     /// Superscript shift up in cramped style (fraction of em).
     pub superscript_shift_up_cramped: f32,
+    /// Minimum height of superscript bottom above baseline (fraction of em).
+    pub superscript_bottom_min: f32,
+    /// Maximum distance superscript baseline may drop below base top (fraction of em).
+    pub superscript_baseline_drop_max: f32,
+    /// Maximum height of superscript bottom when paired with a subscript (fraction of em).
+    pub superscript_bottom_max_with_subscript: f32,
     /// Subscript shift down (fraction of em).
     pub subscript_shift_down: f32,
+    /// Maximum height of subscript top above baseline (fraction of em).
+    pub subscript_top_max: f32,
+    /// Minimum distance subscript baseline drops below base bottom (fraction of em).
+    pub subscript_baseline_drop_min: f32,
     /// Minimum clearance between subscript top and superscript bottom (fraction of em).
     pub sub_superscript_gap_min: f32,
+    /// Extra horizontal space added after a scripted atom (fraction of em).
+    pub space_after_script: f32,
+    /// Minimum vertical gap between upper limit bottom and big operator top (fraction of em).
+    pub upper_limit_gap_min: f32,
+    /// Minimum rise of upper limit baseline above big operator top (fraction of em).
+    pub upper_limit_baseline_rise_min: f32,
+    /// Minimum vertical gap between lower limit top and big operator bottom (fraction of em).
+    pub lower_limit_gap_min: f32,
+    /// Minimum drop of lower limit baseline below big operator bottom (fraction of em).
+    pub lower_limit_baseline_drop_min: f32,
+    /// Vertical gap between base top and overbar rule (fraction of em).
+    pub overbar_vertical_gap: f32,
+    /// Thickness of overbar rule (fraction of em).
+    pub overbar_rule_thickness: f32,
+    /// Extra ascender space above overbar rule (fraction of em).
+    pub overbar_extra_ascender: f32,
+    /// Vertical gap between base bottom and underbar rule (fraction of em).
+    pub underbar_vertical_gap: f32,
+    /// Thickness of underbar rule (fraction of em).
+    pub underbar_rule_thickness: f32,
+    /// Extra descender space below underbar rule (fraction of em).
+    pub underbar_extra_descender: f32,
     /// Vertical gap between radicand top and radical rule in text style (fraction of em).
     pub radical_vertical_gap: f32,
     /// Vertical gap between radicand top and radical rule in display style (fraction of em).
@@ -85,6 +125,8 @@ impl Default for MathConstants {
     fn default() -> Self {
         Self {
             axis_height: 0.258,
+            accent_base_height: 0.480,
+            display_operator_min_height: 1.800,
             fraction_rule_thickness: 0.068,
             fraction_num_display_style_shift_up: 0.640,
             fraction_num_shift_up: 0.585,
@@ -94,12 +136,30 @@ impl Default for MathConstants {
             fraction_num_gap_min: 0.068,
             fraction_den_display_style_gap_min: 0.150,
             fraction_den_gap_min: 0.068,
+            skewed_fraction_horizontal_gap: 0.350,
+            skewed_fraction_vertical_gap: 0.068,
             script_percent_scale_down: 0.70,
             script_script_percent_scale_down: 0.55,
             superscript_shift_up: 0.360,
             superscript_shift_up_cramped: 0.252,
+            superscript_bottom_min: 0.120,
+            superscript_baseline_drop_max: 0.230,
+            superscript_bottom_max_with_subscript: 0.380,
             subscript_shift_down: 0.210,
+            subscript_top_max: 0.368,
+            subscript_baseline_drop_min: 0.160,
             sub_superscript_gap_min: 0.150,
+            space_after_script: 0.040,
+            upper_limit_gap_min: 0.135,
+            upper_limit_baseline_rise_min: 0.300,
+            lower_limit_gap_min: 0.135,
+            lower_limit_baseline_drop_min: 0.670,
+            overbar_vertical_gap: 0.175,
+            overbar_rule_thickness: 0.068,
+            overbar_extra_ascender: 0.068,
+            underbar_vertical_gap: 0.175,
+            underbar_rule_thickness: 0.068,
+            underbar_extra_descender: 0.068,
             radical_vertical_gap: 0.085,
             radical_display_style_vertical_gap: 0.170,
             radical_rule_thickness: 0.068,
@@ -208,68 +268,69 @@ pub fn fonts() -> &'static Fonts {
         let upem = Fonts::units_per_em(&math_face);
         let constants = if let Ok(math) = math_face.math() {
             if let Ok(c) = math.math_constants() {
+                let norm = |record: &read_fonts::tables::math::MathValueRecord| {
+                    record.value().to_i16() as f32 / upem
+                };
                 MathConstants {
-                    axis_height: c.axis_height().value().to_i16() as f32 / upem,
-                    fraction_rule_thickness: c.fraction_rule_thickness().value().to_i16() as f32
+                    axis_height: norm(c.axis_height()),
+                    accent_base_height: norm(c.accent_base_height()),
+                    display_operator_min_height: c.display_operator_min_height().to_u16() as f32
                         / upem,
-                    fraction_num_display_style_shift_up: c
-                        .fraction_numerator_display_style_shift_up()
-                        .value()
-                        .to_i16() as f32
-                        / upem,
-                    fraction_num_shift_up: c.fraction_numerator_shift_up().value().to_i16() as f32
-                        / upem,
-                    fraction_den_display_style_shift_down: c
-                        .fraction_denominator_display_style_shift_down()
-                        .value()
-                        .to_i16() as f32
-                        / upem,
-                    fraction_den_shift_down: c.fraction_denominator_shift_down().value().to_i16()
-                        as f32
-                        / upem,
-                    fraction_num_display_style_gap_min: c
-                        .fraction_num_display_style_gap_min()
-                        .value()
-                        .to_i16() as f32
-                        / upem,
-                    fraction_num_gap_min: c.fraction_numerator_gap_min().value().to_i16() as f32
-                        / upem,
-                    fraction_den_display_style_gap_min: c
-                        .fraction_denom_display_style_gap_min()
-                        .value()
-                        .to_i16() as f32
-                        / upem,
-                    fraction_den_gap_min: c.fraction_denominator_gap_min().value().to_i16() as f32
-                        / upem,
+                    fraction_rule_thickness: norm(c.fraction_rule_thickness()),
+                    fraction_num_display_style_shift_up: norm(
+                        c.fraction_numerator_display_style_shift_up(),
+                    ),
+                    fraction_num_shift_up: norm(c.fraction_numerator_shift_up()),
+                    fraction_den_display_style_shift_down: norm(
+                        c.fraction_denominator_display_style_shift_down(),
+                    ),
+                    fraction_den_shift_down: norm(c.fraction_denominator_shift_down()),
+                    fraction_num_display_style_gap_min: norm(
+                        c.fraction_num_display_style_gap_min(),
+                    ),
+                    fraction_num_gap_min: norm(c.fraction_numerator_gap_min()),
+                    fraction_den_display_style_gap_min: norm(
+                        c.fraction_denom_display_style_gap_min(),
+                    ),
+                    fraction_den_gap_min: norm(c.fraction_denominator_gap_min()),
+                    skewed_fraction_horizontal_gap: norm(c.skewed_fraction_horizontal_gap()),
+                    skewed_fraction_vertical_gap: norm(c.skewed_fraction_vertical_gap()),
                     script_percent_scale_down: c.script_percent_scale_down() as f32 / 100.0,
                     script_script_percent_scale_down: c.script_script_percent_scale_down() as f32
                         / 100.0,
-                    superscript_shift_up: c.superscript_shift_up().value().to_i16() as f32 / upem,
-                    superscript_shift_up_cramped: c.superscript_shift_up_cramped().value().to_i16()
-                        as f32
-                        / upem,
-                    subscript_shift_down: c.subscript_shift_down().value().to_i16() as f32 / upem,
-                    sub_superscript_gap_min: c.sub_superscript_gap_min().value().to_i16() as f32
-                        / upem,
-                    radical_vertical_gap: c.radical_vertical_gap().value().to_i16() as f32 / upem,
-                    radical_display_style_vertical_gap: c
-                        .radical_display_style_vertical_gap()
-                        .value()
-                        .to_i16() as f32
-                        / upem,
-                    radical_rule_thickness: c.radical_rule_thickness().value().to_i16() as f32
-                        / upem,
-                    radical_extra_ascender: c.radical_extra_ascender().value().to_i16() as f32
-                        / upem,
+                    superscript_shift_up: norm(c.superscript_shift_up()),
+                    superscript_shift_up_cramped: norm(c.superscript_shift_up_cramped()),
+                    superscript_bottom_min: norm(c.superscript_bottom_min()),
+                    superscript_baseline_drop_max: norm(c.superscript_baseline_drop_max()),
+                    superscript_bottom_max_with_subscript: norm(
+                        c.superscript_bottom_max_with_subscript(),
+                    ),
+                    subscript_shift_down: norm(c.subscript_shift_down()),
+                    subscript_top_max: norm(c.subscript_top_max()),
+                    subscript_baseline_drop_min: norm(c.subscript_baseline_drop_min()),
+                    sub_superscript_gap_min: norm(c.sub_superscript_gap_min()),
+                    space_after_script: norm(c.space_after_script()),
+                    upper_limit_gap_min: norm(c.upper_limit_gap_min()),
+                    upper_limit_baseline_rise_min: norm(c.upper_limit_baseline_rise_min()),
+                    lower_limit_gap_min: norm(c.lower_limit_gap_min()),
+                    lower_limit_baseline_drop_min: norm(c.lower_limit_baseline_drop_min()),
+                    overbar_vertical_gap: norm(c.overbar_vertical_gap()),
+                    overbar_rule_thickness: norm(c.overbar_rule_thickness()),
+                    overbar_extra_ascender: norm(c.overbar_extra_ascender()),
+                    underbar_vertical_gap: norm(c.underbar_vertical_gap()),
+                    underbar_rule_thickness: norm(c.underbar_rule_thickness()),
+                    underbar_extra_descender: norm(c.underbar_extra_descender()),
+                    radical_vertical_gap: norm(c.radical_vertical_gap()),
+                    radical_display_style_vertical_gap: norm(
+                        c.radical_display_style_vertical_gap(),
+                    ),
+                    radical_rule_thickness: norm(c.radical_rule_thickness()),
+                    radical_extra_ascender: norm(c.radical_extra_ascender()),
                     radical_degree_bottom_raise_percent: c.radical_degree_bottom_raise_percent()
                         as f32
                         / 100.0,
-                    radical_kern_before_degree: c.radical_kern_before_degree().value().to_i16()
-                        as f32
-                        / upem,
-                    radical_kern_after_degree: c.radical_kern_after_degree().value().to_i16()
-                        as f32
-                        / upem,
+                    radical_kern_before_degree: norm(c.radical_kern_before_degree()),
+                    radical_kern_after_degree: norm(c.radical_kern_after_degree()),
                 }
             } else {
                 MathConstants::default()
@@ -755,6 +816,51 @@ mod tests {
         assert_eq!((c.axis_height * 1000.0).round() as i32, 258);
         assert_eq!((c.fraction_rule_thickness * 1000.0).round() as i32, 68);
         assert_eq!((c.script_percent_scale_down * 100.0).round() as i32, 70);
+
+        // Extended OpenType MATH layout constants match STIXTwoMath-Regular.ttf and Default
+        let defaults = MathConstants::default();
+        assert_eq!((c.accent_base_height * 1000.0).round() as i32, 480);
+        assert_eq!(
+            (c.display_operator_min_height * 1000.0).round() as i32,
+            1800
+        );
+        assert_eq!(
+            (c.skewed_fraction_horizontal_gap * 1000.0).round() as i32,
+            350
+        );
+        assert_eq!((c.skewed_fraction_vertical_gap * 1000.0).round() as i32, 68);
+        assert_eq!((c.superscript_bottom_min * 1000.0).round() as i32, 120);
+        assert_eq!(
+            (c.superscript_baseline_drop_max * 1000.0).round() as i32,
+            230
+        );
+        assert_eq!(
+            (c.superscript_bottom_max_with_subscript * 1000.0).round() as i32,
+            380
+        );
+        assert_eq!((c.subscript_top_max * 1000.0).round() as i32, 368);
+        assert_eq!((c.subscript_baseline_drop_min * 1000.0).round() as i32, 160);
+        assert_eq!((c.space_after_script * 1000.0).round() as i32, 40);
+        assert_eq!((c.upper_limit_gap_min * 1000.0).round() as i32, 135);
+        assert_eq!(
+            (c.upper_limit_baseline_rise_min * 1000.0).round() as i32,
+            300
+        );
+        assert_eq!((c.lower_limit_gap_min * 1000.0).round() as i32, 135);
+        assert_eq!(
+            (c.lower_limit_baseline_drop_min * 1000.0).round() as i32,
+            670
+        );
+        assert_eq!((c.overbar_vertical_gap * 1000.0).round() as i32, 175);
+        assert_eq!((c.overbar_rule_thickness * 1000.0).round() as i32, 68);
+        assert_eq!((c.overbar_extra_ascender * 1000.0).round() as i32, 68);
+        assert_eq!((c.underbar_vertical_gap * 1000.0).round() as i32, 175);
+        assert_eq!((c.underbar_rule_thickness * 1000.0).round() as i32, 68);
+        assert_eq!((c.underbar_extra_descender * 1000.0).round() as i32, 68);
+        assert!((c.accent_base_height - defaults.accent_base_height).abs() < 1e-6);
+        assert!(
+            (c.lower_limit_baseline_drop_min - defaults.lower_limit_baseline_drop_min).abs() < 1e-6
+        );
 
         // Radical constants
         assert_eq!(

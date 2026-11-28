@@ -13,6 +13,96 @@ impl Layout {
         base_asc: f32,
         em: f32,
     ) {
+        self.draw_accent_oriented(layout_box, ch, w, x0, base_asc, em, false);
+    }
+
+    /// Reflect an accent below the baseline, preserving natural glyph proportions.
+    pub(super) fn draw_under_accent(
+        &self,
+        layout_box: &mut LBox,
+        ch: char,
+        w: f32,
+        x0: f32,
+        desc: f32,
+        em: f32,
+    ) {
+        let mut accent = LBox::default();
+        let ch = match ch {
+            '⏟' => '⏞',
+            '⎵' => '⎴',
+            '⏝' => '⏜',
+            _ => ch,
+        };
+        self.draw_accent_oriented(&mut accent, ch, w, x0, desc, em, true);
+        for item in accent.items {
+            match item {
+                Item::Poly(poly) => layout_box
+                    .items
+                    .push(Item::Poly(poly.into_iter().map(|(x, y)| (x, -y)).collect())),
+                Item::Contours(contours) => layout_box.items.push(Item::Contours(
+                    contours
+                        .into_iter()
+                        .map(|poly| poly.into_iter().map(|(x, y)| (x, -y)).collect())
+                        .collect(),
+                )),
+                Item::Glyph {
+                    ch,
+                    face,
+                    em: glyph_em,
+                    x,
+                    y,
+                    ssty,
+                } if matches!(
+                    ch,
+                    '\u{2192}' | '\u{2190}' | '\u{2194}' | '⇒' | '⇐' | '⇔' | '=' | '\u{23AF}'
+                ) =>
+                {
+                    // These glyphs are vertically symmetric around +259 font units above
+                    // baseline, so keeping Item::Glyph avoids raster seam notches.
+                    layout_box.items.push(Item::Glyph {
+                        ch,
+                        face,
+                        em: glyph_em,
+                        x,
+                        y: -y + 518.0 * (glyph_em / 1000.0),
+                        ssty,
+                    });
+                }
+                Item::Glyph {
+                    ch,
+                    face,
+                    em: glyph_em,
+                    x,
+                    y,
+                    ..
+                } => {
+                    let contours: Vec<Vec<(f32, f32)>> = self
+                        .font_set
+                        .glyph_polys(face, ch, glyph_em, glyph_em, x, y)
+                        .into_iter()
+                        .map(|poly| poly.into_iter().map(|(px, py)| (px, -py)).collect())
+                        .collect();
+                    if !contours.is_empty() {
+                        layout_box.items.push(Item::Contours(contours));
+                    }
+                }
+            }
+        }
+        layout_box.desc = layout_box.desc.max(accent.asc);
+        layout_box.w = layout_box.w.max(accent.w);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_accent_oriented(
+        &self,
+        layout_box: &mut LBox,
+        ch: char,
+        w: f32,
+        x0: f32,
+        base_asc: f32,
+        em: f32,
+        is_under: bool,
+    ) {
         let ch = match ch {
             '\u{0308}' => '¨',
             '\u{030A}' | '°' => '˚',
@@ -26,10 +116,9 @@ impl Layout {
             '\u{20D1}' => '⇀',
             _ => ch,
         };
-        // Retrieve top accent attachment position from OpenType MATH table if available;
-        // fall back to italic correction compensation if slanted.
+        // `top_accent_attachment_of_box` already includes the base glyph's placed x offset (`x0`).
         let center_x = if let Some(att) = self.top_accent_attachment_of_box(layout_box) {
-            x0 + att
+            att
         } else {
             let ic = self.italic_correction_of_box(layout_box);
             if ic > 0.0 {
@@ -39,7 +128,12 @@ impl Layout {
             }
         };
 
-        let y = -(base_asc + 0.10 * em);
+        let effective_asc = if is_under {
+            base_asc
+        } else {
+            base_asc.max(self.font_set.constants().accent_base_height * em)
+        };
+        let y = -(effective_asc + 0.10 * em);
         let stroke_w = 0.045 * em;
         let mut polys: Vec<Vec<(f32, f32)>> = Vec::new();
         match ch {
@@ -49,21 +143,23 @@ impl Layout {
                     '⃛' => 3,
                     _ => 4,
                 };
-                let step = 0.18 * em;
+                let step = if count == 4 { 0.14 * em } else { 0.16 * em };
+                let radius = if count == 4 { 0.040 * em } else { 0.045 * em };
+                let mut max_dot_x = w;
                 for j in 0..count {
                     let dot_cx = center_x + (j as f32 - (count - 1) as f32 / 2.0) * step;
+                    max_dot_x = max_dot_x.max(dot_cx + radius + 0.02 * em);
                     polys.push(
                         (0..12)
                             .map(|i| {
                                 let angle = i as f32 / 12.0 * std::f32::consts::TAU;
-                                (
-                                    dot_cx + 0.045 * em * angle.cos(),
-                                    y + 0.045 * em * angle.sin(),
-                                )
+                                (dot_cx + radius * angle.cos(), y + radius * angle.sin())
                             })
                             .collect(),
                     );
                 }
+                layout_box.asc = layout_box.asc.max(-y + radius + 0.04 * em);
+                layout_box.w = layout_box.w.max(max_dot_x);
             }
             '⏞' | '⏟' => {
                 let content_w = w - 2.0 * x0;
@@ -77,7 +173,7 @@ impl Layout {
                         .collect::<Vec<_>>(),
                     stroke_w,
                 ));
-                layout_box.asc = layout_box.asc.max(base_asc + depth + 0.15 * em);
+                layout_box.asc = layout_box.asc.max(effective_asc + depth + 0.15 * em);
             }
             '⎴' | '⎵' => {
                 let dir_sign = if ch == '⎴' { -1.0 } else { 1.0 };
@@ -91,7 +187,7 @@ impl Layout {
                     ],
                     stroke_w,
                 ));
-                layout_box.asc = layout_box.asc.max(base_asc + 0.32 * em);
+                layout_box.asc = layout_box.asc.max(effective_asc + 0.32 * em);
             }
             'ˊ' | 'ˋ' => {
                 let (left_y, right_y) = if ch == 'ˊ' {
@@ -106,7 +202,7 @@ impl Layout {
                     ],
                     stroke_w,
                 ));
-                layout_box.asc = layout_box.asc.max(base_asc + 0.30 * em);
+                layout_box.asc = layout_box.asc.max(effective_asc + 0.30 * em);
             }
             'ˇ' => {
                 polys.extend(stroke(
@@ -117,7 +213,7 @@ impl Layout {
                     ],
                     stroke_w,
                 ));
-                layout_box.asc = layout_box.asc.max(base_asc + 0.28 * em);
+                layout_box.asc = layout_box.asc.max(effective_asc + 0.28 * em);
             }
             '˘' | '⌣' | '⏝' => {
                 polys.extend(stroke(
@@ -129,7 +225,7 @@ impl Layout {
                     ),
                     stroke_w,
                 ));
-                layout_box.asc = layout_box.asc.max(base_asc + 0.28 * em);
+                layout_box.asc = layout_box.asc.max(effective_asc + 0.28 * em);
             }
             '˚' => {
                 polys.extend(stroke(
@@ -144,19 +240,20 @@ impl Layout {
                         .collect::<Vec<_>>(),
                     stroke_w * 0.65,
                 ));
-                layout_box.asc = layout_box.asc.max(base_asc + 0.25 * em);
+                layout_box.asc = layout_box.asc.max(effective_asc + 0.25 * em);
             }
             '_' | '═' | '̿' | '̳' => {
+                let y_bar = -(base_asc + 0.10 * em);
                 polys.push(rect(
                     x0,
-                    y - stroke_w / 2.0,
+                    y_bar - stroke_w / 2.0,
                     (w - 2.0 * x0).max(0.3 * em),
                     stroke_w.max(1.0),
                 ));
                 if ch != '_' {
                     polys.push(rect(
                         x0,
-                        y - 0.12 * em - stroke_w / 2.0,
+                        y_bar - 0.12 * em - stroke_w / 2.0,
                         (w - 2.0 * x0).max(0.3 * em),
                         stroke_w.max(1.0),
                     ));
@@ -187,8 +284,8 @@ impl Layout {
                     };
                     let unit = eff_em / 1000.0;
                     let (y_min_font, _) = arrow::glyph_font_y_bounds(dir);
-                    let y_glyph = (-(base_asc + 0.10 * em) + y_min_font * unit)
-                        .min(-(base_asc + 0.18 * em) + 259.0 * unit);
+                    let y_glyph = (-(effective_asc + 0.10 * em) + y_min_font * unit)
+                        .min(-(effective_asc + 0.18 * em) + 259.0 * unit);
                     let (min_y, _) = self.assemble_horizontal_arrow(
                         dir,
                         x_left,
@@ -208,13 +305,13 @@ impl Layout {
                     let span = content_w.max(0.60 * em);
                     let half_w = span / 2.0;
                     let height = (0.08 * em + 0.04 * span).min(0.22 * em);
-                    let base_y = -(base_asc + 0.06 * em);
+                    let base_y = -(effective_asc + 0.06 * em);
                     (half_w, height, base_y)
                 } else {
                     // Standard compact hat for a single letter (such as \hat{x}, \hat{B}).
                     let half_w = (content_w * 0.65).clamp(0.13 * em, 0.22 * em);
                     let height = 0.10 * em;
-                    let base_y = -(base_asc + 0.03 * em);
+                    let base_y = -(effective_asc + 0.03 * em);
                     (half_w, height, base_y)
                 };
                 // Stroke thickness measured perpendicular to the arms:
@@ -258,7 +355,7 @@ impl Layout {
                     let span = content_w.max(0.58 * em);
                     let em_x = em * span / natural_w;
                     let em_y = if content_w < 0.7 * em { 0.78 * em } else { em };
-                    let y_target = -(base_asc + 0.04 * em);
+                    let y_target = -(effective_asc + 0.04 * em);
                     let origin_y = y_target - y_hi * (em_y / em);
                     let origin_x = center_x - (x_lo + x_hi) / 2.0 * (em_x / em);
                     let polys = self.font_set.glyph_polys(
@@ -321,81 +418,6 @@ impl Layout {
             layout_box.items.push(Item::Poly(poly));
         }
         layout_box.asc = layout_box.asc.max(-y + 0.09 * em);
-    }
-
-    /// Reflect an accent below the baseline, preserving natural glyph proportions.
-    pub(super) fn draw_under_accent(
-        &self,
-        layout_box: &mut LBox,
-        ch: char,
-        w: f32,
-        x0: f32,
-        desc: f32,
-        em: f32,
-    ) {
-        let mut accent = LBox::default();
-        let ch = match ch {
-            '⏟' => '⏞',
-            '⎵' => '⎴',
-            '⏝' => '⏜',
-            _ => ch,
-        };
-        self.draw_accent(&mut accent, ch, w, x0, desc, em);
-        for item in accent.items {
-            match item {
-                Item::Poly(poly) => layout_box
-                    .items
-                    .push(Item::Poly(poly.into_iter().map(|(x, y)| (x, -y)).collect())),
-                Item::Contours(contours) => layout_box.items.push(Item::Contours(
-                    contours
-                        .into_iter()
-                        .map(|poly| poly.into_iter().map(|(x, y)| (x, -y)).collect())
-                        .collect(),
-                )),
-                Item::Glyph {
-                    ch,
-                    face,
-                    em: glyph_em,
-                    x,
-                    y,
-                    ssty,
-                } if matches!(
-                    ch,
-                    '\u{2192}' | '\u{2190}' | '\u{2194}' | '⇒' | '⇐' | '⇔' | '=' | '\u{23AF}'
-                ) =>
-                {
-                    // These glyphs are vertically symmetric around +259 font units above
-                    // baseline, so keeping Item::Glyph avoids raster seam notches.
-                    layout_box.items.push(Item::Glyph {
-                        ch,
-                        face,
-                        em: glyph_em,
-                        x,
-                        y: -y + 518.0 * (glyph_em / 1000.0),
-                        ssty,
-                    });
-                }
-                Item::Glyph {
-                    ch,
-                    face,
-                    em: glyph_em,
-                    x,
-                    y,
-                    ..
-                } => {
-                    let contours: Vec<Vec<(f32, f32)>> = self
-                        .font_set
-                        .glyph_polys(face, ch, glyph_em, glyph_em, x, y)
-                        .into_iter()
-                        .map(|poly| poly.into_iter().map(|(px, py)| (px, -py)).collect())
-                        .collect();
-                    if !contours.is_empty() {
-                        layout_box.items.push(Item::Contours(contours));
-                    }
-                }
-            }
-        }
-        layout_box.desc = layout_box.desc.max(accent.asc);
     }
 }
 
@@ -574,5 +596,53 @@ mod tests {
         );
         let (natural_x0, natural_x1) = font_set.ink_x(Face::Symbol, '⇔', em_double);
         assert!(natural_x1 > natural_x0);
+    }
+
+    #[test]
+    fn top_accent_with_horizontal_offset_does_not_double_count_x0_and_ddddot_fits() {
+        let layout = Layout {
+            font_set: fonts(),
+            depth: 0,
+        };
+        let em = 20.0;
+        let base = layout.glyph('x', Face::Variable, em);
+        let x0 = 25.0;
+        let total_w = base.w + 2.0 * x0;
+        let mut boxed = LBox::default();
+        boxed.place(&base, x0, 0.0);
+        boxed.w = total_w;
+        layout.draw_accent(&mut boxed, '\u{0307}', total_w, x0, base.asc, em);
+
+        let expected_cx = x0
+            + fonts()
+                .top_accent_attachment(Face::Variable, 'x', em)
+                .unwrap_or(base.w / 2.0);
+        let dot_poly = boxed
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Poly(points) => Some(points),
+                _ => None,
+            })
+            .expect("overdot polygon");
+        let (min_x, max_x) = dot_poly
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), &(x, _)| {
+                (lo.min(x), hi.max(x))
+            });
+        let actual_cx = (min_x + max_x) / 2.0;
+        assert!(
+            (actual_cx - expected_cx).abs() < 0.1,
+            "dot center {actual_cx} must equal single-offset {expected_cx}"
+        );
+
+        let ddddot = crate::service::parse_latex_to_mathml(r"\ddddot{x}").unwrap();
+        let (ddddot_box, _) = layout_math(&ddddot, 14.0).unwrap();
+        let (ink_min, ink_max, _, _) = ddddot_box.ink_bounds(fonts());
+        assert!(
+            ink_min >= 0.0 && ink_max <= ddddot_box.w + 0.5,
+            "ddddot ink bounds ({ink_min}..{ink_max}) must stay within box width {}",
+            ddddot_box.w
+        );
     }
 }

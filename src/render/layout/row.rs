@@ -84,6 +84,7 @@ impl Layout {
                         delim: None,
                         fence_role: FenceRole::Neutral,
                         is_table: false,
+                        is_large_op: false,
                     });
                 }
                 "mtext"
@@ -106,6 +107,7 @@ impl Layout {
                         delim: None,
                         fence_role: FenceRole::Neutral,
                         is_table: false,
+                        is_large_op: false,
                     });
                 }
                 "mo" => self.atoms_mo(&kid.text, kid.attr("form"), em, &mut atoms, ssty),
@@ -124,6 +126,7 @@ impl Layout {
                             delim: None,
                             fence_role: FenceRole::Neutral,
                             is_table: false,
+                            is_large_op: false,
                         });
                     }
                 }
@@ -160,6 +163,7 @@ impl Layout {
                             delim: None,
                             fence_role: FenceRole::Neutral,
                             is_table: false,
+                            is_large_op: false,
                         });
                     }
                 }
@@ -188,9 +192,10 @@ impl Layout {
                             .iter()
                             .map(|atom| atom.layout_box.desc)
                             .fold(0.0f32, f32::max);
-                        let half_span = (prev_asc - AXIS * em).max(prev_desc + AXIS * em);
-                        let bar_asc = AXIS * em + half_span;
-                        let bar_desc = half_span - AXIS * em;
+                        let axis = self.font_set.constants().axis_height * em;
+                        let half_span = (prev_asc - axis).max(prev_desc + axis);
+                        let bar_asc = axis + half_span;
+                        let bar_desc = half_span - axis;
                         let (sub_node, sup_node) = match kid.tag.as_str() {
                             "msub" => (kid.children.get(1), None),
                             "msup" => (None, kid.children.get(1)),
@@ -207,6 +212,7 @@ impl Layout {
                         delim: None,
                         fence_role: FenceRole::Neutral,
                         is_table: is_wrapped_table(kid),
+                        is_large_op: is_large_op_node(kid),
                     });
                 }
             }
@@ -245,7 +251,15 @@ impl Layout {
         let mut x = 0.0;
         for i in 0..count {
             if i > 0 {
-                x += self.spacing(classes[i - 1], classes[i], em);
+                let mut gap = self.spacing(classes[i - 1], classes[i], em, ctx);
+                if gap == 0.0
+                    && atoms[i - 1].is_large_op
+                    && classes[i] == Class::Open
+                    && !ctx.is_script()
+                {
+                    gap = 3.0 / 18.0 * em;
+                }
+                x += gap;
 
                 // Ensure prime marks clear slanted ascenders or italic hooks.
                 let is_prime = atoms[i]
@@ -304,6 +318,7 @@ impl Layout {
             } else {
                 (FenceRole::Neutral, class_of(ch))
             };
+            let is_large_op = is_integral(ch) || is_big_op(ch);
             let layout_box = if is_integral(ch) {
                 self.integral_without_limits(ch, 1.45 * em, em)
                     .unwrap_or_else(|| self.glyph_styled(display_char(ch), Face::Symbol, em, ssty))
@@ -318,6 +333,7 @@ impl Layout {
                 delim,
                 fence_role,
                 is_table: false,
+                is_large_op,
             });
         }
     }
@@ -342,6 +358,7 @@ impl Layout {
                 delim: None,
                 fence_role: FenceRole::Neutral,
                 is_table: false,
+                is_large_op: false,
             });
             return;
         }
@@ -353,6 +370,7 @@ impl Layout {
                 delim: None,
                 fence_role: FenceRole::Neutral,
                 is_table: false,
+                is_large_op: false,
             });
             return;
         }
@@ -367,6 +385,7 @@ impl Layout {
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
+                    is_large_op: false,
                 });
             } else if bold {
                 out.push(Atom {
@@ -375,6 +394,7 @@ impl Layout {
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
+                    is_large_op: false,
                 });
             } else if ch.is_ascii_digit() {
                 // Digits inside <mi> runs must be upright numbers, not math operators.
@@ -384,6 +404,7 @@ impl Layout {
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
+                    is_large_op: false,
                 });
             } else if is_latin_letter(ch) {
                 let face = if variant == Some("normal") {
@@ -397,6 +418,7 @@ impl Layout {
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
+                    is_large_op: false,
                 });
             } else if is_greek_lower(ch) {
                 out.push(Atom {
@@ -405,6 +427,7 @@ impl Layout {
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
+                    is_large_op: false,
                 });
             } else if is_greek_upper(ch) {
                 out.push(Atom {
@@ -413,6 +436,7 @@ impl Layout {
                     delim: None,
                     fence_role: FenceRole::Neutral,
                     is_table: false,
+                    is_large_op: false,
                 });
             } else {
                 self.atoms_mo(&ch.to_string(), None, em, out, ssty);
@@ -440,6 +464,8 @@ impl Layout {
                             return Class::Rel;
                         }
                     }
+                } else if base.tag == "mi" && is_function(base.text.trim()) {
+                    return Class::Op;
                 }
             }
         }
@@ -447,17 +473,27 @@ impl Layout {
     }
 
     /// TeX spacing table in units of `em` (The TeXbook, Ch. 18, p. 170).
-    fn spacing(&self, left: Class, right: Class, em: f32) -> f32 {
+    ///
+    /// In `Script` and `ScriptScript` contexts (Rule 20), `MED`, `THICK`, and
+    /// non-`Op` `THIN` spacing are suppressed while retaining `THIN` next to `Op`.
+    fn spacing(&self, left: Class, right: Class, em: f32, ctx: MathContext) -> f32 {
         const THIN: f32 = 3.0 / 18.0;
         const MED: f32 = 4.0 / 18.0;
         const THICK: f32 = 5.0 / 18.0;
         use Class::*;
-        let units = match (left, right) {
-            (Ord | Close, Op) | (Op, Ord | Op) => THIN,
-            (Ord | Close, Bin) | (Bin, Ord | Op | Open) => MED,
-            (Ord | Close | Op, Rel) | (Rel, Ord | Op | Open) => THICK,
-            (Punct, Ord | Op | Rel | Open | Punct) => THIN,
-            _ => 0.0,
+        let units = if ctx.is_script() {
+            match (left, right) {
+                (Ord | Close, Op) | (Op, Ord | Op) => THIN,
+                _ => 0.0,
+            }
+        } else {
+            match (left, right) {
+                (Ord | Close, Op) | (Op, Ord | Op) => THIN,
+                (Ord | Close, Bin) | (Bin, Ord | Op | Open) => MED,
+                (Ord | Close | Op, Rel) | (Rel, Ord | Op | Open) => THICK,
+                (Punct, Ord | Op | Rel | Open | Punct) => THIN,
+                _ => 0.0,
+            }
         };
         units * em
     }
@@ -470,6 +506,29 @@ fn is_wrapped_table(mut node: &MathNode) -> bool {
         node = &node.children[0];
     }
     node.tag == "mtable"
+}
+
+fn is_large_op_node(node: &MathNode) -> bool {
+    if node.tag == "mo" {
+        return node
+            .text
+            .trim()
+            .chars()
+            .next()
+            .is_some_and(|ch| is_big_op(ch) || is_integral(ch));
+    }
+    matches!(
+        node.tag.as_str(),
+        "munder" | "mover" | "munderover" | "msub" | "msup" | "msubsup"
+    ) && node.children.first().is_some_and(|base| {
+        base.tag == "mo"
+            && base
+                .text
+                .trim()
+                .chars()
+                .next()
+                .is_some_and(|ch| is_big_op(ch) || is_integral(ch))
+    })
 }
 
 #[cfg(test)]
@@ -505,12 +564,230 @@ mod wrapped_table_tests {
         let med = 4.0 / 18.0 * em;
         let thick = 5.0 / 18.0 * em;
         let thin = 3.0 / 18.0 * em;
-        assert!((layout.spacing(Class::Close, Class::Bin, em) - med).abs() < 1e-4);
-        assert!((layout.spacing(Class::Bin, Class::Open, em) - med).abs() < 1e-4);
-        assert!((layout.spacing(Class::Close, Class::Rel, em) - thick).abs() < 1e-4);
-        assert!((layout.spacing(Class::Rel, Class::Open, em) - thick).abs() < 1e-4);
-        assert!((layout.spacing(Class::Close, Class::Op, em) - thin).abs() < 1e-4);
-        assert!((layout.spacing(Class::Punct, Class::Open, em) - thin).abs() < 1e-4);
+        for ctx in [MathContext::DISPLAY, MathContext::TEXT] {
+            assert!((layout.spacing(Class::Close, Class::Bin, em, ctx) - med).abs() < 1e-4);
+            assert!((layout.spacing(Class::Bin, Class::Open, em, ctx) - med).abs() < 1e-4);
+            assert!((layout.spacing(Class::Close, Class::Rel, em, ctx) - thick).abs() < 1e-4);
+            assert!((layout.spacing(Class::Rel, Class::Open, em, ctx) - thick).abs() < 1e-4);
+            assert!((layout.spacing(Class::Close, Class::Op, em, ctx) - thin).abs() < 1e-4);
+            assert!((layout.spacing(Class::Punct, Class::Open, em, ctx) - thin).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn script_contexts_suppress_bin_rel_punct_spacing_while_keeping_op_thin() {
+        let layout = Layout {
+            font_set: fonts(),
+            depth: 0,
+        };
+        let em = 18.0;
+        let thin = 3.0 / 18.0 * em;
+        let script_ctx = MathContext {
+            style: MathVariantStyle::Script,
+            cramped: false,
+        };
+        let script_script_ctx = MathContext {
+            style: MathVariantStyle::ScriptScript,
+            cramped: true,
+        };
+        for ctx in [script_ctx, script_script_ctx] {
+            for (left, right) in [
+                (Class::Ord, Class::Bin),
+                (Class::Bin, Class::Ord),
+                (Class::Close, Class::Bin),
+                (Class::Bin, Class::Open),
+                (Class::Bin, Class::Op),
+                (Class::Ord, Class::Rel),
+                (Class::Rel, Class::Ord),
+                (Class::Close, Class::Rel),
+                (Class::Rel, Class::Open),
+                (Class::Op, Class::Rel),
+                (Class::Rel, Class::Op),
+                (Class::Punct, Class::Ord),
+                (Class::Punct, Class::Op),
+                (Class::Punct, Class::Rel),
+                (Class::Punct, Class::Open),
+                (Class::Punct, Class::Punct),
+            ] {
+                assert_eq!(
+                    layout.spacing(left, right, em, ctx),
+                    0.0,
+                    "expected zero spacing for ({left:?}, {right:?}) in {ctx:?}"
+                );
+            }
+            for (left, right) in [
+                (Class::Ord, Class::Op),
+                (Class::Close, Class::Op),
+                (Class::Op, Class::Ord),
+                (Class::Op, Class::Op),
+            ] {
+                assert!(
+                    (layout.spacing(left, right, em, ctx) - thin).abs() < 1e-4,
+                    "expected thin spacing for ({left:?}, {right:?}) in {ctx:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn script_expressions_render_compactly_for_bin_rel_and_punct() {
+        fn hit_for<'a>(lbox: &'a LBox, node: &MathNode) -> &'a boxes::RawHit {
+            let key = node as *const _ as usize;
+            lbox.hits
+                .iter()
+                .find(|hit| hit.key == key)
+                .unwrap_or_else(|| panic!("missing hit for <{}> {}", node.tag, node.text))
+        }
+
+        for latex in [r"x^{a+b}", r"x_{i=1}", r"A_{i,j}"] {
+            let math = parse_latex_to_mathml(latex).unwrap();
+            let (lbox, _) = layout_math(&math, 14.0).unwrap();
+            let script_box = &math.children[0].children[1];
+            let tokens = &script_box.children;
+            assert_eq!(
+                tokens.len(),
+                3,
+                "{latex}: expected 3 script tokens, got {tokens:?}"
+            );
+            let first = hit_for(&lbox, &tokens[0]);
+            let middle = hit_for(&lbox, &tokens[1]);
+            let last = hit_for(&lbox, &tokens[2]);
+            let left_gap = middle.x - (first.x + first.w);
+            let right_gap = last.x - (middle.x + middle.w);
+            assert!(
+                left_gap.abs() < 1e-3 && right_gap.abs() < 1e-3,
+                "{latex}: expected compact script spacing, got left_gap={left_gap}, right_gap={right_gap}"
+            );
+        }
+
+        let sin_sub = parse_latex_to_mathml(r"A_{\sin x}").unwrap();
+        let (lbox, em) = layout_math(&sin_sub, 14.0).unwrap();
+        let tokens = &sin_sub.children[0].children[1].children;
+        let func = hit_for(&lbox, &tokens[0]);
+        let arg = hit_for(&lbox, &tokens[1]);
+        let sub_em = em * fonts().constants().script_percent_scale_down;
+        let expected_thin = 3.0 / 18.0 * sub_em;
+        let actual_gap = arg.x - (func.x + func.w);
+        assert!(
+            (actual_gap - expected_thin).abs() < 1e-2,
+            "expected thin Op spacing ({expected_thin}) inside script row, got {actual_gap}"
+        );
+    }
+
+    #[test]
+    fn limit_function_receives_thin_op_spacing_and_math_f_clears_parens() {
+        let font_set = fonts();
+        let math = parse_latex_to_mathml(r"\lim_{x \to +\infty} f(x)").unwrap();
+        let (lbox, em) = layout_math(&math, 14.0).unwrap();
+        let row_children = if math.children.len() == 1 && math.children[0].tag == "mrow" {
+            &math.children[0].children
+        } else {
+            &math.children
+        };
+        let lim_key = &row_children[0] as *const _ as usize;
+        let f_key = &row_children[1] as *const _ as usize;
+        let lim_hit = lbox
+            .hits
+            .iter()
+            .find(|hit| hit.key == lim_key)
+            .expect("lim hit");
+        let f_hit = lbox
+            .hits
+            .iter()
+            .find(|hit| hit.key == f_key)
+            .expect("f hit");
+        let gap = f_hit.x - (lim_hit.x + lim_hit.w);
+        let expected_thin = 3.0 / 18.0 * em;
+        assert!(
+            (gap - expected_thin).abs() < 0.05,
+            "expected thin Op spacing after \\lim_{{...}}, got gap={gap}, expected={expected_thin}"
+        );
+
+        let glyph_ink_span = |target_char: char| -> (f32, f32) {
+            lbox.items
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    Item::Glyph {
+                        ch, face, em, x, ..
+                    } if *ch == target_char => {
+                        let (ink_min, ink_max) = font_set.ink_x(*face, *ch, *em);
+                        Some((x + ink_min, x + ink_max))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing glyph '{target_char}'"))
+        };
+        let (f_min, f_max) = glyph_ink_span('f');
+        let (open_min, open_max) = glyph_ink_span('(');
+        let (x_min, x_max) = glyph_ink_span('x');
+        let (close_min, _) = glyph_ink_span(')');
+        let (_, inf_max) = glyph_ink_span('∞');
+        assert!(
+            inf_max < f_min,
+            "expected ∞ (max={inf_max}) to clear f (min={f_min})"
+        );
+        assert!(
+            f_max < open_min,
+            "expected math italic f (max={f_max}) to clear '(' (min={open_min})"
+        );
+        assert!(
+            open_max < x_min && x_max < close_min,
+            "expected x ({x_min}..{x_max}) to sit cleanly inside ({open_max}..{close_min})"
+        );
+    }
+
+    #[test]
+    fn large_operator_receives_thin_space_before_open_paren_while_sin_stays_tight() {
+        let prod_math = parse_latex_to_mathml(r"\prod_{j=1}^{m} \left(\frac{x}{y}\right)").unwrap();
+        let (prod_box, em) = layout_math(&prod_math, 14.0).unwrap();
+        let children = if prod_math.children.len() == 1 && prod_math.children[0].tag == "mrow" {
+            &prod_math.children[0].children
+        } else {
+            &prod_math.children
+        };
+        let prod_key = &children[0] as *const _ as usize;
+        let open_key = &children[1] as *const _ as usize;
+        let prod_hit = prod_box
+            .hits
+            .iter()
+            .find(|hit| hit.key == prod_key)
+            .expect("prod hit");
+        let open_hit = prod_box
+            .hits
+            .iter()
+            .find(|hit| hit.key == open_key)
+            .expect("open paren hit");
+        let gap = open_hit.x - (prod_hit.x + prod_hit.w);
+        let expected_thin = 3.0 / 18.0 * em;
+        assert!(
+            (gap - expected_thin).abs() < 0.05,
+            "expected thin space before '(' after \\prod, got gap={gap}, expected={expected_thin}"
+        );
+
+        let sin_math = parse_latex_to_mathml(r"\sin(x)").unwrap();
+        let (sin_box, _) = layout_math(&sin_math, 14.0).unwrap();
+        let sin_children = if sin_math.children.len() == 1 && sin_math.children[0].tag == "mrow" {
+            &sin_math.children[0].children
+        } else {
+            &sin_math.children
+        };
+        let sin_key = &sin_children[0] as *const _ as usize;
+        let sin_open_key = &sin_children[1] as *const _ as usize;
+        let sin_hit = sin_box
+            .hits
+            .iter()
+            .find(|hit| hit.key == sin_key)
+            .expect("sin hit");
+        let sin_open_hit = sin_box
+            .hits
+            .iter()
+            .find(|hit| hit.key == sin_open_key)
+            .expect("sin open hit");
+        assert!(
+            (sin_open_hit.x - (sin_hit.x + sin_hit.w)).abs() < 0.05,
+            "expected zero space between \\sin and '('"
+        );
     }
 
     #[test]

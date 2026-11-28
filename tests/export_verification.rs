@@ -496,6 +496,10 @@ fn test_export_ai_visual_layout_suite() {
             "wide_accents",
             r"\widehat{ABCD} + \widetilde{xyz} + \overbrace{a+b+c}^{n=3} + \underbrace{p+q}_{k}",
         ),
+        (
+            "limit_func",
+            r"\lim_{x \to +\infty} f(x) = 2 \sin 2x \cos 3x",
+        ),
     ];
     let mut edge_rows = Vec::new();
     for (label, latex) in edge_cases {

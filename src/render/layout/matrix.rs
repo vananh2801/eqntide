@@ -50,7 +50,8 @@ impl Layout {
             .collect();
         let total_height: f32 = heights.iter().map(|(asc, desc)| asc + desc).sum::<f32>()
             + row_gap * (rows.len() - 1) as f32;
-        let mut y = -AXIS * em - total_height / 2.0;
+        let axis = self.font_set.constants().axis_height * em;
+        let mut y = -axis - total_height / 2.0;
         let mut layout_box = LBox::default();
         for ((row_cells, (row_asc, row_desc)), source_row) in
             rows.iter().zip(&heights).zip(&node.children)
@@ -84,8 +85,8 @@ impl Layout {
         }
         layout_box.w =
             col_widths.iter().sum::<f32>() + col_gap * (col_count.saturating_sub(1)) as f32;
-        layout_box.asc = layout_box.asc.max(total_height / 2.0 + AXIS * em);
-        layout_box.desc = layout_box.desc.max(total_height / 2.0 - AXIS * em);
+        layout_box.asc = layout_box.asc.max(total_height / 2.0 + axis);
+        layout_box.desc = layout_box.desc.max(total_height / 2.0 - axis);
         Ok(layout_box)
     }
 }

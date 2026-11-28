@@ -38,11 +38,10 @@ impl Layout {
                 {
                     let inner_nodes = &base_node.children[1..base_node.children.len() - 1];
                     let inner = self.row(inner_nodes, em, ctx)?;
-                    let half_span = (inner.asc - AXIS * em)
-                        .max(inner.desc + AXIS * em)
-                        .max(0.675 * em);
-                    let bar_asc = AXIS * em + half_span;
-                    let bar_desc = half_span - AXIS * em;
+                    let axis = self.font_set.constants().axis_height * em;
+                    let half_span = (inner.asc - axis).max(inner.desc + axis).max(0.675 * em);
+                    let bar_asc = axis + half_span;
+                    let bar_desc = half_span - axis;
                     let mut eval_box =
                         self.evaluation_bar(sub_node, sup_node, bar_asc, bar_desc, em, ctx)?;
                     eval_box.mark(last);
@@ -74,7 +73,7 @@ impl Layout {
             Some(child) => Some(self.node(child, sup_em, sup_ctx)?),
             None => None,
         };
-        Ok(self.attach_scripts(base, sub, sup, em, sup_em, ctx))
+        Ok(self.attach_scripts(base, sub, sup, em, ctx))
     }
 
     /// Lay out `<mmultiscripts>` tensor prescripts before `base`.
@@ -123,32 +122,8 @@ impl Layout {
             return Ok(base);
         }
 
-        let shift_up = if ctx.cramped {
-            constants.superscript_shift_up_cramped * em
-        } else {
-            constants.superscript_shift_up * em
-        };
-        let shift_down = constants.subscript_shift_down * em;
-        let gap_min = constants.sub_superscript_gap_min * em;
-
-        let mut sub_y = pre_sub.as_ref().map(|sub_box| {
-            shift_down
-                .max(base.desc + 0.05 * em)
-                .max(sub_box.asc - 0.32 * em)
-        });
-        let sup_y = pre_sup.as_ref().map(|sup_box| {
-            -(shift_up
-                .max(base.asc - 0.39 * sup_em)
-                .max(sup_box.desc + 0.11 * em))
-        });
-        if let (Some(sub_box), Some(sup_box), Some(sub_pos), Some(sup_pos)) =
-            (&pre_sub, &pre_sup, sub_y, sup_y)
-        {
-            let gap = (sub_pos - sub_box.asc) - (sup_pos + sup_box.desc);
-            if gap < gap_min {
-                sub_y = Some(sub_pos + (gap_min - gap));
-            }
-        }
+        let (sub_y, sup_y) =
+            self.script_vertical_offsets(&base, pre_sub.as_ref(), pre_sup.as_ref(), em, ctx, false);
 
         let mut layout_box = LBox::default();
         if let (Some(sub_box), Some(y)) = (&pre_sub, sub_y) {
@@ -170,24 +145,9 @@ impl Layout {
         sub: Option<LBox>,
         sup: Option<LBox>,
         em: f32,
-        sup_em: f32,
         ctx: MathContext,
     ) -> LBox {
         let constants = self.font_set.constants();
-        let shift_up = if ctx.cramped {
-            constants.superscript_shift_up_cramped * em
-        } else {
-            constants.superscript_shift_up * em
-        };
-        let shift_down = constants.subscript_shift_down * em;
-        let gap_min = constants.sub_superscript_gap_min * em;
-
-        let mut sub_y = sub.as_ref().map(|sub_box| {
-            shift_down
-                .max(base.desc + 0.05 * em)
-                .max(sub_box.asc - 0.32 * em)
-        });
-
         let is_prime = sup.as_ref().is_some_and(|sup_box| {
             sup_box.items.first().is_some_and(|item| match item {
                 Item::Glyph { ch, .. } => {
@@ -197,26 +157,8 @@ impl Layout {
             })
         });
 
-        let sup_y = sup.as_ref().map(|sup_box| {
-            let y = -(shift_up
-                .max(base.asc - 0.39 * sup_em)
-                .max(sup_box.desc + 0.11 * em));
-            if is_prime {
-                // Lower primes moderately to align with letter tops without colliding.
-                y + 0.04 * em
-            } else {
-                y
-            }
-        });
-
-        if let (Some(sub_box), Some(sup_box), Some(sub_pos), Some(sup_pos)) =
-            (&sub, &sup, sub_y, sup_y)
-        {
-            let gap = (sub_pos - sub_box.asc) - (sup_pos + sup_box.desc);
-            if gap < gap_min {
-                sub_y = Some(sub_pos + (gap_min - gap));
-            }
-        }
+        let (sub_y, sup_y) =
+            self.script_vertical_offsets(&base, sub.as_ref(), sup.as_ref(), em, ctx, is_prime);
 
         let ic = self.italic_correction_of_box(&base);
         let base_glyph = self.last_glyph_of_box(&base);
@@ -285,9 +227,66 @@ impl Layout {
         layout_box.w = if is_prime {
             width + 0.02 * em
         } else {
-            width + 0.03 * em
+            width + constants.space_after_script * em
         };
         layout_box
+    }
+
+    fn script_vertical_offsets(
+        &self,
+        base: &LBox,
+        sub: Option<&LBox>,
+        sup: Option<&LBox>,
+        em: f32,
+        ctx: MathContext,
+        is_prime: bool,
+    ) -> (Option<f32>, Option<f32>) {
+        let constants = self.font_set.constants();
+        let shift_up = if ctx.cramped {
+            constants.superscript_shift_up_cramped * em
+        } else {
+            constants.superscript_shift_up * em
+        };
+        let shift_down = constants.subscript_shift_down * em;
+        let gap_min = constants.sub_superscript_gap_min * em;
+
+        let mut sub_y = sub.map(|sub_box| {
+            shift_down
+                .max(base.desc + 0.05 * em)
+                .max(sub_box.asc - constants.subscript_top_max * em)
+        });
+        let mut sup_y = sup.map(|sup_box| {
+            let y = -(shift_up
+                .max(base.asc - constants.superscript_baseline_drop_max * em)
+                .max(sup_box.desc + constants.superscript_bottom_min * em));
+            if is_prime {
+                // Lower primes moderately to align with letter tops without colliding.
+                y + 0.04 * em
+            } else {
+                y
+            }
+        });
+
+        if let (Some(sub_box), Some(sup_box), Some(sub_pos), Some(sup_pos)) =
+            (sub, sup, sub_y, sup_y)
+        {
+            let gap = (sub_pos - sub_box.asc) - (sup_pos + sup_box.desc);
+            if gap < gap_min {
+                let needed = gap_min - gap;
+                let sup_bottom_above_base = -(sup_pos + sup_box.desc);
+                let max_raise = (constants.superscript_bottom_max_with_subscript * em
+                    - sup_bottom_above_base)
+                    .max(0.0);
+                let raise = needed.min(max_raise);
+                sup_y = Some(sup_pos - raise);
+                let remainder = needed - raise;
+                if remainder > 0.0 {
+                    sub_y = Some(sub_pos + remainder);
+                }
+            }
+        }
+
+        (sub_y, sup_y)
     }
 }
 
@@ -304,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn test_math_style_transitions() {
+    fn math_style_transitions() {
         assert_eq!(Face::auto_detect('x'), Face::Variable);
         assert_eq!(Face::auto_detect('2'), Face::Number);
         assert_eq!(Face::auto_detect('+'), Face::Symbol);

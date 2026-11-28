@@ -24,7 +24,7 @@ impl Layout {
             _ => 1,
         };
         let eff_em = em * (target_h / (2.0 * em)).clamp(0.60, 1.0);
-        let y_mid = -AXIS * em;
+        let y_mid = -self.font_set.constants().axis_height * em;
         let stem = self.integral_stem(target_h, eff_em, y_mid)?;
         let stem_spacing = 0.45 * eff_em;
         let stem_span = (num_stems - 1) as f32 * stem_spacing;
@@ -327,7 +327,10 @@ mod tests {
                         .max_by(|left, right| left.0.total_cmp(&right.0))
                         .unwrap();
                     // The clockwise glyph's outer arrow wing is above the axis.
-                    assert_eq!((rightmost.1 + AXIS * em).signum(), direction);
+                    assert_eq!(
+                        (rightmost.1 + fonts().constants().axis_height * em).signum(),
+                        direction
+                    );
                 }
                 if !limit_kind.is_empty() {
                     let scripted = &math.children[0];

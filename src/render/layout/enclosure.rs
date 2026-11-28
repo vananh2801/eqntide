@@ -77,7 +77,8 @@ impl Layout {
             }
         }
         if has_notation("horizontalstrike") {
-            paths.push(vec![(0.0, -AXIS * em), (width, -AXIS * em)]);
+            let axis = self.font_set.constants().axis_height * em;
+            paths.push(vec![(0.0, -axis), (width, -axis)]);
         }
         if has_notation("verticalstrike") {
             paths.push(vec![(width / 2.0, top), (width / 2.0, bottom)]);

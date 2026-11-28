@@ -3,8 +3,9 @@
 use skrifa::charmap::Charmap;
 use skrifa::{FontRef, GlyphId};
 
-use super::MathStyle;
+use super::{Fonts, MathStyle};
 
+/// Select the primary typeface and glyph ID for `(style, ch)`, falling back across the bundled fonts.
 pub(super) fn pick_glyph<'a>(
     style: MathStyle,
     ch: char,
@@ -13,9 +14,10 @@ pub(super) fn pick_glyph<'a>(
     bold: &'a FontRef<'static>,
     math: &'a FontRef<'static>,
 ) -> (&'a FontRef<'static>, GlyphId) {
-    let ch = normalized_character(style, ch);
-    let primary = primary_font(style, regular, italic, bold, math);
+    let ch = Fonts::to_math_char(style, ch);
+    let primary = primary_font(style, regular, bold, math);
     let fallback_chain = match style {
+        MathStyle::Variable => [primary, italic, regular],
         MathStyle::LcGreek => [primary, math, regular],
         MathStyle::Symbol | MathStyle::ExtraMath => [primary, regular, italic],
         _ => [primary, math, regular],
@@ -35,25 +37,19 @@ pub(super) fn pick_glyph<'a>(
     )
 }
 
-fn normalized_character(style: MathStyle, ch: char) -> char {
-    if style == MathStyle::LcGreek && ('\u{03B1}'..='\u{03C9}').contains(&ch) {
-        std::char::from_u32(ch as u32 + 0x1D34B).unwrap_or(ch)
-    } else {
-        ch
-    }
-}
-
 fn primary_font<'a>(
     style: MathStyle,
     regular: &'a FontRef<'static>,
-    italic: &'a FontRef<'static>,
     bold: &'a FontRef<'static>,
     math: &'a FontRef<'static>,
 ) -> &'a FontRef<'static> {
     match style {
         MathStyle::Text | MathStyle::Function | MathStyle::Number => regular,
-        MathStyle::Variable => italic,
         MathStyle::VectorMatrix => bold,
-        MathStyle::LcGreek | MathStyle::UcGreek | MathStyle::Symbol | MathStyle::ExtraMath => math,
+        MathStyle::Variable
+        | MathStyle::LcGreek
+        | MathStyle::UcGreek
+        | MathStyle::Symbol
+        | MathStyle::ExtraMath => math,
     }
 }

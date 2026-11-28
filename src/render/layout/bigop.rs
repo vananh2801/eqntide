@@ -9,7 +9,8 @@ impl Layout {
     pub(super) fn big_glyph(&self, ch: char, face: Face, em: f32, scale: f32) -> LBox {
         let size = em * scale;
         let (asc, desc) = self.font_set.ink(face, ch, size);
-        let y = (asc - desc) / 2.0 - AXIS * em;
+        let axis = self.font_set.constants().axis_height * em;
+        let y = (asc - desc) / 2.0 - axis;
         let mut layout_box = LBox {
             w: self.font_set.advance(face, ch, size),
             ..Default::default()
@@ -66,7 +67,8 @@ impl Layout {
             Some(base_node) => self.node(base_node, em, ctx)?,
             None => LBox::default(),
         };
-        let is_big = base_char.is_some_and(is_big_op)
+        let is_math_big_op = base_char.is_some_and(is_big_op);
+        let is_big = is_math_big_op
             || first.is_some_and(|base_node| {
                 base_node.tag == "mi" && is_function(base_node.text.trim())
             });
@@ -107,7 +109,16 @@ impl Layout {
             _ => None,
         };
 
-        let gap = if is_big { 0.10 * em } else { 0.12 * em };
+        let (upper_gap, lower_gap) = if is_math_big_op {
+            (
+                constants.upper_limit_gap_min * em,
+                constants.lower_limit_gap_min * em,
+            )
+        } else if is_big {
+            (0.10 * em, 0.12 * em)
+        } else {
+            (0.12 * em, 0.12 * em)
+        };
         let width = [
             Some(base.w),
             under.as_ref().map(|under_box| under_box.w),
@@ -122,14 +133,14 @@ impl Layout {
             layout_box.place(
                 over_box,
                 (width - over_box.w) / 2.0,
-                -(base.asc + gap + over_box.desc),
+                -(base.asc + upper_gap + over_box.desc),
             );
         }
         if let Some(under_box) = &under {
             layout_box.place(
                 under_box,
                 (width - under_box.w) / 2.0,
-                base.desc + gap + under_box.asc,
+                base.desc + lower_gap + under_box.asc,
             );
         }
         if let Some(ch) = accent {
@@ -163,7 +174,84 @@ impl Layout {
                 .push(Item::Poly(rect(x0, y, base.w, stroke_w)));
             layout_box.desc = layout_box.desc.max(y + stroke_w + 0.04 * em);
         }
-        layout_box.w = width;
+        layout_box.w = width.max(layout_box.w);
         Ok(layout_box)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::parse_latex_to_mathml;
+
+    #[test]
+    fn bigop_limits_respect_math_limit_gap_constants() {
+        let math = parse_latex_to_mathml(r"\sum_{i=1}^{n} x_i").unwrap();
+        let (lbox, em) = layout_math(&math, 14.0).unwrap();
+        let constants = fonts().constants();
+        let upper_gap = constants.upper_limit_gap_min * em;
+        let lower_gap = constants.lower_limit_gap_min * em;
+        let sum_glyph = lbox
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Glyph {
+                    ch: '∑',
+                    face,
+                    em: glyph_em,
+                    y,
+                    ..
+                } => {
+                    let (asc, desc) = fonts().ink(*face, '∑', *glyph_em);
+                    Some((asc - y, desc + y))
+                }
+                _ => None,
+            })
+            .expect("missing ∑ glyph");
+        let n_glyph_bottom = lbox
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Glyph {
+                    ch: 'n',
+                    face,
+                    em: glyph_em,
+                    y,
+                    ..
+                } => {
+                    let (_, desc) = fonts().ink(*face, 'n', *glyph_em);
+                    Some(y + desc)
+                }
+                _ => None,
+            })
+            .expect("missing n limit glyph");
+        let eq_top = lbox
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Glyph {
+                    ch: '=',
+                    face,
+                    em: glyph_em,
+                    y,
+                    ..
+                } => {
+                    let (asc, _) = fonts().ink(*face, '=', *glyph_em);
+                    Some(y - asc)
+                }
+                _ => None,
+            })
+            .expect("missing '=' lower limit glyph");
+
+        let actual_upper_gap = (-sum_glyph.0) - n_glyph_bottom;
+        let actual_lower_gap = eq_top - sum_glyph.1;
+        assert!(
+            actual_upper_gap + 1e-3 >= upper_gap,
+            "upper limit gap {actual_upper_gap} must satisfy upper_limit_gap_min {upper_gap}"
+        );
+        assert!(
+            actual_lower_gap + 1e-3 >= lower_gap,
+            "lower limit gap {actual_lower_gap} must satisfy lower_limit_gap_min {lower_gap}"
+        );
     }
 }

@@ -181,9 +181,9 @@ impl Layout {
             return;
         };
         // Center delimiter symmetry around the math axis.
-        let half_span = (asc - AXIS * em).max(desc + AXIS * em);
-        let mut stretched =
-            self.delim_box(delim_ch, AXIS * em + half_span, half_span - AXIS * em, em);
+        let axis = self.font_set.constants().axis_height * em;
+        let half_span = (asc - axis).max(desc + axis);
+        let mut stretched = self.delim_box(delim_ch, axis + half_span, half_span - axis, em);
         for mut hit in std::mem::take(&mut atoms[idx].layout_box.hits) {
             hit.w = stretched.w;
             hit.asc = stretched.asc;

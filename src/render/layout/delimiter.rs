@@ -653,10 +653,11 @@ mod tests {
     fn tall_delimiters_piece_assembly_and_vertical_stretch() {
         let layout = layout();
         let em = 24.0;
+        let axis = fonts().constants().axis_height * em;
         for ch in ['(', ')', '[', ']', '{', '}', '|', '‖'] {
             let short_span = 0.6 * em;
-            let asc_short = short_span / 2.0 + AXIS * em;
-            let desc_short = short_span / 2.0 - AXIS * em;
+            let asc_short = short_span / 2.0 + axis;
+            let desc_short = short_span / 2.0 - axis;
             let box_short = layout
                 .stretchy_delimiter(ch, asc_short, desc_short, em)
                 .expect("delimiter supported");
@@ -680,8 +681,8 @@ mod tests {
             }
 
             let tall_span = 6.0 * em;
-            let asc_tall = tall_span / 2.0 + AXIS * em;
-            let desc_tall = tall_span / 2.0 - AXIS * em;
+            let asc_tall = tall_span / 2.0 + axis;
+            let desc_tall = tall_span / 2.0 - axis;
             let box_tall = layout
                 .stretchy_delimiter(ch, asc_tall, desc_tall, em)
                 .expect("delimiter supported");
@@ -714,8 +715,8 @@ mod tests {
 
         for scale in [1.6f32, 2.0, 2.5, 3.0] {
             let span = scale * em;
-            let asc = span / 2.0 + AXIS * em;
-            let desc = span / 2.0 - AXIS * em;
+            let asc = span / 2.0 + axis;
+            let desc = span / 2.0 - axis;
             let box_brace = layout
                 .stretchy_delimiter('{', asc, desc, em)
                 .expect("delimiter supported");
