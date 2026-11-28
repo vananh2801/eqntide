@@ -2819,3 +2819,463 @@ fn footer_font_and_zoom_render_soft_accent_left_fill_and_adjust_on_wheel() {
         );
     }
 }
+
+#[test]
+fn equation_canvas_ctrl_wheel_zooms_syncs_footer_persists_and_respects_disable_gates() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(path.clone(), Some(&ctx));
+    assert!(app.load_math("<math><mi>x</mi><mo>+</mo><mi>y</mi></math>", None, None));
+
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let pal = app.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
+    let canvas_rect = out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == pal.bg
+                    && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                    && rect_shape.rect.width() > 100.0 =>
+            {
+                Some(rect_shape.rect)
+            }
+            _ => None,
+        })
+        .expect("canvas frame");
+
+    let ctrl_wheel = |pos: Pos2, unit: egui::MouseWheelUnit, delta_y: f32| {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::MouseWheel {
+                unit,
+                delta: Vec2::new(0.0, delta_y),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::CTRL,
+            },
+        ]
+    };
+
+    // Plain wheel over the equation canvas does not zoom.
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(canvas_rect.center()),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    assert_eq!(app.zoom, 2.0);
+
+    // Ctrl+Wheel up steps by +10% (200% -> 210%), persists, and syncs footer without changing latex_font_pt.
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        ctrl_wheel(canvas_rect.center(), egui::MouseWheelUnit::Line, 1.0),
+    );
+    assert_eq!(app.zoom, 2.1);
+    assert_eq!(app.latex_font_pt, settings::DEFAULT_LATEX_FONT_PT);
+    assert_eq!(Settings::load_from_path(&path).zoom, 2.1);
+    let settled = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert!(has_rendered_text(&settled, "210%"));
+
+    // Smooth Point deltas accumulate across frames without jumping until threshold.
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        ctrl_wheel(canvas_rect.center(), egui::MouseWheelUnit::Point, 8.0),
+    );
+    assert_eq!(app.zoom, 2.1);
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        ctrl_wheel(canvas_rect.center(), egui::MouseWheelUnit::Point, 8.0),
+    );
+    assert_eq!(app.zoom, 2.2);
+
+    // Clamps cleanly to 150%..=400% (1.5..=4.0).
+    for _ in 0..10 {
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            ctrl_wheel(canvas_rect.center(), egui::MouseWheelUnit::Line, -1.0),
+        );
+    }
+    assert_eq!(app.zoom, 1.5);
+    assert_eq!(Settings::load_from_path(&path).zoom, 1.5);
+
+    for _ in 0..30 {
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            ctrl_wheel(canvas_rect.center(), egui::MouseWheelUnit::Line, 1.0),
+        );
+    }
+    assert_eq!(app.zoom, 4.0);
+    assert_eq!(Settings::load_from_path(&path).zoom, 4.0);
+
+    // Disabled footer Zoom states suppress Equation Canvas Ctrl+Wheel.
+    app.zoom = 2.0;
+    app.persisted.zoom = 2.0;
+    app.draft_dirty = true;
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        ctrl_wheel(canvas_rect.center(), egui::MouseWheelUnit::Line, 1.0),
+    );
+    assert_eq!(app.zoom, 2.0);
+    app.draft_dirty = false;
+
+    app.matrix_dialog = Some(MatrixDialog::default());
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        ctrl_wheel(canvas_rect.center(), egui::MouseWheelUnit::Line, 1.0),
+    );
+    assert_eq!(app.zoom, 2.0);
+    app.matrix_dialog = None;
+
+    // Hovering over the open inline \command popup blocks canvas Ctrl+Wheel.
+    app.handle_canvas_text("\\");
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let popup_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let popup_pos = find_text_center(&popup_out, |text| text.contains("Enter insert"));
+    let _ = run_ui_pass_frame(
+        &ctx,
+        &mut app,
+        ctrl_wheel(popup_pos, egui::MouseWheelUnit::Line, -1.0),
+    );
+    assert_eq!(app.zoom, 2.0);
+}
+
+#[test]
+fn equation_canvas_ctrl_wheel_anchors_zoom_at_pointer_and_avoids_plain_scroll() {
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app();
+    let mut tall = "<mi>x</mi>".to_string();
+    for _ in 0..4 {
+        tall = format!("<mfrac>{tall}<mi>y</mi></mfrac>");
+    }
+    let wide = format!("<mi>{}</mi>", "x".repeat(24));
+    let mathml = format!("<math>{tall}{wide}</math>");
+    assert!(app.load_math(&mathml, None, Some(14.0)));
+
+    let view_size = Vec2::new(720.0, 440.0);
+    let _ = run_ui_pass_sized(&ctx, &mut app, view_size);
+    let out = run_ui_pass_sized(&ctx, &mut app, view_size);
+    let pal = app.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
+    let canvas_rect = out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == pal.bg
+                    && rect_shape.corner_radius == theme::SURFACE_CORNER_RADIUS
+                    && rect_shape.rect.width() > 100.0 =>
+            {
+                Some(rect_shape.rect)
+            }
+            _ => None,
+        })
+        .expect("canvas frame");
+    let tex_id = app
+        .texture
+        .as_ref()
+        .unwrap_or_else(|| panic!("equation texture missing; status={}", app.status))
+        .id();
+    let eq_rect = |output: &egui::FullOutput| {
+        output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == tex_id => Some(mesh.calc_bounds()),
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape
+                        .brush
+                        .as_ref()
+                        .is_some_and(|brush| brush.fill_texture_id == tex_id) =>
+                {
+                    Some(rect_shape.rect)
+                }
+                _ => None,
+            })
+            .expect("equation texture rect")
+    };
+    let initial_eq = eq_rect(&out);
+    assert!(initial_eq.width() > canvas_rect.width());
+    assert!(initial_eq.height() > canvas_rect.height());
+
+    // Scroll into the interior of the overflowing equation before zooming.
+    let anchor_pos = Pos2::new(canvas_rect.left() + 180.0, canvas_rect.top() + 80.0);
+    for _ in 0..2 {
+        let _ = run_ui_pass_sized_events(
+            &ctx,
+            &mut app,
+            view_size,
+            vec![
+                egui::Event::PointerMoved(anchor_pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(-25.0, -25.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    for _ in 0..12 {
+        let _ = run_ui_pass_sized(&ctx, &mut app, view_size);
+    }
+    let before_out = run_ui_pass_sized(&ctx, &mut app, view_size);
+    let origin_before = eq_rect(&before_out).min;
+    let old_scale = app.zoom * 96.0 / 72.0;
+    let eq_point = (anchor_pos - origin_before) / old_scale;
+
+    // Ctrl+Wheel up keeps the equation point directly beneath anchor_pos in the same frame.
+    let zoom_in_out = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        view_size,
+        vec![
+            egui::Event::PointerMoved(anchor_pos),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::CTRL,
+            },
+        ],
+    );
+    assert_eq!(app.zoom, 2.1);
+    let new_scale = app.zoom * 96.0 / 72.0;
+    let origin_after_in = eq_rect(&zoom_in_out).min;
+    let screen_after_in = origin_after_in + eq_point * new_scale;
+    assert!(
+        (screen_after_in - anchor_pos).length() <= 1.0,
+        "expected zoom-in anchor {anchor_pos:?}, got {screen_after_in:?}"
+    );
+
+    // Ctrl+Wheel back down returns the anchored point cleanly.
+    let zoom_out_out = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        view_size,
+        vec![
+            egui::Event::PointerMoved(anchor_pos),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::CTRL,
+            },
+        ],
+    );
+    assert_eq!(app.zoom, 2.0);
+    let origin_after_out = eq_rect(&zoom_out_out).min;
+    let screen_after_out = origin_after_out + eq_point * old_scale;
+    assert!(
+        (screen_after_out - anchor_pos).length() <= 1.0,
+        "expected zoom-out anchor {anchor_pos:?}, got {screen_after_out:?}"
+    );
+
+    // At the minimum zoom clamp, Ctrl+Wheel does not accidentally scroll the canvas.
+    app.zoom = 1.5;
+    for _ in 0..10 {
+        let _ = run_ui_pass_sized(&ctx, &mut app, view_size);
+    }
+    let clamped_before = run_ui_pass_sized(&ctx, &mut app, view_size);
+    let origin_clamped_before = eq_rect(&clamped_before).min;
+    let clamped_after = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        view_size,
+        vec![
+            egui::Event::PointerMoved(anchor_pos),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::CTRL,
+            },
+        ],
+    );
+    assert_eq!(app.zoom, 1.5);
+    assert_eq!(eq_rect(&clamped_after).min, origin_clamped_before);
+}
+
+#[test]
+fn latex_box_ctrl_wheel_scales_font_size_independently_across_bounds() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(path.clone(), Some(&ctx));
+    app.latex = "alpha + beta\nline2\nline3".into();
+    app.draft_dirty = true;
+
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let pal = app.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
+    let latex_rect = out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == pal.bg
+                    && rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS
+                    && rect_shape.stroke == Stroke::NONE
+                    && rect_shape.rect.width() > 300.0 =>
+            {
+                Some(rect_shape.rect)
+            }
+            _ => None,
+        })
+        .expect("latex frame");
+    assert!((latex_rect.height() - LATEX_INPUT_HEIGHT).abs() <= 0.5);
+
+    let rendered_latex_font = |output: &egui::FullOutput| {
+        output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text_shape)
+                    if text_shape.galley.text().contains("alpha + beta") =>
+                {
+                    text_shape
+                        .galley
+                        .job
+                        .sections
+                        .first()
+                        .map(|section| section.format.font_id.clone())
+                }
+                _ => None,
+            })
+            .expect("rendered latex galley")
+    };
+    assert_eq!(
+        rendered_latex_font(&out),
+        egui::FontId::monospace(settings::DEFAULT_LATEX_FONT_PT)
+    );
+
+    let ctrl_wheel = |pos: Pos2, delta_y: f32| {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, delta_y),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::CTRL,
+            },
+        ]
+    };
+
+    // Ctrl+Wheel up scales LaTeX source by +0.5 pt even while draft_dirty is true.
+    let zoomed_out = run_ui_pass_frame(&ctx, &mut app, ctrl_wheel(latex_rect.center(), 1.0));
+    assert_eq!(app.latex_font_pt, 13.5);
+    assert_eq!(app.zoom, settings::DEFAULT_ZOOM);
+    assert_eq!(app.font_pt, settings::DEFAULT_FONT_PT);
+    assert_eq!(Settings::load_from_path(&path).latex_font_pt, 13.5);
+    assert_eq!(
+        rendered_latex_font(&zoomed_out),
+        egui::FontId::monospace(13.5)
+    );
+    assert!((latex_rect.height() - LATEX_INPUT_HEIGHT).abs() <= 0.5);
+    let first_line_y = |output: &egui::FullOutput| {
+        output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text_shape)
+                    if text_shape.galley.text().contains("alpha + beta") =>
+                {
+                    Some(text_shape.pos.y)
+                }
+                _ => None,
+            })
+            .expect("latex text pos")
+    };
+    assert!((first_line_y(&zoomed_out) - first_line_y(&out)).abs() <= 0.5);
+
+    // Clamps across 8.0..=32.0 pt in 0.5 pt increments.
+    for _ in 0..20 {
+        let _ = run_ui_pass_frame(&ctx, &mut app, ctrl_wheel(latex_rect.center(), -1.0));
+    }
+    let min_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.latex_font_pt, 8.0);
+    assert_eq!(rendered_latex_font(&min_out), egui::FontId::monospace(8.0));
+
+    for _ in 0..60 {
+        let _ = run_ui_pass_frame(&ctx, &mut app, ctrl_wheel(latex_rect.center(), 1.0));
+    }
+    let max_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.latex_font_pt, 32.0);
+    assert_eq!(rendered_latex_font(&max_out), egui::FontId::monospace(32.0));
+    assert_eq!(Settings::load_from_path(&path).latex_font_pt, 32.0);
+
+    // Modals suppress LaTeX box Ctrl+Wheel.
+    app.matrix_dialog = Some(MatrixDialog::default());
+    let _ = run_ui_pass_frame(&ctx, &mut app, ctrl_wheel(latex_rect.center(), -1.0));
+    assert_eq!(app.latex_font_pt, 32.0);
+    app.matrix_dialog = None;
+
+    // Adjusting footer Font size and Zoom never alters latex_font_pt.
+    app.draft_dirty = false;
+    let footer_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let font_pos = find_text_center(&footer_out, |text| text.ends_with(" pt") || text == "12.0");
+    let zoom_pos = find_text_center(&footer_out, |text| text == "200%");
+    for pos in [font_pos, zoom_pos] {
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    assert_eq!(app.font_pt, 13.0);
+    assert_eq!(app.zoom, 2.1);
+    assert_eq!(app.latex_font_pt, 32.0);
+    assert_eq!(Settings::load_from_path(&path).latex_font_pt, 32.0);
+
+    // Inline \command popup keeps TextStyle::Monospace (UI_FONT_SIZE), isolated from latex_font_pt.
+    app.command_input = Some(commands::Input::opened());
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let popup_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let popup_font = popup_out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text_shape) if text_shape.galley.text() == "\\" => text_shape
+                .galley
+                .job
+                .sections
+                .first()
+                .map(|section| section.format.font_id.clone()),
+            _ => None,
+        })
+        .expect("command popup prefix");
+    assert_eq!(popup_font, egui::FontId::monospace(theme::UI_FONT_SIZE));
+}

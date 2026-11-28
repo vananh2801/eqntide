@@ -49,7 +49,6 @@ impl App {
         } else {
             ui.set_opacity(1.0);
         }
-        let scale = self.zoom * 96.0 / 72.0;
         let height = (ui.available_height() - 26.0).max(12.0);
         let pal = self.active_canvas_palette(ui.visuals().dark_mode);
         egui::Frame::new()
@@ -60,6 +59,38 @@ impl App {
             .show(ui, |ui| {
                 Self::configure_canvas_scroll_style(ui, pal);
 
+                let viewport_size =
+                    Vec2::new(ui.available_width(), ui.available_height().min(height));
+                let viewport_min = ui.next_widget_position();
+                let canvas_hit_rect =
+                    Rect::from_min_size(viewport_min, viewport_size).expand(theme::SPACE_LG);
+                let scroll_id = ui.make_persistent_id(egui::IdSalt::new("formula-scroll"));
+                let mut anchored_zoom = None;
+                if ui.is_enabled() && ui.rect_contains_pointer(canvas_hit_rect) {
+                    let steps = ctrl_wheel_steps(ui, scroll_id.with("ctrl-wheel-accum"));
+                    if steps != 0 {
+                        let old_zoom = self.zoom;
+                        let new_zoom =
+                            step_snapped_value(old_zoom, steps, 10.0, crate::settings::ZOOM_RANGE);
+                        if (new_zoom - old_zoom).abs() > f32::EPSILON {
+                            let old_offset = egui::scroll_area::State::load(ui.ctx(), scroll_id)
+                                .map_or(Vec2::ZERO, |state| state.clamped_offset());
+                            let pointer_pos = ui
+                                .ctx()
+                                .input(|input| input.pointer.interact_pos())
+                                .unwrap_or(viewport_min);
+                            let cursor_in_viewport =
+                                (pointer_pos - viewport_min).clamp(Vec2::ZERO, viewport_size);
+                            anchored_zoom = Some((old_zoom, old_offset, cursor_in_viewport));
+                            self.zoom = new_zoom;
+                            self.persisted.zoom = new_zoom;
+                            self.settings_dirty = true;
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                }
+
+                let scale = self.zoom * 96.0 / 72.0;
                 let size = self
                     .rendered
                     .as_ref()
@@ -71,8 +102,6 @@ impl App {
                     })
                     .unwrap_or(Vec2::new(60.0, 40.0));
                 let content_size = size + Vec2::new(12.0, 20.0);
-                let viewport_size =
-                    Vec2::new(ui.available_width(), ui.available_height().min(height));
                 let gutter = ui.spacing().scroll.allocated_width();
                 // Start with the full viewport so two existing gutters cannot keep each other open.
                 let overflows_x = content_size.x > viewport_size.x.ceil();
@@ -81,164 +110,185 @@ impl App {
                     || (overflows_y && content_size.x > (viewport_size.x - gutter).ceil());
                 let scroll_y = overflows_y
                     || (overflows_x && content_size.y > (viewport_size.y - gutter).ceil());
-                egui::ScrollArea::new([scroll_x, scroll_y])
+                let mut scroll_area = egui::ScrollArea::new([scroll_x, scroll_y])
                     .id_salt("formula-scroll")
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .max_height(height)
                     .min_scrolled_height(0.0)
-                    .auto_shrink([false, false])
-                    .show_viewport(ui, |ui, viewport| {
-                        // Only the formula contributes to scrollable content. Filling the
-                        // viewport via allocate_space can round past its width at fractional DPI.
-                        let (_, content_rect) = ui.allocate_space(content_size);
-                        // Empty canvas space remains clickable without creating overflow.
-                        let rect = Rect::from_min_size(
-                            content_rect.min,
-                            viewport.size().max(content_size),
+                    .auto_shrink([false, false]);
+                if let Some((old_zoom, old_offset, cursor_in_viewport)) = anchored_zoom {
+                    let effective_viewport = Vec2::new(
+                        if scroll_y {
+                            (viewport_size.x - gutter).max(1.0)
+                        } else {
+                            viewport_size.x
+                        },
+                        if scroll_x {
+                            (viewport_size.y - gutter).max(1.0)
+                        } else {
+                            viewport_size.y
+                        },
+                    );
+                    let next_offset = anchored_canvas_scroll_offset(
+                        old_zoom,
+                        self.zoom,
+                        old_offset,
+                        cursor_in_viewport.min(effective_viewport),
+                        content_size,
+                        effective_viewport,
+                    );
+                    scroll_area = scroll_area.scroll_offset(next_offset);
+                }
+                scroll_area.show_viewport(ui, |ui, viewport| {
+                    // Only the formula contributes to scrollable content. Filling the
+                    // viewport via allocate_space can round past its width at fractional DPI.
+                    let (_, content_rect) = ui.allocate_space(content_size);
+                    // Empty canvas space remains clickable without creating overflow.
+                    let rect =
+                        Rect::from_min_size(content_rect.min, viewport.size().max(content_size));
+                    let response = ui.interact(
+                        rect,
+                        egui::Id::unique("equation-canvas"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::TextInput,
+                            true,
+                            "Visual equation editor",
+                        )
+                    });
+                    let origin = rect.min + Vec2::new(4.0, 8.0);
+                    if let Some(texture) = &self.texture {
+                        ui.painter().image(
+                            texture.id(),
+                            Rect::from_min_size(origin, size),
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                            pal.ink,
                         );
-                        let response = ui.interact(
-                            rect,
-                            egui::Id::unique("equation-canvas"),
-                            egui::Sense::click_and_drag(),
+                    }
+                    if let Some(rendered) = &self.rendered {
+                        for slot in &rendered.placeholders {
+                            let slot_rect = Rect::from_min_size(
+                                origin + Vec2::new(slot.x, slot.y) * scale,
+                                Vec2::new(slot.width, slot.height) * scale,
+                            );
+                            Self::paint_placeholder(ui.painter(), slot_rect, pal);
+                        }
+                    }
+                    if response.clicked() || response.drag_started() {
+                        response.request_focus();
+                    }
+                    // Enter/Space also set clicked() for a focused egui widget.
+                    // Only a real pointer click may cancel command entry or reposition the caret.
+                    let pointer_clicked = response.clicked_by(egui::PointerButton::Primary);
+                    if pointer_clicked || response.drag_started() {
+                        self.dismiss_command_input();
+                        self.latex_groups.clear();
+                        self.expects_latex_group = false;
+                    }
+                    if response.drag_started() {
+                        if let Some(pos) = ui.input(|input| input.pointer.press_origin()) {
+                            if let Some(caret) = self.hit_test_caret(pos, origin, scale) {
+                                self.editor.set_caret(caret, false);
+                            }
+                        }
+                    }
+                    if (pointer_clicked || response.dragged()) && !self.render_busy {
+                        if let Some(pos) = response.interact_pointer_pos() {
+                            if let Some(caret) = self.hit_test_caret(pos, origin, scale) {
+                                let extend =
+                                    ui.input(|input| input.modifiers.shift) || response.dragged();
+                                if self
+                                    .editor
+                                    .node(caret.node)
+                                    .is_some_and(|node| node.is_opaque())
+                                {
+                                    self.editor.select_node(caret.node);
+                                } else {
+                                    self.editor.set_caret(caret, extend);
+                                }
+                                if response.double_clicked() {
+                                    self.editor.select_node(caret.node);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(selection_rect) = self.selection_rect(origin, scale) {
+                        ui.painter().rect_filled(
+                            selection_rect,
+                            theme::CANVAS_OVERLAY_CORNER_RADIUS,
+                            pal.selection_bg,
                         );
-                        response.widget_info(|| {
-                            egui::WidgetInfo::labeled(
-                                egui::Role::TextInput,
-                                true,
-                                "Visual equation editor",
+                    }
+                    let has_canvas_focus =
+                        response.has_focus() || ui.memory(|mem| mem.has_focus(response.id));
+                    if has_canvas_focus && ui.is_enabled() {
+                        ui.memory_mut(|mem| {
+                            mem.set_focus_lock_filter(
+                                response.id,
+                                egui::EventFilter {
+                                    tab: true,
+                                    horizontal_arrows: true,
+                                    vertical_arrows: true,
+                                    escape: true,
+                                },
                             )
                         });
-                        let origin = rect.min + Vec2::new(4.0, 8.0);
-                        if let Some(texture) = &self.texture {
-                            ui.painter().image(
-                                texture.id(),
-                                Rect::from_min_size(origin, size),
-                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                                pal.ink,
-                            );
+                        if !self.keyboard_handled {
+                            self.handle_canvas_keyboard(ui);
+                            self.sync_render(ui.ctx());
                         }
-                        if let Some(rendered) = &self.rendered {
-                            for slot in &rendered.placeholders {
-                                let slot_rect = Rect::from_min_size(
-                                    origin + Vec2::new(slot.x, slot.y) * scale,
-                                    Vec2::new(slot.width, slot.height) * scale,
-                                );
-                                Self::paint_placeholder(ui.painter(), slot_rect, pal);
-                            }
-                        }
-                        if response.clicked() || response.drag_started() {
-                            response.request_focus();
-                        }
-                        // Enter/Space also set clicked() for a focused egui widget.
-                        // Only a real pointer click may cancel command entry or reposition the caret.
-                        let pointer_clicked = response.clicked_by(egui::PointerButton::Primary);
-                        if pointer_clicked || response.drag_started() {
-                            self.dismiss_command_input();
-                            self.latex_groups.clear();
-                            self.expects_latex_group = false;
-                        }
-                        if response.drag_started() {
-                            if let Some(pos) = ui.input(|input| input.pointer.press_origin()) {
-                                if let Some(caret) = self.hit_test_caret(pos, origin, scale) {
-                                    self.editor.set_caret(caret, false);
-                                }
-                            }
-                        }
-                        if (pointer_clicked || response.dragged()) && !self.render_busy {
-                            if let Some(pos) = response.interact_pointer_pos() {
-                                if let Some(caret) = self.hit_test_caret(pos, origin, scale) {
-                                    let extend = ui.input(|input| input.modifiers.shift)
-                                        || response.dragged();
-                                    if self
-                                        .editor
-                                        .node(caret.node)
-                                        .is_some_and(|node| node.is_opaque())
-                                    {
-                                        self.editor.select_node(caret.node);
+                        let cursor = self
+                            .caret_rect(origin, scale)
+                            .unwrap_or(Rect::from_min_size(origin, Vec2::new(1.0, 24.0)));
+                        if self.is_canvas_caret_visible(ui) {
+                            let ppp = ui.ctx().pixels_per_point();
+                            let snap = |coord: f32| (coord * ppp).round() / ppp;
+                            let x = snap(cursor.left());
+                            ui.painter().line_segment(
+                                [
+                                    Pos2::new(x, snap(cursor.top())),
+                                    Pos2::new(x, snap(cursor.bottom())),
+                                ],
+                                Stroke::new(
+                                    1.5,
+                                    if self.is_caret_in_text() {
+                                        pal.text_caret
                                     } else {
-                                        self.editor.set_caret(caret, extend);
-                                    }
-                                    if response.double_clicked() {
-                                        self.editor.select_node(caret.node);
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(selection_rect) = self.selection_rect(origin, scale) {
-                            ui.painter().rect_filled(
-                                selection_rect,
-                                theme::CANVAS_OVERLAY_CORNER_RADIUS,
-                                pal.selection_bg,
+                                        pal.caret
+                                    },
+                                ),
                             );
                         }
-                        let has_canvas_focus =
-                            response.has_focus() || ui.memory(|mem| mem.has_focus(response.id));
-                        if has_canvas_focus && ui.is_enabled() {
-                            ui.memory_mut(|mem| {
-                                mem.set_focus_lock_filter(
-                                    response.id,
-                                    egui::EventFilter {
-                                        tab: true,
-                                        horizontal_arrows: true,
-                                        vertical_arrows: true,
-                                        escape: true,
-                                    },
-                                )
-                            });
-                            if !self.keyboard_handled {
-                                self.handle_canvas_keyboard(ui);
-                                self.sync_render(ui.ctx());
-                            }
-                            let cursor = self
-                                .caret_rect(origin, scale)
-                                .unwrap_or(Rect::from_min_size(origin, Vec2::new(1.0, 24.0)));
-                            if self.is_canvas_caret_visible(ui) {
-                                let ppp = ui.ctx().pixels_per_point();
-                                let snap = |coord: f32| (coord * ppp).round() / ppp;
-                                let x = snap(cursor.left());
-                                ui.painter().line_segment(
-                                    [
-                                        Pos2::new(x, snap(cursor.top())),
-                                        Pos2::new(x, snap(cursor.bottom())),
-                                    ],
-                                    Stroke::new(
-                                        1.5,
-                                        if self.is_caret_in_text() {
-                                            pal.text_caret
-                                        } else {
-                                            pal.caret
-                                        },
-                                    ),
-                                );
-                            }
-                            ui.output_mut(|out| {
-                                out.ime = Some(egui::output::IMEOutput {
-                                    purpose: egui::IMEPurpose::Normal,
-                                    rect,
-                                    cursor_rect: cursor,
-                                    should_interrupt_composition: false,
-                                })
-                            });
-                            if !self.ime.is_empty() {
-                                ui.painter().text(
-                                    cursor.right_bottom(),
-                                    egui::Align2::LEFT_TOP,
-                                    &self.ime,
-                                    egui::FontId::proportional(18.0),
-                                    pal.ime_fg,
-                                );
-                            }
-                        } else {
-                            self.caret_blink = None;
+                        ui.output_mut(|out| {
+                            out.ime = Some(egui::output::IMEOutput {
+                                purpose: egui::IMEPurpose::Normal,
+                                rect,
+                                cursor_rect: cursor,
+                                should_interrupt_composition: false,
+                            })
+                        });
+                        if !self.ime.is_empty() {
+                            ui.painter().text(
+                                cursor.right_bottom(),
+                                egui::Align2::LEFT_TOP,
+                                &self.ime,
+                                egui::FontId::proportional(18.0),
+                                pal.ime_fg,
+                            );
                         }
-                        self.keyboard_handled = false;
-                        if self.command_input.is_some() && ui.is_enabled() {
-                            let cursor = self
-                                .caret_rect(origin, scale)
-                                .unwrap_or(Rect::from_min_size(origin, Vec2::new(1.0, 24.0)));
-                            self.draw_command_popup(ui, cursor.left_bottom() + Vec2::new(0.0, 6.0));
-                        }
-                    })
+                    } else {
+                        self.caret_blink = None;
+                    }
+                    self.keyboard_handled = false;
+                    if self.command_input.is_some() && ui.is_enabled() {
+                        let cursor = self
+                            .caret_rect(origin, scale)
+                            .unwrap_or(Rect::from_min_size(origin, Vec2::new(1.0, 24.0)));
+                        self.draw_command_popup(ui, cursor.left_bottom() + Vec2::new(0.0, 6.0));
+                    }
+                })
             })
             .inner
     }
@@ -248,6 +298,26 @@ impl App {
         let pal = self.active_canvas_palette(ui.visuals().dark_mode);
         let latex_id = Self::editor_focus_id(StartupFocus::Latex);
         let box_height = ui.available_height().clamp(24.0, LATEX_INPUT_HEIGHT);
+        let latex_hit_rect = Rect::from_min_size(
+            ui.next_widget_position(),
+            Vec2::new(ui.available_width(), box_height),
+        );
+        if ui.is_enabled() && ui.rect_contains_pointer(latex_hit_rect) {
+            let steps = ctrl_wheel_steps(ui, latex_id.with("ctrl-wheel-accum"));
+            if steps != 0 {
+                let next_font = step_snapped_value(
+                    self.latex_font_pt,
+                    steps,
+                    2.0,
+                    crate::settings::LATEX_FONT_PT_RANGE,
+                );
+                if (next_font - self.latex_font_pt).abs() > f32::EPSILON {
+                    self.latex_font_pt = next_font;
+                    self.persisted.latex_font_pt = next_font;
+                    self.settings_dirty = true;
+                }
+            }
+        }
         let frame_resp = egui::Frame::new()
             .fill(pal.bg)
             .corner_radius(theme::CONTROL_CORNER_RADIUS)
@@ -276,7 +346,7 @@ impl App {
                                 .desired_rows(1)
                                 .desired_width(f32::INFINITY)
                                 .min_size(Vec2::new(width, box_height))
-                                .font(egui::TextStyle::Monospace)
+                                .font(egui::FontId::monospace(self.latex_font_pt))
                                 .text_color(pal.ink),
                         )
                     })
@@ -908,4 +978,89 @@ impl App {
             (None, None) => left.offset <= right.offset,
         }
     }
+}
+
+fn ctrl_wheel_steps(ui: &egui::Ui, accum_id: egui::Id) -> i32 {
+    const POINT_STEP_THRESHOLD: f32 = 16.0;
+    let (has_ctrl_wheel, discrete_steps, point_delta) = ui.ctx().input(|input| {
+        let frame_ctrl = input.modifiers.ctrl || input.modifiers.command;
+        let mut has_ctrl_wheel = false;
+        let mut discrete_steps = 0_i32;
+        let mut point_delta = 0.0_f32;
+        for event in &input.raw.events {
+            if let egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } = event
+            {
+                let ctrl_held = frame_ctrl || modifiers.ctrl || modifiers.command;
+                if ctrl_held && delta.y.abs() > f32::EPSILON {
+                    has_ctrl_wheel = true;
+                    match unit {
+                        egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => {
+                            discrete_steps += delta.y.signum() as i32;
+                        }
+                        egui::MouseWheelUnit::Point => {
+                            point_delta += delta.y;
+                        }
+                    }
+                }
+            }
+        }
+        (has_ctrl_wheel, discrete_steps, point_delta)
+    });
+    if !has_ctrl_wheel {
+        return 0;
+    }
+    ui.ctx().input_mut(|input| {
+        input.smooth_scroll_delta = Vec2::ZERO;
+    });
+    let mut accum = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<f32>(accum_id))
+        .unwrap_or(0.0);
+    if discrete_steps != 0 {
+        accum = 0.0;
+    }
+    if point_delta.abs() > f32::EPSILON {
+        if accum * point_delta < 0.0 {
+            accum = 0.0;
+        }
+        accum += point_delta;
+    }
+    let point_steps = (accum / POINT_STEP_THRESHOLD).trunc() as i32;
+    if point_steps != 0 {
+        accum -= point_steps as f32 * POINT_STEP_THRESHOLD;
+    }
+    ui.ctx().data_mut(|data| data.insert_temp(accum_id, accum));
+    discrete_steps + point_steps
+}
+
+fn step_snapped_value(
+    current: f32,
+    steps: i32,
+    steps_per_unit: f64,
+    range: std::ops::RangeInclusive<f32>,
+) -> f32 {
+    let step = 1.0 / steps_per_unit;
+    let next = f64::from(current) + f64::from(steps) * step;
+    let snapped = ((next * steps_per_unit).round() / steps_per_unit) as f32;
+    snapped.clamp(*range.start(), *range.end())
+}
+
+fn anchored_canvas_scroll_offset(
+    old_zoom: f32,
+    new_zoom: f32,
+    old_offset: Vec2,
+    cursor_in_viewport: Vec2,
+    content_size: Vec2,
+    viewport_size: Vec2,
+) -> Vec2 {
+    let pad = Vec2::new(4.0, 8.0);
+    let ratio = new_zoom / old_zoom.max(f32::EPSILON);
+    let raw_offset = pad + (old_offset + cursor_in_viewport - pad) * ratio - cursor_in_viewport;
+    let max_offset = (content_size - viewport_size).max(Vec2::ZERO);
+    raw_offset.clamp(Vec2::ZERO, max_offset)
 }

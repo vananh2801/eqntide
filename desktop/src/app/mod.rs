@@ -202,6 +202,8 @@ pub struct App {
     // ── LaTeX Source & Command Buffer ────────────────────────────────────────
     /// Live LaTeX source buffer synchronized with `editor`.
     pub(super) latex: String,
+    /// Monospace font size (pt) used in the `LaTeX source` box.
+    pub(super) latex_font_pt: f32,
     /// True while `latex` has unparsed user edits not yet reflected in `editor`.
     pub(super) draft_dirty: bool,
     /// Monotonic counter invalidating stale background LaTeX parse responses.
@@ -496,6 +498,7 @@ impl App {
             saved_font: 12.0,
             saved_mode: "omml".into(),
             latex: String::new(),
+            latex_font_pt: settings::DEFAULT_LATEX_FONT_PT,
             draft_dirty: false,
             latex_generation: 0,
             latex_deadline: None,

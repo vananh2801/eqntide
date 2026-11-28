@@ -75,6 +75,7 @@ impl App {
         self.zoom = settings.zoom;
         self.font_pt = settings.font_pt;
         self.saved_font = settings.font_pt;
+        self.latex_font_pt = settings.latex_font_pt;
         self.target = settings.target.clone();
         self.saved_mode = settings.target.clone();
         self.category = settings.category.clone();

@@ -13,6 +13,7 @@ fn with_settings_path_restores_all_persisted_preferences() {
         canvas_opacity: 0.65,
         startup_focus: StartupFocus::Latex,
         font_pt: 18.5,
+        latex_font_pt: 21.5,
         target: "mathtype".into(),
         category: palette::RECENT_GROUP.into(),
         recent_palette: vec![r"\alpha".into(), r"\frac{#?}{#?}".into()],
@@ -26,6 +27,7 @@ fn with_settings_path_restores_all_persisted_preferences() {
     assert!(isolated.settings_path.is_none());
     assert_eq!(isolated.zoom, settings::DEFAULT_ZOOM);
     assert_eq!(isolated.font_pt, settings::DEFAULT_FONT_PT);
+    assert_eq!(isolated.latex_font_pt, settings::DEFAULT_LATEX_FONT_PT);
 
     let ctx = egui::Context::default();
     let restored = super::helpers::app().with_settings_path(path, Some(&ctx));
@@ -35,6 +37,7 @@ fn with_settings_path_restores_all_persisted_preferences() {
     assert_eq!(restored.startup_focus, StartupFocus::Latex);
     assert_eq!(restored.font_pt, 18.5);
     assert_eq!(restored.saved_font, 18.5);
+    assert_eq!(restored.latex_font_pt, 21.5);
     assert_eq!(restored.target, "mathtype");
     assert_eq!(restored.saved_mode, "mathtype");
     assert_eq!(restored.category, palette::RECENT_GROUP);
@@ -51,6 +54,7 @@ fn office_session_overrides_do_not_overwrite_saved_defaults() {
     let path = dir.path().join("settings.json");
     Settings {
         font_pt: 16.0,
+        latex_font_pt: 17.5,
         target: "mathtype".into(),
         ..Settings::default()
     }
@@ -91,6 +95,7 @@ fn office_session_overrides_do_not_overwrite_saved_defaults() {
 
     let on_disk = Settings::load_from_path(&path);
     assert_eq!(on_disk.font_pt, 16.0);
+    assert_eq!(on_disk.latex_font_pt, 17.5);
     assert_eq!(on_disk.target, "mathtype");
 }
 
@@ -1630,4 +1635,77 @@ fn batch_progress_bar_combobox_and_checkboxes_use_active_accent() {
             }
         }
     }
+}
+
+#[test]
+fn latex_font_pt_ctrl_wheel_persists_and_restores_across_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let ctx = egui::Context::default();
+    ThemeTokens::apply_style(&ctx);
+    let mut app = super::helpers::app().with_settings_path(path.clone(), Some(&ctx));
+    app.latex = "restored-latex".into();
+
+    let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+    let pal = app.active_canvas_palette(ctx.theme() == egui::Theme::Dark);
+    let latex_rect = out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape)
+                if rect_shape.fill == pal.bg
+                    && rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS
+                    && rect_shape.stroke == Stroke::NONE
+                    && rect_shape.rect.width() > 300.0 =>
+            {
+                Some(rect_shape.rect)
+            }
+            _ => None,
+        })
+        .expect("latex frame");
+
+    for _ in 0..3 {
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(latex_rect.center()),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::CTRL,
+                },
+            ],
+        );
+    }
+    assert_eq!(app.latex_font_pt, 14.5);
+    assert_eq!(Settings::load_from_path(&path).latex_font_pt, 14.5);
+
+    let fresh_ctx = egui::Context::default();
+    ThemeTokens::apply_style(&fresh_ctx);
+    let mut reloaded = super::helpers::app().with_settings_path(path, Some(&fresh_ctx));
+    reloaded.latex = "restored-latex".into();
+    assert_eq!(reloaded.latex_font_pt, 14.5);
+    let reloaded_out = run_ui_pass_frame(&fresh_ctx, &mut reloaded, vec![]);
+    let rendered_font = reloaded_out
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text_shape)
+                if text_shape.galley.text().contains("restored-latex") =>
+            {
+                text_shape
+                    .galley
+                    .job
+                    .sections
+                    .first()
+                    .map(|section| section.format.font_id.clone())
+            }
+            _ => None,
+        })
+        .expect("reloaded latex galley");
+    assert_eq!(rendered_font, egui::FontId::monospace(14.5));
 }

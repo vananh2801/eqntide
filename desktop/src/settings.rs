@@ -24,10 +24,14 @@ use std::{
 pub(crate) const ZOOM_RANGE: std::ops::RangeInclusive<f32> = 1.5..=4.0;
 /// Allowed equation export font size range in points.
 pub(crate) const FONT_PT_RANGE: std::ops::RangeInclusive<f32> = 6.0..=72.0;
+/// Allowed `LaTeX source` editor font size range in points.
+pub(crate) const LATEX_FONT_PT_RANGE: std::ops::RangeInclusive<f32> = 8.0..=32.0;
 /// Default UI zoom factor.
 pub(crate) const DEFAULT_ZOOM: f32 = 2.0;
 /// Default equation export font size in points.
 pub(crate) const DEFAULT_FONT_PT: f32 = 12.0;
+/// Default `LaTeX source` editor font size in points.
+pub(crate) const DEFAULT_LATEX_FONT_PT: f32 = theme::UI_FONT_SIZE;
 /// Default clipboard/document conversion target identifier.
 pub(crate) const DEFAULT_TARGET: &str = "omml";
 /// Maximum number of recent palette symbols persisted in settings.
@@ -156,6 +160,8 @@ pub(crate) struct Settings {
     pub(crate) background_accent: Option<[u8; 3]>,
     pub(crate) startup_focus: StartupFocus,
     pub(crate) font_pt: f32,
+    /// Monospace font size (pt) used inside the `LaTeX source` editor box.
+    pub(crate) latex_font_pt: f32,
     pub(crate) target: String,
     pub(crate) category: String,
     pub(crate) recent_palette: Vec<String>,
@@ -179,6 +185,7 @@ impl Default for Settings {
             background_accent: None,
             startup_focus: StartupFocus::Canvas,
             font_pt: DEFAULT_FONT_PT,
+            latex_font_pt: DEFAULT_LATEX_FONT_PT,
             target: DEFAULT_TARGET.into(),
             category: palette::DEFAULT_GROUP.into(),
             recent_palette: Vec::new(),
@@ -205,6 +212,7 @@ impl<'de> Deserialize<'de> for Settings {
             background_accent: Option<[u8; 3]>,
             startup_focus: StartupFocus,
             font_pt: f32,
+            latex_font_pt: f32,
             target: String,
             category: String,
             recent_palette: Vec<String>,
@@ -228,6 +236,7 @@ impl<'de> Deserialize<'de> for Settings {
                     background_accent: defaults.background_accent,
                     startup_focus: defaults.startup_focus,
                     font_pt: defaults.font_pt,
+                    latex_font_pt: defaults.latex_font_pt,
                     target: defaults.target,
                     category: defaults.category,
                     recent_palette: defaults.recent_palette,
@@ -265,6 +274,7 @@ impl<'de> Deserialize<'de> for Settings {
             background_accent: raw.background_accent,
             startup_focus: raw.startup_focus,
             font_pt: raw.font_pt,
+            latex_font_pt: raw.latex_font_pt,
             target: raw.target,
             category: raw.category,
             recent_palette: raw.recent_palette,
@@ -304,6 +314,15 @@ impl Settings {
             (clamped * 2.0).round() / 2.0
         } else {
             DEFAULT_FONT_PT
+        };
+
+        self.latex_font_pt = if self.latex_font_pt.is_finite() {
+            let clamped = self
+                .latex_font_pt
+                .clamp(*LATEX_FONT_PT_RANGE.start(), *LATEX_FONT_PT_RANGE.end());
+            (clamped * 2.0).round() / 2.0
+        } else {
+            DEFAULT_LATEX_FONT_PT
         };
 
         if self.target != "omml" && self.target != "mathtype" {
@@ -754,6 +773,7 @@ mod tests {
             background_accent: Some([40, 140, 220]),
             startup_focus: StartupFocus::Latex,
             font_pt: 81.3,
+            latex_font_pt: 60.0,
             target: "latex".into(),
             category: "DoesNotExist".into(),
             recent_palette: vec![
@@ -777,6 +797,7 @@ mod tests {
         assert_eq!(raw.background_opacity, 1.0);
         assert_eq!(raw.canvas_opacity, 1.0);
         assert_eq!(raw.font_pt, *FONT_PT_RANGE.end());
+        assert_eq!(raw.latex_font_pt, *LATEX_FONT_PT_RANGE.end());
         assert_eq!(raw.target, "omml");
         assert_eq!(raw.category, palette::DEFAULT_GROUP);
         assert_eq!(
@@ -796,6 +817,7 @@ mod tests {
         let non_finite = Settings {
             zoom: f32::NAN,
             font_pt: f32::INFINITY,
+            latex_font_pt: f32::NEG_INFINITY,
             background_opacity: f32::NAN,
             canvas_opacity: f32::NEG_INFINITY,
             ..Settings::default()
@@ -803,11 +825,13 @@ mod tests {
         .sanitized();
         assert_eq!(non_finite.zoom, DEFAULT_ZOOM);
         assert_eq!(non_finite.font_pt, DEFAULT_FONT_PT);
+        assert_eq!(non_finite.latex_font_pt, DEFAULT_LATEX_FONT_PT);
         assert_eq!(non_finite.background_opacity, DEFAULT_BACKGROUND_OPACITY);
         assert_eq!(non_finite.canvas_opacity, DEFAULT_CANVAS_OPACITY);
 
         let snapped_font = Settings {
             font_pt: 13.3,
+            latex_font_pt: 14.3,
             zoom: 0.5,
             background_opacity: -0.2,
             canvas_opacity: -0.4,
@@ -816,11 +840,22 @@ mod tests {
         }
         .sanitized();
         assert_eq!(snapped_font.font_pt, 13.5);
+        assert_eq!(snapped_font.latex_font_pt, 14.5);
         assert_eq!(snapped_font.zoom, *ZOOM_RANGE.start());
         assert_eq!(snapped_font.background_opacity, 0.0);
         assert_eq!(snapped_font.canvas_opacity, 0.0);
         assert_eq!(snapped_font.background_image, None);
         assert_eq!(snapped_font.background_mode, BackgroundMode::Solid);
+
+        let clamped_low_latex = Settings {
+            latex_font_pt: 2.0,
+            ..Settings::default()
+        }
+        .sanitized();
+        assert_eq!(
+            clamped_low_latex.latex_font_pt,
+            *LATEX_FONT_PT_RANGE.start()
+        );
 
         let snapped_zoom = Settings {
             zoom: 2.346,
@@ -907,6 +942,7 @@ mod tests {
             background_accent: Some([44, 152, 224]),
             startup_focus: StartupFocus::Latex,
             font_pt: 16.5,
+            latex_font_pt: 19.5,
             target: "mathtype".into(),
             category: palette::RECENT_GROUP.into(),
             recent_palette: vec![r"\frac{#?}{#?}".into(), r"\alpha".into()],
@@ -988,6 +1024,7 @@ mod tests {
 
         let loaded = Settings::load_from_path(&path);
         assert_eq!(loaded.zoom, 2.5);
+        assert_eq!(loaded.latex_font_pt, DEFAULT_LATEX_FONT_PT);
         assert!((loaded.background_opacity - 0.42).abs() < 1e-6);
         assert_eq!(loaded.canvas_opacity, 1.0);
         assert_eq!(loaded.startup_focus, StartupFocus::Canvas);

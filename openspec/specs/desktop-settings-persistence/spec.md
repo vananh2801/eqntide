@@ -14,15 +14,15 @@ The desktop application SHALL store user preferences in a per-user JSON file ins
 - **THEN** the saved preferences file is loaded from the platform configuration directory and the previous values are restored
 
 ### Requirement: Persisted user settings scope and validation
-The desktop application SHALL persist and restore canvas zoom (clamped to `1.5..=4.0` and snapped to `0.01` / `1%` increments), appearance theme, custom app background settings (`background_mode`, `background_image`, `background_opacity`, `canvas_opacity`, `background_accent_enabled`, `background_accent`), startup focus target, font size, equation output target, active palette category, recent palette items, customized palette shortcut overrides (`palette_shortcuts`), batch conversion target, and batch overwrite option, clamping or defaulting invalid stored values safely while ignoring legacy canvas preset keys (`canvas_light`, `canvas_dark`) in existing JSON files.
+The desktop application SHALL persist and restore canvas zoom (clamped to `1.5..=4.0` and snapped to `0.01` / `1%` increments), LaTeX source font size (`latex_font_pt`, clamped to `8.0..=32.0`, snapped to `0.5 pt` increments, and defaulting to `13.0` when omitted or non-finite), appearance theme, custom app background settings (`background_mode`, `background_image`, `background_opacity`, `canvas_opacity`, `background_accent_enabled`, `background_accent`), startup focus target, font size, equation output target, active palette category, recent palette items, customized palette shortcut overrides (`palette_shortcuts`), batch conversion target, and batch overwrite option, clamping or defaulting invalid stored values safely while ignoring legacy canvas preset keys (`canvas_light`, `canvas_dark`) in existing JSON files.
 
 #### Scenario: Valid persisted settings restore on launch
-- **WHEN** the preferences file contains valid values for zoom, theme, custom app background settings, startup focus target, font size, output target, category, recent items, palette shortcut overrides, batch target, and batch overwrite
+- **WHEN** the preferences file contains valid values for zoom, LaTeX source font size, theme, custom app background settings, startup focus target, font size, output target, category, recent items, palette shortcut overrides, batch target, and batch overwrite
 - **THEN** the desktop application launches with those values applied
 
 #### Scenario: Corrupt or out-of-range preferences fall back without failing
 - **WHEN** the preferences file is missing, contains invalid JSON, or contains out-of-range or off-step numbers or unknown identifiers
-- **THEN** the application starts normally with safe clamped/snapped or default values (`zoom` snapped to `1%` increments and `font_pt` snapped to `0.5 pt` increments) without reporting a startup crash
+- **THEN** the application starts normally with safe clamped/snapped or default values (`zoom` snapped to `1%` increments, `font_pt` snapped to `0.5 pt` increments, and `latex_font_pt` clamped to `8.0..=32.0` snapped to `0.5 pt` increments or defaulting to `13.0` when non-finite/omitted) without reporting a startup crash
 
 #### Scenario: Empty Recent category does not trap startup
 - **WHEN** the saved category is `Recent` but the saved recent list is empty or contains no valid palette items
@@ -57,10 +57,10 @@ The desktop application SHALL persist and restore canvas zoom (clamped to `1.5..
 - **THEN** missing `palette_shortcuts` falls back to the default shortcut set, explicit `null` overrides keep cleared default shortcuts unassigned across restarts, and invalid, system-reserved, or duplicate entries are sanitized safely without crashing
 
 ### Requirement: Immediate save on user changes
-The desktop application SHALL persist updated preferences atomically whenever the user changes a persisted setting (including selecting, adjusting, or clearing the app background, or modifying, clearing, swapping, or resetting palette shortcuts) or inserts a palette item in the UI.
+The desktop application SHALL persist updated preferences atomically whenever the user changes a persisted setting (including zooming via `Ctrl+Wheel` on the Equation Canvas or `LaTeX source` box, selecting, adjusting, or clearing the app background, or modifying, clearing, swapping, or resetting palette shortcuts) or inserts a palette item in the UI.
 
 #### Scenario: User setting edits write safely to disk
-- **WHEN** the user adjusts footer zoom or font size (via drag, direct text entry, or mouse wheel), toggles theme, changes startup focus, modifies app background settings, modifies or resets palette shortcuts, changes output target, switches palette category, changes batch options, or inserts a palette item
+- **WHEN** the user adjusts footer zoom or font size (via drag, direct text entry, or mouse wheel), zooms the Equation Canvas or `LaTeX source` box via `Ctrl+Wheel`, toggles theme, changes startup focus, modifies app background settings, modifies or resets palette shortcuts, changes output target, switches palette category, changes batch options, or inserts a palette item
 - **THEN** the updated preferences are written atomically to the preferences file without corrupting existing content on failure (with drag edits flushing on pointer release and discrete wheel or text-commit edits flushing cleanly)
 
 ### Requirement: Configurable startup focus target in Settings
