@@ -875,7 +875,7 @@ impl App {
         }
     }
 
-    /// Renders the bottom action bar with target format radio buttons, font size, zoom, undo/redo, and save.
+    /// Renders the bottom action bar with target format buttons, font size, zoom, undo/redo, and save.
     pub(super) fn draw_footer(&mut self, ui: &mut egui::Ui) {
         let tokens = self.theme_tokens(ui);
         ui.add_enabled_ui(
@@ -891,27 +891,19 @@ impl App {
                         let color = ui.visuals().widgets.inactive.fg_stroke.color;
                         let caption =
                             |text: &str| egui::RichText::new(text).font(font.clone()).color(color);
-                        let mt_resp = Self::accent_radio_value(
-                            ui,
-                            tokens,
-                            &mut self.target,
-                            "mathtype".into(),
-                            "MathType",
-                        );
-                        ui.add_space(theme::SPACE_MD);
-                        let omml_resp = Self::accent_radio_value(
-                            ui,
-                            tokens,
-                            &mut self.target,
-                            "omml".into(),
-                            "OMML",
-                        );
-                        if mt_resp.changed() || omml_resp.changed() {
-                            self.persisted.target = self.target.clone();
-                            self.settings_dirty = true;
-                        }
-                        if mt_resp.clicked() || omml_resp.clicked() {
-                            self.pending_focus_restore = Some(self.active_editor_focus);
+                        for (choice, label) in [("mathtype", "MathType"), ("omml", "OMML")] {
+                            let selected = self.target == choice;
+                            let resp = Self::with_selectable_style(ui, tokens, selected, |ui| {
+                                Self::standard_button(ui, label)
+                            });
+                            if resp.clicked() {
+                                if !selected {
+                                    self.target = choice.into();
+                                    self.persisted.target = self.target.clone();
+                                    self.settings_dirty = true;
+                                }
+                                self.pending_focus_restore = Some(self.active_editor_focus);
+                            }
                         }
                         Self::draw_section_separator(ui, tokens);
                         ui.label(caption("Font size"));
@@ -920,7 +912,7 @@ impl App {
                             tokens,
                             "footer-font-size",
                             f64::from(4.0 / FONT_SIZE_CONTROL_WIDTH),
-                            1.0,
+                            Some(1.0),
                             settings::FONT_PT_RANGE,
                             &mut self.font_pt,
                             "Click and drag left/right, or scroll to adjust",
@@ -957,7 +949,7 @@ impl App {
                             tokens,
                             "footer-zoom",
                             f64::from(1.0 / ZOOM_CONTROL_WIDTH),
-                            10.0,
+                            Some(10.0),
                             settings::ZOOM_RANGE,
                             &mut self.zoom,
                             "Click and drag left/right, or scroll to adjust",
@@ -1038,14 +1030,14 @@ impl App {
         );
     }
 
-    /// Renders a Krita-style left-filled `DragValue` supporting hover mouse-wheel stepping.
+    /// Renders a Krita-style left-filled `DragValue` with optional hover mouse-wheel stepping.
     #[allow(clippy::too_many_arguments)]
-    fn draw_level_drag_value(
+    pub(super) fn draw_level_drag_value(
         ui: &mut egui::Ui,
         tokens: ThemeTokens,
         id_salt: &str,
         speed: f64,
-        steps_per_unit: f64,
+        wheel_steps_per_unit: Option<f64>,
         range: std::ops::RangeInclusive<f32>,
         value: &mut f32,
         hover_text: &str,
@@ -1061,33 +1053,36 @@ impl App {
                 ui.style_mut().explanation_tooltips = false;
                 let meta_id = ui.scope_id().with("level-meta");
                 if enabled {
-                    if let Some((widget_id, widget_rect)) = ui
-                        .ctx()
-                        .data(|data| data.get_temp::<(egui::Id, Rect)>(meta_id))
-                    {
-                        let editing_text = ui.memory(|mem| mem.has_focus(widget_id));
-                        if !editing_text && ui.rect_contains_pointer(widget_rect) {
-                            let wheel_y: f32 = ui.ctx().input(|input| {
-                                input
-                                    .raw
-                                    .events
-                                    .iter()
-                                    .filter_map(|event| match event {
-                                        egui::Event::MouseWheel { delta, .. } => Some(delta.y),
-                                        _ => None,
-                                    })
-                                    .sum()
-                            });
-                            if wheel_y.abs() > f32::EPSILON {
-                                let step = 1.0 / steps_per_unit;
-                                let next = f64::from(*value) + f64::from(wheel_y.signum()) * step;
-                                let snapped =
-                                    ((next * steps_per_unit).round() / steps_per_unit) as f32;
-                                *value = snapped.clamp(*range.start(), *range.end());
-                                wheel_changed = true;
-                                ui.ctx().input_mut(|input| {
-                                    input.smooth_scroll_delta.y = 0.0;
+                    if let Some(steps_per_unit) = wheel_steps_per_unit {
+                        if let Some((widget_id, widget_rect)) = ui
+                            .ctx()
+                            .data(|data| data.get_temp::<(egui::Id, Rect)>(meta_id))
+                        {
+                            let editing_text = ui.memory(|mem| mem.has_focus(widget_id));
+                            if !editing_text && ui.rect_contains_pointer(widget_rect) {
+                                let wheel_y: f32 = ui.ctx().input(|input| {
+                                    input
+                                        .raw
+                                        .events
+                                        .iter()
+                                        .filter_map(|event| match event {
+                                            egui::Event::MouseWheel { delta, .. } => Some(delta.y),
+                                            _ => None,
+                                        })
+                                        .sum()
                                 });
+                                if wheel_y.abs() > f32::EPSILON {
+                                    let step = 1.0 / steps_per_unit;
+                                    let next =
+                                        f64::from(*value) + f64::from(wheel_y.signum()) * step;
+                                    let snapped =
+                                        ((next * steps_per_unit).round() / steps_per_unit) as f32;
+                                    *value = snapped.clamp(*range.start(), *range.end());
+                                    wheel_changed = true;
+                                    ui.ctx().input_mut(|input| {
+                                        input.smooth_scroll_delta.y = 0.0;
+                                    });
+                                }
                             }
                         }
                     }

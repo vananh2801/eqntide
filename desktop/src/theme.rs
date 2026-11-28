@@ -172,10 +172,10 @@ impl ThemeTokens {
 
     /// Apply translucent panel and card fills so a wallpaper stays visible while keeping text legible.
     ///
-    /// `panel_bg` and `card_bg` scale across `0.38..=1.00` (becoming completely opaque at `100%`),
+    /// `panel_bg` and `card_bg` apply `overlay_opacity` directly across `0.38..=1.00` (opaque at `100%`),
     /// while `app_bg` stays transparent so open backdrop regions keep revealing the wallpaper and scrim.
     pub(crate) fn with_background_opacity(mut self, overlay_opacity: f32) -> Self {
-        let surface_alpha = surface_alpha_for_opacity(overlay_opacity, 0.70);
+        let surface_alpha = direct_surface_alpha(overlay_opacity, 0.81);
         self.app_bg = Color32::TRANSPARENT;
         self.panel_bg = with_unmultiplied_alpha(self.panel_bg, surface_alpha);
         self.card_bg = with_unmultiplied_alpha(self.card_bg, surface_alpha);
@@ -184,16 +184,18 @@ impl ThemeTokens {
 
     /// Compute the full-window scrim fill painted between the background image and UI chrome.
     ///
-    /// Scrim alpha scales across `0.00..=0.65` so the background image remains visible even when
-    /// `Overlay opacity` is set to `100%`.
+    /// Scrim alpha scales across `0.00..=0.65` over `overlay_opacity` (`0.38..=1.00`) so the background
+    /// image remains visible even when `Overlay opacity` is set to `100%`.
     pub(crate) fn background_scrim(dark_mode: bool, overlay_opacity: f32) -> Color32 {
         let opacity = if overlay_opacity.is_finite() {
-            overlay_opacity.clamp(0.0, 1.0)
+            overlay_opacity.clamp(MIN_SURFACE_ALPHA, 1.0)
         } else {
-            0.70
+            0.81
         };
+        let normalized =
+            ((opacity - MIN_SURFACE_ALPHA) / (1.0 - MIN_SURFACE_ALPHA)).clamp(0.0, 1.0);
         let base = Self::for_mode(dark_mode).app_bg;
-        let alpha = (opacity * MAX_BACKGROUND_SCRIM_ALPHA * 255.0).round() as u8;
+        let alpha = (normalized * MAX_BACKGROUND_SCRIM_ALPHA * 255.0).round() as u8;
         Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
     }
 
@@ -463,9 +465,9 @@ impl CanvasPalette {
         }
     }
 
-    /// Apply translucent canvas surface fill (`0.38..=1.00`) over a custom background image.
+    /// Apply direct translucent canvas surface fill (`0.38..=1.00`) over a custom background image.
     pub(crate) fn with_canvas_opacity(mut self, canvas_opacity: f32) -> Self {
-        let surface_alpha = surface_alpha_for_opacity(canvas_opacity, 1.0);
+        let surface_alpha = direct_surface_alpha(canvas_opacity, 1.0);
         self.bg = with_unmultiplied_alpha(self.bg, surface_alpha);
         self
     }
@@ -518,13 +520,13 @@ struct DerivedAccentRoles {
     selected_fg: Color32,
 }
 
-fn surface_alpha_for_opacity(raw_opacity: f32, default_opacity: f32) -> u8 {
+fn direct_surface_alpha(raw_opacity: f32, default_opacity: f32) -> u8 {
     let opacity = if raw_opacity.is_finite() {
-        raw_opacity.clamp(0.0, 1.0)
+        raw_opacity.clamp(MIN_SURFACE_ALPHA, 1.0)
     } else {
-        default_opacity
+        default_opacity.clamp(MIN_SURFACE_ALPHA, 1.0)
     };
-    ((MIN_SURFACE_ALPHA + (1.0 - MIN_SURFACE_ALPHA) * opacity) * 255.0).round() as u8
+    (opacity * 255.0).round() as u8
 }
 
 fn with_unmultiplied_alpha(color: Color32, alpha: u8) -> Color32 {
@@ -793,16 +795,16 @@ mod tests {
     #[test]
     fn translucent_background_tokens_preserve_contrast_and_opaque_fallback() {
         for dark in [false, true] {
-            let opaque = ThemeTokens::for_mode_with_background(dark, false, 0.70);
+            let opaque = ThemeTokens::for_mode_with_background(dark, false, 0.81);
             assert_eq!(opaque, ThemeTokens::for_mode(dark));
             assert_eq!(opaque.panel_bg.a(), 255);
             assert_eq!(opaque.card_bg.a(), 255);
 
-            let translucent = ThemeTokens::for_mode_with_background(dark, true, 0.70);
-            let scrim = ThemeTokens::background_scrim(dark, 0.70);
+            let translucent = ThemeTokens::for_mode_with_background(dark, true, 0.81);
+            let scrim = ThemeTokens::background_scrim(dark, 0.81);
             assert_eq!(translucent.app_bg, Color32::TRANSPARENT);
-            assert!(translucent.panel_bg.a() < 255 && translucent.panel_bg.a() > 0);
-            assert!(translucent.card_bg.a() < 255 && translucent.card_bg.a() > 0);
+            assert_eq!(translucent.panel_bg.a(), (0.81_f32 * 255.0).round() as u8);
+            assert_eq!(translucent.card_bg.a(), (0.81_f32 * 255.0).round() as u8);
 
             for extreme_photo in [Color32::BLACK, Color32::WHITE] {
                 let after_scrim = blend_over(scrim, extreme_photo);
@@ -825,12 +827,16 @@ mod tests {
             assert_ne!(blend_over(full_scrim, Color32::WHITE), opaque.app_bg);
             assert_ne!(blend_over(full_scrim, Color32::BLACK), opaque.app_bg);
 
-            // At 0% overlay opacity, the scrim is transparent while surfaces keep a readable floor.
-            let zero_opacity = ThemeTokens::for_mode_with_background(dark, true, 0.0);
-            let zero_scrim = ThemeTokens::background_scrim(dark, 0.0);
-            assert_eq!(zero_scrim.a(), 0);
-            assert_eq!(zero_opacity.app_bg, Color32::TRANSPARENT);
-            assert!(zero_opacity.panel_bg.a() > 0 && zero_opacity.panel_bg.a() < 255);
+            // At 38% (or clamped below 38%), the scrim is transparent while surfaces apply the literal 38% alpha.
+            let floor_opacity = ThemeTokens::for_mode_with_background(dark, true, 0.38);
+            let floor_scrim = ThemeTokens::background_scrim(dark, 0.38);
+            assert_eq!(floor_scrim.a(), 0);
+            assert_eq!(floor_opacity.app_bg, Color32::TRANSPARENT);
+            assert_eq!(
+                floor_opacity.panel_bg.a(),
+                (MIN_SURFACE_ALPHA * 255.0).round() as u8
+            );
+            assert_eq!(ThemeTokens::background_scrim(dark, 0.0).a(), 0);
         }
     }
 
@@ -929,14 +935,17 @@ mod tests {
                 CanvasPalette::for_mode_with_background_and_accent(dark, true, f32::NAN, None);
             assert_eq!(non_finite, base);
 
-            let half = CanvasPalette::for_mode_with_background_and_accent(dark, true, 0.5, None);
-            let expected_half = ((0.38_f32 + 0.62_f32 * 0.5_f32) * 255.0_f32).round() as u8;
-            assert_eq!(half.bg.a(), expected_half);
-            assert_eq!(half.ink, base.ink);
+            let mid = CanvasPalette::for_mode_with_background_and_accent(dark, true, 0.69, None);
+            let expected_mid = (0.69_f32 * 255.0_f32).round() as u8;
+            assert_eq!(mid.bg.a(), expected_mid);
+            assert_eq!(mid.ink, base.ink);
 
-            let zero = CanvasPalette::for_mode_with_background_and_accent(dark, true, 0.0, None);
-            let expected_zero = (0.38_f32 * 255.0_f32).round() as u8;
-            assert_eq!(zero.bg.a(), expected_zero);
+            let floor = CanvasPalette::for_mode_with_background_and_accent(dark, true, 0.38, None);
+            let expected_floor = (0.38_f32 * 255.0_f32).round() as u8;
+            assert_eq!(floor.bg.a(), expected_floor);
+            let clamped_zero =
+                CanvasPalette::for_mode_with_background_and_accent(dark, true, 0.0, None);
+            assert_eq!(clamped_zero.bg.a(), expected_floor);
         }
     }
 }

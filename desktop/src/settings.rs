@@ -37,13 +37,13 @@ pub(crate) const DEFAULT_TARGET: &str = "omml";
 /// Maximum number of recent palette symbols persisted in settings.
 pub(crate) const MAX_RECENT_PALETTE: usize = 24;
 /// Default opacity for the translucent overlay over a custom background image.
-pub(crate) const DEFAULT_BACKGROUND_OPACITY: f32 = 0.70;
+pub(crate) const DEFAULT_BACKGROUND_OPACITY: f32 = 0.81;
 /// Allowed range for the background overlay opacity.
-pub(crate) const BACKGROUND_OPACITY_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+pub(crate) const BACKGROUND_OPACITY_RANGE: std::ops::RangeInclusive<f32> = 0.38..=1.0;
 /// Default opacity for the Equation Canvas and LaTeX source box over a custom background image.
 pub(crate) const DEFAULT_CANVAS_OPACITY: f32 = 1.0;
 /// Allowed range for the Equation Canvas and LaTeX source box opacity.
-pub(crate) const CANVAS_OPACITY_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+pub(crate) const CANVAS_OPACITY_RANGE: std::ops::RangeInclusive<f32> = 0.38..=1.0;
 /// Maximum edge length (in pixels) retained when importing a custom background image.
 pub(crate) const MAX_BACKGROUND_EDGE: u32 = 2560;
 const MANAGED_BACKGROUND_PREFIX: &str = "app-background-";
@@ -363,16 +363,19 @@ impl Settings {
             self.background_accent = None;
         }
         self.background_opacity = if self.background_opacity.is_finite() {
-            self.background_opacity.clamp(
+            let clamped = self.background_opacity.clamp(
                 *BACKGROUND_OPACITY_RANGE.start(),
                 *BACKGROUND_OPACITY_RANGE.end(),
-            )
+            );
+            (clamped * 100.0).round() / 100.0
         } else {
             DEFAULT_BACKGROUND_OPACITY
         };
         self.canvas_opacity = if self.canvas_opacity.is_finite() {
-            self.canvas_opacity
-                .clamp(*CANVAS_OPACITY_RANGE.start(), *CANVAS_OPACITY_RANGE.end())
+            let clamped = self
+                .canvas_opacity
+                .clamp(*CANVAS_OPACITY_RANGE.start(), *CANVAS_OPACITY_RANGE.end());
+            (clamped * 100.0).round() / 100.0
         } else {
             DEFAULT_CANVAS_OPACITY
         };
@@ -834,7 +837,7 @@ mod tests {
             latex_font_pt: 14.3,
             zoom: 0.5,
             background_opacity: -0.2,
-            canvas_opacity: -0.4,
+            canvas_opacity: 0.25,
             background_image: Some("nested/bg.png".into()),
             ..Settings::default()
         }
@@ -842,8 +845,11 @@ mod tests {
         assert_eq!(snapped_font.font_pt, 13.5);
         assert_eq!(snapped_font.latex_font_pt, 14.5);
         assert_eq!(snapped_font.zoom, *ZOOM_RANGE.start());
-        assert_eq!(snapped_font.background_opacity, 0.0);
-        assert_eq!(snapped_font.canvas_opacity, 0.0);
+        assert_eq!(
+            snapped_font.background_opacity,
+            *BACKGROUND_OPACITY_RANGE.start()
+        );
+        assert_eq!(snapped_font.canvas_opacity, *CANVAS_OPACITY_RANGE.start());
         assert_eq!(snapped_font.background_image, None);
         assert_eq!(snapped_font.background_mode, BackgroundMode::Solid);
 
@@ -859,10 +865,14 @@ mod tests {
 
         let snapped_zoom = Settings {
             zoom: 2.346,
+            background_opacity: 0.654,
+            canvas_opacity: 0.726,
             ..Settings::default()
         }
         .sanitized();
         assert_eq!(snapped_zoom.zoom, 2.35);
+        assert_eq!(snapped_zoom.background_opacity, 0.65);
+        assert_eq!(snapped_zoom.canvas_opacity, 0.73);
     }
 
     #[test]

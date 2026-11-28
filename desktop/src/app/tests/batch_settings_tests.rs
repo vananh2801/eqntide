@@ -419,7 +419,7 @@ fn settings_cards_span_full_central_panel_width() {
 }
 
 #[test]
-fn settings_opacity_slider_matches_handle_border_to_accent() {
+fn settings_opacity_level_controls_reflect_accent_and_interactions() {
     let dir = tempfile::tempdir().unwrap();
     let bg_png = dir.path().join("bg.png");
     let img = image::RgbaImage::from_pixel(32, 32, image::Rgba([120, 120, 120, 255]));
@@ -441,68 +441,198 @@ fn settings_opacity_slider_matches_handle_border_to_accent() {
         let _ = run_ui_pass_frame(&ctx, &mut app, vec![]);
         let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
 
-        let overlay_label_pos = find_text_center(&out, |text| text == "Overlay opacity");
-        let rail_rect = out
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Rect(rect_shape)
-                    if rect_shape.fill == tokens.border
-                        && rect_shape.rect.width() >= 150.0
-                        && rect_shape.rect.height() <= 12.0
-                        && (rect_shape.rect.center().y - overlay_label_pos.y).abs() < 12.0 =>
-                {
-                    Some(rect_shape.rect)
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("missing overlay opacity rail in {theme:?}"));
-        assert!((rail_rect.center().y - overlay_label_pos.y).abs() <= 2.0);
-
-        let find_handle = |frame: &egui::FullOutput, label: &str| {
-            frame
+        let find_level_box = |frame: &egui::FullOutput,
+                              row_y: f32,
+                              expected_track: egui::Color32,
+                              expected_fill: egui::Color32,
+                              label: &str| {
+            let track = frame
                 .shapes
                 .iter()
                 .find_map(|clipped| match &clipped.shape {
                     egui::Shape::Rect(rect_shape)
-                        if (rect_shape.rect.center().y - rail_rect.center().y).abs() <= 1.0
-                            && (rect_shape.rect.width() - rect_shape.rect.height()).abs()
-                                <= 0.5
-                            && rect_shape.rect.height() >= 10.0
-                            && rect_shape.rect.height() <= 18.0
-                            && rect_shape.rect.left() >= rail_rect.left() - 2.0
-                            && rect_shape.rect.right() <= rail_rect.right() + 2.0 =>
+                        if rect_shape.fill == expected_track
+                            && (rect_shape.rect.width() - 220.0).abs() <= 0.5
+                            && (rect_shape.rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5
+                            && rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS
+                            && (rect_shape.rect.center().y - row_y).abs() <= 2.0 =>
                     {
                         Some((rect_shape.rect, rect_shape.stroke))
                     }
                     _ => None,
                 })
-                .unwrap_or_else(|| panic!("missing slider handle ({label}) in {theme:?}"))
+                .unwrap_or_else(|| panic!("missing {label} level-fill track in {theme:?}"));
+            let fill = frame
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect_shape)
+                        if rect_shape.fill == expected_fill
+                            && (rect_shape.rect.left() - track.0.left()).abs() <= 0.5
+                            && rect_shape.rect.top() >= track.0.top() - 0.5
+                            && rect_shape.rect.bottom() <= track.0.bottom() + 0.5 =>
+                    {
+                        Some((rect_shape.rect, rect_shape.stroke))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {label} level-fill fill in {theme:?}"));
+            (track, fill)
         };
 
-        let (idle_handle, idle_stroke) = find_handle(&out, "idle");
-        assert_eq!(idle_stroke.color, tokens.accent);
+        let overlay_label_pos = find_text_center(&out, |text| text == "Overlay opacity");
+        let canvas_label_pos = find_text_center(&out, |text| text == "Canvas opacity");
+        let ((overlay_track, overlay_track_stroke), (overlay_fill, overlay_fill_stroke)) =
+            find_level_box(
+                &out,
+                overlay_label_pos.y,
+                tokens.control_bg,
+                tokens.soft_accent_fill(false, true),
+                "Overlay opacity",
+            );
+        assert_eq!(overlay_track_stroke, Stroke::NONE);
+        assert_eq!(overlay_fill_stroke, Stroke::NONE);
+        let expected_fraction = (app.background_opacity - 0.38) / 0.62;
+        assert!((overlay_fill.width() - 220.0 * expected_fraction).abs() <= 1.0);
+        let overlay_pct_pos = find_text_center(&out, |text| text == "81%");
+        assert!(overlay_track.contains(overlay_pct_pos));
+        assert!((overlay_pct_pos.x - overlay_track.center().x).abs() <= 2.0);
+        assert!(!out.shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Text(text_shape) => {
+                text_shape.galley.text() == "81%"
+                    && clipped.shape.visual_bounding_rect().left() > overlay_track.right()
+            }
+            _ => false,
+        }));
+        assert!(!out.shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect_shape) => {
+                (rect_shape.rect.center().y - overlay_label_pos.y).abs() <= 2.0
+                    && (rect_shape.rect.width() - rect_shape.rect.height()).abs() <= 0.5
+                    && rect_shape.rect.height() >= 10.0
+                    && rect_shape.rect.height() <= 18.0
+            }
+            _ => false,
+        }));
 
+        let ((canvas_track, canvas_track_stroke), (canvas_fill, _)) = find_level_box(
+            &out,
+            canvas_label_pos.y,
+            tokens.control_bg,
+            tokens.soft_accent_fill(false, true),
+            "Canvas opacity",
+        );
+        assert_eq!(canvas_track_stroke, Stroke::NONE);
+        assert!((canvas_fill.width() - 220.0).abs() <= 0.5);
+        let canvas_pct_pos = find_text_center(&out, |text| text == "100%");
+        assert!(canvas_track.contains(canvas_pct_pos));
+        assert!((canvas_pct_pos.x - canvas_track.center().x).abs() <= 2.0);
+
+        // Hovering updates track and fill tones without painting a border stroke.
         let hovered_out = run_ui_pass_frame(
             &ctx,
             &mut app,
-            vec![egui::Event::PointerMoved(idle_handle.center())],
+            vec![egui::Event::PointerMoved(overlay_track.center())],
         );
-        let (_, hovered_stroke) = find_handle(&hovered_out, "hovered");
-        assert_eq!(hovered_stroke.color, tokens.accent);
+        let ((_, hovered_track_stroke), (_, hovered_fill_stroke)) = find_level_box(
+            &hovered_out,
+            overlay_label_pos.y,
+            tokens.control_hover_bg,
+            tokens.soft_accent_fill(true, true),
+            "hovered Overlay opacity",
+        );
+        assert_eq!(hovered_track_stroke, Stroke::NONE);
+        assert_eq!(hovered_fill_stroke, Stroke::NONE);
 
-        let active_out = run_ui_pass_frame(
+        // Mouse-wheel scrolling over Settings opacity bars never alters opacity values.
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(overlay_track.center()),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, 1.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!((app.background_opacity - 0.81).abs() < 1e-6);
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(canvas_track.center()),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, -1.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!((app.canvas_opacity - 1.0).abs() < 1e-6);
+
+        // Horizontal dragging updates Overlay opacity across 38%..=100% cleanly.
+        let drag_start = overlay_track.center();
+        let drag_end = Pos2::new(drag_start.x - 40.0, drag_start.y);
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(drag_start),
+                egui::Event::PointerButton {
+                    pos: drag_start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let _ = run_ui_pass_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(drag_end)]);
+        let _ = run_ui_pass_frame(
             &ctx,
             &mut app,
             vec![egui::Event::PointerButton {
-                pos: idle_handle.center(),
+                pos: drag_end,
                 button: egui::PointerButton::Primary,
-                pressed: true,
+                pressed: false,
                 modifiers: egui::Modifiers::NONE,
             }],
         );
-        let (_, active_stroke) = find_handle(&active_out, "active");
-        assert_eq!(active_stroke.color, tokens.accent);
+        assert!(app.background_opacity < 0.81 && app.background_opacity >= 0.38);
+
+        // Clicking enters text-edit focus with a 1px accent border and accepts numeric entry.
+        let _ = run_ui_pass_frame(&ctx, &mut app, click_events(overlay_track.center()));
+        let focused_out = run_ui_pass_frame(&ctx, &mut app, vec![]);
+        assert!(focused_out
+            .shapes
+            .iter()
+            .any(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape) => {
+                    rect_shape.rect.contains(overlay_track.center())
+                        && (rect_shape.rect.width() - 220.0).abs() <= 1.0
+                        && rect_shape.stroke == Stroke::new(1.0, tokens.accent)
+                }
+                _ => false,
+            }));
+        let _ = run_ui_pass_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::Text("50".into()),
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!((app.background_opacity - 0.50).abs() < 1e-6);
     }
 }
 
@@ -1194,24 +1324,42 @@ fn settings_background_mode_toggle_is_non_destructive_and_gates_accent_checkbox(
             _ => false,
         })
     );
-    // Disabled Overlay opacity slider handle stays 100% opaque so trailing fill never shows through.
+    // Disabled Overlay opacity level-fill box stays crisp with muted track/fill contrast.
     let opacity_y = find_text_center(&solid_out, |text| text == "Overlay opacity").y;
-    let disabled_handle = solid_out
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect_shape)
-                if (rect_shape.rect.center().y - opacity_y).abs() <= 2.0
-                    && (rect_shape.rect.width() - rect_shape.rect.height()).abs() <= 0.5
-                    && rect_shape.rect.height() >= 10.0
-                    && rect_shape.rect.height() <= 18.0 =>
-            {
-                Some((rect_shape.fill, rect_shape.stroke))
-            }
-            _ => None,
-        })
-        .expect("disabled Overlay opacity slider handle");
     let solid_tokens = ThemeTokens::for_mode(ctx.theme() == egui::Theme::Dark);
+    let find_level_track =
+        |frame: &egui::FullOutput, row_y: f32, expected_fill: egui::Color32, name: &str| {
+            frame
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect_shape)
+                        if rect_shape.fill == expected_fill
+                            && (rect_shape.rect.center().y - row_y).abs() <= 2.0
+                            && (rect_shape.rect.width() - 220.0).abs() <= 0.5
+                            && (rect_shape.rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5
+                            && rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS =>
+                    {
+                        Some((rect_shape.rect, rect_shape.stroke))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {name}"))
+        };
+    let (disabled_overlay_track, disabled_overlay_stroke) = find_level_track(
+        &solid_out,
+        opacity_y,
+        solid_tokens.control_disabled_bg,
+        "disabled Overlay opacity track",
+    );
+    assert_eq!(disabled_overlay_stroke, Stroke::NONE);
+    assert!(solid_out.shapes.iter().any(|clipped| matches!(
+        &clipped.shape,
+        egui::Shape::Rect(rect_shape)
+            if rect_shape.fill == solid_tokens.soft_accent_fill(false, false)
+                && (rect_shape.rect.left() - disabled_overlay_track.left()).abs() <= 0.5
+                && (rect_shape.rect.center().y - opacity_y).abs() <= 2.0
+    )));
     assert!(solid_out.shapes.iter().any(|clipped| matches!(
         &clipped.shape,
         egui::Shape::Rect(rect_shape)
@@ -1219,40 +1367,47 @@ fn settings_background_mode_toggle_is_non_destructive_and_gates_accent_checkbox(
                 && (rect_shape.rect.height() - 48.0).abs() <= 0.5
                 && rect_shape.stroke == Stroke::NONE
     )));
-    assert_eq!(disabled_handle.0.a(), 255);
-    assert_eq!(disabled_handle.1.color, solid_tokens.disabled_accent());
 
-    // Disabled Canvas opacity slider handle also stays 100% opaque below Overlay opacity.
+    // Disabled Canvas opacity level-fill box also stays muted below Overlay opacity and ignores input.
     let canvas_opacity_pos = find_text_center(&solid_out, |text| text == "Canvas opacity");
     assert!(canvas_opacity_pos.y > opacity_y);
-    let disabled_canvas_handle = solid_out
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect_shape)
-                if (rect_shape.rect.center().y - canvas_opacity_pos.y).abs() <= 2.0
-                    && (rect_shape.rect.width() - rect_shape.rect.height()).abs() <= 0.5
-                    && rect_shape.rect.height() >= 10.0
-                    && rect_shape.rect.height() <= 18.0 =>
-            {
-                Some((rect_shape.fill, rect_shape.stroke, rect_shape.rect.center()))
-            }
-            _ => None,
-        })
-        .expect("disabled Canvas opacity slider handle");
-    assert_eq!(disabled_canvas_handle.0.a(), 255);
-    assert_eq!(
-        disabled_canvas_handle.1.color,
-        solid_tokens.disabled_accent()
+    let (disabled_canvas_track, disabled_canvas_stroke) = find_level_track(
+        &solid_out,
+        canvas_opacity_pos.y,
+        solid_tokens.control_disabled_bg,
+        "disabled Canvas opacity track",
     );
+    assert_eq!(disabled_canvas_stroke, Stroke::NONE);
+    assert!(solid_out.shapes.iter().any(|clipped| matches!(
+        &clipped.shape,
+        egui::Shape::Rect(rect_shape)
+            if rect_shape.fill == solid_tokens.soft_accent_fill(false, false)
+                && (rect_shape.rect.left() - disabled_canvas_track.left()).abs() <= 0.5
+                && (rect_shape.rect.center().y - canvas_opacity_pos.y).abs() <= 2.0
+    )));
     let _ = run_ui_pass_sized_events(
         &ctx,
         &mut app,
         tall,
         click_events(Pos2::new(
-            disabled_canvas_handle.2.x - 40.0,
+            disabled_canvas_track.center().x - 40.0,
             canvas_opacity_pos.y,
         )),
+    );
+    let _ = run_ui_pass_sized_events(
+        &ctx,
+        &mut app,
+        tall,
+        vec![
+            egui::Event::PointerMoved(disabled_canvas_track.center()),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
     );
     assert_eq!(app.canvas_opacity, settings::DEFAULT_CANVAS_OPACITY);
 
@@ -1272,32 +1427,30 @@ fn settings_background_mode_toggle_is_non_destructive_and_gates_accent_checkbox(
     // Switch back to Image via Settings button: immediately restores image + extracted accent.
     let img_btn_pos = find_text_center(&solid_out, |text| text == "Image");
     let back_to_img_out = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(img_btn_pos));
-    // Dragging/clicking the enabled Canvas opacity slider updates state and writes to disk.
+    // Dragging the enabled Canvas opacity level-fill box updates state and writes to disk.
+    let image_tokens = ThemeTokens::for_mode_with_background_and_accent(
+        ctx.theme() == egui::Theme::Dark,
+        true,
+        app.background_opacity,
+        Some(extracted_seed),
+    );
     let canvas_row_y = find_text_center(&back_to_img_out, |text| text == "Canvas opacity").y;
-    let enabled_canvas_handle = back_to_img_out
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect_shape)
-                if (rect_shape.rect.center().y - canvas_row_y).abs() <= 2.0
-                    && (rect_shape.rect.width() - rect_shape.rect.height()).abs() <= 0.5
-                    && rect_shape.rect.height() >= 10.0
-                    && rect_shape.rect.height() <= 18.0 =>
-            {
-                Some(rect_shape.rect.center())
-            }
-            _ => None,
-        })
-        .expect("enabled Canvas opacity slider handle");
-    let drag_end = Pos2::new(enabled_canvas_handle.x - 80.0, canvas_row_y);
+    let (enabled_canvas_track, _) = find_level_track(
+        &back_to_img_out,
+        canvas_row_y,
+        image_tokens.control_bg,
+        "enabled Canvas opacity track",
+    );
+    let enabled_canvas_center = enabled_canvas_track.center();
+    let drag_end = Pos2::new(enabled_canvas_center.x - 80.0, canvas_row_y);
     let _ = run_ui_pass_sized_events(
         &ctx,
         &mut app,
         tall,
         vec![
-            egui::Event::PointerMoved(enabled_canvas_handle),
+            egui::Event::PointerMoved(enabled_canvas_center),
             egui::Event::PointerButton {
-                pos: enabled_canvas_handle,
+                pos: enabled_canvas_center,
                 button: egui::PointerButton::Primary,
                 pressed: true,
                 modifiers: egui::Modifiers::NONE,
@@ -1336,7 +1489,8 @@ fn settings_background_mode_toggle_is_non_destructive_and_gates_accent_checkbox(
     assert_eq!(app.active_accent_seed(), None);
     assert!(!Settings::load_from_path(&settings_path).background_accent_enabled);
 
-    let _ = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(cb_pos_img));
+    let cb_pos_recheck = find_text_center(&unchecked_out, |text| text == checkbox_label);
+    let _ = run_ui_pass_sized_events(&ctx, &mut app, tall, click_events(cb_pos_recheck));
     assert!(app.background_accent_enabled);
     assert_eq!(app.active_accent_seed(), Some(extracted_seed));
     assert!(Settings::load_from_path(&settings_path).background_accent_enabled);

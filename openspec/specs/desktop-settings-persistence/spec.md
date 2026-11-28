@@ -38,11 +38,11 @@ The desktop application SHALL persist and restore canvas zoom (clamped to `1.5..
 
 #### Scenario: Background opacity clamps and defaults safely
 - **WHEN** `background_opacity` is non-finite or out of range
-- **THEN** `background_opacity` clamps safely into the valid range (`0.0..=1.0`, defaulting to a readable default when non-finite)
+- **THEN** `background_opacity` clamps safely into the valid range (`0.38..=1.00`, snapped to `0.01` / `1%` increments, defaulting to a readable default when non-finite)
 
 #### Scenario: Canvas opacity defaults to 100% and clamps safely
 - **WHEN** `canvas_opacity` is omitted from an existing `settings.json`, non-finite, or out of range
-- **THEN** `canvas_opacity` defaults to `1.0` (`100%`) when omitted or non-finite and clamps safely into `0.0..=1.0` when out of range
+- **THEN** `canvas_opacity` defaults to `1.0` (`100%`) when omitted or non-finite and clamps safely into `0.38..=1.00` (snapped to `0.01` / `1%` increments) when out of range
 
 #### Scenario: Legacy settings without background mode migrate seamlessly
 - **WHEN** an existing `settings.json` specifies `background_image` without `background_mode`

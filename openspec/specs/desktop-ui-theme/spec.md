@@ -7,7 +7,7 @@ Defines the modern slate visual design system, technical corner-radius and spaci
 ## Requirements
 
 ### Requirement: Ayu Light and Dark theme palette
-The desktop application SHALL style both Light and Dark modes using Zed Editor–inspired Ayu neutral surfaces—bright off-white surfaces in Light mode stepping progressively deeper across window backdrop (`app_bg`), panels (`panel_bg`), cards (`card_bg`), and interactive controls (`control_bg`, `control_hover_bg`, `control_active_bg`, as well as tinted `selected_bg` / `selected_hover_bg`) so cards are darker than `app_bg` and both unselected and selected controls sit darker than surrounding surfaces while deepening across idle, hover, and active states, and deep warm charcoal/obsidian surfaces in Dark mode where interactive controls render brighter than surrounding surfaces (`app_bg`, `panel_bg`, `card_bg`) so `app_bg`, `panel_bg`, `card_bg`, and `control_bg` remain visually distinct without surface/control borders—paired with readable foreground contrast and an Ayu signature amber/orange default accent color across selections (including inline `\command` popup suggestions and `ComboBox` selected rows), keyboard focus rings on modal action buttons and text-editing cursors, sliders, checkboxes, footer radio buttons, hyperlinks, primary actions, and the Batch DOCX progress bar, while keeping Batch folder tree connector lines (`border_hover`), Batch row dividers, and checkbox/radio captions neutral.
+The desktop application SHALL style both Light and Dark modes using Zed Editor–inspired Ayu neutral surfaces—bright off-white surfaces in Light mode stepping progressively deeper across window backdrop (`app_bg`), panels (`panel_bg`), cards (`card_bg`), and interactive controls (`control_bg`, `control_hover_bg`, `control_active_bg`, as well as tinted `selected_bg` / `selected_hover_bg`) so cards are darker than `app_bg` and both unselected and selected controls sit darker than surrounding surfaces while deepening across idle, hover, and active states, and deep warm charcoal/obsidian surfaces in Dark mode where interactive controls render brighter than surrounding surfaces (`app_bg`, `panel_bg`, `card_bg`) so `app_bg`, `panel_bg`, `card_bg`, and `control_bg` remain visually distinct without surface/control borders—paired with readable foreground contrast and an Ayu signature amber/orange default accent color across selections (including inline `\command` popup suggestions, `ComboBox` selected rows, and footer target option buttons), keyboard focus rings on modal action buttons and text-editing cursors, level-fill opacity controls, checkboxes, hyperlinks, primary actions, and the Batch DOCX progress bar, while keeping Batch folder tree connector lines (`border_hover`), Batch row dividers, and checkbox captions neutral.
 
 #### Scenario: Light and Dark modes apply layered neutral surfaces and legible contrast
 - **WHEN** the desktop application renders in either Light mode or Dark mode with the default solid theme
@@ -23,7 +23,7 @@ The desktop application SHALL style both Light and Dark modes using Zed Editor�
 
 #### Scenario: Checkboxes, footer radios, hover borders, and DragValue focus reflect active accent without tinting excluded frames
 - **WHEN** interactive controls render across **Editor**, **Batch DOCX**, and **Settings** in enabled, disabled, hovered, or focused states
-- **THEN** checked/indeterminate checkboxes and selected footer radio buttons tint their box/circle indicators with the active accent when enabled and opaque `control_disabled_bg` + `disabled_accent()` when disabled while keeping labels/captions neutral; hovered buttons transition to `control_hover_bg` without a border stroke; focused footer `DragValue` edits indicate active focus without adding idle borders; and Batch folder tree connector lines (`border_hover`) remain neutral
+- **THEN** checked/indeterminate checkboxes tint their box indicators with the active accent when enabled and opaque `control_disabled_bg` + `disabled_accent()` when disabled while keeping labels neutral; selected footer target buttons (`MathType` / `OMML`) use `selected_bg` and `selected_fg`; hovered buttons transition to `control_hover_bg` without a border stroke; focused `DragValue` edits indicate active focus without adding idle borders; and Batch folder tree connector lines (`border_hover`) remain neutral
 
 ### Requirement: Technical corner radii and harmonized spacing
 The desktop application SHALL use two consistent corner-radius tiers (`6px` for interactive controls and inputs, `8px` for canvas, cards, modals, and popups) and a `4px`-based spacing and margin scale while keeping all sidebar controls visible and the palette within three rows at `1056x560`.
@@ -37,10 +37,10 @@ The desktop application SHALL use two consistent corner-radius tiers (`6px` for 
 - **THEN** harmonized panel padding and control spacing keep all sidebar buttons unclipped without vertical scrolling and keep the palette within three rows
 
 ### Requirement: Unified hover, active, and disabled interaction feedback
-All interactive controls—including primary and secondary buttons, sidebar category tiles, sidebar navigation tabs, palette items, radio buttons, checkboxes, combo boxes, and canvas preset swatches—SHALL use unified borderless hover and press fill feedback without expanding widget bounds on hover and SHALL display a pointing-hand cursor on hover when enabled.
+All interactive controls—including primary and secondary buttons, sidebar category tiles, sidebar navigation tabs, palette items, footer target option buttons, checkboxes, level-fill controls, and combo boxes—SHALL use unified borderless hover and press fill feedback without expanding widget bounds on hover and SHALL display a pointing-hand cursor on hover when enabled.
 
 #### Scenario: Hovering enabled controls applies consistent surface and cursor feedback
-- **WHEN** the user moves the pointer over any enabled button, sidebar item, palette button, radio control, checkbox, combo box, or color swatch
+- **WHEN** the user moves the pointer over any enabled button, sidebar item, palette button, footer target button, checkbox, level-fill box, or combo box
 - **THEN** the control transitions smoothly in background fill tone without painting a border stroke or growing in size and shows a pointing-hand cursor
 
 #### Scenario: Disabled controls suppress interactive hover styling
@@ -70,11 +70,11 @@ The desktop application SHALL render the Equation Canvas and synchronized LaTeX 
 - **THEN** the Equation Canvas and LaTeX source box render borderless on the `Ayu dark` (`#0d1016`) surface contrasted against a distinct `app_bg` central backdrop with light ink and high-contrast caret, selection highlight, and scrollbars
 
 ### Requirement: Uniform button typography and height tiers
-The desktop application SHALL define explicit UI text styles and standardize interactive text buttons into consistent height tiers (`30px` standard buttons including footer `Save`, `Undo`/`Redo`, `Font size`, and `Zoom` controls; `34px` sidebar navigation tabs; and `24px` compact inline action buttons with non-zero vertical padding) so adjacent controls share matching font size and balanced visual proportions.
+The desktop application SHALL define explicit UI text styles and standardize interactive text buttons into consistent height tiers (`30px` standard buttons including footer `MathType`/`OMML`, `Save`, `Undo`/`Redo`, `Font size`, `Zoom`, and Settings opacity controls; `34px` sidebar navigation tabs; and `24px` compact inline action buttons with non-zero vertical padding) so adjacent controls share matching font size and balanced visual proportions.
 
 #### Scenario: Footer controls and Save button align at standard button height
 - **WHEN** the editor footer is rendered in either standalone or Office mode
-- **THEN** the `Save`, `Undo`, `Redo`, `Font size`, and `Zoom` controls share the `30px` standard control height and consistent button font sizing
+- **THEN** the `MathType`, `OMML`, `Save`, `Undo`, `Redo`, `Font size`, and `Zoom` controls share the `30px` standard control height and consistent button font sizing
 
 #### Scenario: Compact inline controls avoid collapsed zero-padding text buttons
 - **WHEN** contextual matrix controls (`+ row`, `− row`, `+ col`, `− col`) or status bar action buttons (`Retry`, `Next session`) are displayed
@@ -138,42 +138,35 @@ The desktop application SHALL render Tabler UI icons across primary navigation, 
 - **WHEN** the user navigates between the editor, `Batch DOCX`, `Settings`, and `About` views
 - **THEN** `Batch DOCX` (`file-type-docx`), `Settings` (`settings`), and `About` (`info-circle`) sidebar tabs, `Back` buttons (`chevron-left`), `Batch DOCX` actions (`Add DOCX files…` with `file`, `Add folder…` with `folder`, `Convert` with `arrows-left-right`, `Open output folder` with `folder-open`, empty drop-zone with `file-upload`), and `About` metadata rows (`Author` with `user`, `License` with `license`, `GitHub` with `brand-github`) render their assigned Tabler icons legibly in both themes
 
-### Requirement: Accent-matched slider handle border
-Settings sliders' rounded-square handles SHALL render their borders using the theme's accent color so each handle outline matches the active left-side slider fill across idle, hovered, and active states in both Light and Dark modes.
-
-#### Scenario: Slider handle border matches the left accent fill in Light and Dark modes
-- **WHEN** an enabled Settings slider renders in either Light mode or Dark mode across idle, hovered, or dragged states
-- **THEN** the rounded-square handle's border stroke uses the same theme accent color as the filled left portion of the slider rail
-
 ### Requirement: Custom full-window application background image
-When **Image** background mode is active and a valid custom background image is loaded, the desktop application SHALL render that image across the full viewport behind all application views (**Editor**, **Batch DOCX**, **Settings**, and **About**) using aspect-preserving cover scaling, layered with a theme-aware dimming scrim (`0%`..`65%`) and translucent-to-opaque chrome/card surfaces controlled by **Overlay opacity** (`0%`..`100%`, where `panel_bg`—including the sidebar, top palette panel, footer, and status bar—and `card_bg` become fully opaque at `100%` while `app_bg` remains transparent over the scrim so the background image stays visible in open areas), while rendering the **Equation Canvas** and **LaTeX source** box with the active mode's Ayu `CanvasPalette` whose background surface alpha scales across `0.38..=1.00` according to **Canvas opacity** (`0%`..`100%`, defaulting to `100%` opaque).
+When **Image** background mode is active and a valid custom background image is loaded, the desktop application SHALL render that image across the full viewport behind all application views (**Editor**, **Batch DOCX**, **Settings**, and **About**) using aspect-preserving cover scaling, layered with a theme-aware dimming scrim (`0%`..`65%`) and translucent-to-opaque chrome/card surfaces controlled by **Overlay opacity** (`38%..=100%`, where `panel_bg`—including the sidebar, top palette panel, footer, and status bar—and `card_bg` use the literal percentage alpha directly and become fully opaque at `100%` while `app_bg` remains transparent over the scrim so the background image stays visible in open areas), while rendering the **Equation Canvas** and **LaTeX source** box with the active mode's Ayu `CanvasPalette` whose background surface alpha directly equals **Canvas opacity** across `38%..=100%` (defaulting to `100%` opaque).
 
 #### Scenario: Custom background displays across Editor and secondary views
 - **WHEN** the user configures a valid background image in **Image** mode and navigates between the **Editor**, **Batch DOCX**, **Settings**, and **About** views
-- **THEN** the background image fills the window behind the application shell with aspect-preserving cover scaling and remains visible across open central backdrop areas, while chrome panels (sidebar, top palette panel, footer, and status bar) and cards scale from translucent to opaque (`255` alpha at `100%`) according to **Overlay opacity**
+- **THEN** the background image fills the window behind the application shell with aspect-preserving cover scaling and remains visible across open central backdrop areas, while chrome panels (sidebar, top palette panel, footer, and status bar) and cards use the literal **Overlay opacity** alpha (`38%..=100%`, `255` alpha at `100%`)
 
 #### Scenario: Equation Canvas and LaTeX source preserve crisp contrast over a custom background
-- **WHEN** a custom background image is active in either Light mode or Dark mode at the default `100%` **Canvas opacity** (or across `0%`..`100%` with the `0.38` surface floor)
+- **WHEN** a custom background image is active in either Light mode or Dark mode at the default `100%` **Canvas opacity** (or across `38%..=100%`)
 - **THEN** the **Equation Canvas** and **LaTeX source** box preserve crisp legibility with the active `Ayu light` or `Ayu dark` surface, equation ink, caret, selection, and placeholder colors
 
 #### Scenario: Equation Canvas and LaTeX source scale translucency with Canvas opacity over a custom background
-- **WHEN** a custom background image is active in either Light mode or Dark mode and **Canvas opacity** is set to `100%`, an intermediate value, or `0%`
-- **THEN** the **Equation Canvas** and **LaTeX source** box share the active `Ayu light` or `Ayu dark` `CanvasPalette` ink, border, caret, selection, and placeholder colors while their background fill (`pal.bg`) scales linearly in alpha from `0.38` (`0%`) to `1.00` (`100%`, fully opaque by default)
+- **WHEN** a custom background image is active in either Light mode or Dark mode and **Canvas opacity** is set to `100%`, an intermediate percentage, or `38%`
+- **THEN** the **Equation Canvas** and **LaTeX source** box share the active `Ayu light` or `Ayu dark` `CanvasPalette` ink, border, caret, selection, and placeholder colors while their background fill (`pal.bg`) alpha equals the literal **Canvas opacity** percentage (`0.38` at `38%` to `1.00` at `100%`, fully opaque by default)
 
 #### Scenario: Clearing or missing background falls back to default slate theme
 - **WHEN** **Solid** mode is selected, no background image is configured, the user clicks **Clear**, or the stored background file cannot be loaded
 - **THEN** the desktop application renders the opaque Ayu Light or Dark theme surfaces (including opaque `255`-alpha chrome panels and **Equation Canvas** / **LaTeX source** fills) and default Ayu accent without visual errors
 
 ### Requirement: App background customization controls in Settings
-The **Settings** view SHALL place **Appearance** (**Light** / **Dark** theme selector) and **App background** in separate full-width cards, where the **App background** card contains a **Solid** / **Image** selectable mode toggle styled identically to **Light** / **Dark**, a vertically centered row with the `72×48` rounded thumbnail and `Choose image…` / `Clear` buttons (without filename or mode labels beside the thumbnail), a **Match accent color to background** checkbox (enabled when **Image** mode has an active background, disabled when **Solid**), a `1%`-stepped **Overlay opacity** slider row (`0%`..`100%`), and directly below it a `1%`-stepped **Canvas opacity** slider row (`0%`..`100%`, defaulting to `100%`), both sliders disabled in **Solid** mode and rendering fully opaque slider handles (`alpha == 255`) in both enabled and disabled states using standard `30px` controls and `6px`/`8px` theme radii without displaying multi-option Equation Canvas preset pickers.
+The **Settings** view SHALL place **Appearance** (**Light** / **Dark** theme selector) and **App background** in separate full-width cards, where the **App background** card contains a **Solid** / **Image** selectable mode toggle styled identically to **Light** / **Dark**, a vertically centered row with the `72×48` rounded thumbnail and `Choose image…` / `Clear` buttons (without filename or mode labels beside the thumbnail), a **Match accent color to background** checkbox (enabled when **Image** mode has an active background, disabled when **Solid**), a `1%`-stepped **Overlay opacity** level-fill `DragValue` row (`38%..=100%`, `220px` wide × `30px` high), and directly below it a `1%`-stepped **Canvas opacity** level-fill `DragValue` row (`38%..=100%`, `220px` wide × `30px` high, defaulting to `100%`), both level-fill controls displaying their percentage centered inside the `6px`-rounded box (without a slider handle or external right-hand `%` label), painting proportional soft-accent left fills `(value - 38%) / (100% - 38%)`, supporting horizontal drag and direct numeric entry while ignoring mouse-wheel scroll events so vertical Settings scrolling never conflicts with adjusting opacity, and disabled in **Solid** mode while preserving muted disabled track and fill contrast without displaying multi-option Equation Canvas preset pickers.
 
 #### Scenario: Multi-row App background layout and vertical canvas preset ordering
 - **WHEN** the user views **Settings**
-- **THEN** **Appearance** (**Light** / **Dark**) and **App background** (**Solid** / **Image**, vertically centered `72×48` thumbnail + `Choose image…` + `Clear`, **Match accent color to background**, **Overlay opacity**, and **Canvas opacity** below **Overlay opacity**) render as separate full-width cards with no filename/mode text next to the thumbnail and no canvas preset picker rows below
+- **THEN** **Appearance** (**Light** / **Dark**) and **App background** (**Solid** / **Image**, vertically centered `72×48` thumbnail + `Choose image…` + `Clear`, **Match accent color to background**, `220px` **Overlay opacity** level-fill box, and `220px` **Canvas opacity** level-fill box below **Overlay opacity**) render as separate full-width cards with no filename/mode text next to the thumbnail, no external `%` text to the right of the opacity bars, and no canvas preset picker rows below
 
 #### Scenario: Toggling Solid and Image switches background without deleting the saved image
 - **WHEN** a custom background image is loaded and the user clicks **Solid** and then clicks **Image**
-- **THEN** clicking **Solid** switches immediately to the opaque Ayu solid theme (with opaque Equation Canvas and LaTeX source fills) while keeping the thumbnail and saved image reference intact and keeping both the disabled **Overlay opacity** and **Canvas opacity** slider handles fully opaque (`alpha == 255`) with muted accent styling, and clicking **Image** restores the wallpaper and `Canvas opacity` translucency without re-importing
+- **THEN** clicking **Solid** switches immediately to the opaque Ayu solid theme (with opaque Equation Canvas and LaTeX source fills) while keeping the thumbnail and saved image reference intact and rendering both disabled **Overlay opacity** and **Canvas opacity** level-fill boxes in muted disabled track/fill colors (`control_disabled_bg` and `soft_accent_fill(false, false)`) without interactive drag or click changes, and clicking **Image** restores the wallpaper and `Canvas opacity` translucency without re-importing
 
 #### Scenario: Selecting an image updates the live background immediately
 - **WHEN** the user clicks **Choose image…** in **Settings** and selects a valid `PNG`, `JPEG`, or `WebP` file
@@ -184,18 +177,18 @@ The **Settings** view SHALL place **Appearance** (**Light** / **Dark** theme sel
 - **THEN** the application does not crash or discard any previously working background and communicates the failure in the Settings status area or status bar
 
 #### Scenario: Adjusting overlay opacity updates surface translucency in real time
-- **WHEN** the user adjusts the **Overlay opacity** slider while **Image** mode has an active custom background
-- **THEN** the theme-tinted scrim (`0%`..`65%`) and panel/card surface alpha update immediately in `1%` increments—leaving the scrim transparent at `0%` while preserving a readable surface floor, balancing visibility and contrast at intermediate values, and making `panel_bg` and `card_bg` completely opaque (`255` alpha) at `100%` while keeping `app_bg` transparent over the `65%` scrim so open background areas and the thumbnail still show the image underneath
+- **WHEN** the user adjusts the **Overlay opacity** level-fill box (`38%..=100%` via horizontal drag or numeric entry) while **Image** mode has an active custom background, or scrolls the mouse wheel while hovering over the bar
+- **THEN** adjusting via drag or numeric entry displays the exact percentage (`38%..=100%`) centered inside the `220×30px` bar, `panel_bg` and `card_bg` alphas equal that exact percentage (`0.38` at `38%` to `1.00` / `255` alpha at `100%`), and the theme-tinted `background_scrim` scales from `0%` (at `38%`) to `65%` (at `100%`) without showing scrim percentages on the bar while keeping `app_bg` transparent so open background areas and the thumbnail still show the image underneath, whereas mouse-wheel scrolling over the bar does not alter **Overlay opacity**
 
 #### Scenario: Adjusting canvas opacity updates Equation Canvas and LaTeX box translucency in real time
-- **WHEN** the user adjusts the **Canvas opacity** slider while **Image** mode has an active custom background
-- **THEN** the **Equation Canvas** and **LaTeX source** box fill alphas update immediately in `1%` increments across `0.38..=1.00` without changing `panel_bg`, `card_bg`, or the window scrim, leaving both boxes fully opaque (`255` alpha) at `100%` and revealing the wallpaper/scrim cleanly at lower percentages
+- **WHEN** the user adjusts the **Canvas opacity** level-fill box (`38%..=100%` via horizontal drag or numeric entry) while **Image** mode has an active custom background, or scrolls the mouse wheel while hovering over the bar
+- **THEN** adjusting via drag or numeric entry displays the exact percentage (`38%..=100%`) centered inside the `220×30px` bar and the **Equation Canvas** and **LaTeX source** box fill alphas equal that exact percentage (`0.38` at `38%` to `1.00` / `255` alpha at `100%`) without changing `panel_bg`, `card_bg`, or the window scrim, whereas mouse-wheel scrolling over the bar does not alter **Canvas opacity**
 
 ### Requirement: Transparent dashed placeholders and lightly rounded canvas overlays
 Within the Equation Canvas, empty structural placeholder boxes (`□`) SHALL render with a dashed border using the active `CanvasPalette` placeholder stroke color, light `2px` corner rounding, and `0` inner fill opacity (`Color32::TRANSPARENT` over the canvas background) without painting an opaque fill patch or leaving baked synthetic square ink visible when the canvas is translucent, and selection highlights SHALL also use `2px` corner rounding.
 
 #### Scenario: Empty structural placeholder displays an unfilled dashed box with light corner rounding
-- **WHEN** an empty structural slot (`□`) is rendered on the Equation Canvas under any Light or Dark mode `CanvasPreset` or any `Canvas opacity` setting (`0%`..`100%`)
+- **WHEN** an empty structural slot (`□`) is rendered on the Equation Canvas under any Light or Dark mode `CanvasPreset` or any `Canvas opacity` setting (`38%..=100%`)
 - **THEN** the slot displays a dashed outline with `2px` corner rounding, no tinted background fill inside the box (`placeholder_bg` alpha is `0`), and no solid `□` glyph or extra `pal.bg` cover rectangle inside the dashed border, revealing the active opaque or translucent canvas background cleanly
 
 ### Requirement: Adaptive Light and Dark accent derivation from imported background images
@@ -203,11 +196,11 @@ When a background image is imported, the desktop application SHALL extract a dom
 
 #### Scenario: Imported background yields distinct Light and Dark mode accent tones
 - **WHEN** a colorful background image is active with **Match accent color to background** enabled
-- **THEN** Light mode applies a deeper accent tone for legible text and primary/selected surfaces, while Dark mode applies a brighter accent tone from the same hue, propagating across sliders, checkboxes, footer radio indicators, Batch progress bar, `ComboBox` and inline `\command` popup selections (`\` prefix + active suggestion row), and canvas highlights while preserving readable foreground contrast
+- **THEN** Light mode applies a deeper accent tone for legible text and primary/selected surfaces, while Dark mode applies a brighter accent tone from the same hue, propagating across opacity level-fill bars, checkboxes, footer target selection buttons, Batch progress bar, `ComboBox` and inline `\command` popup selections (`\` prefix + active suggestion row), and canvas highlights while preserving readable foreground contrast
 
 #### Scenario: Disabling adaptive accent or switching to Solid restores default Ayu accent
 - **WHEN** the user unchecks **Match accent color to background** or switches **App background** to **Solid**
-- **THEN** UI controls, global widget styles, checkboxes, radio indicators, Batch progress bar, `ComboBox` and inline `\command` popup chrome, and canvas accent highlights immediately revert to the default Ayu amber/orange accent while preserving the stored accent seed for when adaptive **Image** mode is re-enabled
+- **THEN** UI controls, global widget styles, opacity level-fill bars, checkboxes, footer target selection buttons, Batch progress bar, `ComboBox` and inline `\command` popup chrome, and canvas accent highlights immediately revert to the default Ayu amber/orange accent while preserving the stored accent seed for when adaptive **Image** mode is re-enabled
 
 ### Requirement: Modal workspace dimming and visible keyboard focus rings
 When a desktop modal dialog or blocking operation disables the workspace, the **Equation Canvas** SHALL dim uniformly alongside the sidebar, palette, LaTeX source box, and footer—preserving full `1.0` canvas opacity only when editing is disabled solely by an unparsed `draft_dirty` LaTeX draft—and keyboard-focused buttons in both primary and secondary styles SHALL display a `1.0px` high-contrast focus border matching secondary button stroke thickness and distinct from their background fill.
@@ -236,12 +229,12 @@ The desktop application SHALL omit card, canvas, LaTeX box, modal, popup, thumbn
 - **THEN** the outer list card renders without a border while the internal horizontal row dividers and vertical/horizontal folder hierarchy connector lines continue to render normally
 
 #### Scenario: Hovering and selecting controls transitions fill colors without borders
-- **WHEN** the user hovers over enabled controls or selects sidebar categories, sidebar tabs, Settings toggles, or `ComboBox` rows
+- **WHEN** the user hovers over enabled controls or selects sidebar categories, sidebar tabs, footer target buttons, Settings toggles, or `ComboBox` rows
 - **THEN** background and foreground tones update cleanly without painting hover or selection border strokes
 
 #### Scenario: Checkbox, radio, slider, placeholder, and bridge indicators stay visible
-- **WHEN** checkboxes, radio buttons, sliders, empty canvas placeholders (`□`), or the disconnected status-bar bridge icon render
-- **THEN** checkbox squares, radio circles, slider thumb borders, dashed canvas placeholder outlines, and the hollow disconnected bridge circle remain clearly visible
+- **WHEN** checkboxes, empty canvas placeholders (`□`), or the disconnected status-bar bridge icon render
+- **THEN** checkbox squares, dashed canvas placeholder outlines, and the hollow disconnected bridge circle remain clearly visible
 
 ### Requirement: Footer Font size and Zoom level-fill controls with wheel adjustment
 The editor footer SHALL render **Zoom** (`150%..=400%` in `10%` steps, without a Reset button) beside **Font size** (`6.0..=72.0 pt` in `1 pt` steps) with external labels, `30px` height, `6px` corner radius, and shared `draft_dirty` / modal disabled gating. Both boxes SHALL omit right-side spinner arrows, paint a proportional soft-accent left fill behind centered text, and support horizontal drag, direct numeric entry, and hover mouse-wheel stepping.
@@ -306,3 +299,14 @@ Scrolling the mouse wheel while holding `Ctrl` (or the platform command modifier
 #### Scenario: Footer Zoom and Font size controls do not affect LaTeX source font size
 - **WHEN** the user adjusts the footer **Zoom** or **Font size** control via drag, text entry, or wheel
 - **THEN** the `LaTeX source` box retains its configured monospace font size
+
+### Requirement: Consistent selectable target option buttons in editor footer
+The editor footer SHALL render the **MathType** and **OMML** output target selector as a borderless `30px`-tall, `6px`-rounded selectable option button group styled identically to the option selectors in **Settings**, spaced `8px` apart horizontally and vertically centered on the footer row alongside **Font size**, **Zoom**, **Undo**, **Redo**, **Save**, and section separators.
+
+#### Scenario: Footer MathType and OMML buttons match Settings selectable button styling and footer alignment
+- **WHEN** the editor footer renders in Light mode or Dark mode (enabled or disabled during `draft_dirty` or modals)
+- **THEN** **MathType** and **OMML** render without circular radio indicators as `30px`-tall, `6px`-rounded borderless buttons (`selected_bg`/`selected_fg` for the active target and `control_bg`/`text_primary` for the inactive target), separated by `8px` horizontal spacing and sharing the vertical centerline of **Font size**, **Zoom**, **Undo**, **Redo**, and **Save**
+
+#### Scenario: Clicking MathType or OMML in the footer switches the active target
+- **WHEN** the user clicks the unselected **MathType** or **OMML** button in the enabled editor footer
+- **THEN** the clicked button adopts the active selected styling, the other target reverts to neutral control styling, the output target updates and persists immediately, and keyboard focus restores to the active editor surface

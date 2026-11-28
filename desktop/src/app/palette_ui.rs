@@ -324,59 +324,6 @@ impl App {
         .inner
     }
 
-    /// Renders a radio option whose selected indicator uses the active theme accent while keeping the caption neutral.
-    pub(super) fn accent_radio_value<Value: PartialEq>(
-        ui: &mut egui::Ui,
-        tokens: ThemeTokens,
-        current_value: &mut Value,
-        alternative: Value,
-        label: &str,
-    ) -> egui::Response {
-        let enabled = ui.is_enabled();
-        let selected = *current_value == alternative;
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let caption_color = if enabled {
-            tokens.text_primary
-        } else {
-            tokens.text_disabled
-        };
-        let caption = egui::RichText::new(label).font(font).color(caption_color);
-        Self::with_selectable_style(ui, tokens, selected && enabled, |ui| {
-            if !enabled {
-                // Keep disabled radio indicators and captions crisp instead of double-dimming via painter opacity.
-                ui.set_opacity(1.0);
-                let widgets = &mut ui.visuals_mut().widgets;
-                let border_color = if selected {
-                    tokens.disabled_accent()
-                } else {
-                    tokens.border
-                };
-                for widget_visuals in [
-                    &mut widgets.noninteractive,
-                    &mut widgets.inactive,
-                    &mut widgets.hovered,
-                    &mut widgets.active,
-                ] {
-                    widget_visuals.bg_fill = tokens.control_disabled_bg;
-                    widget_visuals.weak_bg_fill = tokens.control_disabled_bg;
-                    widget_visuals.bg_stroke = Stroke::new(1.0, border_color);
-                    widget_visuals.fg_stroke = Stroke::new(1.0, border_color);
-                }
-            } else if selected {
-                let widgets = &mut ui.visuals_mut().widgets;
-                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.selected_border);
-                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.selected_border);
-                widgets.active.bg_stroke = Stroke::new(1.0, tokens.selected_border);
-            } else {
-                let widgets = &mut ui.visuals_mut().widgets;
-                widgets.inactive.bg_stroke = Stroke::new(1.0, tokens.border);
-                widgets.hovered.bg_stroke = Stroke::new(1.0, tokens.border_hover);
-                widgets.active.bg_stroke = Stroke::new(1.0, tokens.accent);
-            }
-            ui.radio_value(current_value, alternative, caption)
-        })
-    }
-
     pub(super) fn full_width_card<R>(
         ui: &mut egui::Ui,
         tokens: ThemeTokens,

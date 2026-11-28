@@ -731,16 +731,17 @@ fn sidebar_settings_and_about_tabs_work_and_toggle_theme() {
         egui::Shape::Text(text_shape) if text_shape.galley.text() == "Theme")));
     assert!(!has_rendered_text(&after_light, "Canvas zoom"));
     assert!(!has_rendered_text(&after_light, "Reset (200%)"));
-    // Opacity slider tracks in Light mode contrast against card_bg (not white-on-white).
+    // Opacity level-fill tracks in Light mode contrast against card_bg (not white-on-white).
     let overlay_pos = find_text_center(&after_light, |text| text == "Overlay opacity");
     assert!(after_light
         .shapes
         .iter()
         .any(|clipped| matches!(&clipped.shape,
         egui::Shape::Rect(rect_shape)
-            if (rect_shape.rect.center().y - overlay_pos.y).abs() < 12.0
-                && rect_shape.rect.width() >= 150.0
-                && rect_shape.rect.height() <= 24.0
+            if (rect_shape.rect.center().y - overlay_pos.y).abs() < 2.0
+                && (rect_shape.rect.width() - 220.0).abs() <= 0.5
+                && (rect_shape.rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5
+                && rect_shape.corner_radius == theme::CONTROL_CORNER_RADIUS
                 && rect_shape.fill == light_tokens.control_disabled_bg)));
 }
 
@@ -1366,10 +1367,17 @@ fn button_height_tiers_align_footer_tabs_and_compact_controls() {
             .unwrap_or_else(|| panic!("missing button rect for icon {icon_name}"))
     };
 
-    // Footer standard buttons and DragValue share BUTTON_HEIGHT (30px).
+    // Footer standard buttons and DragValue share BUTTON_HEIGHT (30px) and vertical centerline.
+    let mt_rect = button_rect_in(&out, "MathType");
+    let omml_rect = button_rect_in(&out, "OMML");
     let save_rect = button_rect_in(&out, "Save MathML");
     let undo_rect = icon_button_rect(&out, &app, "arrow-back-up");
     let redo_rect = icon_button_rect(&out, &app, "arrow-forward-up");
+    assert!((mt_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
+    assert!((omml_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
+    assert!((omml_rect.left() - mt_rect.right() - theme::SPACE_MD).abs() <= 0.5);
+    assert!((mt_rect.center().y - save_rect.center().y).abs() <= 0.5);
+    assert!((omml_rect.center().y - save_rect.center().y).abs() <= 0.5);
     assert!((save_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
     assert!((undo_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
     assert!((redo_rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5);
@@ -2228,26 +2236,31 @@ fn footer_radios_hover_borders_and_drag_value_focus_reflect_active_accent() {
             .unwrap_or_else(|| panic!("missing text {label:?}"))
     }
 
-    fn radio_circles_for(
-        out: &egui::FullOutput,
-        caption_rect: Rect,
-    ) -> Vec<egui::epaint::CircleShape> {
-        let mut circles: Vec<_> = out
-            .shapes
-            .iter()
-            .filter_map(|clipped| match &clipped.shape {
-                egui::Shape::Circle(circle)
-                    if (circle.center.y - caption_rect.center().y).abs() <= 4.0
+    fn target_button_for(out: &egui::FullOutput, caption_rect: Rect) -> egui::epaint::RectShape {
+        assert!(
+            !out.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Circle(circle) => {
+                    (circle.center.y - caption_rect.center().y).abs() <= 4.0
                         && circle.center.x < caption_rect.left()
-                        && circle.center.x >= caption_rect.left() - 26.0 =>
+                        && circle.center.x >= caption_rect.left() - 26.0
+                }
+                _ => false,
+            }),
+            "footer target options must not render circular radio indicators"
+        );
+        out.shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect_shape)
+                    if rect_shape.brush.is_none()
+                        && rect_shape.rect.contains(caption_rect.center())
+                        && (rect_shape.rect.height() - theme::BUTTON_HEIGHT).abs() <= 0.5 =>
                 {
-                    Some(*circle)
+                    Some(rect_shape.clone())
                 }
                 _ => None,
             })
-            .collect();
-        circles.sort_by(|first, second| second.radius.total_cmp(&first.radius));
-        circles
+            .expect("footer target selectable button rect")
     }
 
     let dir = tempfile::tempdir().unwrap();
@@ -2304,7 +2317,7 @@ fn footer_radios_hover_borders_and_drag_value_focus_reflect_active_accent() {
                 if use_adaptive { Some(seed) } else { None },
             );
 
-            // 1. Enabled footer radios use selected_* indicators while keeping neutral captions.
+            // 1. Enabled footer target buttons use borderless selectable styling matching Settings.
             app.tab = 0;
             app.target = "omml".into();
             app.draft_dirty = false;
@@ -2313,51 +2326,53 @@ fn footer_radios_hover_borders_and_drag_value_focus_reflect_active_accent() {
 
             let (omml_rect, omml_caption_color) = find_caption_text(&editor_out, "OMML");
             let (mt_rect, mt_caption_color) = find_caption_text(&editor_out, "MathType");
-            assert_eq!(omml_caption_color, expected.text_primary);
+            assert_eq!(omml_caption_color, expected.selected_fg);
             assert_eq!(mt_caption_color, expected.text_primary);
 
-            let omml_circles = radio_circles_for(&editor_out, omml_rect);
-            let mt_circles = radio_circles_for(&editor_out, mt_rect);
-            assert_eq!(omml_circles.len(), 2);
-            assert_eq!(omml_circles[0].fill, expected.selected_bg);
-            assert_eq!(omml_circles[0].stroke.color, expected.selected_border);
-            assert_eq!(omml_circles[1].fill, expected.selected_fg);
-            assert_eq!(mt_circles.len(), 1);
-            assert_eq!(mt_circles[0].fill, expected.control_bg);
-            assert_eq!(mt_circles[0].stroke.color, expected.border);
+            let omml_button = target_button_for(&editor_out, omml_rect);
+            let mt_button = target_button_for(&editor_out, mt_rect);
+            assert_eq!(omml_button.fill, expected.selected_bg);
+            assert_eq!(omml_button.stroke, Stroke::NONE);
+            assert_eq!(omml_button.corner_radius, theme::CONTROL_CORNER_RADIUS);
+            assert_eq!(mt_button.fill, expected.control_bg);
+            assert_eq!(mt_button.stroke, Stroke::NONE);
+            assert_eq!(mt_button.corner_radius, theme::CONTROL_CORNER_RADIUS);
+            assert!(
+                (omml_button.rect.left() - mt_button.rect.right() - theme::SPACE_MD).abs() <= 0.5
+            );
 
-            // Clicking MathType switches selection indicator cleanly.
+            // Clicking MathType switches selectable styling cleanly.
             let _ = run_frame(&mut app, click_events(mt_rect.center()));
             assert_eq!(app.target, "mathtype");
             let switched_out = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
-            let (switched_mt_rect, _) = find_caption_text(&switched_out, "MathType");
-            let (switched_omml_rect, _) = find_caption_text(&switched_out, "OMML");
-            let switched_mt = radio_circles_for(&switched_out, switched_mt_rect);
-            let switched_omml = radio_circles_for(&switched_out, switched_omml_rect);
-            assert_eq!(switched_mt.len(), 2);
-            assert_eq!(switched_mt[0].fill, expected.selected_bg);
-            assert_eq!(switched_mt[0].stroke.color, expected.selected_border);
-            assert_eq!(switched_mt[1].fill, expected.selected_fg);
-            assert_eq!(switched_omml.len(), 1);
-            assert_eq!(switched_omml[0].fill, expected.control_bg);
-            assert_eq!(switched_omml[0].stroke.color, expected.border);
+            let (switched_mt_rect, switched_mt_color) =
+                find_caption_text(&switched_out, "MathType");
+            let (switched_omml_rect, switched_omml_color) =
+                find_caption_text(&switched_out, "OMML");
+            assert_eq!(switched_mt_color, expected.selected_fg);
+            assert_eq!(switched_omml_color, expected.text_primary);
+            let switched_mt = target_button_for(&switched_out, switched_mt_rect);
+            let switched_omml = target_button_for(&switched_out, switched_omml_rect);
+            assert_eq!(switched_mt.fill, expected.selected_bg);
+            assert_eq!(switched_mt.stroke, Stroke::NONE);
+            assert_eq!(switched_omml.fill, expected.control_bg);
+            assert_eq!(switched_omml.stroke, Stroke::NONE);
 
-            // 2. Disabled footer radios (draft_dirty = true) keep crisp disabled fill/accent and neutral text_disabled captions.
+            // 2. Disabled footer target buttons (draft_dirty = true) suppress active/hover emphasis and clicks.
             app.draft_dirty = true;
             let disabled_out = run_frame(&mut app, vec![egui::Event::PointerMoved(Pos2::ZERO)]);
             let (dis_mt_rect, dis_mt_color) = find_caption_text(&disabled_out, "MathType");
             let (dis_omml_rect, dis_omml_color) = find_caption_text(&disabled_out, "OMML");
-            assert_eq!(dis_mt_color, expected.text_disabled);
-            assert_eq!(dis_omml_color, expected.text_disabled);
-            let dis_mt_circles = radio_circles_for(&disabled_out, dis_mt_rect);
-            let dis_omml_circles = radio_circles_for(&disabled_out, dis_omml_rect);
-            assert_eq!(dis_mt_circles.len(), 2);
-            assert_eq!(dis_mt_circles[0].fill, expected.control_disabled_bg);
-            assert_eq!(dis_mt_circles[0].stroke.color, expected.disabled_accent());
-            assert_eq!(dis_mt_circles[1].fill, expected.disabled_accent());
-            assert_eq!(dis_omml_circles.len(), 1);
-            assert_eq!(dis_omml_circles[0].fill, expected.control_disabled_bg);
-            assert_eq!(dis_omml_circles[0].stroke.color, expected.border);
+            let dis_mt = target_button_for(&disabled_out, dis_mt_rect);
+            let dis_omml = target_button_for(&disabled_out, dis_omml_rect);
+            assert_eq!(dis_mt.stroke, Stroke::NONE);
+            assert_eq!(dis_omml.stroke, Stroke::NONE);
+            assert_ne!(dis_mt.fill, expected.selected_bg);
+            assert_ne!(dis_mt_color, expected.selected_fg);
+            assert_ne!(dis_omml.fill, expected.control_hover_bg);
+            assert_ne!(dis_omml_color, expected.text_primary);
+            let _ = run_frame(&mut app, click_events(dis_omml_rect.center()));
+            assert_eq!(app.target, "mathtype");
             app.draft_dirty = false;
 
             // 3. Hovered non-selected control stays borderless with control_hover_bg while Batch tree lines stay neutral border_hover.
@@ -2523,12 +2538,12 @@ fn canvas_opacity_updates_equation_canvas_and_latex_box_without_affecting_solid_
             egui::Shape::Rect(rect_shape) if rect_shape.fill == full_pal.bg && rect_shape.rect == latex_rect
         )));
 
-        // Lowering canvas_opacity scales both surfaces across 0.38..=1.00 independently of panel_bg.
-        for opacity in [0.5_f32, 0.0_f32] {
+        // Lowering canvas_opacity applies 38%..=100% directly to both surfaces independently of panel_bg.
+        for opacity in [0.65_f32, 0.38_f32] {
             app.canvas_opacity = opacity;
             let out = run_ui_pass_frame(&ctx, &mut app, vec![]);
             let pal = app.active_canvas_palette(dark);
-            let expected_alpha = ((0.38_f32 + 0.62_f32 * opacity) * 255.0_f32).round() as u8;
+            let expected_alpha = (opacity * 255.0_f32).round() as u8;
             assert_eq!(pal.bg.a(), expected_alpha);
             assert!(out.shapes.iter().any(|clipped| matches!(
                 &clipped.shape,
@@ -3441,7 +3456,7 @@ fn palette_panel_uses_panel_bg_with_overlay_opacity_and_bottom_divider() {
 
         // In Image mode, palette panel_bg scales translucency with Overlay opacity just like sidebar/footer.
         app.background_mode = BackgroundMode::Image;
-        for opacity in [0.0_f32, 0.70_f32, 1.0_f32] {
+        for opacity in [0.38_f32, 0.70_f32, 1.0_f32] {
             app.background_opacity = opacity;
             let image_out = run_ui_pass_sized(&ctx, &mut app, Vec2::from(MIN_WINDOW_SIZE));
             let expected_panel_bg =

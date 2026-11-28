@@ -6,8 +6,10 @@ use crate::{
     theme::{self, CanvasPalette, ThemeTokens},
     Event,
 };
-use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use std::{path::Path, sync::Arc};
+
+const OPACITY_CONTROL_WIDTH: f32 = 220.0;
 
 impl App {
     /// Returns `true` when `Image` background mode is selected and a background texture is loaded.
@@ -570,7 +572,7 @@ fn draw_opacity_slider_row(
     let mut changed = false;
     ui.add_enabled_ui(enabled, |ui| {
         if !enabled {
-            // Keep slider handle fills opaque so the trailing fill never shows through.
+            // Keep disabled labels and level-fill controls crisp instead of double-dimming.
             ui.set_opacity(1.0);
         }
         let label_width = 108.0;
@@ -590,40 +592,40 @@ fn draw_opacity_slider_row(
                         ui.label(egui::RichText::new(label).color(label_color));
                     },
                 );
-                changed = ui
-                    .scope(|ui| {
-                        ui.spacing_mut().slider_width = 220.0;
-                        let visuals = ui.visuals_mut();
-                        if enabled {
-                            let handle_stroke = Stroke::new(1.0, tokens.accent);
-                            visuals.widgets.inactive.bg_fill = tokens.border;
-                            visuals.widgets.inactive.fg_stroke = handle_stroke;
-                            visuals.widgets.hovered.fg_stroke = handle_stroke;
-                            visuals.widgets.active.fg_stroke = handle_stroke;
-                            visuals.selection.bg_fill = tokens.accent;
-                        } else {
-                            let opaque_tokens = ThemeTokens::for_mode(tokens.dark_mode);
-                            let disabled_accent = tokens.disabled_accent();
-                            let handle_stroke = Stroke::new(1.0, disabled_accent);
-                            visuals.widgets.noninteractive.bg_fill = opaque_tokens.panel_bg;
-                            visuals.widgets.noninteractive.weak_bg_fill = opaque_tokens.panel_bg;
-                            visuals.widgets.noninteractive.bg_stroke = handle_stroke;
-                            visuals.widgets.noninteractive.fg_stroke = handle_stroke;
-                            visuals.widgets.inactive.bg_fill = opaque_tokens.control_disabled_bg;
-                            visuals.widgets.inactive.fg_stroke = handle_stroke;
-                            visuals.selection.bg_fill = disabled_accent;
-                        }
+                let speed = f64::from((*range.end() - *range.start()) / OPACITY_CONTROL_WIDTH);
+                let (drag_resp, wheel_changed) = App::draw_level_drag_value(
+                    ui,
+                    tokens,
+                    label,
+                    speed,
+                    None,
+                    range.clone(),
+                    value,
+                    "Click and drag left/right, or click to type a percentage",
+                    |ui, current, drag_speed| {
                         ui.add(
-                            egui::Slider::new(value, range)
-                                .step_by(0.01)
-                                .show_value(false)
-                                .trailing_fill(true)
-                                .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 }),
+                            egui::DragValue::from_get_set(|next| {
+                                if let Some(next) = next {
+                                    *current = ((next * 100.0).round() / 100.0) as f32;
+                                }
+                                f64::from(*current)
+                            })
+                            .range(range)
+                            .min_size(Vec2::new(OPACITY_CONTROL_WIDTH, theme::BUTTON_HEIGHT))
+                            .speed(drag_speed)
+                            .custom_formatter(|val, _| format!("{:.0}%", (val * 100.0).round()))
+                            .custom_parser(|text| {
+                                text.trim()
+                                    .trim_end_matches('%')
+                                    .trim()
+                                    .parse::<f64>()
+                                    .ok()
+                                    .map(|pct| pct / 100.0)
+                            }),
                         )
-                        .changed()
-                    })
-                    .inner;
-                ui.label(egui::RichText::new(format!("{:.0}%", *value * 100.0)).color(label_color));
+                    },
+                );
+                changed = drag_resp.changed() || wheel_changed;
             },
         );
     });

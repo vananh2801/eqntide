@@ -2631,7 +2631,7 @@ fn translucent_canvas_renders_placeholders_without_opaque_cover_or_baked_square(
     app.background_texture =
         Some(ctx.load_texture("bg-ph-test", bg_img, egui::TextureOptions::LINEAR));
     app.background_mode = crate::settings::BackgroundMode::Image;
-    app.canvas_opacity = 0.25;
+    app.canvas_opacity = 0.38;
     app.load_math("<math><mfrac><mrow/><mrow/></mfrac></math>", None, None);
     app.sync_render(&ctx);
 
