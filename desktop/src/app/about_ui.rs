@@ -1,8 +1,9 @@
 //! Desktop About view and on-demand update controls.
 
-use super::{App, UI_ICON_SIZE};
+use super::App;
 use crate::{
     theme::{self, ThemeTokens},
+    ui::{self, icons::UI_ICON_SIZE},
     update::{self, UpdateState},
     version::app_version,
 };
@@ -13,9 +14,15 @@ impl App {
     pub(super) fn draw_about_tab(&mut self, ui: &mut egui::Ui) {
         let tokens = self.theme_tokens(ui);
         self.draw_back_to_editor_button(ui);
-        let author_icon = self.ui_icon(ui.ctx(), "user", UI_ICON_SIZE, tokens.text_muted);
-        let license_icon = self.ui_icon(ui.ctx(), "license", UI_ICON_SIZE, tokens.text_muted);
-        let github_icon = self.ui_icon(ui.ctx(), "brand-github", UI_ICON_SIZE, tokens.text_muted);
+        let author_icon = self
+            .ui_icons
+            .image(ui.ctx(), "user", UI_ICON_SIZE, tokens.text_muted);
+        let license_icon =
+            self.ui_icons
+                .image(ui.ctx(), "license", UI_ICON_SIZE, tokens.text_muted);
+        let github_icon =
+            self.ui_icons
+                .image(ui.ctx(), "brand-github", UI_ICON_SIZE, tokens.text_muted);
         let logo_id = self
             .logo_texture
             .get_or_insert_with(|| {
@@ -34,7 +41,7 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                Self::full_width_card(ui, tokens, |ui| {
+                ui::widgets::full_width_card(ui, tokens, |ui| {
                     const ABOUT_LOGO_SIZE: f32 = 72.0;
                     ui.horizontal(|ui| {
                         ui.add(
@@ -69,7 +76,7 @@ impl App {
                         });
                     });
                     ui.add_space(theme::SPACE_XL);
-                    Self::draw_section_separator(ui, tokens);
+                    ui::widgets::section_separator(ui, tokens);
                     ui.add_space(theme::SPACE_MD);
                     egui::Grid::new("about-info")
                         .num_columns(2)
@@ -97,7 +104,7 @@ impl App {
                             ui.end_row();
                         });
                     ui.add_space(theme::SPACE_XL);
-                    Self::draw_section_separator(ui, tokens);
+                    ui::widgets::section_separator(ui, tokens);
                     ui.add_space(theme::SPACE_MD);
                     self.draw_about_updates(ui, tokens);
                 });
@@ -109,19 +116,21 @@ impl App {
         ui.add_space(theme::SPACE_XS);
         match self.update_state.clone() {
             UpdateState::Idle => {
-                if Self::standard_button(ui, "Check for updates").clicked() {
+                if ui::widgets::standard_button(ui, "Check for updates").clicked() {
                     self.start_update_check();
                 }
             }
             UpdateState::Checking => {
                 ui.horizontal(|ui| {
-                    ui.add_enabled_ui(false, |ui| Self::standard_button(ui, "Check for updates"));
+                    ui.add_enabled_ui(false, |ui| {
+                        ui::widgets::standard_button(ui, "Check for updates")
+                    });
                     ui.label(egui::RichText::new("Checking for updates…").color(tokens.text_muted));
                 });
             }
             UpdateState::UpToDate => {
                 ui.horizontal(|ui| {
-                    if Self::standard_button(ui, "Check again").clicked() {
+                    if ui::widgets::standard_button(ui, "Check again").clicked() {
                         self.start_update_check();
                     }
                     ui.label(
@@ -145,7 +154,7 @@ impl App {
                     } else {
                         format!("Open release v{}", release.version)
                     };
-                    if Self::primary_button_with(ui, tokens, true, |ui| {
+                    if ui::widgets::primary_button_with(ui, tokens, true, |ui| {
                         ui.add(
                             egui::Button::new(button_label)
                                 .min_size(Vec2::new(0.0, theme::BUTTON_HEIGHT)),
@@ -158,13 +167,13 @@ impl App {
                             .open_url(egui::OpenUrl::new_tab(release.download_url.clone()));
                     }
                     if release.download_url != release.release_url
-                        && Self::standard_button(ui, "Release notes").clicked()
+                        && ui::widgets::standard_button(ui, "Release notes").clicked()
                         && update::is_trusted_release_url(&release.release_url)
                     {
                         ui.ctx()
                             .open_url(egui::OpenUrl::new_tab(release.release_url.clone()));
                     }
-                    if Self::standard_button(ui, "Check again").clicked() {
+                    if ui::widgets::standard_button(ui, "Check again").clicked() {
                         self.start_update_check();
                     }
                 });
@@ -173,10 +182,10 @@ impl App {
                 ui.label(egui::RichText::new(err).small().color(tokens.error_fg));
                 ui.add_space(theme::SPACE_XS);
                 ui.horizontal(|ui| {
-                    if Self::standard_button(ui, "Retry").clicked() {
+                    if ui::widgets::standard_button(ui, "Retry").clicked() {
                         self.start_update_check();
                     }
-                    if Self::standard_button(ui, "Open Releases").clicked() {
+                    if ui::widgets::standard_button(ui, "Open Releases").clicked() {
                         ui.ctx()
                             .open_url(egui::OpenUrl::new_tab(update::GITHUB_RELEASES_PAGE_URL));
                     }

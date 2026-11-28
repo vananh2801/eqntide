@@ -5,8 +5,9 @@ use crate::{
     palette,
     shortcuts::{self, ShortcutChord, ShortcutKey, ShortcutMap},
     theme::{self, ThemeTokens},
+    ui,
 };
-use eframe::egui::{self, Stroke, Vec2};
+use eframe::egui::{self, Vec2};
 
 const SHORTCUT_ROW_HEIGHT: f32 = 36.0;
 const SHORTCUT_SYSTEM_ROW_HEIGHT: f32 = 32.0;
@@ -32,7 +33,7 @@ impl App {
 
     /// Renders the two-column **Keyboard Shortcuts** card inside the Settings tab.
     pub(super) fn draw_keyboard_shortcuts_card(&mut self, ui: &mut egui::Ui, tokens: ThemeTokens) {
-        Self::full_width_card(ui, tokens, |ui| {
+        ui::widgets::full_width_card(ui, tokens, |ui| {
             let mut search_has_focus = false;
             let mut search_activated = false;
 
@@ -143,7 +144,7 @@ impl App {
             .show_ui(ui, |ui| {
                 let mut render_option = |value: ShortcutCategoryFilter, label: &str| {
                     let is_selected = self.shortcut_filter == value;
-                    Self::with_selectable_style(ui, tokens, is_selected, |ui| {
+                    ui::widgets::with_selectable_style(ui, tokens, is_selected, |ui| {
                         ui.selectable_value(&mut self.shortcut_filter, value, label)
                     });
                 };
@@ -347,33 +348,25 @@ impl App {
                                                     egui::RichText::new("Set shortcut")
                                                         .color(tokens.text_muted)
                                                 };
-                                                let capture_btn = Self::with_selectable_style(
+                                                let capture_btn = ui::widgets::with_selectable_style(
                                                     ui,
                                                     tokens,
                                                     is_recording,
                                                     |ui| {
-                                                        ui.scope(|ui| {
-                                                            if is_recording {
-                                                                ui.visuals_mut()
-                                                                    .widgets
-                                                                    .inactive
-                                                                    .bg_stroke =
-                                                                    Stroke::new(1.0, tokens.accent);
-                                                                ui.visuals_mut()
-                                                                    .widgets
-                                                                    .hovered
-                                                                    .bg_stroke =
-                                                                    Stroke::new(1.0, tokens.accent);
-                                                            }
-                                                            ui.add(
-                                                                egui::Button::new(button_text)
-                                                                    .min_size(Vec2::new(
-                                                                    SHORTCUT_CAPTURE_BUTTON_WIDTH,
-                                                                    theme::BUTTON_HEIGHT,
-                                                                )),
-                                                            )
-                                                        })
-                                                        .inner
+                                                        ui::widgets::with_accent_border(
+                                                            ui,
+                                                            tokens,
+                                                            is_recording,
+                                                            |ui| {
+                                                                ui.add(
+                                                                    egui::Button::new(button_text)
+                                                                        .min_size(Vec2::new(
+                                                                            SHORTCUT_CAPTURE_BUTTON_WIDTH,
+                                                                            theme::BUTTON_HEIGHT,
+                                                                        )),
+                                                                )
+                                                            },
+                                                        )
                                                     },
                                                 );
                                                 if capture_btn.clicked() {
@@ -411,9 +404,7 @@ impl App {
         // Prevent scroll wheel events inside the right list from chaining to the outer Settings
         // ScrollArea when the inner list is already at its top or bottom boundary.
         if ui.is_enabled() && ui.rect_contains_pointer(frame_resp.response.rect) {
-            ui.ctx().input_mut(|input| {
-                input.smooth_scroll_delta.y = 0.0;
-            });
+            ui::scroll::suppress_scroll_delta_y(ui.ctx());
         }
 
         if let Some(clear_source) = clicked_clear {

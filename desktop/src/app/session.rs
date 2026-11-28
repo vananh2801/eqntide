@@ -297,8 +297,8 @@ impl App {
             ("Save MathML", "Save MathML (Ctrl+S)")
         };
         let enabled = self.can_save() && !self.draft_dirty && self.command_input.is_none();
-        if self
-            .primary_button(ui, enabled, label)
+        let tokens = self.theme_tokens(ui);
+        if crate::ui::widgets::primary_button(ui, tokens, enabled, label)
             .on_hover_text(tooltip)
             .clicked()
         {

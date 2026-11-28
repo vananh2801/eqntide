@@ -485,9 +485,12 @@ impl App {
                     for (index, command) in candidates.iter().enumerate() {
                         let is_selected = index == selected;
                         let item_text = format!("\\{}   {}", command.name, command.label);
-                        if Self::with_selectable_style(ui, tokens, is_selected, |ui| {
-                            ui.selectable_label(is_selected, item_text)
-                        })
+                        if crate::ui::widgets::with_selectable_style(
+                            ui,
+                            tokens,
+                            is_selected,
+                            |ui| ui.selectable_label(is_selected, item_text),
+                        )
                         .clicked()
                         {
                             accept = Some(index);

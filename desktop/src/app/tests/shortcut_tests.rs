@@ -1,6 +1,7 @@
 use super::super::*;
 use super::helpers::*;
 use crate::shortcuts::{ShortcutChord, ShortcutConflict, ShortcutKey, DEFAULT_PALETTE_SHORTCUTS};
+use crate::theme;
 
 fn chord_key_event(chord: ShortcutChord) -> egui::Event {
     let key = match chord.key {

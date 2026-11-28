@@ -1,6 +1,7 @@
 use super::super::*;
 use super::helpers::*;
-use eframe::egui::Color32;
+use crate::theme;
+use eframe::egui::{Color32, Stroke};
 use eqntide::MathNode;
 use eqntide_editor::Move;
 use std::time::Duration;

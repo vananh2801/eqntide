@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::theme;
 pub(super) use eframe::egui::Pos2;
 use eqntide::MathNode;
 use std::time::Duration;

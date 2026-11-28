@@ -1,7 +1,7 @@
 //! Three-row symbol and template palette with horizontal navigation.
 
-use super::{App, MatrixDialog, PALETTE_BUTTON_SIZE, PALETTE_GAP, PALETTE_ROWS, UI_ICON_SIZE};
-use crate::{palette, theme};
+use super::{App, MatrixDialog, PALETTE_BUTTON_SIZE, PALETTE_GAP, PALETTE_ROWS};
+use crate::{palette, theme, ui::icons::UI_ICON_SIZE};
 use eframe::egui::{self, Color32, Rect, Vec2};
 
 const PALETTE_COLUMN_STRIDE: f32 = PALETTE_BUTTON_SIZE.x + PALETTE_GAP;
@@ -108,7 +108,9 @@ impl App {
         icon_color: Color32,
     ) {
         let custom_rect = matrix_tools.custom_rect.translate(origin.to_vec2());
-        let icon = self.ui_icon(ui.ctx(), "dots", UI_ICON_SIZE, icon_color);
+        let icon = self
+            .ui_icons
+            .image(ui.ctx(), "dots", UI_ICON_SIZE, icon_color);
         let custom_response = ui
             .scope(|ui| {
                 ui.spacing_mut().button_padding = Vec2::new(theme::SPACE_SM, 2.0);

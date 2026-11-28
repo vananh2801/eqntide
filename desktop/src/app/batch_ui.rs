@@ -1,12 +1,13 @@
 //! Batch DOCX conversion tab, folder-tree/flat file list rendering, and progress tracking.
 
-use super::{App, UI_ICON_SIZE};
+use super::App;
 use crate::{
     batch, runtime,
     theme::{self, ThemeTokens},
+    ui::{self, icons::UI_ICON_SIZE},
     Event,
 };
-use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
+use eframe::egui::{self, Rect, Stroke, Vec2};
 use std::{
     path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc},
@@ -18,7 +19,7 @@ impl App {
         self.sync_batch_row_state();
         let tokens = self.theme_tokens(ui);
         self.draw_back_to_editor_button(ui);
-        Self::full_width_card(ui, tokens, |ui| {
+        ui::widgets::full_width_card(ui, tokens, |ui| {
             ui.label(
                 egui::RichText::new("Input")
                     .small()
@@ -26,9 +27,14 @@ impl App {
             );
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(!self.batch_running, |ui| {
-                    if self
-                        .icon_standard_button(ui, "file", "Add DOCX files…")
-                        .clicked()
+                    if ui::widgets::icon_standard_button(
+                        ui,
+                        &mut self.ui_icons,
+                        tokens,
+                        "file",
+                        "Add DOCX files…",
+                    )
+                    .clicked()
                     {
                         let tx = self.tx.clone();
                         std::thread::spawn(move || {
@@ -40,9 +46,14 @@ impl App {
                             }
                         });
                     }
-                    if self
-                        .icon_standard_button(ui, "folder", "Add folder…")
-                        .clicked()
+                    if ui::widgets::icon_standard_button(
+                        ui,
+                        &mut self.ui_icons,
+                        tokens,
+                        "folder",
+                        "Add folder…",
+                    )
+                    .clicked()
                     {
                         let tx = self.tx.clone();
                         std::thread::spawn(move || {
@@ -70,7 +81,7 @@ impl App {
                 }
             });
             ui.add_space(theme::SPACE_XS);
-            Self::draw_section_separator(ui, tokens);
+            ui::widgets::section_separator(ui, tokens);
             ui.add_space(theme::SPACE_XS);
             ui.label(
                 egui::RichText::new("Options & Actions")
@@ -86,7 +97,7 @@ impl App {
                         .show_ui(ui, |ui| {
                             for (index, (_, label)) in batch::TARGETS.iter().enumerate() {
                                 let selected = self.batch_target == index;
-                                Self::with_selectable_style(ui, tokens, selected, |ui| {
+                                ui::widgets::with_selectable_style(ui, tokens, selected, |ui| {
                                     ui.selectable_value(&mut self.batch_target, index, *label)
                                 });
                             }
@@ -95,7 +106,7 @@ impl App {
                         self.persisted.batch_target = self.batch_target;
                         self.settings_dirty = true;
                     }
-                    if Self::accent_checkbox(
+                    if ui::widgets::accent_checkbox(
                         ui,
                         tokens,
                         &mut self.batch_overwrite,
@@ -111,14 +122,15 @@ impl App {
             });
             ui.horizontal_wrapped(|ui| {
                 let selected_count = self.selected_batch_count();
-                if self
-                    .icon_primary_button(
-                        ui,
-                        !self.batch_running && selected_count > 0,
-                        "arrows-left-right",
-                        "Convert",
-                    )
-                    .clicked()
+                if ui::widgets::icon_primary_button(
+                    ui,
+                    &mut self.ui_icons,
+                    tokens,
+                    !self.batch_running && selected_count > 0,
+                    "arrows-left-right",
+                    "Convert",
+                )
+                .clicked()
                 {
                     let target = batch::TARGETS[self.batch_target].0;
                     let timestamp = batch::timestamp_now();
@@ -188,7 +200,7 @@ impl App {
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
                 ui.add_enabled_ui(!self.batch_running, |ui| {
-                    if Self::compact_button(ui, "Deselect all").clicked() {
+                    if ui::widgets::compact_button(ui, "Deselect all").clicked() {
                         let mode = self.batch_selection_mode;
                         for row in &mut self.batch_rows {
                             row.set_selected(mode, false);
@@ -196,7 +208,7 @@ impl App {
                         self.batch_run_total = 0;
                         self.batch_completed = 0;
                     }
-                    if Self::compact_button(ui, "Select all").clicked() {
+                    if ui::widgets::compact_button(ui, "Select all").clicked() {
                         let mode = self.batch_selection_mode;
                         for row in &mut self.batch_rows {
                             row.set_selected(mode, true);
@@ -206,7 +218,7 @@ impl App {
                     }
                 });
                 let bar_width = ui.available_width().max(80.0);
-                Self::draw_batch_progress_bar(
+                ui::widgets::progress_bar(
                     ui,
                     tokens,
                     bar_width,
@@ -226,8 +238,8 @@ impl App {
                     (batch::BatchSelectionMode::FolderTree, "Folder tree"),
                 ] {
                     let active = self.batch_selection_mode == mode;
-                    if Self::with_selectable_style(ui, tokens, active, |ui| {
-                        Self::compact_button(ui, label)
+                    if ui::widgets::with_selectable_style(ui, tokens, active, |ui| {
+                        ui::widgets::compact_button(ui, label)
                     })
                     .clicked()
                     {
@@ -332,69 +344,6 @@ impl App {
         });
     }
 
-    /// Renders the batch conversion progress bar with `primary_bg` fill and split-contrast status text.
-    pub(super) fn draw_batch_progress_bar(
-        ui: &mut egui::Ui,
-        tokens: ThemeTokens,
-        width: f32,
-        height: f32,
-        fraction: f32,
-        label: &str,
-    ) {
-        let clamped = if fraction.is_finite() {
-            fraction.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
-        response.widget_info(|| {
-            let mut info =
-                egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, ui.is_enabled(), label);
-            info.value = Some((f64::from(clamped) * 100.0).floor());
-            info
-        });
-        if !ui.is_rect_visible(rect) {
-            return;
-        }
-        let painter = ui.painter();
-        painter.rect_filled(rect, theme::CONTROL_CORNER_RADIUS, tokens.extreme_bg);
-        let mut fill_rect = None;
-        if clamped > 0.0 {
-            let min_fill = (2.0 * f32::from(theme::RADIUS_CONTROL)).min(rect.width());
-            let fill_width = (rect.width() * clamped).max(min_fill).min(rect.width());
-            let bar_rect = Rect::from_min_size(rect.min, Vec2::new(fill_width, rect.height()));
-            painter.rect_filled(bar_rect, theme::CONTROL_CORNER_RADIUS, tokens.primary_bg);
-            fill_rect = Some(bar_rect);
-        }
-        let font_id = egui::TextStyle::Button.resolve(ui.style());
-        let galley = ui.fonts_mut(|fonts| {
-            fonts.layout_no_wrap(label.to_owned(), font_id, egui::Color32::PLACEHOLDER)
-        });
-        let text_pos = Pos2::new(
-            rect.left() + theme::SPACE_MD,
-            rect.center().y - galley.size().y * 0.5,
-        );
-        if let Some(bar_rect) = fill_rect {
-            painter.with_clip_rect(bar_rect.intersect(rect)).galley(
-                text_pos,
-                Arc::clone(&galley),
-                tokens.primary_fg,
-            );
-            if bar_rect.right() < rect.right() {
-                let remaining_rect =
-                    Rect::from_min_max(Pos2::new(bar_rect.right(), rect.top()), rect.max);
-                painter
-                    .with_clip_rect(remaining_rect.intersect(rect))
-                    .galley(text_pos, galley, tokens.text_primary);
-            }
-        } else {
-            painter
-                .with_clip_rect(rect)
-                .galley(text_pos, galley, tokens.text_primary);
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(super) fn paint_batch_row_chrome(
         ui: &egui::Ui,
@@ -474,7 +423,9 @@ impl App {
             .count();
         let mut all_checked = total_desc > 0 && selected_desc == total_desc;
         let partial = selected_desc > 0 && selected_desc < total_desc;
-        let folder_icon = self.ui_icon(ui.ctx(), "folder", UI_ICON_SIZE, tokens.text_muted);
+        let folder_icon = self
+            .ui_icons
+            .image(ui.ctx(), "folder", UI_ICON_SIZE, tokens.text_muted);
 
         let resp = ui.allocate_ui_with_layout(
             Vec2::new(ui.available_width(), row_height),
@@ -485,7 +436,7 @@ impl App {
                     ui.add_space(indent);
                 }
                 let toggle_label = if collapsed { "+" } else { "-" };
-                if Self::compact_button(ui, toggle_label).clicked() {
+                if ui::widgets::compact_button(ui, toggle_label).clicked() {
                     if collapsed {
                         self.batch_collapsed_dirs.remove(key);
                     } else {
@@ -493,7 +444,9 @@ impl App {
                     }
                 }
                 ui.add_enabled_ui(!self.batch_running, |ui| {
-                    if Self::accent_checkbox(ui, tokens, &mut all_checked, partial, "").changed() {
+                    if ui::widgets::accent_checkbox(ui, tokens, &mut all_checked, partial, "")
+                        .changed()
+                    {
                         let target = all_checked;
                         for &idx in descendant_indices {
                             self.batch_rows[idx].tree_selected = target;
@@ -520,7 +473,7 @@ impl App {
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(dir_path) = group_output_dir.as_deref() {
-                        if Self::compact_button(ui, "Open folder")
+                        if ui::widgets::compact_button(ui, "Open folder")
                             .on_hover_text(dir_path.display().to_string())
                             .clicked()
                         {
@@ -589,14 +542,16 @@ impl App {
                     ui.add_space(theme::COMPACT_BUTTON_HEIGHT);
                 }
                 ui.add_enabled_ui(!self.batch_running, |ui| {
-                    if Self::accent_checkbox(ui, tokens, &mut checked, false, "").changed() {
+                    if ui::widgets::accent_checkbox(ui, tokens, &mut checked, false, "").changed() {
                         self.batch_rows[idx].set_selected(mode, checked);
                         self.batch_run_total = 0;
                         self.batch_completed = 0;
                     }
                 });
                 if depth > 0 {
-                    let file_icon = self.ui_icon(ui.ctx(), "file", UI_ICON_SIZE, tokens.text_muted);
+                    let file_icon =
+                        self.ui_icons
+                            .image(ui.ctx(), "file", UI_ICON_SIZE, tokens.text_muted);
                     ui.add(file_icon);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -606,7 +561,7 @@ impl App {
                             batch::BatchSelectionMode::FolderTree => out.root_output_dir.is_none(),
                         };
                         if show_open_folder
-                            && Self::compact_button(ui, "Open folder")
+                            && ui::widgets::compact_button(ui, "Open folder")
                                 .on_hover_text(out.file_dir.display().to_string())
                                 .clicked()
                         {
@@ -739,14 +694,11 @@ impl App {
 
     /// Renders the Back button returning from Batch, Settings, or About tabs to the Editor.
     pub(super) fn draw_back_to_editor_button(&mut self, ui: &mut egui::Ui) {
-        if self
-            .icon_standard_button(ui, "chevron-left", "Back")
-            .clicked()
-        {
+        let tokens = self.theme_tokens(ui);
+        if crate::ui::widgets::back_button(ui, &mut self.ui_icons, tokens).clicked() {
             self.tab = 0;
             self.active_editor_focus = self.startup_focus;
             self.pending_focus_restore = Some(self.startup_focus);
         }
-        ui.add_space(theme::SPACE_MD);
     }
 }

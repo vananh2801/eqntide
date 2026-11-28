@@ -1,76 +1,16 @@
-//! Settings tab, canvas presets, and app backgrounds.
+//! Settings tab, preferences persistence, and appearance controls.
 
 use super::App;
 use crate::{
     settings::{self, BackgroundMode, Settings, StartupFocus, ThemeMode},
-    theme::{self, CanvasPalette, ThemeTokens},
-    Event,
+    theme::{self, ThemeTokens},
+    ui,
 };
-use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
-use std::{path::Path, sync::Arc};
+use eframe::egui::{self, Color32, Vec2};
 
 const OPACITY_CONTROL_WIDTH: f32 = 220.0;
 
 impl App {
-    /// Returns `true` when `Image` background mode is selected and a background texture is loaded.
-    pub(super) fn is_image_background_active(&self) -> bool {
-        self.background_mode == BackgroundMode::Image && self.background_texture.is_some()
-    }
-
-    /// Returns the active adaptive RGB accent seed, or `None` when using the default Ayu accent.
-    pub(super) fn active_accent_seed(&self) -> Option<[u8; 3]> {
-        if self.is_image_background_active() && self.background_accent_enabled {
-            self.background_accent
-        } else {
-            None
-        }
-    }
-
-    /// Resolves effective [`ThemeTokens`] for the active theme, background opacity, and accent seed.
-    pub(super) fn theme_tokens(&self, ui: &egui::Ui) -> ThemeTokens {
-        ThemeTokens::for_mode_with_background_and_accent(
-            ui.visuals().dark_mode,
-            self.is_image_background_active(),
-            self.background_opacity,
-            self.active_accent_seed(),
-        )
-    }
-
-    /// Resolves the [`CanvasPalette`] for the requested mode, active background state, canvas opacity, and accent seed.
-    pub(super) fn active_canvas_palette(&self, dark_mode: bool) -> CanvasPalette {
-        CanvasPalette::for_mode_with_background_and_accent(
-            dark_mode,
-            self.is_image_background_active(),
-            self.canvas_opacity,
-            self.active_accent_seed(),
-        )
-    }
-
-    /// Returns the CPU background bitmap and scrim parameters for [`crate::software_painter::SoftwarePainter`].
-    pub(crate) fn software_background(
-        &self,
-        visuals: &egui::Visuals,
-    ) -> Option<crate::software_painter::SoftwareBackgroundLayer> {
-        if !self.native_software_background || self.background_mode != BackgroundMode::Image {
-            return None;
-        }
-        let image = self.software_bg.as_ref()?;
-        Some(crate::software_painter::SoftwareBackgroundLayer {
-            image: Arc::clone(image),
-            scrim: ThemeTokens::background_scrim(visuals.dark_mode, self.background_opacity),
-            base_bg: ThemeTokens::for_mode(visuals.dark_mode).app_bg,
-        })
-    }
-
-    /// Synchronizes global `egui::Context` accent styling when the effective accent seed changes.
-    pub(super) fn sync_accent_style(&mut self, ctx: &egui::Context) {
-        let seed = self.active_accent_seed();
-        if seed != self.applied_accent_seed {
-            self.applied_accent_seed = seed;
-            ThemeTokens::apply_accent_to_style(ctx, seed);
-        }
-    }
-
     /// Applies sanitized settings to in-memory app state and updates theme/accent styles when `egui_ctx` is provided.
     pub(super) fn apply_settings(&mut self, settings: Settings, egui_ctx: Option<&egui::Context>) {
         let settings = settings.sanitized();
@@ -124,190 +64,6 @@ impl App {
         }
     }
 
-    /// Spawns a background file picker and worker thread to import a custom wallpaper image.
-    pub(super) fn spawn_background_picker(&mut self) {
-        self.background_import_seq = self.background_import_seq.wrapping_add(1);
-        let seq = self.background_import_seq;
-        let tx = self.tx.clone();
-        let settings_path = self.settings_path.clone();
-        std::thread::spawn(move || {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
-                .pick_file()
-            {
-                let _ = tx.send(Event::BackgroundImportStarted(seq));
-                let result = settings::prepare_background_import(&path, settings_path.as_deref());
-                let _ = tx.send(Event::BackgroundImported(seq, result));
-            }
-        });
-    }
-
-    /// Uploads a decoded background image to the GPU texture handle and software backdrop cache.
-    pub(super) fn upload_background_image(&mut self, ctx: &egui::Context, image: egui::ColorImage) {
-        if self.native_software_background {
-            self.software_bg_seq = self.software_bg_seq.wrapping_add(1);
-            self.software_bg = Some(Arc::new(
-                crate::software_painter::SoftwareBackgroundImage::from_color_image(
-                    self.software_bg_seq,
-                    &image,
-                ),
-            ));
-        }
-        if let Some(texture) = &mut self.background_texture {
-            texture.set(image, egui::TextureOptions::LINEAR);
-        } else {
-            self.background_texture =
-                Some(ctx.load_texture("app-background", image, egui::TextureOptions::LINEAR));
-        }
-    }
-
-    /// Loads any deferred startup background image from disk and backfills missing accent seeds.
-    pub(super) fn ensure_background_texture(&mut self, ctx: &egui::Context) {
-        if !self.background_load_pending {
-            return;
-        }
-        self.background_load_pending = false;
-        let (Some(settings_path), Some(filename)) = (
-            self.settings_path.as_deref(),
-            self.background_image.as_deref(),
-        ) else {
-            return;
-        };
-        match settings::load_managed_background(settings_path, filename) {
-            Ok(loaded) => {
-                let image = egui::ColorImage::from_rgba_unmultiplied(
-                    [loaded.width as usize, loaded.height as usize],
-                    &loaded.rgba,
-                );
-                self.upload_background_image(ctx, image);
-                if self.background_accent.is_none() && loaded.accent.is_some() {
-                    self.background_accent = loaded.accent;
-                    self.persisted.background_accent = loaded.accent;
-                    self.settings_dirty = true;
-                }
-                self.sync_accent_style(ctx);
-            }
-            Err(err) => {
-                eprintln!("Failed to load managed background {filename}: {err}");
-                self.background_texture = None;
-                self.software_bg = None;
-                self.sync_accent_style(ctx);
-            }
-        }
-    }
-
-    /// Applies an imported background image, updates persisted settings, and cleans up the prior file.
-    pub(super) fn apply_prepared_background(
-        &mut self,
-        bg: settings::PreparedBackground,
-        ctx: &egui::Context,
-    ) {
-        let prev = self.background_image.take();
-        self.upload_background_image(ctx, bg.image);
-        self.background_mode = BackgroundMode::Image;
-        self.background_image = Some(bg.filename.clone());
-        self.background_accent = bg.accent;
-        self.persisted.background_mode = BackgroundMode::Image;
-        self.persisted.background_image = Some(bg.filename.clone());
-        self.persisted.background_accent = bg.accent;
-        self.background_load_pending = false;
-        self.background_error = None;
-        self.sync_accent_style(ctx);
-        self.settings_dirty = true;
-        self.flush_settings();
-        if let (Some(settings_path), Some(old_name)) =
-            (self.settings_path.as_deref(), prev.as_deref())
-        {
-            if old_name != bg.filename {
-                settings::remove_managed_background_file(settings_path, old_name);
-            }
-        }
-    }
-
-    /// Completes an async background import when its sequence matches the latest request.
-    pub(super) fn finish_background_import(
-        &mut self,
-        seq: u64,
-        result: Result<settings::PreparedBackground, String>,
-        ctx: &egui::Context,
-    ) {
-        if seq != self.background_import_seq {
-            if let (Ok(bg), Some(settings_path)) = (result, self.settings_path.as_deref()) {
-                settings::remove_managed_background_file(settings_path, &bg.filename);
-            }
-            return;
-        }
-        self.background_importing = false;
-        match result {
-            Ok(bg) => self.apply_prepared_background(bg, ctx),
-            Err(err) => {
-                self.background_error = Some(err.clone());
-                self.status = err;
-            }
-        }
-    }
-
-    /// Imports a custom background image synchronously from `source_path` (used in tests and CLI helpers).
-    pub(super) fn set_background_image_from_path(
-        &mut self,
-        source_path: &Path,
-        ctx: &egui::Context,
-    ) {
-        self.background_import_seq = self.background_import_seq.wrapping_add(1);
-        let seq = self.background_import_seq;
-        let result =
-            settings::prepare_background_import(source_path, self.settings_path.as_deref());
-        self.finish_background_import(seq, result, ctx);
-    }
-
-    /// Deletes any managed background asset, clears its accent seed, and switches back to `Solid` mode.
-    pub(super) fn clear_background_image(&mut self) {
-        self.background_import_seq = self.background_import_seq.wrapping_add(1);
-        self.background_importing = false;
-        if let (Some(settings_path), Some(filename)) = (
-            self.settings_path.as_deref(),
-            self.background_image.as_deref(),
-        ) {
-            settings::remove_managed_background_file(settings_path, filename);
-        }
-        self.background_mode = BackgroundMode::Solid;
-        self.background_image = None;
-        self.background_accent = None;
-        self.background_texture = None;
-        self.software_bg = None;
-        self.background_load_pending = false;
-        self.background_error = None;
-        self.persisted.background_mode = BackgroundMode::Solid;
-        self.persisted.background_image = None;
-        self.persisted.background_accent = None;
-        self.settings_dirty = true;
-        self.flush_settings();
-    }
-
-    /// Computes cover-crop destination bounds and UVs for an image inside `viewport`.
-    pub(super) fn background_image_layout(viewport: Rect, tex_size: Vec2) -> (Rect, Rect) {
-        let full_uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
-        if viewport.width() <= 0.0
-            || viewport.height() <= 0.0
-            || tex_size.x <= 0.0
-            || tex_size.y <= 0.0
-        {
-            return (viewport, full_uv);
-        }
-        let view_aspect = viewport.width() / viewport.height();
-        let tex_aspect = tex_size.x / tex_size.y;
-        let uv = if tex_aspect > view_aspect {
-            let uv_w = (view_aspect / tex_aspect).clamp(0.0, 1.0);
-            let x0 = (1.0 - uv_w) * 0.5;
-            Rect::from_min_max(Pos2::new(x0, 0.0), Pos2::new(x0 + uv_w, 1.0))
-        } else {
-            let uv_h = (tex_aspect / view_aspect).clamp(0.0, 1.0);
-            let y0 = (1.0 - uv_h) * 0.5;
-            Rect::from_min_max(Pos2::new(0.0, y0), Pos2::new(1.0, y0 + uv_h))
-        };
-        (viewport, uv)
-    }
-
     /// Renders the Settings tab covering appearance, app background, startup focus, and shortcuts.
     pub(super) fn draw_settings_tab(&mut self, ui: &mut egui::Ui) {
         let tokens = self.theme_tokens(ui);
@@ -315,7 +71,7 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                Self::full_width_card(ui, tokens, |ui| {
+                ui::widgets::full_width_card(ui, tokens, |ui| {
                     ui.label(egui::RichText::new("Appearance").strong());
                     ui.add_space(theme::SPACE_XS);
                     let is_dark = ui.visuals().dark_mode;
@@ -324,8 +80,8 @@ impl App {
                             [(egui::Theme::Light, "Light"), (egui::Theme::Dark, "Dark")]
                         {
                             let selected = (choice == egui::Theme::Dark) == is_dark;
-                            if Self::with_selectable_style(ui, tokens, selected, |ui| {
-                                Self::standard_button(ui, label)
+                            if ui::widgets::with_selectable_style(ui, tokens, selected, |ui| {
+                                ui::widgets::standard_button(ui, label)
                             })
                             .clicked()
                                 && !selected
@@ -341,7 +97,7 @@ impl App {
                 self.draw_app_background_card(ui, tokens);
                 let tokens = self.theme_tokens(ui);
                 ui.add_space(theme::SPACE_MD);
-                Self::full_width_card(ui, tokens, |ui| {
+                ui::widgets::full_width_card(ui, tokens, |ui| {
                     ui.label(egui::RichText::new("Startup focus").strong());
                     ui.add_space(theme::SPACE_XS);
                     ui.horizontal(|ui| {
@@ -351,8 +107,8 @@ impl App {
                             (StartupFocus::Latex, "LaTeX source"),
                         ] {
                             let selected = self.startup_focus == choice;
-                            if Self::with_selectable_style(ui, tokens, selected, |ui| {
-                                Self::standard_button(ui, label)
+                            if ui::widgets::with_selectable_style(ui, tokens, selected, |ui| {
+                                ui::widgets::standard_button(ui, label)
                             })
                             .clicked()
                                 && !selected
@@ -372,27 +128,8 @@ impl App {
             });
     }
 
-    /// Paints the active GPU background image and theme scrim behind all panels.
-    pub(super) fn paint_app_background(&self, ui: &egui::Ui) {
-        if self.native_software_background || self.background_mode != BackgroundMode::Image {
-            return;
-        }
-        let Some(texture) = &self.background_texture else {
-            return;
-        };
-        let viewport = ui.max_rect();
-        let bg_painter = ui.ctx().layer_painter(egui::LayerId::background());
-        let dark_mode = ui.visuals().dark_mode;
-        let (dest, uv) = Self::background_image_layout(viewport, texture.size_vec2());
-        bg_painter.image(texture.id(), dest, uv, Color32::WHITE);
-        let scrim = ThemeTokens::background_scrim(dark_mode, self.background_opacity);
-        if scrim.a() > 0 {
-            bg_painter.rect_filled(viewport, 0.0, scrim);
-        }
-    }
-
     fn draw_app_background_card(&mut self, ui: &mut egui::Ui, tokens: ThemeTokens) {
-        Self::full_width_card(ui, tokens, |ui| {
+        ui::widgets::full_width_card(ui, tokens, |ui| {
             let is_dark = ui.visuals().dark_mode;
             ui.label(egui::RichText::new("App background").strong());
             ui.add_space(theme::SPACE_XS);
@@ -402,8 +139,8 @@ impl App {
                     (BackgroundMode::Image, "Image"),
                 ] {
                     let selected = self.background_mode == choice;
-                    if Self::with_selectable_style(ui, tokens, selected, |ui| {
-                        Self::standard_button(ui, label)
+                    if ui::widgets::with_selectable_style(ui, tokens, selected, |ui| {
+                        ui::widgets::standard_button(ui, label)
                     })
                     .clicked()
                         && !selected
@@ -443,7 +180,13 @@ impl App {
                     self.draw_background_thumbnail(ui, tokens, is_dark, thumb_size);
                     if ui
                         .add_enabled_ui(!self.background_importing, |ui| {
-                            self.icon_standard_button(ui, "folder-open", "Choose image…")
+                            ui::widgets::icon_standard_button(
+                                ui,
+                                &mut self.ui_icons,
+                                tokens,
+                                "folder-open",
+                                "Choose image…",
+                            )
                         })
                         .inner
                         .clicked()
@@ -481,7 +224,7 @@ impl App {
             }
             ui.add_space(theme::SPACE_XS);
             ui.add_enabled_ui(has_active_image_bg, |ui| {
-                let accent_checkbox = Self::accent_checkbox(
+                let accent_checkbox = ui::widgets::accent_checkbox(
                     ui,
                     tokens,
                     &mut self.background_accent_enabled,
@@ -571,63 +314,61 @@ fn draw_opacity_slider_row(
 ) -> bool {
     let mut changed = false;
     ui.add_enabled_ui(enabled, |ui| {
-        if !enabled {
-            // Keep disabled labels and level-fill controls crisp instead of double-dimming.
-            ui.set_opacity(1.0);
-        }
-        let label_width = 108.0;
-        let label_color = if enabled {
-            tokens.text_muted
-        } else {
-            tokens.text_disabled
-        };
-        ui.allocate_ui_with_layout(
-            Vec2::new(ui.available_size_before_wrap().x, theme::BUTTON_HEIGHT),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.allocate_ui_with_layout(
-                    Vec2::new(label_width, theme::BUTTON_HEIGHT),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.label(egui::RichText::new(label).color(label_color));
-                    },
-                );
-                let speed = f64::from((*range.end() - *range.start()) / OPACITY_CONTROL_WIDTH);
-                let (drag_resp, wheel_changed) = App::draw_level_drag_value(
-                    ui,
-                    tokens,
-                    label,
-                    speed,
-                    None,
-                    range.clone(),
-                    value,
-                    "Click and drag left/right, or click to type a percentage",
-                    |ui, current, drag_speed| {
-                        ui.add(
-                            egui::DragValue::from_get_set(|next| {
-                                if let Some(next) = next {
-                                    *current = ((next * 100.0).round() / 100.0) as f32;
-                                }
-                                f64::from(*current)
-                            })
-                            .range(range)
-                            .min_size(Vec2::new(OPACITY_CONTROL_WIDTH, theme::BUTTON_HEIGHT))
-                            .speed(drag_speed)
-                            .custom_formatter(|val, _| format!("{:.0}%", (val * 100.0).round()))
-                            .custom_parser(|text| {
-                                text.trim()
-                                    .trim_end_matches('%')
-                                    .trim()
-                                    .parse::<f64>()
-                                    .ok()
-                                    .map(|pct| pct / 100.0)
-                            }),
-                        )
-                    },
-                );
-                changed = drag_resp.changed() || wheel_changed;
-            },
-        );
+        ui::widgets::without_double_dimming(ui, enabled, |ui| {
+            let label_width = 108.0;
+            let label_color = if enabled {
+                tokens.text_muted
+            } else {
+                tokens.text_disabled
+            };
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_size_before_wrap().x, theme::BUTTON_HEIGHT),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(label_width, theme::BUTTON_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(egui::RichText::new(label).color(label_color));
+                        },
+                    );
+                    let speed = f64::from((*range.end() - *range.start()) / OPACITY_CONTROL_WIDTH);
+                    let (drag_resp, wheel_changed) = ui::widgets::level_drag_value(
+                        ui,
+                        tokens,
+                        label,
+                        speed,
+                        None,
+                        range.clone(),
+                        value,
+                        "Click and drag left/right, or click to type a percentage",
+                        |ui, current, drag_speed| {
+                            ui.add(
+                                egui::DragValue::from_get_set(|next| {
+                                    if let Some(next) = next {
+                                        *current = ((next * 100.0).round() / 100.0) as f32;
+                                    }
+                                    f64::from(*current)
+                                })
+                                .range(range)
+                                .min_size(Vec2::new(OPACITY_CONTROL_WIDTH, theme::BUTTON_HEIGHT))
+                                .speed(drag_speed)
+                                .custom_formatter(|val, _| format!("{:.0}%", (val * 100.0).round()))
+                                .custom_parser(|text| {
+                                    text.trim()
+                                        .trim_end_matches('%')
+                                        .trim()
+                                        .parse::<f64>()
+                                        .ok()
+                                        .map(|pct| pct / 100.0)
+                                }),
+                            )
+                        },
+                    );
+                    changed = drag_resp.changed() || wheel_changed;
+                },
+            );
+        });
     });
     changed
 }

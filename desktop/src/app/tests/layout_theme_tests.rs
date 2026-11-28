@@ -1,7 +1,8 @@
 use super::super::*;
 use super::helpers::*;
 use crate::settings::ThemeMode;
-use eframe::egui::Color32;
+use crate::theme;
+use eframe::egui::{Color32, Stroke};
 use eqntide::MathNode;
 
 #[test]
@@ -2647,10 +2648,11 @@ fn primary_and_standard_buttons_render_distinct_focus_borders_in_light_and_dark_
         let mut primary_id = egui::Id::NULL;
         let mut standard_id = egui::Id::NULL;
         let mut unfocused = ctx.run_ui(egui::RawInput::default(), |ui| {
-            primary_id =
-                App::primary_button_with(ui, tokens, true, |ui| ui.add(egui::Button::new("Save")))
-                    .id;
-            standard_id = App::standard_button(ui, "Cancel").id;
+            primary_id = crate::ui::widgets::primary_button_with(ui, tokens, true, |ui| {
+                ui.add(egui::Button::new("Save"))
+            })
+            .id;
+            standard_id = crate::ui::widgets::standard_button(ui, "Cancel").id;
         });
         unfocused.textures_delta.clear();
         assert!(unfocused.shapes.iter().any(|clipped| {
@@ -2664,9 +2666,10 @@ fn primary_and_standard_buttons_render_distinct_focus_borders_in_light_and_dark_
 
         ctx.memory_mut(|mem| mem.request_focus(primary_id));
         let mut focused_primary = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let _ =
-                App::primary_button_with(ui, tokens, true, |ui| ui.add(egui::Button::new("Save")));
-            let _ = App::standard_button(ui, "Cancel");
+            let _ = crate::ui::widgets::primary_button_with(ui, tokens, true, |ui| {
+                ui.add(egui::Button::new("Save"))
+            });
+            let _ = crate::ui::widgets::standard_button(ui, "Cancel");
         });
         focused_primary.textures_delta.clear();
         let expected_focus_border = if dark_mode {
@@ -2686,9 +2689,10 @@ fn primary_and_standard_buttons_render_distinct_focus_borders_in_light_and_dark_
 
         ctx.memory_mut(|mem| mem.request_focus(standard_id));
         let mut focused_standard = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let _ =
-                App::primary_button_with(ui, tokens, true, |ui| ui.add(egui::Button::new("Save")));
-            let _ = App::standard_button(ui, "Cancel");
+            let _ = crate::ui::widgets::primary_button_with(ui, tokens, true, |ui| {
+                ui.add(egui::Button::new("Save"))
+            });
+            let _ = crate::ui::widgets::standard_button(ui, "Cancel");
         });
         focused_standard.textures_delta.clear();
         assert!(focused_standard.shapes.iter().any(|clipped| {

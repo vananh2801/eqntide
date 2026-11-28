@@ -12,6 +12,7 @@ mod settings;
 mod shortcuts;
 mod software_painter;
 mod theme;
+mod ui;
 mod update;
 mod version;
 mod wgpu_runner;
