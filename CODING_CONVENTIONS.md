@@ -46,17 +46,30 @@ eqntide/
 │
 └── desktop/src/                 # `eqntide-desktop` crate: native egui/eframe application
     ├── main.rs                  # Entry point, CLI/worker dispatch, EventSender<Event>
+    ├── ui/                      # App-independent egui UI kit (no App state coupling)
+    │   ├── mod.rs               # Public crate UI kit exports (icons, modal, scroll, widgets)
+    │   ├── icons.rs             # IconCache, UI_ICON_SIZE, bundled Tabler PNG bytes
+    │   ├── modal.rs             # Modal frame/row padding, Escape handling, Tab/Arrow focus trap
+    │   ├── scroll.rs            # Wheel step snapping, Ctrl/Cmd+Wheel accumulation, scroll-chain guard
+    │   └── widgets.rs           # Styled primary/standard/compact buttons, cards, level bars, progress bars
     ├── app/
-    │   ├── mod.rs               # App struct (grouped pub(super) fields), lifecycle diagram, draw_ui, draw_shell
-    │   ├── events.rs            # Event loop & async render/LaTeX/background workers
+    │   ├── mod.rs               # App struct (grouped pub(super) fields), lifecycle diagram, draw_ui
+    │   ├── gpu.rs               # GpuProfile, host/VM/adapter detection, bundled font registration
+    │   ├── shell.rs             # Main window chrome: draw_shell, sidebar, footer, status bar, window bounds
+    │   ├── background.rs        # Background import, GPU/software upload, theme_tokens, accent sync, scrim
+    │   ├── events.rs            # Event loop & async render/LaTeX/background/update workers
     │   ├── session.rs           # Office session lifecycle, dirty checks, save/cancel/close guards
     │   ├── canvas.rs            # Canvas paint, placeholder boxes, hit-testing, vertical cursor nav
     │   ├── keyboard.rs          # Shortcuts, canvas text input, IME, \command popup
-    │   ├── palette_ui.rs        # Palette grid, DPI glyph atlas rasterization, icon caching
+    │   ├── palette_ui.rs        # Palette sprite atlas upload & recent template insertion
+    │   ├── palette_ribbon.rs    # Three-row palette ribbon & horizontal drag/wheel navigation
     │   ├── batch_ui.rs          # Batch DOCX tab UI & folder tree controls
-    │   ├── settings_ui.rs       # Settings/About tabs, matrix dialog, background picker, modals
-    │   └── tests/               # mod, helpers, session_tests, canvas_input_tests, layout_theme_tests, batch_settings_tests
-    └── {batch,commands,instance,palette,runtime,settings,software_painter,theme,wgpu_runner}.rs
+    │   ├── settings_ui.rs       # Settings tab, preferences persistence, appearance & opacity controls
+    │   ├── shortcuts_ui.rs      # Settings keyboard shortcuts card, capture, and filtering
+    │   ├── about_ui.rs          # About tab & manual update controls
+    │   ├── dialogs.rs           # Custom matrix, shortcut conflict, and session confirmation modals
+    │   └── tests/               # mod, helpers, session_tests, canvas_input_tests, layout_theme_tests, batch_settings_tests, palette_tests, shortcut_tests, update_tests, clipboard_tests
+    └── {batch,commands,instance,palette,runtime,settings,shortcuts,software_painter,theme,update,version,wgpu_runner}.rs
 ```
 
 ### Preserving `desktop/src/app/` Structure

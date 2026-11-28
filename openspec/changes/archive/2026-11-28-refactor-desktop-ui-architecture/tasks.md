@@ -1,0 +1,19 @@
+# Tasks: Refactor Desktop UI Architecture
+
+## 1. Extract Standalone `desktop/src/ui/` UI Kit
+
+- [x] 1.1 Create `desktop/src/ui/mod.rs`, `desktop/src/ui/icons.rs`, and `desktop/src/ui/scroll.rs`: move `tabler_icon_bytes` and `ui_icon` texture caching into `ui::icons::IconCache`, and extract shared scroll/wheel helpers (`suppress_scroll_delta_y`, `step_snapped_value`, `ctrl_wheel_steps`) into `ui::scroll`. Verify `cargo check -p eqntide-desktop --all-targets` compiles cleanly with `#![forbid(unsafe_code)]`.
+- [x] 1.2 Create `desktop/src/ui/widgets.rs` with `App`-independent functions (`primary_button*`, `standard_button`, `compact_button`, `icon_primary_button`, `icon_standard_button`, `with_selectable_style`, `with_accent_border`, `without_double_dimming`, `accent_checkbox`, `full_width_card`, `level_drag_value`, `section_separator`, `progress_bar`, `back_button`) and move `draw_level_drag_value` / `draw_section_separator` / `draw_batch_progress_bar` / `draw_back_to_editor_button` / `palette_ui.rs` shared widget methods to delegate to `ui::widgets`. Verify `cargo test -p eqntide-desktop layout_theme_tests` and `batch_settings_tests` pass.
+- [x] 1.3 Create `desktop/src/ui/modal.rs` encapsulating `MODAL_INNER_MARGIN`, `MODAL_BUTTON_PADDING`, `modal_frame`, `ModalFocusState`, Escape handling, and Tab/Arrow focus trapping; update `desktop/src/app/dialogs.rs` to use `ui::modal` instead of local duplicated modal chrome and padding overrides. Verify `cargo test -p eqntide-desktop session_tests` and `shortcut_tests` pass.
+
+## 2. Slim `app/mod.rs`, `palette_ui.rs`, `shortcuts_ui.rs`, and `settings_ui.rs`
+
+- [x] 2.1 Extract `GpuProfile`, host/VM/adapter detection (`detect_gpu_profile`, `detect_host_vm_profile`, `is_software_adapter_name`), and font registration from `desktop/src/app/mod.rs` into `desktop/src/app/gpu.rs`, keeping `GpuProfile` and `is_software_adapter_name` re-exported where needed by tests/callers. Verify `cargo test -p eqntide-desktop` passes all GPU/profile assertions.
+- [x] 2.2 Extract window chrome and shell layout (`draw_shell`, `draw_sidebar`, `draw_footer`, `draw_status_bar`, `enforce_window_minimum*`) from `desktop/src/app/mod.rs` into `desktop/src/app/shell.rs`, keeping `App` entrypoints and layout constants (`MIN_WINDOW_SIZE`, `PALETTE_HEIGHT`, `CONTENT_PADDING`) accessible to `app/tests/*`. Verify `cargo test -p eqntide-desktop layout_theme_tests` passes.
+- [x] 2.3 Extract background image picking, loading, GPU/software upload, `paint_app_background`, `software_background`, `theme_tokens`, `active_canvas_palette`, and `sync_accent_style` from `desktop/src/app/settings_ui.rs` into `desktop/src/app/background.rs`. Verify `cargo test -p eqntide-desktop layout_theme_tests` and `batch_settings_tests` pass.
+- [x] 2.4 Migrate remaining feature UI files (`palette_ui.rs`, `palette_ribbon.rs`, `batch_ui.rs`, `settings_ui.rs`, `shortcuts_ui.rs`, `about_ui.rs`, `session.rs`, `canvas.rs` wheel/step helpers) to call `crate::ui::*` directly, removing dead `App` widget wrappers and inline `ui.visuals_mut()` / `smooth_scroll_delta` duplicates. Verify `cargo test -p eqntide-desktop --all-targets` passes with zero regressions.
+
+## 3. Conventions Sync & Full Workspace Verification
+
+- [x] 3.1 Update `CODING_CONVENTIONS.md` section 2 to document `desktop/src/ui/` and the split `desktop/src/app/` submodules (`gpu.rs`, `shell.rs`, `background.rs`), and audit all modified `.rs` files against the 7-layer ordering, English comments, and single-letter variable rules. Verify every modified non-test file follows the conventions and intra-doc links build cleanly.
+- [x] 3.2 Run the mandatory workspace verification gate (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --all-targets --locked`, and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`) and confirm all four pass with zero warnings.
